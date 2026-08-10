@@ -167,7 +167,8 @@ export function StepReview({
                 An autonomous run can't perform its task without model access.{" "}
               </span>
             )}
-            Go back to Access and pick a stored key (or add one).
+            Connect a provider under Integrations, pin one on the workspace's Model access, or use
+            Access → Override for this run.
           </div>
         </div>
       )}
@@ -293,7 +294,7 @@ export function StepReview({
         />
         <Summary
           label="First-use approval"
-          value={firstUseLabel(inline_policy.first_use_approval)}
+          value={firstUseLabel(inline_policy.first_use_approval, inline_policy.allow_all_egress)}
         />
         {state.workspaces.length > 0 && (
           <Summary
@@ -376,12 +377,13 @@ export function StepReview({
           </div>
           {state.saveAsProfile && (
             <div className="mt-3 border-t border-border pt-3">
-              <Field label="Profile name" htmlFor="profile-name">
+              <Field label="Profile name" htmlFor="profile-name" required>
                 <Input
                   id="profile-name"
                   placeholder="payments-interactive"
                   value={state.profileName}
                   onChange={(e) => patch({ profileName: e.target.value })}
+                  required
                 />
               </Field>
             </div>

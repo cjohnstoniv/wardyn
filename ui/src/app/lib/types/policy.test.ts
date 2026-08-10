@@ -60,12 +60,28 @@ describe("firstUseRaisesApproval", () => {
   });
 });
 
+// N4: always_deny used to read "Off" unconditionally — the most restrictive
+// choice reading as though nothing were set. "Off" is only honest under
+// allow-all egress, where the setting is genuinely inert (buildSpec forces
+// always_deny and the Egress step hides the control) — every other caller
+// must see the real word for the real choice.
 describe("firstUseLabel", () => {
-  it("labels each mode, defaulting unknown/deny to Off", () => {
+  it("labels each review mode", () => {
     expect(firstUseLabel("wait_for_review")).toBe("Ask & wait");
     expect(firstUseLabel("deny_with_review")).toBe("Ask");
-    expect(firstUseLabel("always_deny")).toBe("Off");
-    expect(firstUseLabel(false)).toBe("Off");
-    expect(firstUseLabel("garbage")).toBe("Off");
+  });
+
+  it("labels always_deny/unknown as 'Always deny' by default — a real, restrictive choice, not an inversion of it", () => {
+    expect(firstUseLabel("always_deny")).toBe("Always deny");
+    expect(firstUseLabel(false)).toBe("Always deny");
+    expect(firstUseLabel("garbage")).toBe("Always deny");
+  });
+
+  it("labels it 'Off (allow-all)' only when the caller says this run's egress is allow-all", () => {
+    expect(firstUseLabel("always_deny", true)).toBe("Off (allow-all)");
+    expect(firstUseLabel(undefined, true)).toBe("Off (allow-all)");
+    // The review modes are unaffected by allowAll — they're never forced under
+    // allow-all in the first place (buildSpec always forces always_deny there).
+    expect(firstUseLabel("deny_with_review", true)).toBe("Ask");
   });
 });

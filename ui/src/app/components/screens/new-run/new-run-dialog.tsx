@@ -5,19 +5,21 @@
 
 // NewRunDialog — the entry point for launching a run. Workspace-first: it
 // always opens on "which workspace?" (an onboarded workspace, or the explicit
-// "No workspace — ad-hoc run" escape) BEFORE it ever asks how. Only then does
-// it offer:
-//   - "Describe your task"   → the AI Run Composer (compose → review → launch)
-//   - "Configure manually"   → the existing 5-step PermissionWizard
+// "No workspace — ad-hoc run" escape) BEFORE it ever asks how. A pick lands
+// straight on Describe (the AI Run Composer: compose → review → launch) when
+// the composer is enabled — there is no separate "how" choice screen.
+// "Configure manually" is a footer escape FROM Describe into the existing
+// 5-step PermissionWizard, pre-seeded with the same workspace pick (and Run
+// mode — see wizard.tsx's initialInteractive).
 //
 // The composer is OPTIONAL: if it's disabled (404) or has zero backends,
 // Describe mode is hidden and choosing a workspace (or ad-hoc) drops straight
-// into the manual wizard, pre-seeded with that pick — never a crash. "Edit in
-// wizard" hands a composer proposal to the wizard, prefilled (its own workspace
-// wins over the one picked here — see wizard.tsx's initialWorkspaces).
+// into the manual wizard instead, pre-seeded with that pick — never a crash.
+// "Edit in wizard" hands a composer proposal to the wizard, prefilled (its own
+// workspace wins over the one picked here — see wizard.tsx's initialWorkspaces).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Settings2, Sparkles, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import type {
   AgentRun,
@@ -70,8 +72,10 @@ import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status"
 // "workspace" is the entry mode (Stage 3: workspace-first) — the dialog opens
 // on "which workspace?" before it ever asks HOW (Describe vs Configure). Every
 // other mode is reached only after that choice (or its explicit "no
-// workspace" escape) is made.
-type Mode = "workspace" | "choose" | "describe" | "clarify" | "review" | "wizard";
+// workspace" escape) is made. There is no separate "choose" step any more —
+// a workspace pick lands straight on "describe" (composer enabled) or
+// "wizard" (disabled); "Configure manually" is a footer button on describe.
+type Mode = "workspace" | "describe" | "clarify" | "review" | "wizard";
 
 export function NewRunDialog({
   open,
@@ -126,8 +130,16 @@ export function NewRunDialog({
 
   // review state
   const [result, setResult] = React.useState<ComposeResponse | null>(null);
-  // Launch mode, seeded from the proposal and overridable in the review screen.
+  // Launch mode, captured UPFRONT on Describe (ComposeForm's ModeToggle) and
+  // re-seeded from each proposal's echoed run.interactive — Review renders it
+  // as a read-only fact chip, never a second control (see compose-review.tsx).
   const [interactive, setInteractive] = React.useState(false);
+  // Whether the operator actually touched the mode on Describe. The compose
+  // default (autonomous) and the wizard default (interactive, task-optional)
+  // deliberately differ — only an EXPLICIT pick may cross the manual hand-off,
+  // or every wizard entry would seed autonomous and dead-end Basics on the
+  // now-required empty Task.
+  const [modeTouched, setModeTouched] = React.useState(false);
   const [acknowledged, setAcknowledged] = React.useState(false);
   const [launching, setLaunching] = React.useState(false);
   // Launch (create-run) error surfaced INLINE on the review panel, not as a corner
@@ -146,12 +158,12 @@ export function NewRunDialog({
 
   // Pre-compose readiness hint (B3/B6, intro.tsx's deriveReadiness — the SAME
   // derivation the Getting-started funnel uses). A full setup checklist is
-  // impossible before a proposal exists (items derive from the clamped spec), but
-  // this coarse hint catches the common case — no model access configured yet —
-  // before the operator burns a compose round on a run that can't call a model.
-  const [setupHint, setSetupHint] = React.useState<{ composerReady: boolean; llmReady: boolean } | null>(
-    null,
-  );
+  // impossible before a proposal exists (items derive from the clamped spec),
+  // but this coarse hint catches the common case — no integration powers
+  // Wardyn's own AI features yet — before the operator burns a compose round.
+  // llmReady is deliberately NOT carried here any more (H8): the ModelAccessCard
+  // below states that fact on its own, more precisely.
+  const [setupHint, setSetupHint] = React.useState<{ composerReady: boolean } | null>(null);
 
   // Setup-checklist items the composer's LAST proposal named (compose.go's
   // deriveSetupItems), overlaid with any client-side "re-flip" (decision 9: no
@@ -188,6 +200,7 @@ export function NewRunDialog({
     setRound(0);
     setResult(null);
     setInteractive(false);
+    setModeTouched(false);
     setAcknowledged(false);
     setLaunching(false);
     setWizardInitial(undefined);
@@ -207,9 +220,9 @@ export function NewRunDialog({
         // Never yank the operator off the workspace-first step the instant this
         // probe resolves (typically well before they've picked anything) — only
         // steer mode once they've already left it via chooseWorkspace(). From
-        // "choose"/"describe" onward, an empty/failed backend list still bails
-        // to the manual wizard (composer not configured — manual is the only
-        // path), matching pre-Stage-3 behaviour for that later transition.
+        // "describe" onward, an empty/failed backend list still bails to the
+        // manual wizard (composer not configured — manual is the only path),
+        // matching pre-Stage-3 behaviour for that later transition.
         setMode((m) => (m === "workspace" ? m : bs.length === 0 ? "wizard" : m));
       })
       .catch(() => {
@@ -225,7 +238,7 @@ export function NewRunDialog({
       .then((status) => {
         if (!alive) return;
         const r = deriveReadiness(status);
-        setSetupHint({ composerReady: r.composerReady, llmReady: r.llmReady });
+        setSetupHint({ composerReady: r.composerReady });
       })
       .catch(() => {});
     return () => {
@@ -423,6 +436,14 @@ export function NewRunDialog({
     setMode("wizard");
   };
 
+  // Edit prompt (Review's retreat, §2): prompt, workspaceSelections,
+  // attachments, sources, backend, composeMode and sessionId all already live
+  // in this component and are only ever cleared on dialog open — so returning
+  // to Describe needs nothing saved. The next "Compose" click naturally resets
+  // transcript/round to 0 via runCompose (above), resending the SAME session
+  // id, so the audit feed can still reconstruct the whole conversation.
+  const editPrompt = () => setMode("describe");
+
   // Stage 3 — workspace-first entry: the FIRST decision in this dialog is which
   // workspace (or none), before Describe-vs-Configure is even offered. Seeds
   // workspaceSelections — already the AI path's own state (submitCompose reads
@@ -431,9 +452,20 @@ export function NewRunDialog({
   // for the explicit "No workspace — ad-hoc run" escape, which must reproduce
   // today's exact behaviour: an empty selection, nothing more, an ephemeral
   // scratch run.
+  //
+  // A workspace pick lands straight on Describe now (no intermediate "choose"
+  // screen) — minting the compose-session id here, where a compose
+  // conversation actually starts (moved from the deleted choose card's own
+  // onClick); resent unchanged on every round + at launch. Composer disabled
+  // still routes straight to the manual wizard, unchanged.
   const chooseWorkspace = (sel: RunWorkspaceSelection | null) => {
     setWorkspaceSelections(sel ? [sel] : []);
-    setMode(composerEnabled ? "choose" : "wizard");
+    if (!composerEnabled) {
+      setMode("wizard");
+      return;
+    }
+    setSessionId(crypto.randomUUID());
+    setMode("describe");
   };
 
   // Manual mode renders the existing wizard as its own Dialog. It owns its
@@ -450,6 +482,7 @@ export function NewRunDialog({
         onCreated={onCreated}
         initialState={wizardInitial}
         initialWorkspaces={workspaceSelections}
+        initialInteractive={modeTouched ? interactive : undefined}
       />
     );
   }
@@ -473,7 +506,7 @@ export function NewRunDialog({
                 ? "Wardyn's composer needs a little more detail to propose a least-privilege run. Your answers shape the proposal only — Wardyn still grades and clamps it."
                 : mode === "workspace"
                   ? "Start from an onboarded workspace and the requirements it comes with, or run ad-hoc. Everything here stays editable in the steps that follow."
-                  : "Describe your task and let Wardyn propose a confined run, or configure the permission envelope by hand."}
+                  : "Describe what you want done in this workspace. Wardyn proposes a confined run for you to review before anything starts."}
           </DialogDescription>
         </DialogHeader>
 
@@ -526,62 +559,19 @@ export function NewRunDialog({
             </div>
           )}
 
-          {mode === "choose" && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <OptionCard
-                selected={false}
-                onClick={() => {
-                  // Mint the compose-session id on entering describe mode (not on
-                  // dialog open) — this is where a compose conversation actually
-                  // starts; resent unchanged on every round + at launch.
-                  setSessionId(crypto.randomUUID());
-                  setMode("describe");
-                }}
-                className="h-full"
-                title={
-                  <span className="flex items-center gap-2">
-                    <Sparkles className="size-4 text-primary" /> Describe your task
-                    <Chip tone="primary" title="This feature is in beta — expect rough edges.">
-                      Beta
-                    </Chip>
-                  </span>
-                }
-                hint="Write what you want done in plain language. Wardyn proposes a confined run setup for you to review. This feature is in beta."
-              />
-              <OptionCard
-                selected={false}
-                onClick={() => setMode("wizard")}
-                className="h-full"
-                title={
-                  <span className="flex items-center gap-2">
-                    <Settings2 className="size-4" /> Configure manually
-                  </span>
-                }
-                hint="Compose the permission envelope step by step in the wizard."
-              />
-            </div>
-          )}
-
-          {/* llmReady and composerReady are independent facts (a host-CLI
-              subscription satisfies the first and never the second — see
-              intro.tsx's deriveReadiness) — each gets its own sentence so
-              neither one's absence borrows the other's wording. A host with
-              only the composer half missing must never read "model access
-              configured yet", which on that host is false. One shared remedy
-              link: the fix for either gap is the same action. */}
-          {mode === "describe" && composerEnabled && setupHint && (!setupHint.composerReady || !setupHint.llmReady) && (
+          {/* Halved (H8): composerReady is the ONLY fact left here — the
+              ModelAccessCard rendered just below in ComposeForm states the
+              llmReady fact more precisely (resolved integration + "Applies
+              because"), so repeating it here would say the same thing twice.
+              composerReady still needs its own banner: it answers "does an
+              integration power Wardyn's OWN AI features" (this composer
+              included), which the ModelAccessCard — scoped to the AGENT's
+              model access — never claims either way. */}
+          {mode === "describe" && composerEnabled && setupHint && !setupHint.composerReady && (
             <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle p-3 text-xs leading-relaxed text-warning">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <div className="space-y-1.5">
-                {!setupHint.llmReady && (
-                  <p>
-                    Wardyn doesn&apos;t have model access configured yet — Wardyn can still draft a
-                    proposal, but a launched run won&apos;t be able to call a model until this is fixed.
-                  </p>
-                )}
-                {!setupHint.composerReady && (
-                  <p>No integration powers Wardyn&apos;s own AI features yet — this composer included.</p>
-                )}
+                <p>No integration powers Wardyn&apos;s own AI features yet — this composer included.</p>
                 <p>
                   <Link to="/integrations" className="font-medium underline underline-offset-2 hover:text-warning">
                     Add an integration
@@ -612,7 +602,10 @@ export function NewRunDialog({
               onSourcesChange={setSources}
               onBackendChange={setBackend}
               onModeChange={setComposeMode}
-              onInteractiveChange={setInteractive}
+              onInteractiveChange={(v) => {
+                setInteractive(v);
+                setModeTouched(true);
+              }}
               onCompose={runCompose}
               error={composeError}
             />
@@ -650,29 +643,31 @@ export function NewRunDialog({
               acknowledged={acknowledged}
               launching={launching}
               launchError={launchError}
-              onInteractiveChange={setInteractive}
               onAcknowledge={setAcknowledged}
               onApproveLaunch={approveLaunch}
               onAddSecret={(name) => (launchError ? secretFix.openFix(name) : secretFix.openManual(name))}
               onFixWorkspace={scanAndReload}
+              onEditPrompt={editPrompt}
               onEditInWizard={editInWizard}
               onCancel={() => onOpenChange(false)}
             />
           )}
         </div>
 
-        {/* "choose" gets back to the workspace-first pick; "describe" gets back
-            to "choose" — so the operator can always retreat as far as the
-            workspace decision itself. */}
-        {(mode === "describe" || mode === "choose") && (
+        {/* Describe's own footer retreat: Back returns to the workspace-first
+            pick; Configure manually hands off to the wizard, pre-seeded with
+            the same workspace choice — exactly what the deleted "choose"
+            card's own button did (workspaceSelections already carries it). */}
+        {mode === "describe" && (
           <div className="flex items-center justify-between border-t border-border pt-4">
-            <Button
-              variant="ghost"
-              onClick={() => setMode(mode === "describe" ? "choose" : "workspace")}
-              disabled={composing}
-            >
-              Back
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={() => setMode("workspace")} disabled={composing}>
+                Back
+              </Button>
+              <Button variant="ghost" onClick={() => setMode("wizard")} disabled={composing}>
+                Configure manually
+              </Button>
+            </div>
           </div>
         )}
         </DialogContent>

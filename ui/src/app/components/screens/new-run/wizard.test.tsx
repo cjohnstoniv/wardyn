@@ -313,6 +313,27 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     expect(screen.queryByRole("button", { name: /add the .* secret/i })).toBeNull();
   });
 
+  // N2: stepError used to only disable Next/Review-now — validateStep's
+  // message was never rendered anywhere, so a blocked step was a silent grey
+  // button. It must now be visible without even needing a click.
+  it("renders the blocked-step reason inline instead of a silent disabled Next (N2)", async () => {
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        initialState={{ ...initialWizardState("CC2"), mode: "batch", task: "" }}
+      />,
+    );
+    const nextBtn = await screen.findByRole("button", { name: /^next$/i });
+    expect(nextBtn).toBeDisabled();
+    const banner = await screen.findByTestId("wizard-step-error");
+    expect(banner).toHaveTextContent("An autonomous run needs a task to perform.");
+    // The banned wire word (copy.ts) must never appear now that this string
+    // actually renders.
+    expect(banner).not.toHaveTextContent(/batch/i);
+  });
+
   it("fires preflight on entering Review and renders its setup checklist", async () => {
     createRunMock.mockResolvedValue(createdRun);
     render(

@@ -448,6 +448,59 @@ describe("buildSpec — git_pat grant", () => {
       gitPatSecretName: "",
     });
     expect((missingSecret.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
+    // D5/claim4 (worse than filed): a half-configured PAT used to still widen
+    // egress to the typed host even with no grant to justify it. requiredHosts'
+    // union is now gated on the SAME predicate as the grant emission above.
+    expect(missingSecret.inline_policy.allowed_domains).not.toContain("gitlab.com");
+
+    const missingHost = buildSpec({
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "",
+      gitPatSecretName: "gl-pat",
+    });
+    expect((missingHost.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
+  });
+});
+
+// D5/claim4: validateStep("access") used to check only the GitHub repo list +
+// TTL — a git_pat switched on with a host-or-secret left blank produced no
+// error and an enabled Next, yet (pre-fix) still widened egress to the typed
+// host with no PAT ever brokered to reach it.
+describe("validateStep — Access: half-configured git_pat (D5/claim4)", () => {
+  it("errors when enabled with a host but no stored secret", () => {
+    const state = {
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "dev.azure.com",
+      gitPatSecretName: "",
+    };
+    expect(validateStep("access", state)).toBe("Git PAT needs both a host and a stored secret.");
+  });
+
+  it("errors when enabled with a secret but no host", () => {
+    const state = {
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "",
+      gitPatSecretName: "ado-pat",
+    };
+    expect(validateStep("access", state)).toBe("Git PAT needs both a host and a stored secret.");
+  });
+
+  it("passes when disabled, regardless of host/secret", () => {
+    const state = { ...initialWizardState(), gitPatEnabled: false, gitPatHost: "", gitPatSecretName: "" };
+    expect(validateStep("access", state)).toBeNull();
+  });
+
+  it("passes when enabled with both host and secret set", () => {
+    const state = {
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "dev.azure.com",
+      gitPatSecretName: "ado-pat",
+    };
+    expect(validateStep("access", state)).toBeNull();
   });
 });
 

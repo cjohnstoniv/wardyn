@@ -62,15 +62,21 @@ export function firstUseRaisesApproval(v: unknown): boolean {
   return m === "deny_with_review" || m === "wait_for_review";
 }
 
-// firstUseLabel is a short human label for review/summary surfaces.
-export function firstUseLabel(v: unknown): string {
+// firstUseLabel is a short human label for review/summary surfaces. always_deny
+// is a real, restrictive choice ("Always deny") wherever the operator could
+// have picked a review mode instead — labelling it "Off" there reads as LESS
+// restrictive than it is (N4). Only under allow-all egress is the setting
+// genuinely inert (buildSpec forces always_deny and the Egress step hides the
+// control entirely) — callers that know the run is allow-all pass `allowAll`
+// and get the honest "Off (allow-all)" instead.
+export function firstUseLabel(v: unknown, allowAll = false): string {
   switch (asFirstUseMode(v)) {
     case "wait_for_review":
       return "Ask & wait";
     case "deny_with_review":
       return "Ask";
     default:
-      return "Off";
+      return allowAll ? "Off (allow-all)" : "Always deny";
   }
 }
 

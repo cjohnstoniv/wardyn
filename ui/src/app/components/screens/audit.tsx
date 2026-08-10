@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ScrollText,
   Search,
@@ -214,6 +214,7 @@ function groupByDay(events: AuditEvent[]): DayGroup[] {
 }
 
 export function AuditScreen() {
+  const navigate = useNavigate();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -460,9 +461,12 @@ export function AuditScreen() {
       <NewRunDialog
         open={newRunOpen}
         onOpenChange={setNewRunOpen}
-        onCreated={() => {
+        onCreated={(r) => {
           setNewRunOpen(false);
-          load();
+          // One post-launch rule: every entry point lands on the run it
+          // launched (§7). Navigating away unmounts this screen; re-entry
+          // reloads via its own effect, so there's nothing to refresh here.
+          navigate(`/runs/${encodeURIComponent(r.id)}`);
         }}
       />
     </div>

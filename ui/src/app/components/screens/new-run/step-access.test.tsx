@@ -82,6 +82,23 @@ const openaiTeam: IntegrationRow = {
   checkIds: [],
 };
 
+// Wardyn-features-only: azure_openai is impossible for BOTH claude_code and
+// codex_cli (IMPOSSIBLE.azure_openai) — it can never drive any agent, only
+// Wardyn's own features. Distinct from openaiTeam above, which is impossible
+// for claude_code but genuinely compatible with codex_cli.
+const azureFeaturesOnly: IntegrationRow = {
+  id: "ai:azure_openai",
+  category: "ai_provider",
+  name: "Azure OpenAI",
+  typeLabel: "azure · openai key",
+  chips: [],
+  residency: "control_plane",
+  posture: { kind: "configured" },
+  secretNames: ["azure-openai-key"],
+  aiType: "azure_openai",
+  checkIds: [],
+};
+
 function renderStep(overrides?: Partial<Parameters<typeof StepAccess>[0]>) {
   return render(
     <StepAccess
@@ -452,6 +469,35 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     getSetupStatusMock.mockResolvedValue(baseStatus());
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+  });
+
+  // MEDIUM fix: a row that can't drive ANY agent (Wardyn-features-only, e.g.
+  // Azure OpenAI) must not hide behind the neutral "wait for review" line —
+  // that implies a different agent might still resolve it, which is false
+  // here no matter which agent the eventual proposal picks.
+  it("renders the amber none-line (not neutral) when the only integration can't drive ANY agent — Wardyn-features-only", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([azureFeaturesOnly]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "azure_openai", category: "ai_provider", type: "azure_openai" }] }),
+    );
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(screen.queryByText(RD.AGENT_AT_REVIEW_LINE)).toBeNull();
+  });
+
+  // The genuine agent-mismatch case stays neutral: an OpenAI key can't drive
+  // Claude Code (the display agent here) but genuinely could drive Codex CLI —
+  // a real "wait for review" case, unlike the Azure-only case above.
+  it("keeps the neutral wait-for-review line when the only integration could drive a DIFFERENT agent (codex, not the display agent)", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([openaiTeam]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "openai_api_key", category: "ai_provider", type: "openai_api_key" }] }),
+    );
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
   });
 
   // LOW test blind spot: onPatch absent renders the workspace link (never the

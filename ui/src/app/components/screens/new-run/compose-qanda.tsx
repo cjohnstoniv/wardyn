@@ -79,6 +79,13 @@ export function ComposeQandA({
 }) {
   const [answers, setAnswers] = React.useState<Record<string, AnswerState>>({});
   const [currentIndex, setCurrentIndex] = React.useState(0);
+  // N3: the question rail lets the operator jump straight to the last question
+  // and click Continue while an earlier one (e.g. Q2) is still blank — set to
+  // that question's index so submit() can explain instead of silently no-op-ing.
+  // Self-clears: it's only rendered while currentIndex is still on that
+  // question AND it's still unanswered (see the derived condition below), so
+  // answering it — or navigating away — drops the note with no extra state.
+  const [blockedIndex, setBlockedIndex] = React.useState<number | null>(null);
 
   const get = (id: string): AnswerState => answers[id] ?? { selected: [], text: "", note: "" };
   const set = (id: string, next: AnswerState) =>
@@ -89,7 +96,12 @@ export function ComposeQandA({
   const currentAnswered = answered(current, answers[current.id]);
 
   const submit = () => {
-    if (!questions.every((q) => answered(q, answers[q.id]))) return;
+    const firstUnanswered = questions.findIndex((q) => !answered(q, answers[q.id]));
+    if (firstUnanswered !== -1) {
+      setCurrentIndex(firstUnanswered);
+      setBlockedIndex(firstUnanswered);
+      return;
+    }
     onSubmit(
       questions.map((q) => ({ question: q.question, answer: answerToText(q, get(q.id)) })),
     );
@@ -158,6 +170,12 @@ export function ComposeQandA({
         onChange={(v) => set(current.id, v)}
         notes={notes}
       />
+
+      {blockedIndex === currentIndex && !currentAnswered && (
+        <p className="text-xs text-danger" aria-live="polite" data-testid="qanda-unanswered-note">
+          Question {currentIndex + 1} is unanswered.
+        </p>
+      )}
 
       <div className="flex items-center justify-between border-t border-border pt-4">
         {currentIndex === 0 ? (

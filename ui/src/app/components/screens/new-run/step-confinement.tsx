@@ -200,9 +200,6 @@ export function StepConfinement({
             <Label htmlFor="lc-never" className="flex-1 cursor-pointer">
               Keep running until I stop it
             </Label>
-            <span className="font-mono text-[0.6563rem] text-muted-foreground">
-              auto_stop_after_sec
-            </span>
           </label>
           <label className="flex items-center gap-2.5 rounded-lg border border-border p-2.5">
             <RadioGroupItem value="auto" id="lc-auto" />
@@ -217,14 +214,10 @@ export function StepConfinement({
                 onChange={(e) =>
                   patch({ autoStopMinutes: Number(e.target.value), lifecycle: "auto" })
                 }
-                disabled={state.lifecycle !== "auto"}
                 className="w-20 font-mono"
               />
               <span className="text-sm text-muted-foreground">min</span>
             </div>
-            <span className="font-mono text-[0.6563rem] text-muted-foreground">
-              auto_stop_after_sec
-            </span>
           </label>
         </RadioGroup>
       </Field>

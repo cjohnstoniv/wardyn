@@ -377,7 +377,15 @@ export function AppShell({
           being torn down on every dismiss. */}
       {newRunMounted && (
         <React.Suspense fallback={null}>
-          <NewRunDialog open={newRunOpen} onOpenChange={setNewRunOpen} onCreated={() => navigate("/runs")} />
+          <NewRunDialog
+            open={newRunOpen}
+            onOpenChange={setNewRunOpen}
+            // One post-launch rule: every entry point lands on the run it
+            // launched (§7), not just the list — matches runs.tsx's own
+            // openRun and saves the extra click every interactive launch used
+            // to cost (the terminal auto-embeds on the run's own detail page).
+            onCreated={(r) => navigate(`/runs/${encodeURIComponent(r.id)}`)}
+          />
         </React.Suspense>
       )}
     </div>

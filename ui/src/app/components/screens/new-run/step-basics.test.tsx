@@ -65,4 +65,17 @@ describe("StepBasics — run type + sandbox image", () => {
     expect(screen.getByText("Command")).toBeInTheDocument();
     expect(screen.queryByText("Task", { exact: true })).toBeNull();
   });
+
+  // N2: Field's `required` marker (and the paired native attribute) is only
+  // honest when the field is actually conditionally required — Task is
+  // optional in Interactive mode, required in Autonomous (validateStep).
+  it("does not mark Task required in Interactive mode", () => {
+    renderStep({ state: { ...initialWizardState(), mode: "interactive" } });
+    expect(screen.getByPlaceholderText("Describe what the agent should accomplish…")).not.toBeRequired();
+  });
+
+  it("marks Task required in Autonomous mode", () => {
+    renderStep({ state: { ...initialWizardState(), mode: "batch" } });
+    expect(screen.getByPlaceholderText("Describe what the agent should accomplish…")).toBeRequired();
+  });
 });

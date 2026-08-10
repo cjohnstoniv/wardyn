@@ -187,7 +187,7 @@ export function ComposeForm({
       <Field
         label="Describe your task"
         htmlFor="compose-prompt"
-        hint="Describe what you want the agent to do, in plain language. Wardyn proposes a confined run setup for you to review before launch."
+        hint="Describe what you want the agent to do, in plain language. Wardyn proposes a confined run setup for you to review before launch — this feature is in beta."
       >
         <Textarea
           id="compose-prompt"
@@ -198,40 +198,15 @@ export function ComposeForm({
         />
       </Field>
 
+      {/* Run mode gets ONE home (§4): captured upfront, here, as a real input —
+          Review renders the result as a neutral fact chip, never a second
+          control (overriding it after grading would invalidate the displayed
+          risk grade). */}
       <Field
         label="Run mode"
-        hint="Interactive comes up idle so you attach and drive it over a terminal; Autonomous runs the task unattended and stops when done. You can still change this on the proposal."
+        hint="Interactive comes up idle so you attach and drive it over a terminal; Autonomous runs the task unattended and stops when done."
       >
-        {/* Radix supplies the APG radiogroup keyboard behaviour (roving tabindex,
-            arrows move selection AND focus, Home/End) — the wire value is the
-            RUN_MODE key, mapped to the boolean `interactive` compose() sends. */}
-        <RadioGroupPrimitive.Root
-          className="grid grid-cols-2 gap-2"
-          aria-label="Run mode"
-          value={interactive ? "interactive" : "autonomous"}
-          onValueChange={(v) => onInteractiveChange(v === "interactive")}
-        >
-          {(["interactive", "autonomous"] as const).map((m) => {
-            const active = interactive === (m === "interactive");
-            return (
-              <RadioGroupPrimitive.Item
-                key={m}
-                value={m}
-                className={cn(
-                  "flex flex-col items-start gap-0.5 rounded-lg border p-2.5 text-left transition-colors",
-                  active
-                    ? "border-primary/50 bg-primary/10"
-                    : "border-border hover:bg-surface-2",
-                )}
-              >
-                <span className="text-sm font-medium text-foreground">{RUN_MODE[m].label}</span>
-                <span className="text-[0.6875rem] leading-snug text-muted-foreground">
-                  {RUN_MODE[m].blurb}
-                </span>
-              </RadioGroupPrimitive.Item>
-            );
-          })}
-        </RadioGroupPrimitive.Root>
+        <ModeToggle interactive={interactive} onChange={onInteractiveChange} disabled={composing} />
       </Field>
 
       {/* The agent isn't known until the proposal returns — "claude-code" here
@@ -439,5 +414,50 @@ export function ComposeForm({
         </div>
       </div>
     </div>
+  );
+}
+
+// Compact segmented control to choose Interactive vs Autonomous — captured
+// UPFRONT here (§4: one home for run mode); Review renders the result as a
+// neutral fact chip, never a second control (overriding it after grading
+// would silently invalidate the risk grade already on screen). Moved from
+// compose-review.tsx's deleted ModeToggle, unchanged. Radix supplies the APG
+// radiogroup keyboard behaviour (roving tabindex, arrows move selection AND
+// focus, Home/End); the primitive Item is used directly because the shadcn
+// wrapper hardcodes a dot indicator this segmented pill doesn't have.
+function ModeToggle({
+  interactive,
+  onChange,
+  disabled,
+}: {
+  interactive: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <RadioGroupPrimitive.Root
+      aria-label="Run mode"
+      className="inline-flex rounded-md border border-border p-0.5"
+      value={interactive ? "interactive" : "autonomous"}
+      onValueChange={(v) => onChange(v === "interactive")}
+      disabled={disabled}
+    >
+      {(["interactive", "autonomous"] as const).map((m) => {
+        const active = interactive === (m === "interactive");
+        return (
+          <RadioGroupPrimitive.Item
+            key={m}
+            value={m}
+            title={RUN_MODE[m].blurb}
+            className={cn(
+              "rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50",
+              active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {RUN_MODE[m].label}
+          </RadioGroupPrimitive.Item>
+        );
+      })}
+    </RadioGroupPrimitive.Root>
   );
 }

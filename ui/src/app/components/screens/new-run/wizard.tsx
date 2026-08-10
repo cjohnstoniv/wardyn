@@ -7,7 +7,7 @@
 // CANONICAL wire contract and, on launch, optionally persists the spec as a named
 // policy (createPolicy) then creates the run (createRun) with inline_policy.
 import * as React from "react";
-import { ArrowLeft, ArrowRight, KeyRound, Loader2, Rocket } from "lucide-react";
+import { ArrowLeft, ArrowRight, KeyRound, Loader2, Rocket, TriangleAlert } from "lucide-react";
 import type {
   AgentRun,
   ConfinementClass,
@@ -56,6 +56,7 @@ export function PermissionWizard({
   onCreated,
   initialState,
   initialWorkspaces,
+  initialInteractive,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -70,6 +71,12 @@ export function PermissionWizard({
   // in wizard — already carries its own resolved class). Ignored once
   // `initialState` is set.
   initialWorkspaces?: RunWorkspaceSelection[];
+  // Seeds Basics' Run-mode pick on a FRESH entry from Describe's own upfront
+  // ModeToggle choice (new-run-dialog.tsx's `interactive` state) — "Configure
+  // manually" used to silently re-seed initialWizardState's own "interactive"
+  // default regardless of what the operator had just picked. Same
+  // ignored-once-initialState-is-set rule as initialWorkspaces above.
+  initialInteractive?: boolean;
 }) {
   const [stepIdx, setStepIdx] = React.useState(0);
   const [state, setState] = React.useState<WizardState>(
@@ -177,8 +184,12 @@ export function PermissionWizard({
     mergedWs.current = new Set();
     if (initialState) {
       setState(initialState);
-    } else if (initialWorkspaces?.length) {
-      setState((s) => ({ ...s, workspaces: initialWorkspaces }));
+    } else if (initialWorkspaces?.length || initialInteractive !== undefined) {
+      setState((s) => ({
+        ...s,
+        ...(initialWorkspaces?.length ? { workspaces: initialWorkspaces } : {}),
+        ...(initialInteractive !== undefined ? { mode: initialInteractive ? "interactive" : "batch" } : {}),
+      }));
     }
     setAvailableClasses(null);
     let alive = true;
@@ -205,7 +216,11 @@ export function PermissionWizard({
         setAvailableClasses(classes);
         if (initialState) return; // keep the prefilled proposal verbatim
         const fresh = initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[]));
-        setState(initialWorkspaces?.length ? { ...fresh, workspaces: initialWorkspaces } : fresh);
+        setState({
+          ...fresh,
+          ...(initialWorkspaces?.length ? { workspaces: initialWorkspaces } : {}),
+          ...(initialInteractive !== undefined ? { mode: initialInteractive ? "interactive" : "batch" } : {}),
+        });
       });
     };
     probe();
@@ -215,7 +230,7 @@ export function PermissionWizard({
     return () => {
       alive = false;
     };
-  }, [open, loadSecrets, reloadWorkspaces, initialState, initialWorkspaces]);
+  }, [open, loadSecrets, reloadWorkspaces, initialState, initialWorkspaces, initialInteractive]);
 
   // When a workspace is selected, load its recorded profile's egress (approved_egress
   // ∪ scanned registries) into the Egress step so a new run VISIBLY inherits the
@@ -432,6 +447,24 @@ export function PermissionWizard({
               />
             )}
           </div>
+
+          {/* N2: validateStep's message used to be dead copy — it only disabled
+              Next/Review-now with no explanation anywhere. Render it passively
+              (computed every render, not just on click) so a blocked step is
+              never a silent grey button. Suppressed when it's byte-identical to
+              the launch-error banner below (launch() re-validates every step and
+              sets `error` to this same string when Review itself is invalid) so
+              the same sentence never renders twice. */}
+          {stepError && stepError !== error && (
+            <div
+              className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning"
+              aria-live="polite"
+              data-testid="wizard-step-error"
+            >
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              <p>{stepError}</p>
+            </div>
+          )}
 
           {error && (
             <div

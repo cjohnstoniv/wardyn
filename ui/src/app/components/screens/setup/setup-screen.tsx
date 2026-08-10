@@ -16,7 +16,7 @@
 // not here. It is the MANDATORY first-run gate — there is no early escape; see
 // App.tsx's RequireSetupComplete for everything that clears it.
 import * as React from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -73,6 +73,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // only place a proxy is configured. Read once at mount (an unknown or
   // absent value just starts at the beginning); the URL is not kept in sync
   // afterwards, since the rail is the navigation from then on.
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [stepId, setStepId] = React.useState<SetupStepId>(() => {
     const want = searchParams.get("step");
@@ -479,9 +480,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       <NewRunDialog
         open={newRunOpen}
         onOpenChange={setNewRunOpen}
-        onCreated={() => {
+        onCreated={(r) => {
+          // One post-launch rule: every entry point lands on the run it
+          // launched (§7) — supersedes onDone's own plain navigate("/runs")
+          // (App.tsx) with the more specific detail-page destination.
           dismissSetup();
-          onDone();
+          navigate(`/runs/${encodeURIComponent(r.id)}`);
         }}
       />
     </>

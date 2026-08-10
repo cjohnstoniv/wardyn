@@ -149,15 +149,19 @@ test.describe("New Run wizard", () => {
     await expect(dlg.getByText("none (ephemeral scratch)")).toBeVisible();
   });
 
-  test("autonomous mode requires a task before advancing", async ({ page }) => {
+  test("autonomous mode requires a task before advancing, and says why", async ({ page }) => {
     const dlg = await openWizard(page);
     await fillValidBasics(dlg);
     // Switch to Autonomous — now the task is required (validateStep basics).
     await dlg.getByRole("radio", { name: "Autonomous" }).click();
     const nextBtn = dlg.getByRole("button", { name: "Next" });
     await expect(nextBtn).toBeDisabled();
+    // N2: the block used to be a silent grey button — validateStep's message
+    // is now rendered inline, not dead copy.
+    await expect(dlg.getByText("An autonomous run needs a task to perform.")).toBeVisible();
     await dlg.getByPlaceholder("Describe what the agent should accomplish…").fill("Run the audit");
     await expect(nextBtn).toBeEnabled();
+    await expect(dlg.getByText("An autonomous run needs a task to perform.")).toHaveCount(0);
   });
 
   test("steps through all five steps end to end", async ({ page }) => {
@@ -361,9 +365,11 @@ test.describe("New Run wizard", () => {
     await dlg.getByRole("button", { name: "Launch run" }).click();
     const created = (await (await createResp).json()) as { id: string };
 
-    // The wizard closes on success and the shell navigates to /runs.
+    // The wizard closes on success and the shell navigates straight to the
+    // launched run's own detail page (every launch lands on the run it
+    // launched, not just the list).
     await expect(page.getByRole("button", { name: "Launch run" })).toHaveCount(0);
-    await expect(page).toHaveURL(/\/runs$/);
+    await expect(page).toHaveURL(new RegExp(`/runs/${created.id}$`));
 
     // THE created run (by id, not just any local:payments row — a re-run against
     // an un-reseeded backend leaves prior launches behind) exists addressably,

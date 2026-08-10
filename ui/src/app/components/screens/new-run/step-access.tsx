@@ -114,12 +114,18 @@ export function StepAccess({
 
         {state.githubEnabled && (
           <div className="mt-3 space-y-4 border-t border-border pt-3">
-            <Field label="Repositories" htmlFor="gh-repos" hint="One or more org/repo, comma or space separated.">
+            <Field
+              label="Repositories"
+              htmlFor="gh-repos"
+              hint="One or more org/repo, comma or space separated."
+              required
+            >
               <Input
                 id="gh-repos"
                 placeholder="acme/payments-service, acme/shared-libs"
                 value={state.githubRepos}
                 onChange={(e) => patch({ githubRepos: e.target.value })}
+                required
                 className="font-mono"
               />
             </Field>
@@ -152,13 +158,14 @@ export function StepAccess({
               />
             </div>
 
-            <Field label="Token TTL (minutes)" htmlFor="gh-ttl">
+            <Field label="Token TTL (minutes)" htmlFor="gh-ttl" required>
               <Input
                 id="gh-ttl"
                 type="number"
                 min={1}
                 value={state.githubTtlMinutes}
                 onChange={(e) => patch({ githubTtlMinutes: Number(e.target.value) })}
+                required
                 className="w-32 font-mono"
               />
             </Field>
@@ -191,17 +198,23 @@ export function StepAccess({
 
         {state.gitPatEnabled && (
           <div className="mt-3 space-y-4 border-t border-border pt-3">
-            <Field label="Host" htmlFor="pat-host" hint="The git host, e.g. dev.azure.com or gitlab.com. Unioned into allowed egress.">
+            <Field
+              label="Host"
+              htmlFor="pat-host"
+              hint="The git host, e.g. dev.azure.com or gitlab.com. Unioned into allowed egress once a secret is selected."
+              required
+            >
               <Input
                 id="pat-host"
                 placeholder="dev.azure.com"
                 value={state.gitPatHost}
                 onChange={(e) => patch({ gitPatHost: e.target.value })}
+                required
                 className="font-mono"
               />
             </Field>
 
-            <Field label="Stored PAT secret">
+            <Field label="Stored PAT secret" required>
               <div className="flex items-center gap-2">
                 <SecretCombobox
                   value={state.gitPatSecretName}
@@ -265,6 +278,21 @@ function agentCapability(agent: WizardState["agent"]): AiCapability {
 // the verbatim fact this whole redesign renders instead of a toggle.
 export function incompatibleReason(row: IntegrationRow, capability: AiCapability): string | undefined {
   return row.aiType ? IMPOSSIBLE[row.aiType]?.[capability] : undefined;
+}
+
+// The two real agent capabilities an integration can drive — never direct_api
+// or wardyn_features, neither of which is "an agent".
+const AGENT_CAPABILITIES: AiCapability[] = ["claude_code", "codex_cli"];
+
+// Whether `row` could EVER drive some agent, per the same IMPOSSIBLE-map
+// compatibility resolveModelAccess's own `compatible` check reads below —
+// never whether it's actually marked/pinned/resolved right now. This is what
+// tells apart "just not wired as a default yet, but some agent could still
+// use it" from "impossible for every agent" (e.g. an Azure-OpenAI-only
+// integration, which powers only Wardyn's own features) — only the latter
+// deserves the amber RD.NONE_LINE instead of the neutral wait-for-review line.
+function couldDriveSomeAgent(row: IntegrationRow): boolean {
+  return AGENT_CAPABILITIES.some((cap) => !incompatibleReason(row, cap));
 }
 
 export function resolveModelAccess(
@@ -420,12 +448,17 @@ export function ModelAccessCard({
   // — `resolved` is meaningless (computed off default/empty state), so it must
   // not render as either the amber "nothing resolves" line or a false positive.
   const loaded = !workspacesLoading && aiLoaded && statusLoaded;
-  // Neutral, not amber (M7): the compose-form usage (no onPatch — the real
-  // agent isn't known until the proposal resolves it) when integrations DO
-  // exist but simply don't match the hardcoded preview agent. The manual
-  // wizard (onPatch present) is unaffected — it keeps the amber line for every
-  // unresolved case, as it always has.
-  const neutralMismatch = loaded && !resolved && !onPatch && ai.length > 0;
+  // Neutral, not amber (M7, tightened): the compose-form usage (no onPatch —
+  // the real agent isn't known until the proposal resolves it) when at least
+  // one fetched row could drive SOME agent (couldDriveSomeAgent) — a genuine
+  // "wait for review" case. When NOT ONE row can ever drive any agent (e.g. a
+  // Wardyn-features-only integration such as Azure OpenAI), the neutral line
+  // would be dishonest — it implies a different agent might still resolve it
+  // when none ever will — so that case renders the amber RD.NONE_LINE, same as
+  // the zero-providers case. The manual wizard (onPatch present) is
+  // unaffected — it keeps the amber line for every unresolved case, as it
+  // always has.
+  const neutralMismatch = loaded && !resolved && !onPatch && ai.some(couldDriveSomeAgent);
 
   return (
     <div className="rounded-xl border border-border bg-card p-3.5">

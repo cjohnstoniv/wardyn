@@ -88,11 +88,34 @@ describe("StepConfinement copy", () => {
     expect(patched).toEqual({ confinementClass: "CC2" });
   });
 
-  it("uses the wire field name as a mono hint, not a magic-number readout", () => {
+  // D12/claim8: the raw wire field name used to print next to BOTH lifecycle
+  // radios (identical text discriminating nothing) — the only raw snake_case
+  // field rendered as visible copy anywhere in New Run, contradicting this
+  // file's own honesty header comment. The Review YamlBlock is the sanctioned
+  // escape hatch for wire-shape detail; this card stays plain-English only.
+  it("never renders the raw wire field name auto_stop_after_sec as visible copy", () => {
     renderStep();
     expect(screen.getByText("Keep running until I stop it")).toBeInTheDocument();
-    expect(screen.queryByText(/auto_stop_after_sec = -1/)).toBeNull();
-    expect(screen.getAllByText("auto_stop_after_sec").length).toBeGreaterThan(0);
+    expect(screen.getByText("Auto-stop after")).toBeInTheDocument();
+    expect(screen.queryByText(/auto_stop_after_sec/)).toBeNull();
+  });
+
+  // N6: the number input patched { autoStopMinutes, lifecycle: "auto" } on
+  // change, but stayed `disabled` until "auto" was ALREADY selected — the
+  // lifecycle half of that patch was unreachable. Dropping `disabled` makes
+  // the code's own intent (type a number, the radio follows) actually work.
+  it("stays enabled while 'never' is selected, so typing it selects the auto radio (N6)", () => {
+    let patched: Partial<ReturnType<typeof initialWizardState>> | null = null;
+    renderStep({
+      state: { ...initialWizardState(), lifecycle: "never" },
+      patch: (p) => {
+        patched = p;
+      },
+    });
+    const input = screen.getByDisplayValue("60"); // initialWizardState's autoStopMinutes
+    expect(input).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: "45" } });
+    expect(patched).toEqual({ autoStopMinutes: 45, lifecycle: "auto" });
   });
 
   it("badges the strongest available tier's tile Recommended, same nudge as Getting started's tier picker", () => {

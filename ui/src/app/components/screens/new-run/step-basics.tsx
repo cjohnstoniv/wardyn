@@ -271,6 +271,7 @@ export function StepBasics({
               ? "Autonomous runs need a command — it runs unattended as a plain shell command in the sandbox."
               : "Autonomous runs need a task — the agent runs it unattended."
         }
+        required={state.mode === "batch"}
       >
         <Textarea
           id="task"
@@ -282,6 +283,7 @@ export function StepBasics({
           value={state.task}
           onChange={(e) => patch({ task: e.target.value })}
           rows={3}
+          required={state.mode === "batch"}
           className={state.runType === "command" ? "font-mono" : undefined}
         />
       </Field>

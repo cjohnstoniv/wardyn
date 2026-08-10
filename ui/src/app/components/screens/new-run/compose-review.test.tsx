@@ -108,9 +108,9 @@ function renderReview(
 ) {
   const onAcknowledge = vi.fn();
   const onApproveLaunch = vi.fn();
+  const onEditPrompt = vi.fn();
   const onEditInWizard = vi.fn();
   const onCancel = vi.fn();
-  const onInteractiveChange = vi.fn();
   const onAddSecret = opts.onAddSecret ?? vi.fn();
   const onFixWorkspace = opts.onFixWorkspace ?? vi.fn();
   const utils = render(
@@ -120,11 +120,11 @@ function renderReview(
       interactive={opts.interactive ?? false}
       acknowledged={opts.acknowledged ?? false}
       launching={false}
-      onInteractiveChange={onInteractiveChange}
       onAcknowledge={onAcknowledge}
       onApproveLaunch={onApproveLaunch}
       onAddSecret={onAddSecret}
       onFixWorkspace={onFixWorkspace}
+      onEditPrompt={onEditPrompt}
       onEditInWizard={onEditInWizard}
       onCancel={onCancel}
     />,
@@ -132,9 +132,9 @@ function renderReview(
   return {
     onAcknowledge,
     onApproveLaunch,
+    onEditPrompt,
     onEditInWizard,
     onCancel,
-    onInteractiveChange,
     onAddSecret,
     onFixWorkspace,
     ...utils,
@@ -182,24 +182,49 @@ describe("ComposeReview — risk grade", () => {
   });
 });
 
-describe("ComposeReview — mode selector (D3: Interactive / Autonomous)", () => {
-  it("renders an Interactive/Autonomous toggle reflecting the current mode", () => {
-    renderReview(baseResult(), { interactive: false });
-    const group = screen.getByRole("radiogroup", { name: /run mode/i });
-    expect(within(group).getByRole("radio", { name: "Interactive" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(within(group).getByRole("radio", { name: "Autonomous" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+// §5: the risk panel's container tone is by whether it needs YOU (an ack),
+// not by grade — a default-configuration MEDIUM used to paint itself amber on
+// every run, training operators to ignore the colour that must survive for
+// the HIGH case. Nothing about the grade itself is softened (RiskBadge, why[0],
+// RISK_ATTRIBUTION, and the HIGH ack gate are all unchanged — see the other
+// describes in this file).
+describe("ComposeReview — risk panel container tone is by need-you, not by grade (§5)", () => {
+  it("renders the neutral tone for a MEDIUM grade that needs no acknowledgment — the badge still says Medium", () => {
+    renderReview(baseResult()); // overall_risk: "medium", no high items => needsAck false
+    const panel = screen.getByText(/^Risk:$/).closest("div.rounded-xl");
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toMatch(/bg-muted\/30/);
+    expect(panel!.className).not.toMatch(/bg-warning-subtle/);
+    expect(screen.getByText("Medium", { exact: true })).toBeInTheDocument();
   });
 
-  it("fires onInteractiveChange when the operator overrides the proposed mode", async () => {
-    const { onInteractiveChange } = renderReview(baseResult(), { interactive: false });
-    await userEvent.setup().click(screen.getByRole("radio", { name: "Interactive" }));
-    expect(onInteractiveChange).toHaveBeenCalledWith(true);
+  it("renders the danger tone only when a HIGH item needs an acknowledgment", () => {
+    renderReview(highRiskResult()); // needsAck true
+    const panel = screen.getByText(/^Risk:$/).closest("div.rounded-xl");
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toMatch(/bg-danger-subtle/);
+  });
+});
+
+// §4: run mode gets ONE home — the form, upfront. Review shows the mode the
+// operator already picked as a neutral FACT, never a second control: the
+// composer never decides mode (compose.go's run.Interactive = req.Interactive
+// discards its guess), and flipping it here used to silently invalidate the
+// risk grade already on screen (§5's honesty hole — an interactive proposal's
+// never-reap grades Low; flipping to Autonomous post-grade would launch a
+// never-reaped autonomous run under a Low badge with no ack gate).
+describe("ComposeReview — run mode renders as a neutral fact chip, not a toggle (D3/§4)", () => {
+  it("renders Autonomous as a chip and offers no radiogroup to override it", () => {
+    renderReview(baseResult(), { interactive: false });
+    expect(screen.getByText("Autonomous", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /run mode/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("renders Interactive as a chip and offers no radiogroup to override it", () => {
+    renderReview(baseResult(), { interactive: true });
+    expect(screen.getByText("Interactive", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /run mode/i })).not.toBeInTheDocument();
   });
 });
 
@@ -223,9 +248,9 @@ describe("ComposeReview — high-risk acknowledgment gate (D8)", () => {
         interactive={false}
         acknowledged={true}
         launching={false}
-        onInteractiveChange={() => {}}
         onAcknowledge={onAcknowledge}
         onApproveLaunch={onApproveLaunch}
+        onEditPrompt={() => {}}
         onEditInWizard={() => {}}
         onCancel={() => {}}
       />,
@@ -261,9 +286,11 @@ describe("ComposeReview — high-risk acknowledgment gate (D8)", () => {
     expect(screen.getByRole("button", { name: /approve & launch/i })).toBeEnabled();
   });
 
-  it("Adjust in full wizard and Cancel fire their callbacks", async () => {
-    const { onEditInWizard, onCancel } = renderReview(baseResult());
+  it("Edit prompt, Adjust in full wizard, and Cancel fire their callbacks", async () => {
+    const { onEditPrompt, onEditInWizard, onCancel } = renderReview(baseResult());
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^edit prompt$/i }));
+    expect(onEditPrompt).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: /edit in wizard/i }));
     expect(onEditInWizard).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));

@@ -35,11 +35,18 @@
 //   * barriers render as the user labels Fence/Wall/Vault — the wire codes
 //     CC1/CC2/CC3 NEVER leak as a bare visible label (only inside the collapsed
 //     raw-JSON escape hatch, always quoted, and in native title tooltips).
-//   * the run-mode pair is Interactive / Autonomous — never "Batch".
+//   * the run-mode pair is Interactive / Autonomous — never "Batch" — captured
+//     upfront on Describe and shown on Review as a neutral fact chip, never a
+//     second control (overriding it post-grade would invalidate the displayed
+//     risk grade).
 //   * capabilities/guarantees are split CAN ("This run can") / CAN'T ("It can't").
 //   * the risk grade is deterministic ("Graded by Wardyn's rules, not the model.")
 //     and ONLY a HIGH grade gates launch behind an acknowledgment.
-//   * footer actions are "Approve & launch" and "Edit in wizard".
+//   * footer actions are "Approve & launch", "Edit prompt", and "Edit in wizard".
+//   * a workspace pick on the first screen lands DIRECTLY on Describe — there
+//     is no separate Describe/Configure chooser screen; "Configure manually"
+//     is a footer button on Describe itself.
+//   * every launch lands on the launched run's own detail page, not the list.
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
@@ -59,14 +66,15 @@ function dialog(page: Page): Locator {
 // load-bearing, NOT belt-and-braces: chooseWorkspace (new-run-dialog.tsx)
 // reads composerEnabled — derived from `backends` — AT CLICK TIME, so a click
 // landing inside the probe window routes straight into the manual wizard with
-// no way back to Describe/Configure, even on a control plane where the
-// composer really is enabled (the workspace-step OptionCards carry
-// `disabled={backends === null}` for exactly this reason — see
-// new-run-dialog.tsx). Clears the workspace-first step (Stage 3) via the "No
-// workspace — ad-hoc run" escape so every compose test below still exercises
+// no way back to Describe, even on a control plane where the composer really
+// is enabled (the workspace-step OptionCards carry `disabled={backends ===
+// null}` for exactly this reason — see new-run-dialog.tsx). Clears the
+// workspace-first step (Stage 3) via the "No workspace — ad-hoc run" escape,
+// which now lands DIRECTLY on Describe (no intermediate chooser screen — the
+// deleted "choose" screen) so every compose test below still exercises
 // ComposeForm's OWN WorkspacePicker (selectWorkspace) as a separate,
 // still-editable pick — mirrors wizard.spec.ts's openWizard. Returns the
-// dialog on the Describe/Configure entry chooser.
+// dialog already on Describe.
 async function openChooser(page: Page): Promise<Locator> {
   await gotoConsole(page);
   const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
@@ -78,10 +86,11 @@ async function openChooser(page: Page): Promise<Locator> {
   return dlg;
 }
 
-// Open the New Run dialog and switch to the "Describe your task" compose form.
+// Open the New Run dialog on the "Describe your task" compose form — the
+// ad-hoc escape now lands there directly, so this is just openChooser with an
+// assertion that we're really on it.
 async function openDescribe(page: Page): Promise<Locator> {
   const dlg = await openChooser(page);
-  await dlg.getByRole("button", { name: /Describe your task/ }).click();
   // The compose form's prompt textarea proves we're on it.
   await expect(dlg.getByLabel("Describe your task")).toBeVisible();
   return dlg;
@@ -156,9 +165,10 @@ test.describe("AI Run Composer — Describe your task", () => {
     const card = dlg.getByRole("button", { name: /payments/ });
     await expect(card).toBeVisible();
     await card.click();
-    await dlg.getByRole("button", { name: /Describe your task/ }).click();
 
-    // Already attached as the primary — no combobox interaction.
+    // Lands DIRECTLY on Describe — no separate Describe/Configure chooser to
+    // click through — already attached as the primary, no combobox interaction.
+    await expect(dlg.getByLabel("Describe your task")).toBeVisible();
     await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
     await expect(dlg.getByText("Comes with:")).toBeVisible();
 
@@ -218,9 +228,12 @@ test.describe("AI Run Composer — Describe your task", () => {
     // And the banned egress adjective never appears.
     expect(await dlg.innerText()).not.toMatch(/unrestricted/i);
 
-    // The run-mode control offers Interactive / Autonomous (never "Batch").
-    await expect(dlg.getByRole("radiogroup", { name: "Run mode" })).toBeVisible();
-    await expect(dlg.getByRole("radio", { name: "Autonomous" })).toBeVisible();
+    // Run mode was captured upfront on Describe and renders here as a neutral
+    // fact CHIP — never "Batch", and never a second control to override it
+    // (overriding it after grading would invalidate the risk grade already on
+    // screen — §5).
+    await expect(dlg.getByText("Autonomous", { exact: true })).toBeVisible();
+    await expect(dlg.getByRole("radiogroup", { name: "Run mode" })).toHaveCount(0);
 
     // The CAN / CAN'T split.
     await expect(dlg.getByText("This run can")).toBeVisible();
@@ -335,6 +348,29 @@ test.describe("AI Run Composer — Describe your task", () => {
     expect(createFired).toBe(false);
   });
 
+  // §2: the retreat Review was missing — before this, Cancel destroyed the
+  // session and "Edit in wizard" abandoned the conversation, so there was no
+  // way to change what you asked for.
+  test("Edit prompt returns to Describe with the prompt intact and re-composes cleanly", async ({
+    page,
+  }) => {
+    const dlg = await openDescribe(page);
+    const task = "Refactor the parser in this checkout.";
+    await compose(dlg, task);
+
+    await dlg.getByRole("button", { name: "Edit prompt" }).click();
+
+    // Back on Describe, with the SAME prompt text still in the textarea.
+    const prompt = dlg.getByLabel("Describe your task");
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toHaveValue(task);
+
+    // Nothing is broken by the retreat — composing again reaches the review
+    // screen exactly as before.
+    await dlg.getByRole("button", { name: "Compose" }).click();
+    await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
+  });
+
   test("Edit in wizard drops the proposal into the prefilled manual 5-step wizard", async ({
     page,
   }) => {
@@ -367,14 +403,19 @@ test.describe("AI Run Composer — Describe your task", () => {
     );
   });
 
-  test("a mode switch from Describe returns to manual configuration (the wizard)", async ({
+  test("Back on Describe returns to the workspace chooser; Configure manually hands off to the wizard", async ({
     page,
   }) => {
     const dlg = await openDescribe(page);
 
-    // The describe form's footer "Back" returns to the entry chooser.
+    // Back returns to the workspace-first pick — no intermediate "choose"
+    // screen any more (deleted; Configure manually now lives on Describe's
+    // own footer, exercised below).
     await dlg.getByRole("button", { name: "Back" }).click();
-    // Pick "Configure manually" from the chooser.
+    await expect(dlg.getByRole("button", { name: /No workspace — ad-hoc run/ })).toBeVisible();
+
+    // Re-enter Describe and use its OWN "Configure manually" footer button.
+    await dlg.getByRole("button", { name: /No workspace — ad-hoc run/ }).click();
     await dlg.getByRole("button", { name: /Configure manually/ }).click();
 
     // The manual wizard takes over as a CLEAN config: Basics with nothing
@@ -441,16 +482,17 @@ test.describe("AI Run Composer — Describe your task", () => {
     await expect(launch).toBeEnabled();
 
     // The launch fires a create POST /api/v1/runs.
-    const createReq = page.waitForRequest(
-      (req) => req.method() === "POST" && /\/api\/v1\/runs$/.test(req.url()),
+    const createResp = page.waitForResponse(
+      (r) => r.request().method() === "POST" && /\/api\/v1\/runs$/.test(r.url()),
     );
     await launch.click();
-    await createReq;
+    const created = (await (await createResp).json()) as { id: string };
 
-    // The composer dialog closes on success and the shell navigates to /runs,
-    // where the newly-created run (carrying the fake proposal's task) is listed.
+    // The composer dialog closes on success and the shell navigates straight
+    // to the launched run's own detail page (§7: every launch lands on the
+    // run it launched, not just the list).
     await expect(page.getByRole("heading", { name: "Proposed setup" })).toHaveCount(0);
-    await expect(page).toHaveURL(/\/runs$/);
+    await expect(page).toHaveURL(new RegExp(`/runs/${created.id}$`));
     // .first(): this mutating test creates a run with this task, so a re-run
     // against a non-reset backend leaves more than one (same convention as the
     // workspace assertion below).

@@ -148,6 +148,41 @@ describe("StepReview — preflight surfacing", () => {
     expect(screen.getByTestId("review-no-model-access")).toBeInTheDocument();
     expect(screen.queryByTestId("review-batch-no-model")).toBeNull();
   });
+
+  // D3/claim2: the old remedy ("Go back to Access and pick a stored key") named
+  // a control step-access.tsx no longer has — model access resolves from
+  // integrations, and there is no manual picker on Access to "go back" to.
+  it("the no-model-access remedy names Integrations, not the deleted Access picker", () => {
+    render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight()}
+        preflightStatus="idle"
+      />,
+    );
+    const banner = screen.getByTestId("review-no-model-access");
+    expect(banner).toHaveTextContent(/Connect a provider under Integrations/);
+    expect(banner).not.toHaveTextContent(/pick a stored key/i);
+    expect(banner).not.toHaveTextContent(/go back to access/i);
+  });
+});
+
+// N4: the same wire value used to read "Off" everywhere — reading as LESS
+// restrictive than always_deny actually is on a normal allowlist. "Off" is
+// only honest once allow-all makes the setting genuinely inert.
+describe("StepReview — First-use approval label (N4)", () => {
+  it("reads 'Always deny' for a real always_deny choice on a normal allowlist", () => {
+    render(
+      <StepReview state={{ ...initialWizardState("CC2"), firstUseApproval: "always_deny" }} patch={() => {}} />,
+    );
+    expect(screen.getByText("Always deny")).toBeInTheDocument();
+  });
+
+  it("reads 'Off (allow-all)' once egress is allow-all — buildSpec forces always_deny there, and it's genuinely inert", () => {
+    render(<StepReview state={{ ...initialWizardState("CC2"), allowAllEgress: true }} patch={() => {}} />);
+    expect(screen.getByText("Off (allow-all)")).toBeInTheDocument();
+  });
 });
 
 // A local directory used to leak through as "Repo: local:<basename>" — the

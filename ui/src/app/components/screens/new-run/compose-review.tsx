@@ -18,7 +18,6 @@
 //     gates launch behind an explicit acknowledgment;
 //   • the real launch / adjust / cancel actions, wired to the actual proposal.
 import * as React from "react";
-import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import {
   ArrowUpRight,
   ChevronDown,
@@ -55,11 +54,11 @@ export function ComposeReview({
   acknowledged,
   launching,
   launchError,
-  onInteractiveChange,
   onAcknowledge,
   onApproveLaunch,
   onAddSecret,
   onFixWorkspace,
+  onEditPrompt,
   onEditInWizard,
   onCancel,
 }: {
@@ -69,15 +68,18 @@ export function ComposeReview({
   // data the dialog already has, not re-derived here). Absent/empty renders no
   // checklist section — never a crash against an older server.
   setupItems?: SetupItem[];
-  // The run mode the user will launch with. Seeded from the composer's proposal
-  // but operator-overridable here (the composer ADVISES; the human decides).
+  // The run mode the user will launch with — captured UPFRONT on Describe
+  // (compose-form.tsx's ModeToggle) and rendered here as a neutral FACT chip,
+  // never a second control: overriding it after grading would silently
+  // invalidate the risk grade already on screen (§5 — the mode that was graded
+  // is the mode that launches). To change it, "Edit prompt" retreats to
+  // Describe, which re-grades on the next Compose.
   interactive: boolean;
   acknowledged: boolean;
   launching: boolean;
   // A create-run failure, surfaced INLINE here (not a toast) so the operator keeps
   // the proposal and can fix it in place. null when there's no error.
   launchError?: string | null;
-  onInteractiveChange: (v: boolean) => void;
   onAcknowledge: (v: boolean) => void;
   onApproveLaunch: () => void;
   // Open the Add-secret dialog for a secret the launch error OR a setup-checklist
@@ -86,6 +88,9 @@ export function ComposeReview({
   onAddSecret?: (name: string) => void;
   // Kick off a (re-)scan for a setup-checklist item's `scan_workspace` fix.
   onFixWorkspace?: (workspaceId: string) => void;
+  // Retreat to Describe with the prompt/selections/session intact (§2) — the
+  // fix for the honesty hole a mode override used to open (§5).
+  onEditPrompt: () => void;
   onEditInWizard: () => void;
   onCancel: () => void;
 }) {
@@ -134,6 +139,7 @@ export function ComposeReview({
 
   const why = React.useMemo(() => whyRisky(risk_assessment), [risk_assessment]);
   const autoStop = autoStopLabel(inline_policy.auto_stop_after_sec);
+  const modeKey = interactive ? "interactive" : "autonomous";
 
   return (
     <div className="space-y-5">
@@ -147,10 +153,6 @@ export function ComposeReview({
           <Chip tone="primary" title="The AI Run Composer is in beta — expect rough edges.">
             Beta
           </Chip>
-          <StepDots />
-          <span className="text-[0.7188rem] text-muted-foreground">
-            Describe · Clarify · <span className="text-foreground">Review</span>
-          </span>
         </div>
 
         <div>
@@ -178,7 +180,12 @@ export function ComposeReview({
         <div className="flex flex-wrap items-center gap-2">
           <AgentBadge agent={run.agent} />
           <ConfinementChip value={inline_policy.min_confinement_class} />
-          <ModeToggle interactive={interactive} onChange={onInteractiveChange} disabled={launching} />
+          {/* Neutral FACT, not a toggle (§4 — one home for run mode: the form,
+              upfront). RUN_MODE's blurb rides in the native title tooltip, same
+              spot the deleted toggle's own item title used. */}
+          <Chip tone="neutral" title={RUN_MODE[modeKey].blurb}>
+            {RUN_MODE[modeKey].label}
+          </Chip>
           {run.repo && (
             <Chip tone="neutral" mono>
               <GitBranch className="size-3" />
@@ -343,6 +350,12 @@ export function ComposeReview({
         <Button variant="ghost" onClick={onCancel} disabled={launching}>
           Cancel
         </Button>
+        {/* The retreat (§2): nothing needs saving on the way back to Describe —
+            see new-run-dialog.tsx's editPrompt. Deliberately no confirm-on-Cancel
+            dialog either — this affordance IS the fix for that gap. */}
+        <Button variant="ghost" onClick={onEditPrompt} disabled={launching}>
+          Edit prompt
+        </Button>
         <Button variant="outline" onClick={onEditInWizard} disabled={launching} className="gap-1.5">
           <Settings2 className="size-4" />
           Edit in wizard
@@ -356,10 +369,12 @@ export function ComposeReview({
   );
 }
 
-// Deterministic risk grade (D8): tone escalates with the grade, RISK_ATTRIBUTION
-// makes clear Wardyn's rules graded this — not the model — and ONLY a HIGH grade
-// gates launch behind an explicit acknowledgment. The high items list the grader's
-// plain-language rationales (never the raw wire field / invariant ref — D4).
+// Deterministic risk grade (D8): RISK_ATTRIBUTION makes clear Wardyn's rules
+// graded this — not the model — and ONLY a HIGH grade gates launch behind an
+// explicit acknowledgment. Container tone escalates by whether it needs an
+// acknowledgment, not by the raw grade (see `tone` below, §5) — the high items
+// list the grader's plain-language rationales (never the raw wire field /
+// invariant ref — D4).
 function RiskPanel({
   overallRisk,
   why,
@@ -375,12 +390,12 @@ function RiskPanel({
   acknowledged: boolean;
   onAcknowledge: (v: boolean) => void;
 }) {
-  const tone =
-    overallRisk === "high"
-      ? "border-danger/40 bg-danger-subtle"
-      : overallRisk === "medium"
-        ? "border-warning/30 bg-warning-subtle"
-        : "border-border bg-muted/30";
+  // Tone by whether it needs YOU, not by grade (§5) — a Medium default (the
+  // typical CC2 host) used to paint itself amber on every run, training
+  // operators to ignore the colour that must survive for the HIGH case.
+  // RiskBadge below still renders the real "Medium" label in amber; only the
+  // container chrome stops alarming for a state that requires no action.
+  const tone = needsAck ? "border-danger/40 bg-danger-subtle" : "border-border bg-muted/30";
   return (
     <div className={cn("space-y-2 rounded-xl border p-4", tone)}>
       <div className="flex flex-wrap items-center gap-2">
@@ -556,60 +571,6 @@ function SetupChecklistRow({
         </Button>
       )}
     </li>
-  );
-}
-
-// Three-dot progress cue (Describe · Clarify · Review) — orientation only.
-function StepDots() {
-  return (
-    <span className="flex items-center gap-1" aria-hidden="true">
-      <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-      <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-      <span className="h-1.5 w-4 rounded-full bg-primary" />
-    </span>
-  );
-}
-
-// Inline segmented control to choose Interactive vs Autonomous — the composer
-// ADVISES a mode, the operator DECIDES here. Labels come verbatim from RUN_MODE
-// (D3): the pair is Interactive / Autonomous, never Batch/Background. Radix
-// supplies the APG radiogroup keyboard behaviour (roving tabindex, arrows move
-// selection AND focus, Home/End); the primitive Item is used directly because the
-// shadcn wrapper hardcodes a dot indicator this segmented pill doesn't have.
-function ModeToggle({
-  interactive,
-  onChange,
-  disabled,
-}: {
-  interactive: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <RadioGroupPrimitive.Root
-      aria-label="Run mode"
-      className="inline-flex rounded-md border border-border p-0.5"
-      value={interactive ? "interactive" : "autonomous"}
-      onValueChange={(v) => onChange(v === "interactive")}
-      disabled={disabled}
-    >
-      {(["interactive", "autonomous"] as const).map((m) => {
-        const active = interactive === (m === "interactive");
-        return (
-          <RadioGroupPrimitive.Item
-            key={m}
-            value={m}
-            title={RUN_MODE[m].blurb}
-            className={cn(
-              "rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50",
-              active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {RUN_MODE[m].label}
-          </RadioGroupPrimitive.Item>
-        );
-      })}
-    </RadioGroupPrimitive.Root>
   );
 }
 

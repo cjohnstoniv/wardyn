@@ -418,6 +418,14 @@ function githubPermissionsMap(perm: GitHubPermission): Record<string, string> {
     : { contents: "read" };
 }
 
+// The ONE predicate for "is there a real git_pat grant" — shared by buildSpec's
+// grant emission, its requiredHosts union, and validateStep's error, so a
+// half-configured PAT (host with no secret, or vice versa) can never widen
+// egress for a grant that was never minted (D5/claim4).
+function gitPatConfigured(state: WizardState): boolean {
+  return state.gitPatEnabled && !!state.gitPatHost.trim() && !!state.gitPatSecretName.trim();
+}
+
 // Resolve one WorkspaceSelection against the fetched onboarded-workspace list
 // into its onboarded kind/source/name. Returns undefined for a stale selection
 // (the workspace was deleted after it was picked) — buildSpec defensively skips
@@ -587,7 +595,7 @@ export function buildSpec(
   // git_pat grant: broker a stored PAT to git for a non-GitHub host. The PAT
   // VALUE reaches git via the credential helper (opposite of api_key). Emit only
   // when enabled with both a host and a secret selected.
-  if (state.gitPatEnabled && state.gitPatHost.trim() && state.gitPatSecretName.trim()) {
+  if (gitPatConfigured(state)) {
     const scope: Record<string, string> = {
       host: state.gitPatHost.trim(),
       secret_name: state.gitPatSecretName.trim(),
@@ -647,8 +655,11 @@ export function buildSpec(
   }
   // git_pat is reached over plain CONNECT egress (like github), NOT a proxy
   // injection rule — so union its host into allowed_domains here. Forgetting
-  // this gates the clone behind first-use approval.
-  if (state.gitPatEnabled && state.gitPatHost.trim()) {
+  // this gates the clone behind first-use approval. Gated on the SAME
+  // gitPatConfigured predicate as the grant above (D5/claim4): a host typed
+  // with no secret selected must never widen egress for a grant that was
+  // never emitted.
+  if (gitPatConfigured(state)) {
     requiredHosts.push(state.gitPatHost.trim());
   }
 
@@ -878,7 +889,7 @@ export function validateStep(id: WizardStepId, state: WizardState): string | nul
       // leaves repo "" and emits no workspace_mounts/repos). Only a batch run needs
       // a task; an interactive run comes up idle for the operator to drive.
       if (state.mode === "batch" && !state.task.trim())
-        return "A batch run needs a task to perform.";
+        return "An autonomous run needs a task to perform.";
       return null;
     }
     case "access": {
@@ -886,6 +897,8 @@ export function validateStep(id: WizardStepId, state: WizardState): string | nul
         return "Add at least one repo for the GitHub token, or disable it.";
       if (state.githubEnabled && state.githubTtlMinutes <= 0)
         return "GitHub token TTL must be a positive number of minutes.";
+      if (state.gitPatEnabled && !gitPatConfigured(state))
+        return "Git PAT needs both a host and a stored secret.";
       return null;
     }
     case "egress": {

@@ -224,7 +224,7 @@ function ProfileBody({
         />
         <Summary
           label="First-use approval"
-          value={firstUseLabel(inline_policy.first_use_approval)}
+          value={firstUseLabel(inline_policy.first_use_approval, inline_policy.allow_all_egress)}
         />
       </div>
 

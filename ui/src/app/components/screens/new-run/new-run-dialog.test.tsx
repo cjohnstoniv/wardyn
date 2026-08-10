@@ -201,18 +201,21 @@ beforeEach(() => {
 });
 
 describe("NewRunDialog", () => {
-  it("offers both entry modes when the composer is enabled, once a workspace choice is made", async () => {
+  it("lands straight on Describe when the composer is enabled, once a workspace choice is made — no intermediate chooser", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-    // Neither entry mode is offered yet — the FIRST screen is the workspace
-    // chooser, not Describe/Configure.
+    // Neither the describe form nor "Configure manually" is offered yet — the
+    // FIRST screen is the workspace chooser.
     expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /describe your task/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/describe your task/i)).not.toBeInTheDocument();
 
+    // A workspace pick (the ad-hoc escape) lands DIRECTLY on Describe — there
+    // is no separate "choose" screen to click through any more.
     await chooseAdHoc(user);
-    expect(await screen.findByRole("button", { name: /describe your task/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/describe your task/i)).toBeInTheDocument();
+    // "Configure manually" survives as a footer button on Describe itself.
     expect(screen.getByRole("button", { name: /configure manually/i })).toBeInTheDocument();
   });
 
@@ -240,7 +243,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -267,6 +269,35 @@ describe("NewRunDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  // §2: Review's retreat. Before this, Cancel destroyed the session and "Edit
+  // in wizard" abandoned the conversation — there was no way to change what
+  // you asked for.
+  it("Edit prompt on Review returns to Describe with the prompt intact, and re-composes under the SAME session id", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    composeMock.mockResolvedValue(composeResult({ risk_assessment: [], overall_risk: "low" }));
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+    await screen.findByText(/proposed setup/i);
+    const sessionId = composeMock.mock.calls[0][0].sessionId;
+
+    await user.click(screen.getByRole("button", { name: /^edit prompt$/i }));
+
+    // Back on Describe, with the SAME prompt text still in the textarea — not
+    // cleared, not a fresh dialog (nothing needed saving: it never left state).
+    expect(await screen.findByLabelText(/describe your task/i)).toHaveValue("fix CI");
+
+    // Re-composing resends the SAME session id, round reset to 0 — the audit
+    // feed can still reconstruct the whole conversation.
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+    await screen.findByText(/proposed setup/i);
+    expect(composeMock).toHaveBeenCalledTimes(2);
+    expect(composeMock.mock.calls[1][0]).toMatchObject({ sessionId, round: 0, transcript: [] });
+  });
+
   // Stage 2 (workspace identity on the AI path): the compose proposal echoes
   // back whatever workspace_selections the request carried (server-side,
   // composeProposed.WorkspaceSelections) — approveLaunch must forward that
@@ -287,7 +318,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     expect(await screen.findByText(/proposed setup/i)).toBeInTheDocument();
@@ -315,7 +345,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
@@ -349,7 +378,6 @@ describe("NewRunDialog", () => {
       const user = userEvent.setup({ pointerEventsCheck: 0 });
 
       await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
       await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
       await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -367,7 +395,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -399,7 +426,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
@@ -436,7 +462,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -469,7 +494,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText("What GitHub access?");
@@ -494,7 +518,6 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
@@ -531,7 +554,6 @@ describe("NewRunDialog — compose-session id (decision 1/9)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText("What GitHub access?");
@@ -563,7 +585,7 @@ describe("NewRunDialog — compose-session id (decision 1/9)", () => {
 });
 
 describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
-  it("shows an amber hint linking to Integrations when model access isn't configured", async () => {
+  it("shows an amber hint linking to Integrations when the composer isn't configured", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     // No secret, no CLI login, AND no resolved composer backend — llmReady AND
     // composerReady both false (the dialog's own listComposerBackends() is a
@@ -579,17 +601,19 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     const link = await screen.findByRole("link", { name: /add an integration/i });
     expect(link).toHaveAttribute("href", "/integrations");
   });
 
-  it("splits the two readiness facts — a host-CLI subscription (llmReady, not composerReady) never shows the false 'model access' claim", async () => {
+  // H8 (halved banner): gated on composerReady ALONE now — the ModelAccessCard
+  // rendered just below in ComposeForm owns the llmReady fact instead, more
+  // precisely. This fixture proves the gate really is composerReady-only: a
+  // host-CLI subscription makes llmReady true (an agent-driven run gets a
+  // model) while composerReady stays false (the Wardyn-features capability is
+  // off for this lane — CAPS.sub's own hostCli row), and the banner still
+  // shows — because it no longer asks about llmReady at all.
+  it("shows the amber hint for a missing composer integration even when llmReady is true (a host-CLI subscription)", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
-    // A host-CLI Claude subscription: llmReady is true (an agent-driven run
-    // gets a model) but composerReady is false (the Wardyn-features capability
-    // is off for this lane — CAPS.sub's own hostCli row) — the exact split
-    // this host's own funnel screens report in green/"Configured".
     getSetupStatusMock.mockResolvedValue(
       readySetupStatus({
         secrets: { present: [], github_app: false },
@@ -600,8 +624,9 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await screen.findByText(/No integration powers Wardyn's own AI features yet/);
+    // The llmReady sentence is gone entirely now — never rendered, regardless
+    // of llmReady's value (the ModelAccessCard states that fact instead).
     expect(screen.queryByText(/doesn't have model access configured yet/)).not.toBeInTheDocument();
   });
 
@@ -612,7 +637,6 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await screen.findByLabelText(/describe your task/i);
     expect(screen.queryByRole("link", { name: /finish getting started/i })).toBeNull();
   });
@@ -642,7 +666,6 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
@@ -713,7 +736,6 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
@@ -804,7 +826,6 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /payments/i }));
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -821,7 +842,6 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -849,7 +869,6 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /api-service/i }));
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
 
     // Stage 4: the Composer's picker now offers the Optional toggle too
@@ -864,16 +883,75 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     });
   });
 
-  it("choose mode's Back returns to the workspace-first chooser", async () => {
+  it("describe mode's Back returns to the workspace-first chooser", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await chooseAdHoc(user);
-    expect(await screen.findByRole("button", { name: /describe your task/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/describe your task/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
+  });
+
+  it("describe mode's Configure manually hands off to the wizard, pre-seeded with the same workspace pick", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    expect(await screen.findByLabelText(/describe your task/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /configure manually/i }));
+    // Same pre-seed the deleted "choose" card's own Configure-manually option
+    // gave — the ad-hoc escape means nothing attached (the wizard's own honest
+    // empty state), not a crash or a lost pick.
+    expect(await screen.findByText(/compose the agent's permission envelope/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no workspace attached/i)).toBeInTheDocument();
+  });
+
+  // Describe's own upfront Run-mode pick (ComposeForm's ModeToggle) used to be
+  // silently discarded on "Configure manually". Only an EXPLICIT pick crosses
+  // the hand-off (modeTouched): the compose default (autonomous) and the
+  // wizard default (interactive, task-optional) deliberately differ, and
+  // forwarding an untouched default would dead-end Basics on a required empty
+  // Task. Radix fires no change for clicking the already-selected item, so a
+  // real pick here is Interactive → Autonomous.
+  it("describe mode's Configure manually keeps the picked Run mode", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    await user.click(await screen.findByRole("radio", { name: /Interactive/ }));
+    await user.click(await screen.findByRole("radio", { name: /Autonomous/ }));
+
+    await user.click(screen.getByRole("button", { name: /configure manually/i }));
+    await screen.findByText(/compose the agent's permission envelope/i);
+
+    // Basics' Mode radio wraps its hint text in the same accessible name
+    // ("Autonomous Runs the task"), unlike Describe's ModeToggle — match by
+    // substring, not exact string.
+    expect(screen.getByRole("radio", { name: /^Autonomous/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: /^Interactive/ })).toHaveAttribute("aria-checked", "false");
+  });
+
+  // The inverse guard (caught live by wizard.spec.ts): an UNTOUCHED mode must
+  // NOT cross the hand-off. The wizard's interactive-first, task-optional
+  // default is deliberate — forwarding the compose default (autonomous) made
+  // Task required and disabled Next on every manual entry.
+  it("describe mode's Configure manually keeps the wizard's own default when mode was never touched", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    await user.click(screen.getByRole("button", { name: /configure manually/i }));
+    await screen.findByText(/compose the agent's permission envelope/i);
+
+    expect(screen.getByRole("radio", { name: /^Interactive/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: /^Autonomous/ })).toHaveAttribute("aria-checked", "false");
   });
 
   // Item 3 (medium): "Edit in wizard" used to silently drop every Optional
@@ -905,7 +983,6 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /api-service/i }));
-    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
