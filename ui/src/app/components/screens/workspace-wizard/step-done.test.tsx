@@ -52,7 +52,7 @@ describe("StepDone — usable (happy path)", () => {
     expect(screen.getByText(/2 suspected committed secrets/)).toBeInTheDocument();
   });
 
-  it("offers exactly the two hardening cards — model access is not one of them", () => {
+  it("offers exactly the two hardening cards — model access is not one of them — and both just open the workspace's page (no focus target exists to jump to)", () => {
     const onOpenDetail = vi.fn();
     render(
       <StepDone
@@ -66,9 +66,14 @@ describe("StepDone — usable (happy path)", () => {
       />,
     );
     fireEvent.click(screen.getByText("Verify with a session"));
-    expect(onOpenDetail).toHaveBeenCalledWith("record");
     fireEvent.click(screen.getByText("Env as code"));
-    expect(onOpenDetail).toHaveBeenCalledWith("env");
+    // The EFFECT, not a dropped argument: both cards independently reach
+    // onOpenDetail (2 calls), and neither passes anything — workspace-detail
+    // has no focus/query-param handling to receive an argument, so the prior
+    // per-card "focus" (fed straight into onOpenWorkspace's
+    // (workspaceId) => void and silently discarded) was removed rather than
+    // asserted on.
+    expect(onOpenDetail.mock.calls).toEqual([[], []]);
     // Binding a provider is configuration, not hardening: it lives on step ③
     // Integrations and the workspace's own page, and access resolves down a
     // four-tier ladder, so most workspaces never pin anything.

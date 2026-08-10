@@ -393,9 +393,14 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 		}
 		row := bySane[sane]
 		kind, id := "workspace_secret", "workspace_secret:"+sane
-		requiredBy := "declared by workspace " + row.ws + " (untrusted content, names only)"
+		// Plain noun phrases, like every other RequiredBy string in this file
+		// (e.g. "the proposal's confinement class"): compose-review.tsx renders
+		// "Required by " + this value, so a phrase that ALSO starts with a
+		// "required by"/"declared by" verb doubles up — "Required by required by
+		// workspace X's requirements contract", observed live.
+		requiredBy := "workspace " + row.ws + " (untrusted content, names only)"
 		if row.required {
-			requiredBy = "required by workspace " + row.ws + "'s requirements contract"
+			requiredBy = "workspace " + row.ws + "'s requirements contract"
 		}
 		it := SetupItem{Label: "Workspace secret: " + row.raw, RequiredBy: requiredBy}
 		if presentSecrets[sane] {

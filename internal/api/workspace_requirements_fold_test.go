@@ -404,6 +404,13 @@ func TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
 		if _, dup := findItem(items, "workspace_secret:acme-stripe-key"); dup {
 			t.Error("the escalated row must REPLACE the neutral workspace_secret row for this name, not duplicate it")
 		}
+		// RequiredBy must be a plain noun phrase: compose-review.tsx renders
+		// "Required by " + this value, so a value that ALSO starts with "required
+		// by" doubles up ("Required by required by workspace X's requirements
+		// contract", observed live — see reconcile-workspace-first.md item 3).
+		if want := "workspace acme-app's requirements contract"; it.RequiredBy != want {
+			t.Errorf("RequiredBy = %q, want %q", it.RequiredBy, want)
+		}
 	})
 
 	t.Run("present needs no escalation and no duplicate row", func(t *testing.T) {
@@ -414,6 +421,11 @@ func TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
 		}
 		if _, dup := findItem(items, "secret:acme-stripe-key"); dup {
 			t.Error("a PRESENT contract secret must not ALSO render at the escalated secret: id")
+		}
+		// Same non-doubling pin as the absent case above: presence changes
+		// Kind/Status only, never RequiredBy's wording.
+		if want := "workspace acme-app's requirements contract"; it.RequiredBy != want {
+			t.Errorf("RequiredBy = %q, want %q", it.RequiredBy, want)
 		}
 	})
 

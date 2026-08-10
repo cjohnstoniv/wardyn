@@ -17,13 +17,20 @@ export type DoneVariant = "usable" | "scanning" | "failed";
 // hardening; it already has step ③ Integrations and the workspace's own page;
 // and access RESOLVES down a four-tier ladder, so most workspaces should never
 // pin anything at all.
-const STRENGTHEN_CARDS: { focus: "record" | "env"; title: string; desc: string }[] = [
+//
+// Neither card deep-links into a section of workspace-detail — that page has
+// no focus/query-param handling to receive one (reconcile-workspace-first.md
+// item 1) — so onOpenDetail takes no argument and a click just opens the
+// workspace's own page, where Sessions/Env-as-code already live. An earlier
+// revision carried a per-card "focus" that fed onOpenWorkspace's
+// (workspaceId) => void and was silently discarded; dropped rather than wired
+// through 3 unrelated call sites for two "optional" hardening cards.
+const STRENGTHEN_CARDS: { title: string; desc: string }[] = [
   {
-    focus: "record",
     title: "Verify with a session",
     desc: "Drive it once; approve what it asks for at the door, adjust, retry — then save.",
   },
-  { focus: "env", title: "Env as code", desc: "Generate a devcontainer.json / AGENTS.md you can commit." },
+  { title: "Env as code", desc: "Generate a devcontainer.json / AGENTS.md you can commit." },
 ];
 
 export function StepDone({
@@ -40,7 +47,7 @@ export function StepDone({
   requirements: WorkspaceRequirementsMap;
   storedSecretNames: string[];
   leakCount: number;
-  onOpenDetail: (focus?: "record" | "env") => void;
+  onOpenDetail: () => void;
   onRescan: () => void;
 }) {
   const scanning = variant === "scanning";
@@ -136,12 +143,18 @@ export function StepDone({
         <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
           Make it stronger — optional
         </p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {STRENGTHEN_CARDS.map((c) => (
             <button
-              key={c.focus}
+              key={c.title}
               type="button"
-              onClick={() => onOpenDetail(c.focus)}
+              // Explicitly zero-arg: onClick otherwise hands onOpenDetail the
+              // DOM MouseEvent as its first argument — silently, since
+              // () => void is structurally assignable to a 1-arg handler —
+              // which would leak an argument the () => void contract doesn't
+              // have, the same class of mismatch this card's focus parameter
+              // was just removed for.
+              onClick={() => onOpenDetail()}
               className="space-y-1 rounded-lg border border-border p-3 text-left transition-colors hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <p className="text-xs font-medium text-foreground">{c.title}</p>

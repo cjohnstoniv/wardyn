@@ -146,6 +146,23 @@ func (s *Server) validateImageBuildRequest(req createRunRequest) string {
 //     as WARDYN_EPHEMERAL_DIRS at dispatch (runs_dispatch.go); the sandbox
 //     mkdirs it.
 //
+// A COMPOSED launch never sets req.WorkspaceID, so this function does not run
+// for one — compose.go's applyWorkspaces seeds the SAME mount/repo entries
+// directly from the proposal's workspace descriptor instead (a different route
+// to the identical spec.WorkspaceMounts/WorkspaceRepos shape). That parallel
+// route is deliberately narrower, not an oversight: it never resolves a stored
+// types.Workspace record, so it cannot mirror this function's base_image ->
+// req.Image step or its ephemeral-target -> WARDYN_EPHEMERAL_DIRS step. Nor can
+// this function simply be re-run afterward to cover the gap (e.g. by deriving a
+// workspace_id for the primary composed selection): it would PREPEND the same
+// sources a second time — harmless for a git repo with no explicit source
+// target (buildRepoRecords dedupes on the shared default clone dest) but a
+// genuine double-clone for one WITH an explicit target, and a hard 422 for a
+// local_dir source (the unique-target invariant re-checked below would then see
+// the identical target twice). A composed run's workspace's base_image and
+// ephemeral source targets are therefore a known, currently-unclosed gap — see
+// reconcile-workspace-first.md item 2 — not something this function covers.
+//
 // base_image REPLACES the old container-kind image resolution: when the
 // workspace carries one (and the caller didn't already set an explicit
 // --image), it sets req.Image — mirroring exactly what a user passing
@@ -249,16 +266,27 @@ type requirementAuditEntry struct {
 // Shared by create (runs.go) and preflight so the two can never disagree about
 // which selection a workspace resolves to.
 func resolveWorkspaceSelections(req createRunRequest) map[string]client.WorkspaceSelection {
-	out := make(map[string]client.WorkspaceSelection, len(req.Workspaces)+1)
-	for _, sel := range req.Workspaces {
-		if sel.WorkspaceID != "" {
-			out[sel.WorkspaceID] = sel
-		}
-	}
+	out := selectionsByWorkspaceID(req.Workspaces)
 	if req.WorkspaceID != nil {
 		id := req.WorkspaceID.String()
 		if _, exists := out[id]; !exists {
 			out[id] = client.WorkspaceSelection{WorkspaceID: id}
+		}
+	}
+	return out
+}
+
+// selectionsByWorkspaceID indexes a WorkspaceSelection list by id — the part of
+// resolveWorkspaceSelections that has a second caller: the compose pipeline's
+// preview fold (compose.go), which has req.WorkspaceSelections (the same
+// []client.WorkspaceSelection shape) but no legacy singular workspace_id to
+// alias in, so it calls this directly instead of resolveWorkspaceSelections'
+// createRunRequest-shaped wrapper.
+func selectionsByWorkspaceID(sels []client.WorkspaceSelection) map[string]client.WorkspaceSelection {
+	out := make(map[string]client.WorkspaceSelection, len(sels))
+	for _, sel := range sels {
+		if sel.WorkspaceID != "" {
+			out[sel.WorkspaceID] = sel
 		}
 	}
 	return out

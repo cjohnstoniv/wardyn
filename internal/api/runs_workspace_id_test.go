@@ -95,6 +95,39 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		}
 	})
 
+	// A composed launch's create-run request never carries workspace_id (it
+	// carries workspaces: [...] / inline_policy instead — compose.go's
+	// applyWorkspaces seeds the mounts/repos directly). This is the KNOWN,
+	// documented gap that leaves: a composed run's base_image never sets
+	// req.Image, unlike the manual/workspace_id case just above (same
+	// container-shaped-workspace scenario, base_image and all). See
+	// seedRequestWorkspace's doc comment and reconcile-workspace-first.md item 2
+	// for why re-running this function afterward (deriving a workspace_id for
+	// the primary composed selection) is not a safe fix: applyWorkspaces
+	// already seeded the same sources, and this function would seed them a
+	// second time.
+	t.Run("nil WorkspaceID no-ops entirely, regardless of any workspace's base_image (the composed-launch shape)", func(t *testing.T) {
+		spec := types.RunPolicySpec{}
+		req := createRunRequest{Agent: "claude-code"} // no WorkspaceID: the compose path's shape
+		// A bare *Server{}, deliberately: the WorkspaceID==nil guard returns
+		// before this function ever reads s.cfg (Store included), so there is no
+		// workspace/store fixture to construct — that IS the property under
+		// test. (TestIsOperator above uses the same bare-literal pattern for the
+		// identical reason; New(...) is for tests that need its full wiring —
+		// e.g. a live runner/background reconciliation — which this does not.)
+		srv := &Server{}
+		dirs, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req)
+		if err != nil || code != 0 {
+			t.Fatalf("seed: %d %v, want a clean no-op", code, err)
+		}
+		if req.Image != "" {
+			t.Errorf("req.Image = %q, want empty — a composed launch does not carry workspace_id, so the workspace's base_image is never consulted", req.Image)
+		}
+		if len(dirs) != 0 || len(spec.WorkspaceMounts) != 0 || len(spec.WorkspaceRepos) != 0 {
+			t.Errorf("want a total no-op with WorkspaceID nil: dirs=%v mounts=%v repos=%v", dirs, spec.WorkspaceMounts, spec.WorkspaceRepos)
+		}
+	})
+
 	// A multi-source workspace — only possible under the composition model — must
 	// seed ONE policy entry per local_dir/repo source, in order, while its
 	// ephemeral source contributes NO policy entry (it surfaces only via the

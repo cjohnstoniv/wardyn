@@ -517,14 +517,35 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	}
 
 	// Deterministic risk grade of the FINAL run + spec (incl. the operator
-	// workspace — e.g. a read-write local mount grades HIGH).
+	// workspace — e.g. a read-write local mount grades HIGH). Computed BEFORE
+	// the requirements fold just below: a workspace's contract additions were
+	// already outside Grade's scope before this fix (composer.Grade only ever
+	// graded the operator's own choices, never a workspace's fine print), and
+	// folding first would risk shifting graded risk levels for reasons unrelated
+	// to this batch.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "grade"})
 	items := composer.Grade(run, clamped)
 	overall := composer.OverallLevel(items)
 
+	// Fold each referenced workspace's requirements contract into clamped — the
+	// SAME applyWorkspaceRequirements call the manual wizard's preflight
+	// (preflight.go) and the real launch (runs.go) both make before THEIR
+	// setup-checklist/response is built. Without this, a required egress/secret/
+	// write term a workspace's contract declares was invisible on Review (both
+	// in the "N allowed" envelope below, since clamped becomes
+	// proposed.InlinePolicy, and in the egress checklist row's "no additional
+	// egress needed" verdict) yet applied anyway once the operator clicked
+	// Launch — two derivations of "what egress does this run get" that could
+	// disagree. Reusing the launch fold verbatim (not a second, egress-only
+	// reimplementation) is what makes them agree. Discarded, not audited: like
+	// preflight's identical call, this is a preview — it persists nothing.
+	wsRefs := s.referencedWorkspaces(ctx, clamped)
+	_ = s.applyWorkspaceRequirements(ctx, &clamped, run.Agent, wsRefs, selectionsByWorkspaceID(req.WorkspaceSelections))
+
 	// Setup checklist: what this proposal needs configured (secrets, onboarded
 	// workspaces, repo credentials, egress) vs. what actually is, derived from
-	// this SAME final clamped spec — never gates the proposal (Decision 4).
+	// this SAME final clamped spec (now INCLUDING the fold just above) — never
+	// gates the proposal (Decision 4).
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "setup"})
 	setupItems := s.deriveSetupItems(ctx, run, clamped, presentSecrets, llmAccess, droppedDomains, subState)
 
@@ -640,6 +661,19 @@ func auditWorkspaceRefs(wss []composer.Workspace) []auditWorkspaceRef {
 // run + clamped policy. It runs AFTER the clamp (which strips any model-emitted
 // mount), so a host directory enters a composed run ONLY via this operator
 // choice. Returns (warnings, httpStatus, error); a nil error means applied.
+//
+// This is the compose path's counterpart to runs_create.go's
+// seedRequestWorkspace, and covers the SAME core job — mount/repo entries land
+// on spec.WorkspaceMounts/WorkspaceRepos either way — but from a narrower
+// input: wss is the proposal's raw kind+source descriptor (composer.Workspace),
+// never a resolved types.Workspace record, so unlike seedRequestWorkspace it
+// cannot set a base_image (composer.RunInput has no field to carry one to the
+// create-run request even if it could) or surface an ephemeral source's target
+// as WARDYN_EPHEMERAL_DIRS. Deliberate, not an oversight: see
+// seedRequestWorkspace's own doc comment for why routing a composed launch back
+// through it instead (e.g. by deriving a workspace_id for the primary
+// selection) would double-apply the sources this function already seeded. See
+// reconcile-workspace-first.md item 2.
 func applyWorkspaces(run *composer.RunInput, spec *types.RunPolicySpec, wss []composer.Workspace) ([]string, int, error) {
 	var warns []string
 	localCount, gitCount := 0, 0

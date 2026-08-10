@@ -602,8 +602,13 @@ func TestDeriveSetupItems_WorkspaceSecrets(t *testing.T) {
 	if !ok || miss.Status != "missing" || miss.Fix == nil || miss.Fix.Action != "add_secret" || miss.Fix.SecretName != "oidc-client-secret" {
 		t.Errorf("absent workspace secret = %+v, want missing + add_secret(oidc-client-secret)", miss)
 	}
-	if !strings.Contains(miss.RequiredBy, "untrusted") {
-		t.Errorf("workspace_secret RequiredBy must carry the untrusted-provenance label: %q", miss.RequiredBy)
+	// Exact match, not just a substring: a plain noun phrase, like every other
+	// RequiredBy in this file — compose-review.tsx prepends "Required by ", so a
+	// value starting with its own "declared by"/"required by" would double up
+	// (see reconcile-workspace-first.md item 3; the sibling contract-required
+	// branch is pinned in workspace_requirements_fold_test.go).
+	if want := "workspace app (untrusted content, names only)"; miss.RequiredBy != want {
+		t.Errorf("workspace_secret RequiredBy = %q, want %q", miss.RequiredBy, want)
 	}
 	if _, ok := findItem(items, "workspace_secret:stripe-secret-key"); ok {
 		t.Error("optional needs must not produce checklist rows")
