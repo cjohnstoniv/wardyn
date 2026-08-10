@@ -48,12 +48,16 @@ func scanSource(row pgx.Row) (types.Source, error) {
 	return src, nil
 }
 
-// sourceRequirementsParam marshals a requirements map for a jsonb param, or
-// nil on empty/error — callers COALESCE nil back to '{}' in the SQL. Shared by
-// the explicit-requirements writers below and the scan-seed fill (seed and a
+// sourceRequirementsParam marshals a requirements map for a jsonb param. A nil
+// map (a failed scan, or "no seed to apply") becomes SQL NULL — callers
+// COALESCE nil back to '{}' in the SQL, and the scan-seed CASE below reads NULL
+// as "leave requirements untouched". A non-nil map, empty or not, marshals to
+// real JSON ("{}" for empty) so a scan that legitimately finds nothing still
+// REBUILDS the scan_seeded subset instead of reading as a failed scan. Shared
+// by the explicit-requirements writers below and the scan-seed fill (seed and a
 // source's own requirements are the same concrete type).
 func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
-	if len(m) == 0 {
+	if m == nil {
 		return nil
 	}
 	b, err := json.Marshal(m)
@@ -227,14 +231,21 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 // SetSourceScanResult persists a scan outcome FENCED on the claiming run:
 // only the run that holds active_run_id may write, so a stale upload from a
 // superseded run can never clobber a fresher result. `seed` is the scan's
-// requirement discovery for
-// the SOURCE's OWN contract, applied fill-missing-only in the same statement:
-// jsonb `||` lets the RIGHT side win, so an existing row — an operator's
-// edit, or an earlier scan's — is never overwritten by a re-scan.
+// requirement discovery for the SOURCE's OWN contract, applied as a
+// provenance-aware REBUILD in the same statement: seed replaces the
+// scan_seeded subset of requirements outright (so a name a rescan no longer
+// finds is DROPPED, not stuck forever); non-scan_seeded rows — an operator's
+// own edit — always win regardless of seed, because they land on the RIGHT
+// side of jsonb `||`; a NULL seed (failed scan — workspace_run.go's
+// launch-failure path passes nil) leaves the contract untouched. A non-nil but
+// EMPTY seed (a rescan that legitimately finds nothing) still rebuilds: it
+// marshals to '{}', not NULL — see sourceRequirementsParam.
 func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources
-		SET profile=$1, status=$2, requirements=COALESCE($5::jsonb, '{}'::jsonb) || COALESCE(requirements, '{}'::jsonb),
+		SET profile=$1, status=$2, requirements = CASE WHEN $5::jsonb IS NULL THEN requirements ELSE $5::jsonb || COALESCE(
+		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
+		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
 		    active_run_id=NULL, updated_at=now()
 		WHERE id=$3 AND active_run_id=$4
 		RETURNING `+sourceCols,
@@ -244,11 +255,15 @@ func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byt
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
 // which never claimed a run slot — there is no concurrent writer to fence
 // against on that path, exactly as the workspace inline scan wrote directly.
-// Same fill-missing-only seed semantics as the fenced writer.
+// Same provenance-aware rebuild semantics as the fenced writer: rebuilds the
+// scan_seeded subset; non-scan_seeded rows still win; NULL seed (failed scan)
+// leaves the contract untouched.
 func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources
-		SET profile=$1, status=$2, requirements=COALESCE($4::jsonb, '{}'::jsonb) || COALESCE(requirements, '{}'::jsonb),
+		SET profile=$1, status=$2, requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
+		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
+		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
 		    updated_at=now()
 		WHERE id=$3 RETURNING `+sourceCols,
 		profile, string(status), id, sourceRequirementsParam(seed)))

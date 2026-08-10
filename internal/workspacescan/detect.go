@@ -210,6 +210,63 @@ var knownSecretKinds = func() map[string]struct{} {
 // config/family classification beats a bare CI/code sighting).
 var weakKinds = map[string]struct{}{"ci": {}, "code": {}, "generic": {}}
 
+// platformEnvNames is the closed set of environment-variable NAMES that are
+// platform/runtime plumbing, never an application secret. detectEnvAccess
+// records the NAME of every os.getenv/process.env/ENV[] read in source code
+// with no way to tell getenv("HOME") from getenv("STRIPE_SECRET_KEY") at the
+// read site — real repos read dozens of these, and unfiltered they were the
+// majority of the operator-facing checklist (40+ rows for a typical repo,
+// HOME/MODE/USERPROFILE/NODE_ENV chief among them).
+// ponytail: a fixed enum, not a rule engine. Under-covering is harmless (an
+// unlisted platform var just surfaces as one more low-priority optional
+// checklist row); add names here as they're reported rather than trying to
+// be exhaustive up front.
+var platformEnvNames = map[string]struct{}{
+	// shell / POSIX
+	"HOME": {}, "PATH": {}, "PWD": {}, "OLDPWD": {}, "SHELL": {}, "TERM": {},
+	"LANG": {}, "LANGUAGE": {}, "TZ": {}, "TMPDIR": {}, "TEMP": {}, "TMP": {},
+	"USER": {}, "LOGNAME": {}, "HOSTNAME": {}, "EDITOR": {}, "PAGER": {}, "SHLVL": {},
+
+	// Windows
+	"USERPROFILE": {}, "APPDATA": {}, "LOCALAPPDATA": {}, "PROGRAMDATA": {},
+	"PROGRAMFILES": {}, "SYSTEMROOT": {}, "WINDIR": {}, "COMSPEC": {},
+	"PATHEXT": {}, "USERNAME": {}, "COMPUTERNAME": {},
+
+	// proxies
+	"HTTP_PROXY": {}, "HTTPS_PROXY": {}, "NO_PROXY": {}, "ALL_PROXY": {}, "FTP_PROXY": {},
+
+	// node / vite / frontend build
+	"NODE_ENV": {}, "MODE": {}, "DEV": {}, "PROD": {}, "SSR": {}, "BASE_URL": {},
+	"NPM_REGISTRY": {}, "NODE_OPTIONS": {}, "NODE_PATH": {}, "PUBLIC_URL": {},
+
+	// go
+	"GOPATH": {}, "GOROOT": {}, "GOOS": {}, "GOARCH": {}, "GOBIN": {},
+	"GOCACHE": {}, "GOFLAGS": {}, "GOPROXY": {}, "CGO_ENABLED": {},
+
+	// python / java toolchain
+	"PYTHONPATH": {}, "PYTHONHOME": {}, "PYTHONUNBUFFERED": {}, "VIRTUAL_ENV": {},
+	"JAVA_HOME": {}, "JAVA_OPTS": {}, "CLASSPATH": {}, "MAVEN_OPTS": {}, "GRADLE_OPTS": {},
+
+	// generic app config
+	"CI": {}, "DEBUG": {}, "PORT": {}, "HOST": {}, "LOG_LEVEL": {}, "ENV": {}, "APP_ENV": {},
+	"VERBOSE": {}, "FORCE_COLOR": {}, "NO_COLOR": {},
+}
+
+// isPlatformEnvName reports whether name is platform/runtime plumbing rather
+// than an application secret: an exact hit in platformEnvNames (uppercased
+// before compare — this table is written in shell convention, but
+// process.env reads are case-sensitive in JS), or a locale (LC_*) / XDG
+// base-directory (XDG_*) variable — both open-ended families (LC_TIME,
+// LC_MONETARY, XDG_CONFIG_HOME, XDG_CACHE_HOME, …) a fixed enum can't cover
+// member-by-member.
+func isPlatformEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	if _, ok := platformEnvNames[upper]; ok {
+		return true
+	}
+	return strings.HasPrefix(upper, "LC_") || strings.HasPrefix(upper, "XDG_")
+}
+
 // leakRule matches a well-known secret VALUE format. High-precision only —
 // this mirrors internal/contentscan/patterns.go's secretRules catalog (kept
 // local rather than reshaping that package's Span/Finding streaming API). Only
@@ -1043,6 +1100,15 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 	for _, n := range raw {
 		name := strings.TrimSpace(n.Name)
 		if !needNameRE.MatchString(name) {
+			continue
+		}
+		// Platform/runtime names (HOME, NODE_ENV, PATH, …) are filtered HERE —
+		// not in addNeed at collection time — because validateSecretNeeds is
+		// the one boundary BOTH scan lanes cross: the host-side Scan call below
+		// AND the repo-lane's re-derivation of untrusted uploaded facts via
+		// DeriveProfile. A collection-site filter would cover the former but
+		// miss the latter.
+		if isPlatformEnvName(name) {
 			continue
 		}
 		kind := n.Kind

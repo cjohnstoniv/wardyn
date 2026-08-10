@@ -51,6 +51,11 @@ import {
   type RunWorkspaceSelection,
 } from "./wizard-types";
 
+// "Available if you need it" preview budget, shared across secrets+hosts
+// (secrets first, hosts fill the remainder) — keeps a junk-heavy scan from
+// walling the card in checkboxes.
+const OPTIONAL_PREVIEW_CAP = 6;
+
 export function WorkspacePicker({
   selections,
   onChange,
@@ -65,11 +70,10 @@ export function WorkspacePicker({
   loading: boolean;
   onAddWorkspace: () => void;
   // The "Available if you need it" optional-requirement checkboxes write into
-  // enabledOptional, which only the manual wizard's buildSpec forwards onto
-  // CreateRunRequest.Workspaces — the AI Run Composer's OWN wire (ComposeRequest)
-  // has no equivalent field yet. compose-form.tsx sets this false so the
-  // Composer's picker never shows a checkbox that would silently do nothing;
-  // defaults true (unchanged) for every other caller (step-basics.tsx).
+  // enabledOptional. The manual wizard's buildSpec forwards it onto
+  // CreateRunRequest.Workspaces; the AI Run Composer forwards it onto
+  // ComposeRequest.WorkspaceSelections (toRunWorkspacesWire, new-run-dialog.tsx)
+  // — both wire it now, so this defaults true for every caller.
   optionalRequirementsEnabled?: boolean;
 }) {
   const byId = new Map(workspaces.map((w) => [w.id, w]));
@@ -205,6 +209,7 @@ function SelectedWorkspaceCard({
   onPatch: (p: Partial<RunWorkspaceSelection>) => void;
 }) {
   const [showRequired, setShowRequired] = React.useState(false);
+  const [showAllOptional, setShowAllOptional] = React.useState(false);
   const KindIcon = (ws && KIND_META[ws.kind] ? KIND_META[ws.kind] : KIND_META.local_dir).Icon;
   const summary = ws ? summarizeWorkspaceRequirements(ws) : undefined;
   const unstored = ws ? unstoredRequiredSecrets(ws, storedSecrets) : [];
@@ -237,6 +242,17 @@ function SelectedWorkspaceCard({
     (summary.optionalSecrets.length > 0 ||
       summary.optionalHosts.length > 0 ||
       summary.optionalWriteKeys.length > 0);
+
+  // Secrets first, hosts fill the remainder of the shared budget.
+  const optionalSecrets = summary?.optionalSecrets ?? [];
+  const optionalHosts = summary?.optionalHosts ?? [];
+  const optionalCount = optionalSecrets.length + optionalHosts.length;
+  const visibleOptionalSecrets = showAllOptional
+    ? optionalSecrets
+    : optionalSecrets.slice(0, OPTIONAL_PREVIEW_CAP);
+  const visibleOptionalHosts = showAllOptional
+    ? optionalHosts
+    : optionalHosts.slice(0, Math.max(0, OPTIONAL_PREVIEW_CAP - visibleOptionalSecrets.length));
 
   return (
     <div className="rounded-lg border border-border p-2.5">
@@ -356,7 +372,7 @@ function SelectedWorkspaceCard({
                 <strong className="font-semibold">Available if you need it:</strong>
               </span>
               <div className="flex flex-wrap items-center gap-4">
-                {summary.optionalSecrets.map((e: RequirementEntry) => (
+                {visibleOptionalSecrets.map((e: RequirementEntry) => (
                   <OptionalCheckbox
                     key={e.key}
                     id={`opt-${sel.workspaceId}-${e.key}`}
@@ -373,7 +389,7 @@ function SelectedWorkspaceCard({
                     warnUnmetOk={!secretAutoGrants(ws, e.name)}
                   />
                 ))}
-                {summary.optionalHosts.map((e: RequirementEntry) => (
+                {visibleOptionalHosts.map((e: RequirementEntry) => (
                   <OptionalCheckbox
                     key={e.key}
                     id={`opt-${sel.workspaceId}-${e.key}`}
@@ -399,6 +415,15 @@ function SelectedWorkspaceCard({
                   </div>
                 ))}
               </div>
+              {!showAllOptional && optionalCount > OPTIONAL_PREVIEW_CAP && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllOptional(true)}
+                  className="text-[0.6875rem] font-medium text-primary"
+                >
+                  Show all {optionalCount}
+                </button>
+              )}
             </div>
           )}
 

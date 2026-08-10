@@ -106,8 +106,10 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 // a directory's own write path is optional (mounted read-only until a run
 // asks for more). Provenance scan_seeded throughout — the fold's trust
 // boundary makes such rows poison auto-granting, so discovery can never mint
-// a credential. Applied fill-missing-only by the store (existing rows,
-// operator edits above all, always win).
+// a credential. The store REBUILDS the scan_seeded subset of the contract from
+// this seed on every successful scan (a name a rescan no longer finds is
+// dropped, not stuck forever); operator-edited/non-scan_seeded rows always win
+// regardless; a nil seed (a failed scan) leaves the contract untouched.
 func seedSourceRequirements(kind types.SourceKind, locator string, p workspacescan.WorkspaceProfile) map[string]types.WorkspaceRequirement {
 	seed := map[string]types.WorkspaceRequirement{}
 	for _, sec := range p.RequiredSecrets {

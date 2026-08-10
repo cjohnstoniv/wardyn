@@ -121,10 +121,10 @@ func TestPG_HydrateAttachments_DerivedViewAndFold(t *testing.T) {
 	}
 }
 
-// A scan's discoveries land on the SOURCE's own contract — fill-missing-only:
-// scan_seeded rows appear, an operator's existing row is NEVER overwritten by
-// a re-scan (level OR provenance), and the workspace level only ever
-// aggregates via the fold.
+// A scan's discoveries land on the SOURCE's own contract as a PROVENANCE-AWARE
+// REBUILD: scan_seeded rows appear, an operator's existing (non-scan_seeded)
+// row is NEVER overwritten by a re-scan (level OR provenance), and the
+// workspace level only ever aggregates via the fold.
 func TestPG_SourceScanSeedsOwnContract(t *testing.T) {
 	s := hydrateStore(t)
 	ctx := context.Background()
@@ -169,6 +169,91 @@ func TestPG_SourceScanSeedsOwnContract(t *testing.T) {
 	if got.Requirements["egress:proxy.golang.org"].Provenance != "scan_seeded" {
 		t.Errorf("fenced lane did not seed: %+v", got.Requirements)
 	}
+}
+
+// TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows is the junk-secrets-
+// wall regression at the store: a rescan's seed REBUILDS the scan_seeded
+// subset of a source's contract instead of only filling gaps, so a name a
+// prior scan found but this one no longer does is DROPPED — while an
+// operator's own row survives untouched regardless of what the new seed
+// contains.
+func TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+	prof, _ := json.Marshal(map[string]any{"confidence": "high"})
+
+	assertRebuilt := func(t *testing.T, label string, reqs map[string]types.WorkspaceRequirement) {
+		t.Helper()
+		if _, present := reqs["secret:junk"]; present {
+			t.Errorf("%s: stale scan_seeded row must be dropped on rescan, still: %+v", label, reqs)
+		}
+		if row := reqs["secret:real"]; row.Level != "required" || row.Provenance != "operator_set" {
+			t.Errorf("%s: operator_set row must survive a rescan untouched: %+v", label, reqs)
+		}
+		if row := reqs["secret:real2"]; row.Level != "required" || row.Provenance != "scan_seeded" {
+			t.Errorf("%s: newly-seeded row missing: %+v", label, reqs)
+		}
+	}
+	seedReal2 := map[string]types.WorkspaceRequirement{
+		"secret:real2": {Level: "required", Provenance: "scan_seeded"},
+	}
+	starting := map[string]types.WorkspaceRequirement{
+		"secret:junk": {Level: "optional", Provenance: "scan_seeded"},
+		"secret:real": {Level: "required", Provenance: "operator_set"},
+	}
+
+	// Unfenced (local_dir inline scan) lane.
+	dirSrc := mkSource(t, s, types.SourceLocalDir, "/home/me/junky", starting)
+	got, err := s.SetSourceScanResultUnfenced(ctx, dirSrc.ID, prof, types.WorkspaceScanned, seedReal2)
+	if err != nil {
+		t.Fatalf("unfenced rescan write: %v", err)
+	}
+	assertRebuilt(t, "unfenced", got.Requirements)
+
+	// Fenced (governed repo-scan upload) lane — same rebuild, different $N.
+	repoSrc := mkSource(t, s, types.SourceRepo, "github.com/acme/junky", starting)
+	runID := uuid.New()
+	if err := s.ClaimSourceActiveRun(ctx, repoSrc.ID, runID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	got, err = s.SetSourceScanResult(ctx, repoSrc.ID, prof, types.WorkspaceScanned, runID, seedReal2)
+	if err != nil {
+		t.Fatalf("fenced rescan write: %v", err)
+	}
+	assertRebuilt(t, "fenced", got.Requirements)
+
+	// The other half of the fix: an EMPTY (non-nil) seed — a rescan that
+	// legitimately finds nothing — must still drop stale scan_seeded rows, not
+	// leave them stranded because an empty map used to serialize to SQL NULL,
+	// indistinguishable from "scan failed, don't touch anything".
+	assertEmptyRebuilt := func(t *testing.T, label string, reqs map[string]types.WorkspaceRequirement) {
+		t.Helper()
+		if _, present := reqs["secret:junk"]; present {
+			t.Errorf("%s: stale scan_seeded row must be dropped by an EMPTY rescan too, still: %+v", label, reqs)
+		}
+		if row := reqs["secret:real"]; row.Level != "required" || row.Provenance != "operator_set" {
+			t.Errorf("%s: operator_set row must survive an empty rescan untouched: %+v", label, reqs)
+		}
+	}
+	emptySeed := map[string]types.WorkspaceRequirement{} // non-nil, zero entries
+
+	dirSrc2 := mkSource(t, s, types.SourceLocalDir, "/home/me/junky-empty", starting)
+	got, err = s.SetSourceScanResultUnfenced(ctx, dirSrc2.ID, prof, types.WorkspaceScanned, emptySeed)
+	if err != nil {
+		t.Fatalf("unfenced empty-seed rescan write: %v", err)
+	}
+	assertEmptyRebuilt(t, "unfenced empty-seed", got.Requirements)
+
+	repoSrc2 := mkSource(t, s, types.SourceRepo, "github.com/acme/junky-empty", starting)
+	runID2 := uuid.New()
+	if err := s.ClaimSourceActiveRun(ctx, repoSrc2.ID, runID2); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	got, err = s.SetSourceScanResult(ctx, repoSrc2.ID, prof, types.WorkspaceScanned, runID2, emptySeed)
+	if err != nil {
+		t.Fatalf("fenced empty-seed rescan write: %v", err)
+	}
+	assertEmptyRebuilt(t, "fenced empty-seed", got.Requirements)
 }
 
 // An EPHEMERAL-ONLY composition (the wizard's default scratch floor) must

@@ -30,8 +30,8 @@ import (
 // TestSources_CRUDAndLifecycle exercises the source library end to end over
 // the SDK: create with a seeded requirements contract -> get -> list contains
 // it -> scan a real dir (200, status -> scanned, the operator-set requirement
-// survives the scan's fill-missing-only seed) -> attaching it to a workspace
-// makes a non-forced delete 409 -> force=1 detaches and deletes.
+// survives the scan's rebuild of the scan_seeded subset) -> attaching it to a
+// workspace makes a non-forced delete 409 -> force=1 detaches and deletes.
 func TestSources_CRUDAndLifecycle(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
 	ctx := context.Background()
@@ -87,8 +87,8 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	if rescanned.Status != client.WorkspaceScanned {
 		t.Errorf("source status after scan = %q, want %q", rescanned.Status, client.WorkspaceScanned)
 	}
-	// The operator-set requirement must survive the scan's fill-missing-only
-	// seed (discovery never clobbers an operator's own row).
+	// The operator-set requirement must survive the scan's rebuild of the
+	// scan_seeded subset (discovery never clobbers an operator's own row).
 	if req, ok := rescanned.Requirements["egress:example.com"]; !ok || req.Provenance != "operator_set" {
 		t.Errorf("scan clobbered the operator-set requirement: %+v", rescanned.Requirements)
 	}

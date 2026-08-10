@@ -112,13 +112,13 @@ func TestScan_ComposeServicesAndInterpolation(t *testing.T) {
 			"  app:\n"+
 			"    build: .\n"+
 			"    environment:\n"+
-			"      - DEBUG=${DEBUG:-0}\n")
+			"      - GREETING=${GREETING:-hi}\n")
 	got := Scan(dir)
 	eq(t, "ServicesNeeded", got.ServicesNeeded, []string{"minio", "postgres", "redis"})
 	if n := needByName(t, got.RequiredSecrets, "DB_PASSWORD"); n.Optional {
 		t.Errorf("${VAR?err} must be required: %+v", n)
 	}
-	if n := needByName(t, got.RequiredSecrets, "DEBUG"); !n.Optional {
+	if n := needByName(t, got.RequiredSecrets, "GREETING"); !n.Optional {
 		t.Errorf("${VAR:-def} must be optional: %+v", n)
 	}
 }
@@ -281,6 +281,21 @@ func TestScan_EnvAccessFromSourceIsAdvisory(t *testing.T) {
 			t.Errorf("%s from source must be optional/advisory: %+v", name, n)
 		}
 	}
+}
+
+// TestScan_PlatformEnvNamesAreNotSecretNeeds is the junk-secrets-wall
+// regression: platform/runtime env-var reads (HOME, NODE_ENV, MODE) must
+// never surface as a secret need, however many source files read them — only
+// an actual application secret read the same way (STRIPE_SECRET_KEY) survives.
+func TestScan_PlatformEnvNamesAreNotSecretNeeds(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "web/app.ts",
+		"const a = process.env.HOME;\n"+
+			"const b = process.env.NODE_ENV;\n"+
+			"const c = process.env.MODE;\n"+
+			"const d = process.env.STRIPE_SECRET_KEY;\n")
+	got := Scan(dir)
+	eq(t, "RequiredSecrets names", needNames(got.RequiredSecrets), []string{"STRIPE_SECRET_KEY"})
 }
 
 func TestScan_CISecretsSuppressedAsOptional(t *testing.T) {

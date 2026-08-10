@@ -257,6 +257,24 @@ describe("WorkspacePicker — optional requirements write into enabledOptional",
   });
 });
 
+// A busy optional set (e.g. a workspace scanned before the junk-secrets filter
+// existed) must never wall the card in checkboxes — capped preview + reveal.
+describe("WorkspacePicker — optional grid cap", () => {
+  it("caps the optional grid at 6 with a Show all N control that reveals the rest", async () => {
+    listSecretsMock.mockResolvedValue([]);
+    const requirements: Record<string, { level: string; provenance: string }> = {};
+    for (let i = 0; i < 10; i++) {
+      requirements[`secret:OPT_${i}`] = { level: "optional", provenance: "operator_set" };
+    }
+    const ws = workspace({ requirements });
+    renderPicker([{ workspaceId: "ws-1" }], [ws]);
+    await screen.findByText(/Available if you need it/i);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+    await userEvent.click(screen.getByRole("button", { name: "Show all 10" }));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(10);
+  });
+});
+
 describe("WorkspacePicker — write mode: Required chip vs Optional toggle", () => {
   it("a Required write renders a summary chip, never a toggle", async () => {
     listSecretsMock.mockResolvedValue([]);
