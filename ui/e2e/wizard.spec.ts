@@ -310,10 +310,12 @@ test.describe("New Run wizard", () => {
     await expect(dlg.getByText("claude-code", { exact: true })).toBeVisible();
     await expect(dlg.getByText("Interactive", { exact: true })).toBeVisible();
     // The Workspace summary is the workspace itself — its name over its own
-    // kind + source — not the synthetic `local:<basename>` wire label that
+    // composition-aware sub-line (UX-4: the shared sourceSubLine, so a single
+    // local dir shows its path and a multi-source workspace would read
+    // "2 dirs · 1 repo") — not the synthetic `local:<basename>` wire label that
     // still travels on the run (see the runs-list assertion further down).
     await expect(dlg.getByText("payments", { exact: true })).toBeVisible();
-    await expect(dlg.getByText("local dir · /home/me/projects/payments")).toBeVisible();
+    await expect(dlg.getByText("/home/me/projects/payments").first()).toBeVisible();
 
     // The verbatim inline_policy JSON is rendered and includes the denied domain,
     // the min_confinement_class wire field, and the default allowed domain.
