@@ -8,83 +8,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-### Added
-
-- **A named Anthropic integration bakes the `claude-code` CLI into a
-  workspace's recommended build.** `AgentToolsForIntegrationTypes` maps any
-  `anthropic_*`-typed integration on the workspace to `claude-code`, and a
-  generated `.devcontainer/Dockerfile` installs it via the same
-  checksum-verified native-binary lane `deploy/images/claude-code/Dockerfile`
-  offers under `CLAUDE_INSTALL=native`, running as root before any
-  devcontainer feature so it depends on none. The tool set is also the
-  build-cache key's input, so naming or un-naming the integration in a
-  workspace's own contract invalidates that workspace's cached image and
-  the next build reflects it. `codex-cli` is deliberately never baked — no
-  Wardyn-verified public native-download contract, and its npm lane would
-  need a Node runtime this build stage doesn't carry — so an OpenAI
-  integration bakes nothing. A workspace whose repo ships its own
-  `.devcontainer` bypasses the generator (and the bake) entirely: Wardyn
-  builds that file as-is and never modifies it, on disk or in the image, so
-  a repo that wants the CLI has to add it itself. Live-proven against a
-  real daemon: a built image's `claude --version` reports a real binary,
-  not the inert no-op an earlier attempt silently shipped.
-
-### Removed
-
-- **The AI Run Composer's per-run "Use my Claude subscription" toggle and its
-  `use_subscription` wire field.** A composed run's model access now resolves
-  exactly like a manual run's, through `resolveRunIntegration`
-  (`internal/api/llmcred.go`): an explicit `integration_id`, else the primary
-  workspace's `LLMCred.IntegrationRef` binding, else the operator's
-  `DefaultFor: agent_runs` default. Pin a workspace's model access or set the
-  operator default once — there is nothing left to opt into per run.
-
-### Fixed
-
-- **A workspace pinned to a subscription integration previewed as api-key at
-  Review, then launch silently granted the subscription instead.** The
-  compose pipeline resolved its run-level integration with an always-empty
-  workspace ref, so the proposal skipped the workspace-binding tier entirely
-  while `foldRunIntegration` read the real binding at launch — a Review↔Launch
-  divergence. `primaryWorkspaceLLMRef` (`internal/api/compose.go`) now
-  resolves the compose request's primary workspace against the onboarded
-  workspace list the same way `referencedWorkspaces` does, so Review can no
-  longer disagree with what Launch grants.
-- **The wizard's Build step showed only a bare spinner — the real image-build
-  output went solely to wardynd's own log, invisible to whoever triggered
-  the build.** `handleBuildWorkspace`'s goroutine now threads a bounded
-  per-workspace log ring (`buildTracker.Log`, 500 lines, oldest dropped)
-  through `resolveWorkspaceImage` into the `api.ImageBuilder` call as an
-  explicit `logSink io.Writer`; the wardynd docker adapter tees it with the
-  existing slog sink so operator logs keep receiving every line unchanged.
-  `GET`/`POST /workspaces/{id}/build` now carry `log` in the response, and
-  `step-build.tsx` renders it in a scrollable pane that stays up through the
-  done/failed states too — the failure line plus the log is the debugging
-  story.
-- **Editing an onboarded workspace through the "Edit source…" dialog could
-  silently destroy it.** The legacy single-form edit dialog rendered blank
-  for any multi-source workspace, and its save path submitted the
-  deprecated scalar shape — which `decodeWorkspaceRequest` folds into
-  exactly ONE source, collapsing `sources[]` and wiping
-  Requirements/Profile/ApprovedEgress on save. `AddWorkspaceDialog` is
-  retired; the "Edit workspace…" kebab item (workspaces.tsx and
-  workspace-detail.tsx) now opens the same wizard used for onboarding,
-  hydrated from the row (sources, base image, requirements) and landed on
-  whatever step the workspace hasn't cleared yet, saving through the
-  composition-shape `sources[]`/`base_image` PUT the wizard's own Base
-  image step already used.
-- **An outside click or Esc could strand a half-onboarded workspace
-  mid-wizard with no way back.** Most steps (including Build) have no
-  explicit Close button, and dismissing the dialog never deleted anything
-  server-side, so a stray outside-click or Esc left the operator locked out
-  of a workspace they'd started onboarding. `WorkspaceWizard`'s
-  `DialogContent` now blocks outside-click and Esc dismissal once a
-  workspace exists and the step isn't Done — the same condition its own
-  footer note already warns about. The X button stays a deliberate
-  one-click close either way, and the "Edit workspace…" fix above gives the
-  operator a way back regardless.
-
-## [0.4.5] — 2026-08-04
+## [0.4.5] — 2026-08-11
 
 ### Added
 
@@ -108,10 +32,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   immediately, on the right tier.** A confined verify session now holds an
   off-policy host at the door; approving it durably writes an `egress:<host>`
   row into *that workspace's* contract, never the shared source (a plain
-  run's approval isn't durable). The whole approve/deny surface stays
-  egress-only by construction — a sandbox can raise an egress approval but
-  never request a secret. See `docs/POLICIES.md` ("`first_use_approval` modes")
-  and `docs/TRY-IT.md` ("Level 2.5") for the write-back mechanism.
+  run's approval isn't durable). A verify session's own holds stay
+  egress-only by construction — that door can raise an egress approval but
+  never request a secret; the approval queue elsewhere also carries
+  credential and tool-call holds (`internal/types.ApprovalKind`). See
+  `docs/POLICIES.md` ("`first_use_approval` modes") and `docs/TRY-IT.md`
+  ("Level 2.5") for the write-back mechanism.
 - **Corporate network is its own Getting-started step, and it comes before
   Integrations** — because on a corporate network every integration after it
   depends on the path it configures, and discovering that at the point an
@@ -246,9 +172,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   it. A **Tools** tab names the other half: a tool is what the image carries,
   an integration is what it connects through.
 - **Model access resolves** instead of being configured per run: an explicit
-  integration on the run, else — for a compose run only — the deprecated
-  `use_subscription` alias, else the workspace's binding, else the
-  operator's site-wide default — and below all four tiers, dispatch can
+  integration on the run, else the workspace's binding, else the operator's
+  site-wide default — and below all three tiers, dispatch can
   still credential the run from a managed subscription or a global Bedrock
   config where either is configured and the run's agent can use it. See
   `docs/OPERATIONS.md` ("Model access resolves —
@@ -265,6 +190,114 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A workspace detail page** at `/workspaces/:id`: the requirements editor,
   the candidates Wardyn noticed but hasn't given to any run, recorded sessions
   and their confined replays, and env-as-code.
+
+- **Push branch-namespace confinement is now REAL, and ON BY DEFAULT.** The
+  git-broker route parses the pkt-line command section of a
+  `POST …/git-receive-pack` and refuses any ref outside
+  `refs/heads/wardyn/<run-id>/` — other branches, the default branch, tags,
+  `refs/pull/*`, and deletes outside the namespace all 403 before the
+  installation token is minted, with a `brokered:git:branch-ns` deny row in the
+  decision log. Only that (≤64 KiB) command section is buffered; the packfile
+  still streams, and clone/fetch are untouched. Nothing to turn on: `agent-run`
+  now checks each cloned repo out onto `wardyn/$WARDYN_RUN_ID/work` and sets
+  `push.default=current`, so a stock run pushes inside its own namespace without
+  the operator pinning the convention in task text. Set
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
+  whose `agent-run` predates the run branch); unrecognized values fail closed.
+- **The brokered git route is now the only route to those GitHub host names.**
+  Dispatch subtracts the four broker-managed GitHub hosts from the egress
+  allowlist of any run with git grants **and denies them** (deny beats
+  `allow_all_egress` too), and `wardyn-git-helper` no longer mints a GitHub App
+  token into a brokered sandbox at all — closing a gap an opaque CONNECT
+  tunnel used to leave open. A run with no git grants is unaffected. See
+  `docs/POLICIES.md` ("Brokered GitHub: the denies you did not write") and
+  `docs/ENV.md` (`WARDYN_GIT_BROKER_REPOS`).
+- **A brokered forge is now single-lane: neither `ssh_key` nor `git_pat` can
+  ride beside a `github_token` grant for it.** Three seams enforce it: policy
+  write refuses a policy declaring both grants for the same forge (`400`);
+  dispatch denies that forge's SSH endpoint and withholds any already-stored
+  grant from the sandbox; and the mint route refuses either kind for a
+  brokered forge outright, closing a direct-POST gap that used to bypass
+  `wardyn-git-helper`'s own refusal. A grant for a different host (ADO,
+  GitLab, GHES) is untouched. See `docs/POLICIES.md` ("The `ssh_key` and
+  `git_pat` lanes are closed too") for the write/dispatch/mint mechanics.
+- **Token-side confinement: GitHub ref-ruleset verification, plus an opt-in
+  mint gate.** `VerifyRefRuleset` asks GitHub which rules bind a repo outside
+  and inside the run's push namespace. A `github_ref_ruleset` setup-checklist
+  row grades the first repo a policy names, and
+  `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) turns the same
+  check into a pre-mint gate. Branches only — classic branch protection isn't
+  visible to this check. See `docs/POLICIES.md` ("Bound the token itself: a
+  GitHub ruleset") for the recipe, the bypass-actor rule, and the exact
+  fnmatch semantics.
+- **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
+  main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
+  chart's default resolves to; `workflow_dispatch` `extra_tag` backfills
+  pre-workflow releases), and a **kind-based `helm install` CI gate**
+  (`helm-install-test`) proves the chart converges to a healthy control plane on
+  every PR — not just that it renders. The image now defaults
+  `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`, fixing the crash-loop
+  every default `docker run`/Helm install previously hit (the Go-relative
+  default never resolved from the distroless WorkingDir).
+
+- **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate**, the first
+  authorization tier on the control plane, now covering 34 routes. Listed
+  operators keep full access; every other signed-in human becomes a **viewer**
+  — reads everything, can launch/kill runs, but is 403'd on configuring the
+  deployment, secret writes, approval decisions, and sandbox attach. Additive
+  (unset keeps prior behavior); an empty operator list with OIDC configured now
+  **refuses to boot** (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`).
+  Allowlist, not RBAC — run create/kill stay open to any signed-in human. See
+  `docs/OPERATIONS.md` ("Who can change what").
+- **Three per-process defects that used to make `replicas > 1` unsafe are now
+  closed at the code level** — not because multi-replica is supported today,
+  but so a future build doesn't need three separate durability projects to get
+  there. Session recordings default to a Postgres-backed store visible to every
+  replica (`WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod
+  directory; the Helm chart deliberately keeps `fs`). Run-watcher adoption is a
+  Postgres lease plus a periodic cross-replica sweep, and the ground-truth
+  token rotator is leader-elected via a Postgres advisory lock. See
+  `docs/OPERATIONS.md` ("One replica, by construction") for the full mechanism
+  and what remains per-process by design — the secret-masking registry,
+  notably, still fails open across replicas.
+  **Upgrade note:** nothing migrates existing on-disk recordings into
+  Postgres — they stay on the `recordings` volume, but `Replay` now queries a
+  table that has never seen those keys and 404s. Set
+  `WARDYN_RECORDING_STORE=fs` to keep replaying pre-upgrade casts (the Helm
+  chart already keeps this default for that reason).
+
+- **A named Anthropic integration bakes the `claude-code` CLI into a
+  workspace's recommended build.** `AgentToolsForIntegrationTypes` maps any
+  `anthropic_*`-typed integration on the workspace to `claude-code`, and a
+  generated `.devcontainer/Dockerfile` installs it via the same
+  checksum-verified native-binary lane `deploy/images/claude-code/Dockerfile`
+  offers under `CLAUDE_INSTALL=native`, running as root before any
+  devcontainer feature so it depends on none. The tool set is also the
+  build-cache key's input, so naming or un-naming the integration in a
+  workspace's own contract invalidates that workspace's cached image and
+  the next build reflects it. `codex-cli` is deliberately never baked — no
+  Wardyn-verified public native-download contract, and its npm lane would
+  need a Node runtime this build stage doesn't carry — so an OpenAI
+  integration bakes nothing. A workspace whose repo ships its own
+  `.devcontainer` bypasses the generator (and the bake) entirely: Wardyn
+  builds that file as-is and never modifies it, on disk or in the image, so
+  a repo that wants the CLI has to add it itself. Live-proven against a
+  real daemon: a built image's `claude --version` reports a real binary,
+  not the inert no-op an earlier attempt silently shipped.
+
+- **Run creation starts from a workspace, not a blank policy, and Describe →
+  Review is the default path.** The New Run dialog now opens on "which
+  workspace?" before ever offering a task description or the manual wizard;
+  picking a workspace seeds both paths from the same selection, and
+  "Configure manually" survives as a footer escape hatch carrying the same
+  pre-seed. An explicit "No workspace — ad-hoc run" choice reproduces the
+  previous ephemeral-scratch behavior exactly. A workspace's Required rows
+  apply automatically; Optional rows are opt-in toggles that now actually
+  reach the run on the Describe path too, not only the manual wizard. Review
+  gained "Edit prompt" (back to Describe with the prompt, selections and
+  attachments intact, under the same audit session) and renders the run's
+  mode as a neutral fact chip instead of a control that could still be
+  flipped after the risk grade below was computed for the other mode.
 
 ### Changed
 
@@ -363,6 +396,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The run's Access step no longer asks how to authenticate; it shows what
   resolved and why, with a per-run override.
 
+- **Plaintext HTTP on a specific non-loopback bind is now refused at boot**
+  (was: warn-only). Loopback and unspecified binds (compose/`make setup`)
+  are unaffected. Migration for TLS-terminating-proxy deploys on a specific
+  IP: set `WARDYN_TLS_TERMINATED=true` (or `WARDYN_ALLOW_PLAINTEXT_LISTEN=true`
+  to keep the old behavior explicitly).
+
 ### Removed
 
 - **The verify pipeline.** `wardyn-verify`, its brokered upload route,
@@ -375,6 +414,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the emitted devcontainer no longer auto-runs them at create — nothing
   verified them. Finalize's one real job, writing those files into a local
   workspace, is now `POST /workspaces/{id}/env-as-code/write`.
+
+- **The AI Run Composer's per-run "Use my Claude subscription" toggle and its
+  `use_subscription` wire field.** A composed run's model access now resolves
+  exactly like a manual run's, through `resolveRunIntegration`
+  (`internal/api/llmcred.go`): an explicit `integration_id`, else the primary
+  workspace's `LLMCred.IntegrationRef` binding, else the operator's
+  `DefaultFor: agent_runs` default. Pin a workspace's model access or set the
+  operator default once — there is nothing left to opt into per run.
 
 ### Fixed
 
@@ -523,85 +570,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Ephemeral workspace targets were named in the sandbox environment but never
   created — nothing on the other side read the variable.
 
-### Added
-
-- **Push branch-namespace confinement is now REAL, and ON BY DEFAULT.** The
-  git-broker route parses the pkt-line command section of a
-  `POST …/git-receive-pack` and refuses any ref outside
-  `refs/heads/wardyn/<run-id>/` — other branches, the default branch, tags,
-  `refs/pull/*`, and deletes outside the namespace all 403 before the
-  installation token is minted, with a `brokered:git:branch-ns` deny row in the
-  decision log. Only that (≤64 KiB) command section is buffered; the packfile
-  still streams, and clone/fetch are untouched. Nothing to turn on: `agent-run`
-  now checks each cloned repo out onto `wardyn/$WARDYN_RUN_ID/work` and sets
-  `push.default=current`, so a stock run pushes inside its own namespace without
-  the operator pinning the convention in task text. Set
-  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
-  whose `agent-run` predates the run branch); unrecognized values fail closed.
-- **The brokered git route is now the only route to those GitHub host names.**
-  Dispatch subtracts the four broker-managed GitHub hosts from the egress
-  allowlist of any run with git grants **and denies them** (deny beats
-  `allow_all_egress` too), and `wardyn-git-helper` no longer mints a GitHub App
-  token into a brokered sandbox at all — closing a gap an opaque CONNECT
-  tunnel used to leave open. A run with no git grants is unaffected. See
-  `docs/POLICIES.md` ("Brokered GitHub: the denies you did not write") and
-  `docs/ENV.md` (`WARDYN_GIT_BROKER_REPOS`).
-- **A brokered forge is now single-lane: neither `ssh_key` nor `git_pat` can
-  ride beside a `github_token` grant for it.** Three seams enforce it: policy
-  write refuses a policy declaring both grants for the same forge (`400`);
-  dispatch denies that forge's SSH endpoint and withholds any already-stored
-  grant from the sandbox; and the mint route refuses either kind for a
-  brokered forge outright, closing a direct-POST gap that used to bypass
-  `wardyn-git-helper`'s own refusal. A grant for a different host (ADO,
-  GitLab, GHES) is untouched. See `docs/POLICIES.md` ("The `ssh_key` and
-  `git_pat` lanes are closed too") for the write/dispatch/mint mechanics.
-- **Token-side confinement: GitHub ref-ruleset verification, plus an opt-in
-  mint gate.** `VerifyRefRuleset` asks GitHub which rules bind a repo outside
-  and inside the run's push namespace. A `github_ref_ruleset` setup-checklist
-  row grades the first repo a policy names, and
-  `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) turns the same
-  check into a pre-mint gate. Branches only — classic branch protection isn't
-  visible to this check. See `docs/POLICIES.md` ("Bound the token itself: a
-  GitHub ruleset") for the recipe, the bypass-actor rule, and the exact
-  fnmatch semantics.
-- **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
-  main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
-  chart's default resolves to; `workflow_dispatch` `extra_tag` backfills
-  pre-workflow releases), and a **kind-based `helm install` CI gate**
-  (`helm-install-test`) proves the chart converges to a healthy control plane on
-  every PR — not just that it renders. The image now defaults
-  `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`, fixing the crash-loop
-  every default `docker run`/Helm install previously hit (the Go-relative
-  default never resolved from the distroless WorkingDir).
-
-- **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate**, the first
-  authorization tier on the control plane, now covering 35 routes. Listed
-  operators keep full access; every other signed-in human becomes a **viewer**
-  — reads everything, can launch/kill runs, but is 403'd on configuring the
-  deployment, secret writes, approval decisions, and sandbox attach. Additive
-  (unset keeps prior behavior); an empty operator list with OIDC configured now
-  **refuses to boot** (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`).
-  Allowlist, not RBAC — run create/kill stay open to any signed-in human. See
-  `docs/OPERATIONS.md` ("Who can change what").
-- **Three per-process defects that used to make `replicas > 1` unsafe are now
-  closed at the code level** — not because multi-replica is supported today,
-  but so a future build doesn't need three separate durability projects to get
-  there. Session recordings default to a Postgres-backed store visible to every
-  replica (`WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod
-  directory; the Helm chart deliberately keeps `fs`). Run-watcher adoption is a
-  Postgres lease plus a periodic cross-replica sweep, and the ground-truth
-  token rotator is leader-elected via a Postgres advisory lock. See
-  `docs/OPERATIONS.md` ("One replica, by construction") for the full mechanism
-  and what remains per-process by design — the secret-masking registry,
-  notably, still fails open across replicas.
-  **Upgrade note:** nothing migrates existing on-disk recordings into
-  Postgres — they stay on the `recordings` volume, but `Replay` now queries a
-  table that has never seen those keys and 404s. Set
-  `WARDYN_RECORDING_STORE=fs` to keep replaying pre-upgrade casts (the Helm
-  chart already keeps this default for that reason).
-
-### Fixed
-
 - **Opting a proxy out of push branch-namespace confinement is no longer
   silent.** `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` used to produce no
   signal anywhere — no boot line, no distinct audit row — while the per-mint
@@ -636,13 +604,90 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `github.com` URL with no derivable `<org>/<repo>` now yields no grant at all
   rather than an unmintable one.
 
-### Changed
+- **A workspace pinned to a subscription integration previewed as api-key at
+  Review, then launch silently granted the subscription instead.** The
+  compose pipeline resolved its run-level integration with an always-empty
+  workspace ref, so the proposal skipped the workspace-binding tier entirely
+  while `foldRunIntegration` read the real binding at launch — a Review↔Launch
+  divergence. `primaryWorkspaceLLMRef` (`internal/api/compose.go`) now
+  resolves the compose request's primary workspace against the onboarded
+  workspace list the same way `referencedWorkspaces` does, so Review can no
+  longer disagree with what Launch grants.
+- **The wizard's Build step showed only a bare spinner — the real image-build
+  output went solely to wardynd's own log, invisible to whoever triggered
+  the build.** `handleBuildWorkspace`'s goroutine now threads a bounded
+  per-workspace log ring (`buildTracker.Log`, 500 lines, oldest dropped)
+  through `resolveWorkspaceImage` into the `api.ImageBuilder` call as an
+  explicit `logSink io.Writer`; the wardynd docker adapter tees it with the
+  existing slog sink so operator logs keep receiving every line unchanged.
+  `GET`/`POST /workspaces/{id}/build` now carry `log` in the response, and
+  `step-build.tsx` renders it in a scrollable pane that stays up through the
+  done/failed states too — the failure line plus the log is the debugging
+  story.
+- **Editing an onboarded workspace through the "Edit source…" dialog could
+  silently destroy it.** The legacy single-form edit dialog rendered blank
+  for any multi-source workspace, and its save path submitted the
+  deprecated scalar shape — which `decodeWorkspaceRequest` folds into
+  exactly ONE source, collapsing `sources[]` and wiping
+  Requirements/Profile/ApprovedEgress on save. `AddWorkspaceDialog` is
+  retired; the "Edit workspace…" kebab item (workspaces.tsx and
+  workspace-detail.tsx) now opens the same wizard used for onboarding,
+  hydrated from the row (sources, base image, requirements) and landed on
+  whatever step the workspace hasn't cleared yet, saving through the
+  composition-shape `sources[]`/`base_image` PUT the wizard's own Base
+  image step already used.
+- **An outside click or Esc could strand a half-onboarded workspace
+  mid-wizard with no way back.** Most steps (including Build) have no
+  explicit Close button, and dismissing the dialog never deleted anything
+  server-side, so a stray outside-click or Esc left the operator locked out
+  of a workspace they'd started onboarding. `WorkspaceWizard`'s
+  `DialogContent` now blocks outside-click and Esc dismissal once a
+  workspace exists and the step isn't Done — the same condition its own
+  footer note already warns about. The X button stays a deliberate
+  one-click close either way, and the "Edit workspace…" fix above gives the
+  operator a way back regardless.
 
-- **Plaintext HTTP on a specific non-loopback bind is now refused at boot**
-  (was: warn-only). Loopback and unspecified binds (compose/`make setup`)
-  are unaffected. Migration for TLS-terminating-proxy deploys on a specific
-  IP: set `WARDYN_TLS_TERMINATED=true` (or `WARDYN_ALLOW_PLAINTEXT_LISTEN=true`
-  to keep the old behavior explicitly).
+- **The manual wizard's "Edit in wizard" path could launch a HIGH-risk run
+  with no acknowledgment gate, because the manual path carried no risk grade
+  at all — two paths sharing one spec, with opposite consent requirements.**
+  `POST /runs/preflight` now returns the same deterministic grader verdict
+  the AI Composer computes (the response carries the grade and its overall
+  level, computed on the resolved spec with the ENFORCED confinement class
+  folded in — grading previously ran against the pre-raise floor, so a run
+  could grade "HIGH: Fence" while actually launching at Vault). The wizard's
+  Review step now renders the same risk panel the Composer does, and a HIGH
+  grade gates Launch behind the same explicit acknowledgment, reset on every
+  fresh preflight so a stale ack cannot survive a spec change.
+- **A workspace card could render 40+ junk "(secret) won't auto-grant"
+  checkboxes.** Every environment-variable read the scanner found in scanned
+  code (`HOME`, `MODE`, `USERPROFILE`, `NODE_ENV`, …) became an advisory
+  secret need, crowding real needs out of the requirements cap. A closed set
+  of platform/build env names is now filtered at the one boundary both the
+  host-side scan and the in-sandbox scan cross, and a rescan of a previously
+  junk-only source now heals: the scan-seeded subset rebuilds on every
+  successful scan (an operator's own rows still win) instead of only when it
+  had never been populated.
+- **Three more findings from this release's own adversarial review, closed
+  before ship.** A Git-PAT "Add secret" could wire the PAT as the model's
+  Anthropic API key instead of a git credential — the shared handler no
+  longer writes the LLM secret from any control but the dedicated
+  model-access one. A workspace composed of more than one source (the
+  three-tier model above) could not actually be launched from the console —
+  both run-creation doors now iterate a workspace's sources instead of
+  assuming a single one. And deleting an integration now says, correctly,
+  that it removes the integration and its default-for mark but never the
+  underlying stored secret, which another integration may still share.
+
+### Security
+
+- **The proxy's local credential-mint route no longer hands a live GitHub
+  installation token to an unauthenticated in-sandbox caller.** Any process
+  inside a sandbox with a brokered git grant could `curl` the route directly
+  and receive the same live App installation token the credential helper
+  would have minted — a bypass of the per-repo allowlist the git-broker
+  exists to enforce. The route now refuses an unauthenticated in-sandbox mint
+  of a broker-served grant. Affects 0.4.4 and earlier with
+  `WARDYN_GIT_BROKER_REPOS` configured.
 
 ## [0.4.4] — 2026-08-02
 

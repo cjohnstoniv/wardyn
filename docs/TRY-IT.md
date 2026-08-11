@@ -283,7 +283,8 @@ in an OPEN (allow-all egress) sandbox, so you can learn exactly what that
 session actually uses.
 The session idles for `wardyn attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
-profile (or promote the observed egress from the console's import panel).
+profile (or promote the observed egress from the workspace page's
+recorded-session pane — **Promote to approved egress**).
 
 ## Level 3 — the AI Composer (describe a task, get a proposed run)
 

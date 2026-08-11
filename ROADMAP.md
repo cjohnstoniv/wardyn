@@ -78,7 +78,7 @@ extension phase — each was confirmed real, sized L (multi-day), and left out o
 the final cleanup on purpose:
 
 - **Authorization/RBAC + owner scoping.** A **minimal** viewer/operator gate now
-  ships across 25 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
+  ships across 34 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
   human outside that list is a viewer — reads everything, launches and kills
   runs, but is 403'd on configuring the deployment (managed harness credential,
   policies, workspaces, site-config), writing/deleting secrets, deciding an
@@ -117,7 +117,7 @@ the final cleanup on purpose:
 - **Team mode:** SAML/SCIM, per-user RBAC on the console. SSO *sign-in* shipped
   in 0.4.4, and so did exactly two authorization tiers —
   `WARDYN_OIDC_OPERATOR_EMAILS` splits signed-in humans into operator and viewer
-  across 25 routes (`requireOperator`). What has NOT shipped is per-user roles:
+  across 34 routes (`requireOperator`). What has NOT shipped is per-user roles:
   no custom roles, no per-resource scoping, no separation of duty between
   operators, and the admin token is unconditionally an operator.
 - **OTLP/OCSF audit sinks**; age-key rotation for the secret store.
@@ -158,12 +158,12 @@ shipped behavior; none is scheduled.
   console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
   (`/healthz` reports `sso`), and the session it mints authenticates the whole API.
   There is exactly ONE role tier: `WARDYN_OIDC_OPERATOR_EMAILS` (above) demotes
-  unlisted signers-in to viewers across 25 routes — configuring the deployment,
+  unlisted signers-in to viewers across 34 routes — configuring the deployment,
   credential writes, approval decisions, and attaching to a running sandbox (the
   ticket mint *and* the attach WebSocket); reading and launching/killing runs stay
   open to any signed-in human. Leaving it unset with OIDC configured is refused at
   boot (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` overrides, and then anyone who
-  signs in has the admin token's powers). For anything those 25 routes do not
+  signs in has the admin token's powers). For anything those 34 routes do not
   cover, an operator and the admin token are the same thing.
 
 ## What is not on the roadmap

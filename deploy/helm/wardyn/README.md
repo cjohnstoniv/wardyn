@@ -173,10 +173,10 @@ See `values.yaml` for all options. Key settings:
   under whatever key that first boot generated — the NEXT boot generates a
   different one, can no longer decrypt them, and the pod crash-loops forever.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
-  literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` in
-  particular is **required in practice**: the image's own default is a
-  relative path that does not resolve inside it (see
-  [Installation](#installation)).
+  literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
+  optional — the image already bakes a working default; see
+  [Installation](#installation) for that default and the crash-loop caveat on
+  images built before it was baked.
 - `extraEnv`: raw `EnvVar` entries (so `valueFrom.secretKeyRef` works) for the
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
   `WARDYN_COMPOSER_API_KEY`, and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM

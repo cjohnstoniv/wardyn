@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.4.3)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.4.5)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** This document is forward-looking. Controls
@@ -34,6 +34,7 @@ invitation, not an embarrassment.
 | **Prompt-injected agent (primary adversary)** | Arbitrary code execution inside its sandbox; full reasoning; reads any in-sandbox file; drives any tool the gateway exposes. Hostile payload arrives via repo content, web fetch, MCP tool output, dependency, or issue text. | **Untrusted.** This is the threat the whole platform exists to contain. |
 | **Malicious insider (developer)** | Legitimately can launch agent runs; tries to use the agent as laundering/cover for actions they could not perform under their own identity, or to dodge attribution. | Authenticated, partially trusted, audited. |
 | **Compromised dependency / supply chain** | Code executing with agent privileges inside the sandbox (build tooling, npm/pip postinstall, MCP server image). | Untrusted; collapses into "prompt-injected agent" for containment purposes. |
+| **Repo-supplied devcontainer/build content** | Arbitrary `Dockerfile` `RUN` / devcontainer feature / lifecycle-command execution during a workspace image build (`internal/envbuild`'s ENVBUILDER stage) — BEFORE any confinement tier exists. | **Untrusted.** Executes on the host build container, not inside a Confinement Class and not behind `wardyn-proxy` — see residual #13 and boundary B8. |
 | **External network attacker** | Can host malicious endpoints; attempt domain fronting, DNS rebinding; run a confused-deputy against the egress/git proxy. | Untrusted, off-box. |
 | **Compromised single runner node** | Root on one runner host; tries lateral movement to control plane, other tenants' sandboxes, or the secret store. | Untrusted after compromise; blast-radius containment target. |
 | **Platform operator / SRE** | Admin of the control plane. | Trusted. Out of scope as an adversary in v1 (insider-admin threat = future hardening). |
@@ -136,6 +137,7 @@ invitation, not an embarrassment.
 | **B5 — Approval gate vs. credential issuance** | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in section 4. |
 | **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5+ — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
+| **B8 — Untrusted build container vs. host daemon + registry** | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only the network named by `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the run sandboxes' own bridge, never `host`) plus the layer-cache registry. See residual #13. |
 
 On a single-operator machine the trust boundaries compose into a strict
 containment ladder — Wardyn never *adds* power beyond what the operating user
@@ -314,12 +316,36 @@ hiding them would repeat the failure mode we are designed to avoid.
     never falsely reads `healthy`. Live validation is the first follow-up.
 
 13. **A Bring-Your-Own-Image base is trusted-by-the-operator, and the wrap that
-    adds Wardyn's tools runs on the HOST.** BYOI (`internal/envbuild`
-    `FinalizeBase`, opt-in via `WARDYN_ENVBUILD`) wraps an operator-named base
-    image with the runner tools via a `FROM` + `COPY` build on the host Docker
-    daemon — outside the untrusted-build sandbox and outside every confinement
-    tier. Wrapping is **not vetting**, and the honest boundaries are:
+    adds Wardyn's tools runs on the HOST — and so does the RECOMMENDED
+    devcontainer build.** `internal/envbuild` gates two distinct lanes behind
+    the single `WARDYN_ENVBUILD` flag: `FinalizeBase` (the BYOI wrap — a
+    `FROM` + `COPY` build that executes nothing the base controls) and the
+    ENVBUILDER stage (the "Recommended — built for this workspace" devcontainer
+    build, which clones the source and genuinely RUNS its
+    `Dockerfile`/devcontainer features/`onCreateCommand`). Both build on the
+    host Docker daemon — outside the untrusted-build sandbox and outside every
+    confinement tier. **Default posture differs by deployment**: a bare-binary
+    or host-mode `wardynd` still defaults `WARDYN_ENVBUILD` off (opt-in); the
+    compose stack (`make setup`) defaults it ON — so on the flagship install
+    the RECOMMENDED path runs build-time code by default, not on request.
+    Wrapping is **not vetting**, and the honest boundaries are:
 
+    - **Devcontainer build-time execution is real, and it is neither
+      tier-confined nor proxied.** The ENVBUILDER stage executes the source's
+      own `Dockerfile`/feature/lifecycle-command content (or, for Wardyn's own
+      generated recommended build, an installer this range added — see
+      `docs/OPERATIONS.md` "A named Anthropic integration bakes the
+      claude-code CLI") inside a build container that is capped (CapDrop ALL,
+      resource limits) but is neither a Confinement Class nor behind
+      `wardyn-proxy`. On the compose stack it reaches only the network named
+      by `WARDYN_ENVBUILD_BUILD_NETWORK` (default: the `wardyn-internal`
+      bridge the run sandboxes themselves use, never `host` — `host` would
+      additionally reach the loopback-published control-plane Postgres and
+      admin API). A repo's own devcontainer build carries this same exposure;
+      it is accepted, structural — the same trust an operator already places
+      in any build step run on their behalf — not a gap defended against
+      elsewhere in this document. See actor "Repo-supplied devcontainer/build
+      content" (§1) and boundary B8 (§3).
     - **Wrap-only is enforced, not assumed.** A `FROM` fires any `ONBUILD`
       triggers baked into the base, which would make a hostile base host-side
       build-time RCE (`ONBUILD RUN curl … | sh`) — the one way a base's content
@@ -343,12 +369,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **Base CONTENT is not scanned or attested.** No malware/CVE scan, no
       signature or provenance verification (no cosign/notation/SLSA check) is
       performed on a BYOI base. A backdoored base is wrapped and launched.
-      What bounds this is structural rather than inspective: the base's code
-      only ever executes *later*, inside the run's confinement tier, under the
-      same egress policy, credential-brokering and audit as any other run — so a
-      hostile base is contained exactly as well as a hostile agent is, and no
-      better. The launch gate is a functional self-test (`agent-run --selftest`),
-      which proves the image is *runnable*, never that it is *trustworthy*.
+      What bounds this is structural rather than inspective: **a BYOI base's**
+      code only ever executes *later*, inside the run's confinement tier, under
+      the same egress policy, credential-brokering and audit as any other run
+      — so a hostile BYOI base is contained exactly as well as a hostile agent
+      is, and no better. (This does NOT extend to devcontainer build-TIME
+      content — that executes earlier, unconfined, per the bullet above.) The
+      launch gate is a functional self-test (`agent-run --selftest`), which
+      proves the image is *runnable*, never that it is *trustworthy*.
 
 14. **The control plane authenticates; it barely authorizes.** Distinct from
     #9, which is about someone who already IS an admin: wherever more than one
@@ -359,15 +387,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set, so an operator either names the
     operators or explicitly accepts all-admin. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
     to a list of operator addresses makes every other signed-in human a
-    **viewer**: 403 on the mutating routes of seven clusters — the managed
+    **viewer**: 403 on the mutating routes of nine clusters — the managed
     harness credential, policy CRUD, workspace CRUD (including the scoped
-    widening writes below), `PUT /site-config`, secret write/delete, deciding
-    an approval (`POST /approvals/{id}/approve|deny`), and attaching to a
-    running sandbox — both the ticket mint (`POST /runs/{id}/attach-ticket`) and
-    the WebSocket itself (`GET /runs/{id}/attach`), since the socket falls back
-    to session-cookie auth when no ticket is presented and a browser attaches
-    that cookie to a same-origin handshake on its own; gating only the mint
-    would leave the PTY reachable. Reads are never gated, the admin token and local mode are always
+    widening writes below), `PUT /site-config` and its two connectivity
+    probes (each launches a sandbox on the operator's behalf), secret
+    write/delete, deciding an approval (`POST /approvals/{id}/approve|deny`),
+    attaching to a running sandbox — both the ticket mint (`POST
+    /runs/{id}/attach-ticket`) and the WebSocket itself (`GET
+    /runs/{id}/attach`), since the socket falls back to session-cookie auth
+    when no ticket is presented and a browser attaches that cookie to a
+    same-origin handshake on its own; gating only the mint would leave the PTY
+    reachable — the source-library and base-image catalog CRUD, and
+    integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
+    /integrations/{id}/adopt`). Reads are never gated, the admin token and local mode are always
     operators (one shared credential carries no human to demote), and NOTHING
     ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
     open to any signed-in human: launching and stopping a run is a viewer act

@@ -55,9 +55,12 @@ wardyn run --agent claude-code --task-mode exec \
   --policy-file examples/policies/sandbox.yaml --wait
 ```
 
-(Add `--image ubuntu:24.04` to bring your own base image — that path is opt-in:
-it needs `WARDYN_ENVBUILD=true` on wardynd, which the default `make setup` stack
-leaves off. See the BYOI bullet below and [docs/ENVBUILD.md](docs/ENVBUILD.md).)
+(Add `--image ubuntu:24.04` to bring your own base image — that path needs
+`WARDYN_ENVBUILD=true` on wardynd, which the default `make setup` (compose)
+stack turns ON by default; a bare-binary/host-mode `wardynd` still needs it set
+explicitly. See [docs/OPERATIONS.md](docs/OPERATIONS.md#recommended-builds-on-compose)
+("Recommended builds on compose"), the BYOI bullet below, and
+[docs/ENVBUILD.md](docs/ENVBUILD.md).)
 
 The commented [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml)
 is a sealed floor you can edit at a glance; `wardyn policy render -f <file>`
@@ -118,8 +121,9 @@ checks it.
   a minimum class; the plane refuses a run a substrate cannot satisfy.
 
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the
-  plane wraps it with the runner tools (opt-in via `WARDYN_ENVBUILD`) and gates
-  launch on an in-sandbox self-test, fail-closed. The wrap is **wrap-only** — a
+  plane wraps it with the runner tools (`WARDYN_ENVBUILD`, on by default on
+  the compose stack — opt-in in bare-binary/host mode) and gates launch on an
+  in-sandbox self-test, fail-closed. The wrap is **wrap-only** — a
   `FROM` + `COPY` that never runs image-controlled code on the host, so a base
   carrying `ONBUILD` triggers is **refused**. **[shipped]**
 

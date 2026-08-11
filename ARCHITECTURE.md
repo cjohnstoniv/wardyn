@@ -25,7 +25,7 @@ the governance target.
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
-| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -314,12 +314,16 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
 > sign-in lights up when OIDC is configured. Authorization is exactly **two
 > tiers**, not RBAC: `WARDYN_OIDC_OPERATOR_EMAILS` names the operators and every
-> other signed-in human is a viewer, 403 on the mutating routes of seven
+> other signed-in human is a viewer, 403 on the mutating routes of nine
 > clusters — the managed harness credential, policy CRUD, workspace CRUD and its
-> scoped widening writes, `PUT /site-config`, secret write/delete, deciding an
-> approval, and attaching to a running sandbox (**both** the ticket mint and the
-> attach WebSocket itself, which falls back to session-cookie auth when no ticket
-> is presented). 25 routes in all; reads are never gated and `POST /runs` /
+> scoped widening writes, `PUT /site-config` and its two connectivity probes
+> (each launches a sandbox on the operator's behalf), secret write/delete,
+> deciding an approval, attaching to a running sandbox (**both** the ticket mint
+> and the attach WebSocket itself, which falls back to session-cookie auth when
+> no ticket is presented), the source-library and base-image catalog CRUD, and
+> integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
+> /integrations/{id}/adopt` — the same corp-wide blast radius as site-config's
+> PUT). 34 routes in all; reads are never gated and `POST /runs` /
 > `POST /runs/{id}/kill` stay open, because launching a run is a viewer act by
 > design. All-admin is still reachable but no longer by accident: OIDC configured
 > with that list empty **refuses to boot** unless

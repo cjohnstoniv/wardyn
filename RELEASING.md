@@ -50,6 +50,9 @@ before step 3.
    section) to `## [X.Y.Z] — YYYY-MM-DD` in [CHANGELOG.md](CHANGELOG.md), following the
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format already in use
    (`### Added` / `### Changed` / `### Fixed`). Keep entries user-facing and specific.
+   **Also bump `threatmodel/THREAT-MODEL.md`'s currency line** (`**Version:** v2
+   (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
+   cutting — this has drifted from the shipped version before, twice.
 
    **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
    `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]`
