@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
@@ -198,14 +198,20 @@ describe("WorkspaceDetailScreen — kebab: Edit workspace… / Rescan… (destru
     expect(await screen.findByRole("heading", { name: "Edit workspace" })).toBeInTheDocument();
   });
 
-  it("Rescan… states what it destroys before scanning", async () => {
+  // UX-6: a plain rescan (POST /workspaces/{id}/scan) clears nothing — only a
+  // sources EDIT does (the composition-edit PUT, gated on sourcesChanged).
+  // The old confirm reused wizard.tsx's C.RESCAN_DESTROYS copy verbatim,
+  // deterring the one safe way to refresh a stale profile with a warning
+  // that was true of a DIFFERENT action.
+  it("Rescan… states an accurate (non-destructive) line before scanning", async () => {
     getWorkspaceMock.mockResolvedValue(ws());
     scanWorkspaceMock.mockResolvedValue({ async: false });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderDetail();
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
     await user.click(screen.getByRole("menuitem", { name: /rescan/i }));
-    expect(await screen.findByText(/requirements and recorded sessions are cleared/i)).toBeInTheDocument();
+    expect(await screen.findByText(/aren.t touched/i)).toBeInTheDocument();
+    expect(screen.queryByText(/requirements and recorded sessions are cleared/i)).not.toBeInTheDocument();
     expect(scanWorkspaceMock).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /^rescan$/i }));
     await waitFor(() => expect(scanWorkspaceMock).toHaveBeenCalledWith("ws-1"));
@@ -265,6 +271,40 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
     await waitFor(() =>
       expect(promoteRecordEgressMock).toHaveBeenCalledWith("ws-1", "build-test", ["evil.example.com"]),
     );
+  });
+
+  // UI-WS-14: requestPromoteEgress used to subtract only ws.approved_egress —
+  // session-helpers.ts's newEgressHosts (which drives the button's own count)
+  // ALSO subtracts profile.egress_domains, so the confirm could list an
+  // auto-allowed host the button never asked about.
+  it("the confirm lists exactly what the button counted — an auto-allowed (profile) host never sneaks in", async () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: {
+        domains: [
+          { host: "proxy.golang.org", allow_count: 1, deny_count: 0, pending_count: 0 },
+          { host: "nexus.corp.internal", allow_count: 1, deny_count: 0, pending_count: 0 },
+        ],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        record_results: { "build-test": rr },
+        profile: { egress_domains: ["proxy.golang.org"] } as unknown as Record<string, unknown>,
+      }),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    // The button already excludes the auto-allowed host from its own count.
+    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    expect(dialog.getByText(/nexus\.corp\.internal/)).toBeInTheDocument();
+    expect(dialog.queryByText(/proxy\.golang\.org/)).not.toBeInTheDocument();
   });
 });
 

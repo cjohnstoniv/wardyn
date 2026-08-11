@@ -18,6 +18,7 @@ import {
   isRemovable,
   isSshRemote,
   newSourceRow,
+  operatorOverlay,
   parseRepoSource,
   removeSource,
   repoOwnDevcontainerWins,
@@ -331,6 +332,43 @@ describe("summarizeRequirements / unmetRequiredSecrets", () => {
     expect(unmetRequiredSecrets(reqs, [])).toEqual(["DATABASE_URL"]);
     expect(unmetRequiredSecrets(reqs, ["DATABASE_URL"])).toEqual([]);
   });
+
+  // UI-WS-9: a named integration is as real a part of the contract as a
+  // secret or a host — omitting it left it uncounted on Done and the detail
+  // page, even though it's the one row that actually opens hosts and
+  // presents a credential.
+  it("counts integration: rows alongside secret/egress/write", () => {
+    const withIntegrations: WorkspaceRequirementsMap = {
+      "integration:artifactory": { level: "required", provenance: "operator_set" },
+      "integration:jfrog-eu": { level: "optional", provenance: "operator_set" },
+    };
+    expect(summarizeRequirements(withIntegrations)).toEqual({
+      always: ["1 integration"],
+      onRequest: ["1 integration"],
+    });
+  });
+});
+
+// UI-WS-7: the wizard's overlay PUT (and requirements-card.tsx's persist, on
+// the detail page) must carry only what the operator actually decided —
+// the scan-derived half already lives on the source's own contract.
+describe("operatorOverlay", () => {
+  it("drops scan_seeded rows, keeps operator_set ones", () => {
+    const reqs: WorkspaceRequirementsMap = {
+      "secret:database-url": { level: "required", provenance: "scan_seeded" },
+      "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
+      "integration:artifactory": { level: "required", provenance: "operator_set" },
+    };
+    expect(operatorOverlay(reqs)).toEqual({
+      "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
+      "integration:artifactory": { level: "required", provenance: "operator_set" },
+    });
+  });
+
+  it("is {} for an all-scan_seeded map, and {} for an already-empty one", () => {
+    expect(operatorOverlay({ "secret:x": { level: "required", provenance: "scan_seeded" } })).toEqual({});
+    expect(operatorOverlay({})).toEqual({});
+  });
 });
 
 describe("toBaseImageInput / suggestedRegistryImage — the base-image wire shape", () => {
@@ -418,11 +456,18 @@ describe("baseImageStateFromWorkspace — edit hydration, the inverse of toBaseI
     );
   });
 
-  it("registry hydrates the registry choice (the exact image is re-derived on Continue, not carried)", () => {
-    const state = baseImageStateFromWorkspace(
-      fixtureWorkspace({ base_image: { kind: "registry", image: "mcr.microsoft.com/devcontainers/go:1" } }),
-    );
-    expect(state.choice).toBe("registry");
+  // UI-WS-5: b.image used to be discarded outright — a no-edit Continue then
+  // re-derived a heuristic guess (suggestedRegistryImage) instead of the
+  // catalog/registry image actually stored, silently swapping a corporate
+  // image for a public devcontainer one. A ref the heuristic would NEVER
+  // guess proves it's genuinely carried, not coincidentally matching.
+  it("registry carries the exact stored image ref forward (round-trips through toBaseImageInput)", () => {
+    const wsFixture = fixtureWorkspace({
+      base_image: { kind: "registry", image: "internal.registry/acme/go-builder:1.22" },
+    });
+    const state = baseImageStateFromWorkspace(wsFixture);
+    expect(state).toMatchObject({ choice: "registry", registryRef: "internal.registry/acme/go-builder:1.22" });
+    expect(toBaseImageInput(state)).toEqual(wsFixture.base_image);
   });
 
   it("byo carries the image ref forward", () => {
@@ -445,7 +490,7 @@ describe("baseImageStateFromWorkspace — edit hydration, the inverse of toBaseI
     });
   });
 
-  it("round-trips through toBaseImageInput for byo/custom (registry is re-derived by design)", () => {
+  it("round-trips through toBaseImageInput for byo/custom too", () => {
     const byo = fixtureWorkspace({ base_image: { kind: "byo", image: "ghcr.io/acme/dev:latest" } });
     expect(toBaseImageInput(baseImageStateFromWorkspace(byo))).toEqual(byo.base_image);
 

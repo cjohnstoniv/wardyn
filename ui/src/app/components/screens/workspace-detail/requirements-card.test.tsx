@@ -150,6 +150,58 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
     await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalledWith(updated));
   });
 
+  // UI-WS-6: a row declared only via a shared source's own contract (the
+  // FOLD) — with an empty overlay on THIS workspace — used to fall back to
+  // requirements[key]?.level ?? "required" and render Required, disagreeing
+  // with the header's own Needs-you line (computed from the same fold).
+  it("displays a level from the EFFECTIVE fold, not just this workspace's own (empty) overlay", async () => {
+    const w = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: {},
+      effective_requirements: {
+        "secret:database-url": { level: "optional", provenance: "scan_seeded" },
+        "egress:registry.npmjs.org": { level: "required", provenance: "scan_seeded" },
+      },
+    });
+    render(
+      <RequirementsCard ws={w} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+    await openTab("Secrets");
+    expect(
+      within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Optional" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  // UI-WS-7's sibling on this surface: `pending` is seeded from the fold, so
+  // toggling ONE lane must not bake every OTHER, untouched fold-only
+  // (scan_seeded) row into the overlay PUT — that would freeze it past the
+  // rescan meant to refresh it, exactly the wizard-side bug UI-WS-7 closes.
+  it("touching one lane does not write an untouched scan_seeded fold row into the overlay PUT", async () => {
+    const w = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: {},
+      effective_requirements: {
+        "secret:database-url": { level: "required", provenance: "scan_seeded" },
+        "egress:registry.npmjs.org": { level: "required", provenance: "scan_seeded" },
+      },
+    });
+    setRequirementsMock.mockResolvedValue(w);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <RequirementsCard ws={w} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+
+    // Touch ONLY the Reach (egress) lane — Secrets stays untouched.
+    const reachGroup = within(screen.getByTestId("group-reach"));
+    await user.click(reachGroup.getByRole("radio", { name: "Optional" }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    const body = setRequirementsMock.mock.calls[0][1] as WorkspaceRequirementsMap;
+    expect(body["egress:registry.npmjs.org"]).toEqual({ level: "optional", provenance: "operator_set" });
+    // The untouched secret row never rides along into the overlay.
+    expect(body["secret:database-url"]).toBeUndefined();
+  });
+
   // The race PUT-per-toggle used to lose: deriving each write straight from
   // the `ws` prop (which only updates once the PREVIOUS PUT resolves) means
   // two toggles fired before that round trip lands both read the same stale

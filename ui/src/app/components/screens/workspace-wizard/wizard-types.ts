@@ -242,6 +242,12 @@ export interface BaseImageState {
   byoRef: string;
   // Set iff choice === "catalog".
   catalog: CatalogPick | null;
+  // UI-WS-5: the exact stored image ref for a plain (non-catalog) "registry"
+  // choice hydrated from an existing workspace — carried forward byte-for-byte
+  // the same way byoRef/customBase already are. Empty for a FRESH pick (the
+  // card has no text field of its own), in which case toBaseImageInput falls
+  // back to the suggestedRegistryImage() heuristic as before.
+  registryRef: string;
 }
 export function defaultBaseImageState(): BaseImageState {
   return {
@@ -250,6 +256,7 @@ export function defaultBaseImageState(): BaseImageState {
     buildSteps: "",
     byoRef: "",
     catalog: null,
+    registryRef: "",
   };
 }
 
@@ -271,7 +278,9 @@ export function toBaseImageInput(state: BaseImageState, detectedChips: string[] 
   if (state.choice === "catalog" && state.catalog) {
     return { kind: state.catalog.kind, image: state.catalog.image, steps: state.catalog.steps };
   }
-  if (state.choice === "registry") return { kind: "registry", image: suggestedRegistryImage(detectedChips) };
+  if (state.choice === "registry") {
+    return { kind: "registry", image: state.registryRef || suggestedRegistryImage(detectedChips) };
+  }
   if (state.choice === "byo") return { kind: "byo", image: state.byoRef.trim() };
   if (state.choice === "custom") {
     return {
@@ -286,22 +295,18 @@ export function toBaseImageInput(state: BaseImageState, detectedChips: string[] 
 // The inverse of toBaseImageInput(), for edit hydration. A "catalog" pick
 // (base_image_id set) is intentionally NOT reconstructed into a CatalogPick —
 // that needs a name plus a catalog fetch this hydration doesn't do — it
-// degrades to its own kind's plain card (registry/custom/byo) instead.
-// byo/custom round-trip byte-for-byte (the ref/steps are carried forward
-// verbatim below). "registry" does NOT: BaseImageState has no field for the
-// exact stored image ref, so a no-edit continue re-derives it via
-// toBaseImageInput -> suggestedRegistryImage(detectedChips) instead of
-// carrying ws.base_image.image forward — usually the same ref (the heuristic
-// is deterministic off the same detected chips), but not guaranteed if the
-// chips changed since the original pick. ponytail: no registryRef carried on
-// BaseImageState, no catalog-identity round-trip either; add a registryRef
-// field (or a catalog lookup) if an edit session silently re-picking the
-// image turns out to matter in practice.
+// degrades to its own kind's plain card (registry/custom/byo) instead, still
+// carrying the exact stored image (registryRef) so a zero-edit Continue can't
+// silently swap it for the client heuristic's guess (UI-WS-5). byo/custom
+// round-trip byte-for-byte too (the ref/steps are carried forward verbatim
+// below). The catalog row's own IDENTITY (which saved entry this was) is not
+// reconstructed — the selected CARD still degrades to the plain registry
+// choice — only the image it resolves to survives.
 export function baseImageStateFromWorkspace(ws: Workspace): BaseImageState {
   const base = defaultBaseImageState();
   const b = ws.base_image;
   if (!b || b.kind === "recommended") return base;
-  if (b.kind === "registry") return { ...base, choice: "registry" };
+  if (b.kind === "registry") return { ...base, choice: "registry", registryRef: b.image ?? "" };
   if (b.kind === "byo") return { ...base, choice: "byo", byoRef: b.image ?? "" };
   return {
     ...base,
@@ -463,6 +468,23 @@ export function setRequirementLane(
   return { ...reqs, [key]: { level, provenance: "operator_set" } };
 }
 
+// UI-WS-7: only operator-authored rows belong in a workspace's own
+// requirements OVERLAY — the scan-derived half already lives on the SOURCE's
+// own contract and rebuilds there on every rescan (SetSourceScanResult,
+// store_sources.go). Writing a scan_seeded row back into the overlay would
+// freeze it past the rescan that's supposed to refresh it: the source drops
+// or changes the row, the overlay still has the stale copy, and the fold
+// keeps auto-granting it forever with no editor row left to remove it from.
+// Every caller that PUTs a full requirements map — whether seeding the
+// contract (deriveInitialRequirements above) or persisting a single toggle
+// composed onto the effective fold (requirements-card.tsx) — filters through
+// this first.
+export function operatorOverlay(reqs: WorkspaceRequirementsMap): WorkspaceRequirementsMap {
+  const out: WorkspaceRequirementsMap = {};
+  for (const [k, v] of Object.entries(reqs)) if (v.provenance === "operator_set") out[k] = v;
+  return out;
+}
+
 // ============================ Contract summary (step ③ header, step ④) ============================
 export interface ContractSummary {
   always: string[];
@@ -480,6 +502,8 @@ export function summarizeRequirements(reqs: WorkspaceRequirementsMap): ContractS
   let optHosts = 0;
   let reqWrite = 0;
   let optWrite = 0;
+  let reqIntegrations = 0;
+  let optIntegrations = 0;
   for (const [key, v] of Object.entries(reqs)) {
     const split = splitRequirementKey(key);
     if (!split) continue;
@@ -487,15 +511,23 @@ export function summarizeRequirements(reqs: WorkspaceRequirementsMap): ContractS
     if (split.type === "secret") required ? reqSecrets++ : optSecrets++;
     else if (split.type === "egress") required ? reqHosts++ : optHosts++;
     else if (split.type === "write") required ? reqWrite++ : optWrite++;
+    // UI-WS-9: a named integration (e.g. an operator-required Artifactory) is
+    // as real a part of "always"/"on request" as a secret or a host — omitting
+    // it here left it uncounted everywhere this summary renders (Done, the
+    // detail page), even though it's the one row that actually opens hosts
+    // and presents a credential.
+    else if (split.type === "integration") required ? reqIntegrations++ : optIntegrations++;
   }
   const always: string[] = [];
   if (reqSecrets) always.push(countPhrase(reqSecrets, "secret"));
   if (reqHosts) always.push(countPhrase(reqHosts, "host"));
   if (reqWrite) always.push("write access");
+  if (reqIntegrations) always.push(countPhrase(reqIntegrations, "integration"));
   const onRequest: string[] = [];
   if (optSecrets) onRequest.push(countPhrase(optSecrets, "secret"));
   if (optHosts) onRequest.push(countPhrase(optHosts, "host"));
   if (optWrite) onRequest.push("write access");
+  if (optIntegrations) onRequest.push(countPhrase(optIntegrations, "integration"));
   return { always, onRequest };
 }
 

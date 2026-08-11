@@ -57,6 +57,21 @@ describe("EnvAsCodeCard — generate", () => {
     expect(screen.getByRole("button", { name: /generate files/i })).toBeDisabled();
     expect(screen.getByText(/scan first/i)).toBeInTheDocument();
   });
+
+  // UI-WS-12: the error branch sat behind `!files ? ... : error ? ... : ...`
+  // — unreachable on a first failure (files is still null then), so a failed
+  // Generate showed nothing at all, not even on a retry (a failure never sets
+  // `files`, so the dead branch is permanent).
+  it("shows the error inline, next to the still-clickable button, when Generate fails", async () => {
+    getEnvAsCodeMock.mockRejectedValueOnce(new Error("500 profile too large"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<EnvAsCodeCard ws={ws()} />);
+
+    await user.click(screen.getByRole("button", { name: /generate files/i }));
+    expect(await screen.findByText(/500 profile too large/i)).toBeInTheDocument();
+    // The button is still there (files never got set) — a retry is possible.
+    expect(screen.getByRole("button", { name: /generate files/i })).toBeEnabled();
+  });
 });
 
 describe("EnvAsCodeCard — write into the directory (local_dir only)", () => {

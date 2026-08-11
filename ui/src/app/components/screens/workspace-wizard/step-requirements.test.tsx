@@ -72,6 +72,23 @@ describe("StepRequirements — empty / no-profile states", () => {
     expect(screen.getByText(C.EMPTY_SCAN)).toBeInTheDocument();
   });
 
+  // UI-WS-9: contractEmpty used to be computed purely from the PROFILE,
+  // never consulting `requirements` — so a named integration (added at the
+  // wizard's own Integrations step, independent of the scan) on an
+  // otherwise-empty profile (ephemeral-only, or a genuinely clean repo) hid
+  // the whole Tabs block, taking the ONE picker for that integration with it.
+  it("does not claim 'nothing to require' when the contract already names an integration, even with an empty scan profile", () => {
+    render(
+      <Harness
+        profile={{}}
+        initialRequirements={{ "integration:artifactory": { level: "required", provenance: "operator_set" } }}
+      />,
+    );
+    expect(screen.queryByText(C.EMPTY_SCAN)).not.toBeInTheDocument();
+    expect(screen.getByTestId("group-reach")).toBeInTheDocument();
+    expect(screen.getByText("artifactory")).toBeInTheDocument();
+  });
+
   it("states the Required/Optional axis on the Secrets tab, where the lanes it explains live", async () => {
     render(
       <Harness profile={{ required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }] }} />,

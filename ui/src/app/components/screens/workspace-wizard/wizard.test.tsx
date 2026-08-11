@@ -36,11 +36,15 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 const listIntegrationsMock = vi.fn();
+const adoptIntegrationMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/integrations")>(
     "../../../lib/api/integrations",
   );
-  return { ...actual, integrationsApi: { list: () => listIntegrationsMock() } };
+  return {
+    ...actual,
+    integrationsApi: { list: () => listIntegrationsMock(), adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
+  };
 });
 
 import { WorkspaceWizard } from "./wizard";
@@ -107,6 +111,7 @@ beforeEach(() => {
   listSecretsMock.mockReset().mockResolvedValue([]);
   getSetupStatusMock.mockReset().mockResolvedValue({ secrets: { present: [], github_app: false } });
   listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [], mirror: [], proxy: [] });
+  adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
 });
 
 // Drives the wizard from a blank Sources step through a resolved (synchronous,
@@ -166,16 +171,15 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
     await screen.findByText(RD2.CARRY);
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
-    // Two calls now: leaving step ③ Integrations persists whatever was picked
-    // there (nothing, in this walk), and step ⑤'s "Save & continue" persists
-    // the full seeded contract — assert the LAST one, the final saved state.
+    // Two calls now: leaving step ③ Integrations and step ⑤'s "Save &
+    // continue". UI-WS-7: PUT /requirements replaces the workspace OVERLAY,
+    // which carries ONLY operator-authored rows — this walk edits nothing, so
+    // both PUTs send {}. The scan_seeded DATABASE_URL / registry.npmjs.org rows
+    // (seeded here under the STORABLE name for DISPLAY) live on the source
+    // contract and fold into effective_requirements server-side; persisting
+    // them into the overlay would freeze them past a rescan.
     await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
-    expect(setRequirementsMock.mock.calls.at(-1)?.[1]).toMatchObject({
-      // Seeded under the STORABLE name — the PUT must pass the server's
-      // secret-name grammar (the live 400 this pins).
-      "secret:database-url": { level: "required" },
-      "egress:registry.npmjs.org": { level: "required" },
-    });
+    expect(setRequirementsMock.mock.calls.at(-1)?.[1]).toEqual({});
     await screen.findByText("payments is usable.");
   });
 });
@@ -712,5 +716,105 @@ describe("WorkspaceWizard — Back-to-Sources preserves operator_set lanes when 
     expect(setRequirementsMock.mock.calls.at(-1)?.[1]).toMatchObject({
       "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
     });
+  });
+});
+
+// UI-WS-3: unlike M4 above (sources confirmed UNCHANGED), an ACTUAL sources
+// edit after Back must not let the pre-edit operator_set contract ride back
+// onto the new composition — the server just wiped it for the same reason.
+describe("WorkspaceWizard — a sources edit after Back adopts the server's wiped contract, not the stale one (UI-WS-3)", () => {
+  it("does not re-apply a row reviewed against the OLD source once sources are actually touched", async () => {
+    const editWs = editableWorkspace({
+      status: "scanned",
+      image_ref: "",
+      requirements: {
+        "egress:old-repo-host.example.com": { level: "required", provenance: "operator_set" },
+      },
+    });
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(editWs);
+    // The server wipes Requirements/Profile/ApprovedEgress once sourcesChanged
+    // (internal/api/workspaces.go) — mirrored here for the sources-edit PUT.
+    updateWorkspaceMock.mockReset().mockResolvedValue({ ...editWs, requirements: {} });
+    setRequirementsMock.mockResolvedValue(editWs);
+
+    render(<WorkspaceWizard initial={editWs} onClose={vi.fn()} />);
+    await screen.findByText("Recommended — built for this workspace"); // lands on Base image
+
+    // Back triggers the RESCAN_DESTROYS-style confirm (hasScanned is true).
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+    expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+
+    // A REAL edit this time (unlike M4) — repoint the source at a different repo.
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "acme/new-repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await screen.findByText("Recommended — built for this workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText("Image ready");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(C.S3_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
+    // The row reviewed against repo A must not silently ride onto repo B —
+    // nothing in ANY write from here on names it.
+    for (const call of setRequirementsMock.mock.calls) {
+      expect(call[1]).not.toHaveProperty("egress:old-repo-host.example.com");
+    }
+  });
+});
+
+// UI-WS-13: adopt-then-setLane used to derive its patch from the RENDER-TIME
+// `s` closure (patch()'s own eager eval), not React's latest state — a second
+// row named while the first row's adopt was still in flight got silently
+// dropped once the deferred call finally landed.
+describe("WorkspaceWizard — Integrations' adopt-then-name doesn't drop a row named mid-flight (UI-WS-13)", () => {
+  it("a row named while another row's adopt is still pending survives that adopt's resolution", async () => {
+    const ws = baseWorkspace();
+    createWorkspaceMock.mockResolvedValue(ws);
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+    let resolveAdopt!: () => void;
+    adoptIntegrationMock.mockReset().mockImplementation(
+      () => new Promise<void>((resolve) => { resolveAdopt = resolve; }),
+    );
+    listIntegrationsMock.mockReset().mockResolvedValue({
+      ai: [
+        // Derived (needs adopt): its own onLane defers behind adoptIntegration.
+        { id: "ai:gitlab", serverId: "git_host:gitlab.com", name: "GitLab", typeLabel: "gitlab.com" },
+        // Already stored: its onLane calls setLane synchronously, no adopt gate.
+        { id: "artifactory", serverId: "artifactory", name: "Artifactory", typeLabel: "artifactory.corp" },
+      ],
+      scm: [],
+    });
+
+    render(<WorkspaceWizard onClose={vi.fn()} />);
+    await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" })); // -> integrations
+    await screen.findByText(INTEGRATIONS_BLURB);
+
+    const useButtons = await screen.findAllByRole("button", { name: /use in this workspace/i });
+    expect(useButtons).toHaveLength(2);
+
+    // GitLab needs adopt first — click it, its promise never resolves yet.
+    fireEvent.click(useButtons[0]);
+    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("git_host:gitlab.com"));
+
+    // Artifactory names itself synchronously WHILE GitLab's adopt is pending.
+    fireEvent.click(useButtons[1]);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /not used/i })).toHaveLength(1));
+
+    // GitLab's adopt now resolves — its OWN setLane must not clobber
+    // Artifactory's already-landed one.
+    await act(async () => {
+      resolveAdopt();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /not used/i })).toHaveLength(2));
   });
 });

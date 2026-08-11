@@ -116,3 +116,38 @@ describe("AddServiceDialog", () => {
     expect(screen.getByText(/Anything Wardyn hasn't listed is an Other service/i)).toBeInTheDocument();
   });
 });
+
+// UI-WS-8: PUT /integrations/{id} is create-or-REPLACE with no existence
+// check — a second row whose name slugs onto an existing id used to silently
+// replace it (hosts, credential ref, docs, default_for, all gone) with no
+// warning anywhere.
+describe("AddServiceDialog — a name that slugs onto an existing row (UI-WS-8)", () => {
+  it("warns before Save when the id collides with an already-stored row", async () => {
+    renderDialog({ existingRows: [{ id: "jfrog-artifactory", name: "JFrog EU" }] });
+    await userEvent.type(screen.getByRole("textbox", { name: /search integration types/i }), "jfrog");
+    await userEvent.click(await screen.findByText("JFrog Artifactory"));
+
+    expect(await screen.findByText(/replaces the existing.*JFrog EU/i)).toBeInTheDocument();
+
+    // Still lets the operator go through with it, deliberately.
+    await userEvent.click(screen.getByRole("button", { name: /add integration/i }));
+    await waitFor(() => expect(genericIntegrationsApi.put).toHaveBeenCalled());
+    expect(vi.mocked(genericIntegrationsApi.put).mock.calls[0][0]).toBe("jfrog-artifactory");
+  });
+
+  it("no warning when the id doesn't collide with anything stored", async () => {
+    renderDialog({ existingRows: [{ id: "some-other-id", name: "Something else" }] });
+    await userEvent.type(screen.getByRole("textbox", { name: /search integration types/i }), "jfrog");
+    await userEvent.click(await screen.findByText("JFrog Artifactory"));
+
+    expect(screen.queryByText(/replaces the existing/i)).not.toBeInTheDocument();
+  });
+
+  it("omitting existingRows entirely never warns (optional, backward compatible)", async () => {
+    renderDialog();
+    await userEvent.type(screen.getByRole("textbox", { name: /search integration types/i }), "jfrog");
+    await userEvent.click(await screen.findByText("JFrog Artifactory"));
+
+    expect(screen.queryByText(/replaces the existing/i)).not.toBeInTheDocument();
+  });
+});

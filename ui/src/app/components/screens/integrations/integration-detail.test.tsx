@@ -43,16 +43,22 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   },
 }));
 
-// The default-for write path (actions.ts's setDefaultFor) calls these two —
-// everything else this screen needs from the module stays real.
+// The default-for write path (actions.ts's setDefaultFor) calls adopt/put; the
+// delete path (deleteIntegration) removes the adopted stored integration via
+// remove — everything else this screen needs from the module stays real.
 const adoptIntegrationMock = vi.fn();
 const putIntegrationMock = vi.fn();
+const removeIntegrationMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
   return {
     ...actual,
     integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
-    genericIntegrationsApi: { ...actual.genericIntegrationsApi, put: (...a: unknown[]) => putIntegrationMock(...a) },
+    genericIntegrationsApi: {
+      ...actual.genericIntegrationsApi,
+      put: (...a: unknown[]) => putIntegrationMock(...a),
+      remove: (...a: unknown[]) => removeIntegrationMock(...a),
+    },
   };
 });
 
@@ -73,9 +79,13 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
   beforeEach(() => {
     deleteSecretMock.mockReset().mockResolvedValue(undefined);
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    removeIntegrationMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("Delete integration lists the computed blast radius, then really deletes the backing secret", async () => {
+  // UI-WS-4: the copy has always said the stored secret is NOT deleted — the
+  // CODE used to disagree and delete it anyway. Now they match: the secret
+  // (which may be referenced by another workspace/site-config field) survives.
+  it("Delete integration lists the computed blast radius, and does not touch the stored secret", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         secrets: { present: ["anthropic-api-key"], github_app: false },
@@ -103,9 +113,13 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
     expect(dialog.getByText(/anthropic-api-key.*not deleted.*Secrets/i)).toBeInTheDocument();
 
     await user.click(dialog.getByRole("button", { name: /^delete integration$/i }));
-    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("anthropic-api-key"));
-    // A successful delete returns to the list.
+    // A successful "delete" still returns to the list. The secret stays
+    // (UI-WS-4), but the ADOPTED stored integration — this row holds a real
+    // default_for mark — is removed server-side, so agent runs actually fall
+    // back to the server default the blast radius just warned about.
     expect(await screen.findByText("back on the list")).toBeInTheDocument();
+    expect(deleteSecretMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(removeIntegrationMock).toHaveBeenCalledWith("anthropic_api_key"));
   });
 
   it("a harness-backed subscription's blast radius says disconnecting is the removal, and Delete calls harnessDisconnect", async () => {
@@ -168,6 +182,32 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
 
     expect(screen.getByText(/Unknown/)).toBeInTheDocument();
     expect(screen.getByText(T.CACHE_CAVEAT)).toBeInTheDocument();
+  });
+
+  // SCM-SEAM-1: deleting an SCM row must drop the site-config registration
+  // that widens every run's egress allowlist, or "Runs stop inheriting
+  // github.com" is a lie the moment the row disappears.
+  it("Delete integration on an SCM host also drops it from site-config scm_hosts", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["git-pat-github-com"], github_app: false } }));
+    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com", "gitlab.com"] });
+    listSecretsMock.mockResolvedValue(["git-pat-github-com"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    renderDetail("scm:github.com");
+    await screen.findByRole("heading", { name: "GitHub" });
+
+    await user.click(screen.getByRole("button", { name: /delete integration…/i }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    await user.click(dialog.getByRole("button", { name: /^delete integration$/i }));
+
+    await waitFor(() =>
+      expect(putSiteConfigMock).toHaveBeenCalledWith(expect.objectContaining({ scm_hosts: ["gitlab.com"] })),
+    );
+    // The secret itself still survives (UI-WS-4); the adopted stored host
+    // integration is removed too.
+    expect(deleteSecretMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(removeIntegrationMock).toHaveBeenCalledWith("git_host:github.com"));
+    expect(await screen.findByText("back on the list")).toBeInTheDocument();
   });
 });
 

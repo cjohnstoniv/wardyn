@@ -23,10 +23,11 @@ import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { LeakBanner } from "../workspace-wizard/step-requirements";
+import { storableSecretName } from "../workspace-wizard/wizard-types";
 import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { RequirementLevel, WorkspaceRequirementsMap } from "../../../lib/api/workspaces";
-import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import { effectiveWorkspaceRequirements, type Workspace, type WorkspaceProfile } from "../../../lib/types";
 import { SectionCard } from "./section-card";
 
 // Boundary-local typed cast-read — same idiom requirements-card.tsx uses at
@@ -58,9 +59,15 @@ export function DetectedCard({
     };
   }, [ws.id]);
 
+  // The overlay — promote()'s own write base (a PUT here replaces ONLY this
+  // workspace's overlay, so it must never spread rows visible only via the
+  // fold onto it — see wizard-types.ts's operatorOverlay). Kept distinct from
+  // `effective` below, which is what "already covered, don't re-offer" reads
+  // from (UI-WS-6).
   const reqs = requirementsOf(ws);
+  const effective = effectiveWorkspaceRequirements(ws);
   const contractHosts = new Set(
-    Object.keys(reqs)
+    Object.keys(effective)
       .filter((k) => k.startsWith("egress:"))
       .map((k) => k.slice("egress:".length)),
   );
@@ -70,9 +77,15 @@ export function DetectedCard({
 
   const suggested = (profile.suggested_egress ?? []).filter((h) => !inContract(h));
   const observedDenied = (observed?.denied ?? []).filter((h) => !inContract(h) && !approved.has(h));
-  const codeRefs = (profile.required_secrets ?? []).filter(
-    (s) => (s.kind === "code" || s.kind === "ci") && !(`secret:${s.name}` in reqs),
-  );
+  // UI-WS-1: the row's face stays the scan's raw env-var name, but the
+  // dedupe check and the promote key use the STORABLE name — the server
+  // rejects a requirement keyed on the raw name outright (secretNameRE), and
+  // a name that maps to "" (storableSecretName's own escape) has nothing to
+  // promote at all.
+  const codeRefs = (profile.required_secrets ?? [])
+    .filter((s) => s.kind === "code" || s.kind === "ci")
+    .map((s) => ({ name: s.name, storable: storableSecretName(s.name) }))
+    .filter((s) => s.storable && !(`secret:${s.storable}` in effective));
   const leaks = profile.leak_findings ?? [];
   const nothingPending = leaks.length === 0 && suggested.length === 0 && observedDenied.length === 0 && codeRefs.length === 0;
 
@@ -91,7 +104,7 @@ export function DetectedCard({
     }
   };
   const promoteHost = (host: string, level: RequirementLevel) => void promote(`egress:${host}`, level);
-  const promoteSecret = (name: string, level: RequirementLevel) => void promote(`secret:${name}`, level);
+  const promoteSecret = (storable: string, level: RequirementLevel) => void promote(`secret:${storable}`, level);
 
   return (
     <SectionCard
@@ -129,14 +142,19 @@ export function DetectedCard({
             {codeRefs.map((s) => (
               <div key={s.name} className="flex flex-wrap items-center gap-2 p-2.5">
                 <Mono className="text-xs text-foreground">{s.name}</Mono>
+                {s.storable !== s.name && (
+                  <span className="text-[0.6875rem] text-muted-foreground">
+                    stored as <Mono className="text-[0.6875rem]">{s.storable}</Mono>
+                  </span>
+                )}
                 <span className="text-[0.6875rem] text-muted-foreground">advisory — referenced in code, not declared</span>
                 <span className="ml-auto" />
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-7"
-                  disabled={busy === `secret:${s.name}`}
-                  onClick={() => promoteSecret(s.name, "required")}
+                  disabled={busy === `secret:${s.storable}`}
+                  onClick={() => promoteSecret(s.storable, "required")}
                 >
                   Add as required
                 </Button>
@@ -144,8 +162,8 @@ export function DetectedCard({
                   size="sm"
                   variant="ghost"
                   className="h-7"
-                  disabled={busy === `secret:${s.name}`}
-                  onClick={() => promoteSecret(s.name, "optional")}
+                  disabled={busy === `secret:${s.storable}`}
+                  onClick={() => promoteSecret(s.storable, "optional")}
                 >
                   Add as optional
                 </Button>

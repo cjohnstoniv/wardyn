@@ -52,12 +52,18 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 // describePosture, ...) stays real.
 const adoptIntegrationMock = vi.fn();
 const putIntegrationMock = vi.fn();
+const removeIntegrationMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
   return {
     ...actual,
     integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
-    genericIntegrationsApi: { ...actual.genericIntegrationsApi, put: (...a: unknown[]) => putIntegrationMock(...a) },
+    genericIntegrationsApi: {
+      ...actual.genericIntegrationsApi,
+      put: (...a: unknown[]) => putIntegrationMock(...a),
+      // deleteIntegration removes the adopted stored integration on delete.
+      remove: (...a: unknown[]) => removeIntegrationMock(...a),
+    },
   };
 });
 
@@ -439,5 +445,94 @@ describe("IntegrationsScreen — default-for controls issue the write and render
       expect(putIntegrationMock).toHaveBeenCalledWith("anthropic_api_key", expect.objectContaining({ default_for: [] })),
     );
     expect(adoptIntegrationMock).not.toHaveBeenCalled();
+  });
+});
+
+// UI-WS-11: the list screen's own delete confirm used to call blastRadius
+// with no opts at all, dropping the two most consequential warning lines the
+// detail page shows for the SAME row (agent runs lose model access, Composer
+// loses its backend) — an operator confirming from the kebab never saw them.
+describe("IntegrationsScreen — the list delete confirm matches the detail page's blast radius", () => {
+  it("shows the default-holder lines when the row pending delete holds both marks", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        secrets: { present: ["anthropic-api-key"], github_app: false },
+        integrations: [
+          {
+            id: "anthropic_api_key",
+            category: "ai_provider",
+            type: "anthropic_api_key",
+            source: "stored",
+            default_for: ["agent_runs", "wardyn_features"],
+          },
+        ],
+      }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    renderScreen();
+    await screen.findByText("Anthropic (API key)");
+
+    await user.click(screen.getByRole("button", { name: /Anthropic \(API key\) actions/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /delete integration/i }));
+
+    const dialog = within(await screen.findByRole("alertdialog"));
+    expect(dialog.getByText(/first model call fails/i)).toBeInTheDocument();
+    expect(dialog.getByText(/Composer loses its backend/i)).toBeInTheDocument();
+  });
+});
+
+// UX-2: embedded mode has no PageHeader (its Add button included), and once
+// any row exists neither the EmptyState's own button nor GenericSections'
+// dashed-panel one render either — all three conditions could be
+// simultaneously false, leaving no Add affordance anywhere on the step.
+describe("IntegrationsScreen — embedded mode always has an Add affordance (UX-2)", () => {
+  it("renders a toolbar Add button once a generic row exists, even with no PageHeader", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        integrations: [
+          {
+            id: "artifactory",
+            name: "Artifactory",
+            category: "package_feed",
+            type: "artifactory",
+            source: "stored",
+            hosts: ["artifactory.corp.internal"],
+          },
+        ],
+      }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <IntegrationsScreen embedded />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Artifactory");
+    // No PageHeader (embedded drops it) — the toolbar row is the only
+    // remaining Add affordance, and it must exist.
+    expect(screen.queryByRole("heading", { name: "Integrations", level: 1 })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeInTheDocument();
+  });
+
+  it("still shows nothing extra (the EmptyState's own button covers it) when totally empty", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <IntegrationsScreen embedded />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(T.EMPTY_TITLE);
+    // Exactly one Add button — the EmptyState's — not a redundant second one.
+    expect(screen.getAllByRole("button", { name: /add integration/i })).toHaveLength(1);
   });
 });

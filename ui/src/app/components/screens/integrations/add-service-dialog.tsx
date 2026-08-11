@@ -42,11 +42,20 @@ export function slugifyIntegrationId(name: string): string {
     .slice(0, 128);
 }
 
+/** One already-stored row's id + display name — enough to warn on a slug
+ *  collision (UI-WS-8) without importing the full IntegrationRow/WireIntegration
+ *  shape into this dialog. */
+export interface ExistingIntegrationRef {
+  id: string;
+  name: string;
+}
+
 export function AddServiceDialog({
   open,
   onOpenChange,
   onAdded,
   onHandoff,
+  existingRows = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,6 +66,10 @@ export function AddServiceDialog({
    *  picked TYPE travels with it: that flow must open on the thing that was
    *  clicked, never re-ask the coarser question this panel already answered. */
   onHandoff: (target: IntegrationTypeMeta) => void;
+  /** Every currently-stored row's id — so a new name that slugs onto one of
+   *  them can be flagged before Add silently replaces it (UI-WS-8) instead of
+   *  after. Optional: an omitted list just means no collision is ever caught. */
+  existingRows?: ExistingIntegrationRef[];
 }) {
   const [picked, setPicked] = React.useState<IntegrationTypeMeta | null>(null);
 
@@ -84,6 +97,7 @@ export function AddServiceDialog({
         {picked ? (
           <ConnectPanel
             type={picked}
+            existingRows={existingRows}
             onBack={() => setPicked(null)}
             onSaved={() => {
               onOpenChange(false);
@@ -163,10 +177,12 @@ function PickPanel({ onPick }: { onPick: (t: IntegrationTypeMeta) => void }) {
 
 function ConnectPanel({
   type,
+  existingRows,
   onBack,
   onSaved,
 }: {
   type: IntegrationTypeMeta;
+  existingRows: ExistingIntegrationRef[];
   onBack: () => void;
   onSaved: () => void;
 }) {
@@ -189,12 +205,18 @@ function ConnectPanel({
     .map((h) => h.trim())
     .filter(Boolean);
   const delivery = RESIDENCY_META[takesHeader && secret.trim() ? "proxy_injected" : type.delivery];
+  const slug = slugifyIntegrationId(name);
+  // UI-WS-8: PUT /integrations/{id} is create-or-REPLACE — a second row whose
+  // name slugs onto an existing id would silently overwrite it (hosts,
+  // credential ref, docs, default_for, gone) with no existence check on the
+  // server side. Warn here, before Save, rather than after.
+  const collision = existingRows.find((r) => r.id === slug);
 
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      await genericIntegrationsApi.put(slugifyIntegrationId(name), {
+      await genericIntegrationsApi.put(slug, {
         name: name.trim(),
         category: group.category,
         type: type.apiType ?? type.id,
@@ -230,8 +252,13 @@ function ConnectPanel({
         <Label htmlFor="int-name">Name</Label>
         <Input id="int-name" value={name} onChange={(e) => setName(e.target.value)} />
         <p className="text-[0.6875rem] text-muted-foreground">
-          Stored as <Mono className="text-[0.6875rem]">{slugifyIntegrationId(name) || "—"}</Mono>
+          Stored as <Mono className="text-[0.6875rem]">{slug || "—"}</Mono>
         </p>
+        {collision && (
+          <p className="text-[0.6875rem] leading-snug text-warning">
+            Replaces the existing “{collision.name}” integration — same stored id.
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">

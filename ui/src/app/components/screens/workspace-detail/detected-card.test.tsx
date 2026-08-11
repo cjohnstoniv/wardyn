@@ -103,10 +103,26 @@ describe("DetectedCard — suggested egress promotes behind the untrusted-conten
     render(<DetectedCard ws={w} onWorkspaceUpdated={vi.fn()} />);
     expect(screen.queryByTestId("detected-suggested-egress")).not.toBeInTheDocument();
   });
+
+  // UI-WS-6: a host required only via the EFFECTIVE fold (e.g. a shared
+  // library source's own contract), never restated in this workspace's own
+  // overlay, used to still read "not in the contract" and get re-offered.
+  it("a host required only via the fold (not this workspace's own overlay) is not re-suggested either", () => {
+    const w = ws({ suggested_egress: ["registry.npmjs.org"] });
+    (w as unknown as { requirements: Record<string, unknown>; effective_requirements: Record<string, unknown> }).requirements = {};
+    (w as unknown as { effective_requirements: Record<string, unknown> }).effective_requirements = {
+      "egress:registry.npmjs.org": { level: "required", provenance: "scan_seeded" },
+    };
+    render(<DetectedCard ws={w} onWorkspaceUpdated={vi.fn()} />);
+    expect(screen.queryByTestId("detected-suggested-egress")).not.toBeInTheDocument();
+  });
 });
 
 describe("DetectedCard — code/CI names promote directly (no egress confirm)", () => {
-  it("Add as optional calls setRequirements immediately for a secret name", async () => {
+  // UI-WS-1: the raw env-var name is what the server rejects
+  // (secretNameRE) — the promote key and the dedupe check must use the
+  // STORABLE name (storableSecretName), matching the wizard's own Secrets tab.
+  it("Add as optional calls setRequirements with the STORABLE name, not the raw env-var name", async () => {
     const onWorkspaceUpdated = vi.fn();
     setRequirementsMock.mockResolvedValue(ws({}));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -117,14 +133,41 @@ describe("DetectedCard — code/CI names promote directly (no egress confirm)", 
       />,
     );
     const group = screen.getByTestId("detected-code-refs");
+    // The row's face is still the scan's honest, raw fact.
+    expect(within(group).getByText("SENTRY_DSN")).toBeInTheDocument();
+    expect(within(group).getByText(/stored as/i)).toBeInTheDocument();
     await user.click(within(group).getByRole("button", { name: /add as optional/i }));
     await waitFor(() =>
       expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
-        "secret:SENTRY_DSN": { level: "optional", provenance: "operator_set" },
+        "secret:sentry-dsn": { level: "optional", provenance: "operator_set" },
       }),
     );
     // Direct — no confirm dialog in the way.
     expect(screen.queryByText(/untrusted content/i)).not.toBeInTheDocument();
+  });
+
+  it("a name with nothing storable (storableSecretName -> '') is skipped, not offered to promote", () => {
+    render(
+      <DetectedCard
+        ws={ws({ required_secrets: [{ name: "___", kind: "code" }] })}
+        onWorkspaceUpdated={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("detected-code-refs")).not.toBeInTheDocument();
+    expect(screen.getByTestId("detected-empty")).toBeInTheDocument();
+  });
+
+  // UI-WS-6: a secret already required via the fold (a shared source's own
+  // contract) must not still read "advisory — referenced in code, not
+  // declared" just because this workspace's own overlay is empty.
+  it("a secret already required via the fold is not offered as an advisory code ref", () => {
+    const w = ws({ required_secrets: [{ name: "STRIPE_KEY", kind: "code" }] });
+    (w as unknown as { requirements: Record<string, unknown> }).requirements = {};
+    (w as unknown as { effective_requirements: Record<string, unknown> }).effective_requirements = {
+      "secret:stripe-key": { level: "optional", provenance: "scan_seeded" },
+    };
+    render(<DetectedCard ws={w} onWorkspaceUpdated={vi.fn()} />);
+    expect(screen.queryByTestId("detected-code-refs")).not.toBeInTheDocument();
   });
 });
 

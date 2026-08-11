@@ -239,7 +239,13 @@ export function StepRequirements({
     holding.length === 0 &&
     services.length === 0 &&
     leaks.length === 0 &&
-    localDirPaths.length === 0;
+    localDirPaths.length === 0 &&
+    // UI-WS-9: purely profile-derived, so a named integration (e.g. one
+    // required at the wizard's own Integrations step) on an otherwise-empty
+    // scan — ephemeral-only, or a genuinely clean repo — hid this whole
+    // block, taking the power-source card and the ONLY picker for that
+    // integration with it.
+    Object.keys(requirements).length === 0;
 
   const unmet = unmetRequiredSecrets(requirements, storedSecretNames);
   const nothingResolves = powerSource.kind === "none";

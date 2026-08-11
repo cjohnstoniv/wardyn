@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { baseStatus } from "../setup/test-fixtures";
 import { AI_TYPES, SUBSCRIPTION_LANE_META, T } from "../../../lib/integrations";
@@ -18,12 +18,30 @@ import type { SetupStatus } from "../../../lib/types";
 // ScmHandoff re-GETs site-config on mount (stale-copy discipline); give it a
 // resolved fake so the two tests that land on the SCM ladder don't leak an
 // unhandled rejection from jsdom's URL-less fetch.
+const getSiteConfigMock = vi.fn().mockResolvedValue({});
+const putSiteConfigMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../../lib/api/health", () => ({
   health: {
-    getSiteConfig: vi.fn().mockResolvedValue({}),
-    putSiteConfig: vi.fn().mockResolvedValue(undefined),
+    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
   },
 }));
+
+// UI-WS-2's default-for write path (actions.ts's setDefaultFor, unmocked and
+// real) calls these two — everything else this module needs (AI_TYPES-driven
+// rendering, aiResidency, aiServerId, ...) stays real.
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
+const adoptIntegrationMock = vi.fn();
+const putIntegrationMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return {
+    ...actual,
+    integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
+    genericIntegrationsApi: { ...actual.genericIntegrationsApi, put: (...a: unknown[]) => putIntegrationMock(...a) },
+  };
+});
 
 vi.mock("../setup/harness-login-pane", () => ({
   HarnessLoginPane: (p: { onDone: () => void; onCancel: () => void }) => (
@@ -34,10 +52,27 @@ vi.mock("../setup/harness-login-pane", () => ({
   ),
 }));
 
+const toastErrorMock = vi.fn();
+const toastInfoMock = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), success: vi.fn(), info: (...a: unknown[]) => toastInfoMock(...a) },
+}));
+
+beforeEach(() => {
+  getSiteConfigMock.mockReset().mockResolvedValue({});
+  putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+  getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
+  adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
+  putIntegrationMock.mockReset().mockResolvedValue(undefined);
+  toastErrorMock.mockReset();
+  toastInfoMock.mockReset();
+});
+
 function renderDialog(
   existingAiRows: IntegrationRow[] = [],
   target: AddIntegrationTarget = { s: "ai_type" },
   status: SetupStatus = baseStatus(),
+  secretNames: string[] = [],
 ) {
   const reload = vi.fn();
   const onOpenChange = vi.fn();
@@ -49,6 +84,7 @@ function renderDialog(
       status={status}
       siteConfig={{}}
       existingAiRows={existingAiRows}
+      secretNames={secretNames}
       reload={reload}
       target={target}
       onBackToSearch={onBackToSearch}
@@ -232,5 +268,115 @@ describe("ConnectReviewPanel — the container-login credential cell", () => {
     // onCancelAll = onBack → the AI type panel is up again.
     expect(screen.queryByTestId("harness-login-pane")).not.toBeInTheDocument();
     expect(screen.getByText(AI_TYPES.anthropic_subscription.title)).toBeInTheDocument();
+  });
+});
+
+// UI-WS-2: "Add integration" used to patch only local dialog state — neither
+// the Name field nor the two DefaultFor checkboxes ever reached the server.
+describe("ConnectReviewPanel — Add integration persists the DefaultFor checkboxes", () => {
+  it("adopts and PUTs BOTH auto-checked marks for a fresh, first-ever provider", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        secrets: { present: ["openai-api-key"], github_app: false },
+        integrations: [
+          { id: "openai_api_key", category: "ai_provider", type: "openai_api_key", source: "legacy", default_for: [] },
+        ],
+      }),
+    );
+    const { onOpenChange, reload } = renderDialog([], { s: "ai_connect", type: "openai_api_key" });
+
+    await userEvent.click(screen.getByRole("button", { name: /^add integration$/i }));
+
+    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("openai_api_key"));
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith(
+        "openai_api_key",
+        expect.objectContaining({ default_for: expect.arrayContaining(["agent_runs", "wardyn_features"]) }),
+      ),
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("unchecking a default before Add clears the mark instead of silently keeping the auto-checked default", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        secrets: { present: ["openai-api-key"], github_app: false },
+        integrations: [
+          {
+            id: "openai_api_key",
+            category: "ai_provider",
+            type: "openai_api_key",
+            source: "stored",
+            default_for: ["agent_runs", "wardyn_features"],
+          },
+        ],
+      }),
+    );
+    renderDialog([], { s: "ai_connect", type: "openai_api_key" });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("checkbox", { name: /default for agent runs/i }));
+    await user.click(screen.getByRole("button", { name: /^add integration$/i }));
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("openai_api_key", expect.objectContaining({ default_for: ["wardyn_features"] })),
+    );
+    // Already stored — nothing to adopt for either mark.
+    expect(adoptIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  it("the Name field is a fact (aiRowName), not an editable control nothing ever reads back", () => {
+    renderDialog([], { s: "ai_connect", type: "openai_api_key" });
+    expect(screen.queryByRole("textbox", { name: /^name$/i })).not.toBeInTheDocument();
+    expect(screen.getByText("OpenAI (API key)")).toBeInTheDocument();
+  });
+});
+
+// SCM-SEAM-3: addHost had try/finally with no catch — a rejected write left
+// the spinner stopping with no toast, no inline error, and the host never
+// registered.
+describe("ScmHandoff — a rejected scm_hosts write toasts and doesn't advance", () => {
+  it("addHost's catch surfaces the failure instead of swallowing it", async () => {
+    putSiteConfigMock.mockRejectedValueOnce(new Error("500"));
+    const { reload, onOpenChange } = renderDialog([], { s: "scm" });
+    const user = userEvent.setup();
+
+    // GitHub is PROVIDER_OPTIONS[0], pre-selected — Continue needs no typing.
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to add the SCM host", expect.anything()));
+    expect(reload).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // Not stuck mid-spinner — Done is clickable again.
+    expect(await screen.findByRole("button", { name: "Done" })).toBeEnabled();
+  });
+});
+
+// SCM-SEAM-4: both SCM hand-off panels opened AddSecretDialog with no
+// existingNames, so its own overwrite gate (explicit confirm + "Rotate
+// secret" title) never armed — exactly on the locked conventional names most
+// likely to collide.
+describe("ScmHandoff — existingNames arms AddSecretDialog's overwrite gate", () => {
+  it("a PAT name that collides with an existing secret opens as Rotate secret, not Add secret", async () => {
+    renderDialog([], { s: "scm" }, baseStatus(), ["git-pat-github-com"]);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Add PAT" }));
+
+    expect(await screen.findByText("Rotate secret")).toBeInTheDocument();
+    expect(screen.queryByText("Add secret")).not.toBeInTheDocument();
+  });
+
+  it("a non-colliding name still opens as a plain Add secret", async () => {
+    renderDialog([], { s: "scm" }, baseStatus(), ["some-other-secret"]);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Add PAT" }));
+
+    expect(await screen.findByText("Add secret")).toBeInTheDocument();
   });
 });

@@ -7,14 +7,20 @@
 // legacy artifact_overrides removal by host, clearing the two mutually-exclusive
 // proxy fields) went with the categories that needed them — Corporate network
 // owns a proxy and a redirect now, including their removal. What's left is one
-// rule for every remaining row, and these tests pin BOTH halves of it plus the
-// absence of any site-config write.
+// rule for every remaining row: the stored secret is never deleted (UI-WS-4 —
+// it may be referenced elsewhere), and an scm_host row additionally drops its
+// site-config scm_hosts registration when it's actually a member (SCM-SEAM-1).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { IntegrationRow } from "../../../lib/api/integrations";
+import type { SiteConfig } from "../../../lib/types";
 
+const getSiteConfigMock = vi.fn();
 const putSiteConfigMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
-  health: { putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a) },
+  health: {
+    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
+  },
 }));
 
 const deleteSecretMock = vi.fn();
@@ -44,6 +50,7 @@ vi.mock("../../../lib/api/integrations", async (importOriginal) => {
 });
 
 import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor } from "./actions";
+import { HttpError } from "../../../lib/api/core";
 import type { WireIntegration } from "../../../lib/types/setup";
 
 function scmRow(overrides: Partial<IntegrationRow> = {}): IntegrationRow {
@@ -63,15 +70,27 @@ function scmRow(overrides: Partial<IntegrationRow> = {}): IntegrationRow {
 
 describe("deleteIntegration", () => {
   beforeEach(() => {
+    getSiteConfigMock.mockReset().mockResolvedValue({} as SiteConfig);
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
     deleteSecretMock.mockReset().mockResolvedValue(undefined);
     harnessDisconnectMock.mockReset().mockResolvedValue(undefined);
+    removeIntegrationMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("deletes every backing secret, and never touches the site config", async () => {
+  // UI-WS-4: the confirm copy (blastRadius) has always said the stored secret
+  // is NOT deleted — remove it under Secrets. deleteIntegration used to delete
+  // it anyway; a secret shared with another workspace/site-config field broke
+  // every other consumer the instant an operator believed the copy.
+  it("never deletes the backing secret — it may be referenced elsewhere", async () => {
     await deleteIntegration(scmRow({ secretNames: ["github-app-id", "github-app-key"] }));
+    expect(deleteSecretMock).not.toHaveBeenCalled();
+  });
 
-    expect(deleteSecretMock.mock.calls.flat()).toEqual(["github-app-id", "github-app-key"]);
+  it("an ai_provider row (no site-config concept at all) never touches the site config", async () => {
+    await deleteIntegration(
+      scmRow({ id: "ai:anthropic_api_key", category: "ai_provider", typeLabel: "anthropic · api key", secretNames: ["anthropic-api-key"] }),
+    );
+    expect(getSiteConfigMock).not.toHaveBeenCalled();
     expect(putSiteConfigMock).not.toHaveBeenCalled();
   });
 
@@ -82,12 +101,87 @@ describe("deleteIntegration", () => {
 
     expect(harnessDisconnectMock).toHaveBeenCalledWith("anthropic");
     expect(deleteSecretMock).not.toHaveBeenCalled();
+    expect(putSiteConfigMock).not.toHaveBeenCalled();
   });
 
-  it("one rejected secret delete surfaces, it isn't swallowed by the others", async () => {
-    deleteSecretMock.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("403 operator role required"));
+  // SCM-SEAM-1: the removal control that died with the retired SCM Provider
+  // step. Without this, "Runs stop inheriting <host>" is false — the host
+  // stays unioned into every future run's egress allowlist forever, with no
+  // remaining surface that can see or revoke it.
+  it("drops a registered host from site-config scm_hosts on delete", async () => {
+    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com", "gitlab.com"] } as SiteConfig);
 
-    await expect(deleteIntegration(scmRow({ secretNames: ["a", "b"] }))).rejects.toThrow(/operator role/);
+    await deleteIntegration(scmRow({ typeLabel: "github.com" }));
+
+    expect(putSiteConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({ scm_hosts: ["gitlab.com"] }),
+    );
+  });
+
+  it("matches the host case-insensitively — the operator may have typed it in mixed case", async () => {
+    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["GitHub.com"] } as SiteConfig);
+
+    await deleteIntegration(scmRow({ typeLabel: "github.com" }));
+
+    expect(putSiteConfigMock).toHaveBeenCalledWith(expect.objectContaining({ scm_hosts: [] }));
+  });
+
+  it("a host never registered (a derivedFrom guess row) triggers no site-config write", async () => {
+    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["gitlab.com"] } as SiteConfig);
+
+    await deleteIntegration(scmRow({ typeLabel: "ghes.corp.internal" }));
+
+    expect(putSiteConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("no scm_hosts at all triggers no site-config write", async () => {
+    getSiteConfigMock.mockResolvedValue({} as SiteConfig);
+
+    await deleteIntegration(scmRow());
+
+    expect(putSiteConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("a rejected site-config write surfaces, it isn't swallowed", async () => {
+    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com"] } as SiteConfig);
+    putSiteConfigMock.mockRejectedValueOnce(new Error("403 operator role required"));
+
+    await expect(deleteIntegration(scmRow())).rejects.toThrow(/operator role/);
+  });
+
+  // The bug this closes: the UI's Delete never called DELETE /integrations for
+  // a legacy row, so an adopted default-holder kept its default_for standing
+  // server-side even after the operator "deleted" it — agent runs went on
+  // resolving the default the blast radius promised they'd lose.
+  const aiRow = () =>
+    scmRow({
+      id: "ai:anthropic_api_key",
+      category: "ai_provider",
+      serverId: "anthropic_api_key",
+      typeLabel: "anthropic · api key",
+      secretNames: ["anthropic-api-key"],
+    });
+
+  it("removes the adopted stored integration for a legacy row that has a serverId", async () => {
+    await deleteIntegration(aiRow());
+    expect(removeIntegrationMock).toHaveBeenCalledWith("anthropic_api_key");
+    // Still never the secret (UI-WS-4).
+    expect(deleteSecretMock).not.toHaveBeenCalled();
+  });
+
+  it("swallows the 404 a never-adopted legacy row's delete returns — nothing was stored", async () => {
+    removeIntegrationMock.mockRejectedValueOnce(new HttpError(404, 'no stored integration "anthropic_api_key"'));
+    await expect(deleteIntegration(aiRow())).resolves.toBeUndefined();
+  });
+
+  it("propagates any non-404 failure from the stored-integration delete", async () => {
+    removeIntegrationMock.mockRejectedValueOnce(new HttpError(500, "boom"));
+    await expect(deleteIntegration(aiRow())).rejects.toThrow(/boom/);
+  });
+
+  it("a derivedFrom guess SCM row (no serverId) makes no stored-integration delete", async () => {
+    await deleteIntegration(scmRow({ serverId: undefined }));
+    expect(removeIntegrationMock).not.toHaveBeenCalled();
   });
 });
 

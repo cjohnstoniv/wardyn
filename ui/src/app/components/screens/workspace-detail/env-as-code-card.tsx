@@ -87,6 +87,11 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
               ? "devcontainer.json (base image, language features, registry redirects) + AGENTS.md (detected recipe and declared services, as prose)."
               : "Needs a scanned profile — scan first."}
           </p>
+          {/* UI-WS-12: this branch (files still null) is exactly where a
+              FAILED generate leaves state — the `error` check below it was
+              unreachable on a first failure, so the operator saw nothing at
+              all, not even on a retry (a failure never sets `files`). */}
+          {error && <p className="w-full text-sm text-danger">{error}</p>}
         </div>
       ) : error ? (
         <p className="text-sm text-danger">{error}</p>

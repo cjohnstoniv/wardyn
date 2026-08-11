@@ -162,6 +162,13 @@ export function IntegrationsScreen({
   // The EFFECTIVE wire row behind a derived IntegrationRow (by its serverId) —
   // where a real default_for lives. Looked up once per render, not per row.
   const wireById = new Map((status.integrations ?? []).map((w) => [w.id, w]));
+  // UI-WS-11: the row pending delete's own default-holder opts, the same ones
+  // integration-detail.tsx passes — so the list's confirm doesn't drop the two
+  // most consequential lines (agent runs lose model access, Composer loses its
+  // backend) just because it deletes from a different surface.
+  const toDeleteWire = toDelete?.serverId ? wireById.get(toDelete.serverId) : undefined;
+  const toDeleteDefAgent = !!toDeleteWire?.default_for?.includes("agent_runs");
+  const toDeleteDefFeat = !!toDeleteWire?.default_for?.includes("wardyn_features");
 
   const requestDelete = (row: IntegrationRow) => setToDelete(row);
   const runDelete = async () => deleteIntegration(toDelete!);
@@ -231,6 +238,22 @@ export function IntegrationsScreen({
             </div>
           )}
 
+          {/* UX-2: embedded mode has no PageHeader (its Add button included)
+              and, once any row exists, neither the EmptyState's own button
+              (totalRows!==0) nor GenericSections' dashed panel one
+              (sections.length!==0) — all three conditions can be
+              simultaneously false, leaving no Add affordance anywhere on the
+              step and no in-app link to /integrations either (the nav is
+              gated). This is the one case the other three don't cover. */}
+          {embedded && totalRows > 0 && (
+            <div className="flex items-center justify-end gap-2">
+              {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+              <Button size="sm" onClick={() => setAddServiceOpen(true)} disabled={!operator}>
+                <Plus className="size-4" /> Add integration
+              </Button>
+            </div>
+          )}
+
           {totalRows === 0 ? (
             <div className="rounded-xl border border-border">
               <EmptyState
@@ -291,6 +314,7 @@ export function IntegrationsScreen({
         open={addServiceOpen}
         onOpenChange={setAddServiceOpen}
         onAdded={load}
+        existingRows={(status.integrations ?? []).map((w) => ({ id: w.id, name: w.name || w.id }))}
         onHandoff={(t) => {
           // The rule: never re-ask an answered question, never skip a real one.
           // A pick whose type still has an open sub-choice lands on the AI type
@@ -327,6 +351,7 @@ export function IntegrationsScreen({
           status={status}
           siteConfig={siteConfig}
           existingAiRows={data.ai}
+          secretNames={loaded.secretNames}
           reload={load}
           onBackToSearch={() => {
             setAddOpen(false);
@@ -352,7 +377,10 @@ export function IntegrationsScreen({
         entity="integration"
         description={
           <ul className="space-y-1">
-            {blastRadius(toDelete ?? ({} as IntegrationRow)).map((line, i) => (
+            {blastRadius(toDelete ?? ({} as IntegrationRow), {
+              isDefaultAgent: toDeleteDefAgent,
+              isDefaultFeatures: toDeleteDefFeat,
+            }).map((line, i) => (
               <li key={i}>{line}</li>
             ))}
           </ul>

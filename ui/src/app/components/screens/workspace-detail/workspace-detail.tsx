@@ -20,7 +20,6 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { statusTone, statusWord, storySentence } from "../../../lib/workspace-status";
-import { C } from "../../../lib/workspace-copy";
 import { hasLlmPath } from "../onboarding/intro";
 import { comesWithLine } from "../new-run/wizard-types";
 import { Button } from "../../ui/button";
@@ -57,7 +56,7 @@ import { RequirementsCard } from "./requirements-card";
 import { DetectedCard } from "./detected-card";
 import { EnvAsCodeCard } from "./env-as-code-card";
 import { RecordPane } from "./record-pane";
-import { isRecording, sessionKeyOf } from "./session-helpers";
+import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
 
 const POLL_MS = 2500;
 
@@ -190,13 +189,14 @@ export function WorkspaceDetailScreen() {
   // app uses for egress approval — the host names came from a session's
   // observed traffic, not something the operator typed.
   const requestApproveHost = (host: string) => setPendingConfirm({ hosts: [host], run: () => void approveHost(host) });
+  // UI-WS-14: newEgressHosts is the SAME helper that drives the button's own
+  // "Approve N observed host(s)" count (record-pane.tsx) — reusing it here
+  // means the untrusted-content confirm can never list more hosts than the
+  // button that opened it offered (it used to subtract only approved_egress,
+  // missing the profile's own auto-allowed set).
   const requestPromoteEgress = (taskKey: string) => {
     if (!ws) return;
-    const rr = ws.record_results?.[taskKey];
-    const observedAllowed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
-    const already = new Set(ws.approved_egress ?? []);
-    const newHosts = observedAllowed.filter((h) => !already.has(h));
-    setPendingConfirm({ hosts: newHosts, run: () => void promoteEgress(taskKey) });
+    setPendingConfirm({ hosts: newEgressHosts(ws, taskKey), run: () => void promoteEgress(taskKey) });
   };
 
   // ---------------- render ----------------
@@ -407,7 +407,15 @@ export function WorkspaceDetailScreen() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Rescan {ws.name}?</AlertDialogTitle>
-            <AlertDialogDescription>{C.RESCAN_DESTROYS}</AlertDialogDescription>
+            {/* UX-6: this action is POST /workspaces/{id}/scan — a plain
+                re-read, not the composition-edit PUT that actually clears
+                requirements/sessions (that warning belongs on wizard.tsx's
+                own confirm, where it's true). Reusing C.RESCAN_DESTROYS here
+                deterred the one safe way to refresh a stale profile. */}
+            <AlertDialogDescription>
+              Rescanning re-reads each source from scratch and refreshes what it detected — your requirements,
+              approved egress, and recorded sessions aren&apos;t touched.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

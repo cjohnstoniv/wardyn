@@ -7,18 +7,26 @@
 // list screen's kebab and the detail page's header/danger-zone, so "delete
 // this integration" means the same real thing wherever it's triggered.
 //
-// Every remaining row is backed by stored credential material, so deleting one
-// means deleting that material: a generic secret goes through the secret store
-// (its entire footprint IS the secret), a harness login (subscription / AWS
-// SSO) is disconnected through its own endpoint, matching llm-access.tsx's
-// disconnectManaged. An SCM row's credential deletion mirrors
-// scm-provider-step.tsx's "Delete credential"/"Remove App" exactly — the
-// host's site-config registration is untouched (a separate concern owned by
-// the SCM Provider step). No site-config branch survives here: the two
-// categories that existed only as a site-config field (host proxy, egress
-// redirection) moved to the Corporate network step, which owns their removal.
-import { secrets as secretsApi } from "../../../lib/api/secrets";
+// A harness login (subscription / AWS SSO) is disconnected through its own
+// endpoint — a captured session isn't secret-store material, so the generic
+// delete path below can't reach it. Every OTHER row's stored secret is left
+// alone (UI-WS-4): it may be referenced by another workspace or site-config
+// field, and blastRadius's own confirm copy already tells the operator so —
+// deleting it here would silently break every other consumer. Remove it
+// explicitly under Secrets when it's genuinely no longer needed. What delete
+// DOES undo server-side: an SCM row's site-config scm_hosts registration
+// (SCM-SEAM-1 — the removal control that died with the retired SCM Provider
+// step), and, for ANY legacy row that was adopted, the stored Integration
+// itself (its default_for radio mark + renamed identity) via the server's
+// DELETE endpoint — a 404 there just means the row was never adopted, so
+// there was nothing stored to remove. The credential-derived row still
+// reappears on the next read until its secret is removed under Secrets (the
+// server's own contract, handleDeleteIntegration). Host proxy / egress
+// redirection still don't belong here: those two categories moved to the
+// Corporate network step, which owns their removal.
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
+import { health } from "../../../lib/api/health";
+import { HttpError } from "../../../lib/api/core";
 import { genericIntegrationsApi, integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
 import type { WireIntegration } from "../../../lib/types/setup";
 
@@ -43,8 +51,38 @@ export async function deleteIntegration(row: IntegrationRow): Promise<void> {
     await harnessAuthApi.harnessDisconnect(row.harnessProvider);
     return;
   }
-  const results = await Promise.allSettled(row.secretNames.map((n) => secretsApi.deleteSecret(n)));
-  for (const r of results) if (r.status === "rejected") throw r.reason;
+  // The stored secret is deliberately NOT deleted (UI-WS-4) — see this file's
+  // header comment.
+  if (row.category === "scm_host") {
+    // Re-GET (never the caller's possibly-stale copy) and drop the host only
+    // when it's actually a member — a derivedFrom guess row was never
+    // registered, so it must trigger no write. Case-insensitive: the site
+    // config stores whatever case the operator typed, while row.typeLabel
+    // (deriveProviders' r.host) is already lowercased.
+    const siteConfig = await health.getSiteConfig();
+    const hosts = siteConfig.scm_hosts ?? [];
+    const remaining = hosts.filter((h) => h.trim().toLowerCase() !== row.typeLabel);
+    if (remaining.length !== hosts.length) {
+      await health.putSiteConfig({ ...siteConfig, scm_hosts: remaining });
+    }
+  }
+  // Remove the ADOPTED stored integration — the one piece of server-side state
+  // a legacy row can own (its default_for radio mark + a renamed identity),
+  // written by setDefaultFor's adopt-then-PUT. Without this the UI's Delete
+  // never called DELETE /integrations at all for a legacy row: deleting an
+  // adopted default-holder left its default_for standing, so agent runs kept
+  // resolving it as the default the blast-radius copy just warned they'd lose.
+  // A never-adopted row has nothing stored — the server 404s and that IS the
+  // done state (its credential-derived row keeps reappearing on the next read,
+  // per handleDeleteIntegration's own contract, until the secret is removed
+  // under Secrets, which is exactly what the confirm copy directs). Any other
+  // status is a real failure and propagates, like the site-config write above.
+  if (row.serverId) {
+    await genericIntegrationsApi.remove(row.serverId).catch((e) => {
+      if (e instanceof HttpError && e.status === 404) return;
+      throw e;
+    });
+  }
 }
 
 /** The two DefaultFor marks the console can toggle (types.Integration.DefaultFor's closed set). */

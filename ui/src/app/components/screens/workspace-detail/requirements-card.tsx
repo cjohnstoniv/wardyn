@@ -19,24 +19,21 @@ import { Mono } from "../../wardyn/code-block";
 import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { WorkspaceRequirementsMap, WorkspaceSourceInput } from "../../../lib/api/workspaces";
-import type { SetupStatus, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { effectiveWorkspaceRequirements, type SetupStatus, type Workspace, type WorkspaceProfile } from "../../../lib/types";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { C } from "../../../lib/workspace-copy";
 import { StepRequirements } from "../workspace-wizard/step-requirements";
-import type { PowerSource, SourceRow } from "../workspace-wizard/wizard-types";
+import { operatorOverlay, type PowerSource, type SourceRow } from "../workspace-wizard/wizard-types";
 import { WorkspaceLLMCredDialog, llmCredLabel, llmCredTone } from "../workspace-llm-cred";
 import { SectionCard } from "./section-card";
 import { useOperator } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
-// Boundary-local typed cast-read for the composition-model fields the shared
-// Workspace type doesn't carry yet — same idiom lib/api/workspaces.ts and
-// new-run/wizard-types.ts each already use at their own boundary, rather than
-// importing workspace-wizard's WorkspaceWithComposition (a different owner's
-// internal type) into this file.
-function requirementsOf(ws: Workspace): WorkspaceRequirementsMap {
-  return (ws as unknown as { requirements?: WorkspaceRequirementsMap }).requirements ?? {};
-}
+// Boundary-local cast-read for the pre-composition legacy fallback (single
+// kind/source/ref) StepRequirements still needs to know about — same idiom
+// lib/api/workspaces.ts and new-run/wizard-types.ts each already use at their
+// own boundary. requirements/effective_requirements are real Workspace
+// fields now (UI-WS-6's own evidence) and are read directly below, not cast.
 function sourcesOf(ws: Workspace): SourceRow[] {
   const raw = (ws as unknown as { sources?: WorkspaceSourceInput[] }).sources ?? [];
   if (raw.length > 0) {
@@ -113,14 +110,17 @@ export function RequirementsCard({
   const recipe = profile?.setup_commands ?? [];
 
   const [saving, setSaving] = React.useState(false);
-  // Local, optimistic copy of the requirements map. PUT-per-toggle used to
-  // derive `next` straight from the `ws` PROP, which only updates once the
-  // PREVIOUS PUT resolves: two toggles fired inside one round trip both read
-  // the same stale base, and the second's write silently discards the first
-  // (PUT is a full replace). Composing on this local copy instead means each
-  // toggle always builds on the one just applied, regardless of the server's
-  // timing.
-  const [pending, setPending] = React.useState<WorkspaceRequirementsMap>(() => requirementsOf(ws));
+  // Local, optimistic copy of the EFFECTIVE contract (UI-WS-6: the fold, not
+  // just this workspace's own overlay) — so a row a shared source's own
+  // contract already declares (e.g. secret:stripe-key = optional) displays
+  // its real level instead of falling back to "required" because the overlay
+  // alone never repeats it. PUT-per-toggle used to derive `next` straight
+  // from the `ws` PROP, which only updates once the PREVIOUS PUT resolves:
+  // two toggles fired inside one round trip both read the same stale base,
+  // and the second's write silently discards the first (PUT is a full
+  // replace). Composing on this local copy instead means each toggle always
+  // builds on the one just applied, regardless of the server's timing.
+  const [pending, setPending] = React.useState<WorkspaceRequirementsMap>(() => effectiveWorkspaceRequirements(ws));
   // Reconciles `pending` with the server whenever `ws` changes out from under
   // this card. This card is NOT remounted on every out-of-band refresh — only
   // load(true)'s foreground gate tears the detail page's subtree down
@@ -141,20 +141,26 @@ export function RequirementsCard({
   React.useEffect(() => {
     if (saving || Date.parse(ws.updated_at) <= Date.parse(lastReconciledAt.current)) return;
     lastReconciledAt.current = ws.updated_at;
-    setPending(requirementsOf(ws));
+    setPending(effectiveWorkspaceRequirements(ws));
   }, [ws, saving]);
   const persist = async (next: WorkspaceRequirementsMap) => {
     setPending(next);
     setSaving(true);
     try {
-      const updated = await workspacesApi.setRequirements(ws.id, next);
-      setPending(requirementsOf(updated));
+      // UI-WS-7's sibling on this surface: `next` is derived from the FOLD
+      // (`pending`), so it carries every fold-only row untouched this toggle
+      // — writing it verbatim would freeze each one into this workspace's own
+      // overlay, past the rescan meant to refresh it. Only rows the operator
+      // has actually touched (this one included — setRequirementLane always
+      // stamps operator_set) belong in the overlay PUT.
+      const updated = await workspacesApi.setRequirements(ws.id, operatorOverlay(next));
+      setPending(effectiveWorkspaceRequirements(updated));
       onWorkspaceUpdated(updated);
     } catch (e) {
       // Roll back to the server's own last-known state — a rejected write
       // must not leave a phantom lane rendered (and composing onto every
       // later write) forever.
-      setPending(requirementsOf(ws));
+      setPending(effectiveWorkspaceRequirements(ws));
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });
     } finally {
       setSaving(false);

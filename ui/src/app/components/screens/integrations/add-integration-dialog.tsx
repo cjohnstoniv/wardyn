@@ -14,6 +14,7 @@
 // two step bodies.
 import * as React from "react";
 import { ChevronDown, KeyRound, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 import {
   AI_TYPES,
   BEDROCK_LANE_META,
@@ -25,11 +26,11 @@ import {
   type BedrockLane,
   type SubscriptionLane,
 } from "../../../lib/integrations";
-import { aiResidency, aiRowName, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
+import { aiResidency, aiRowName, aiServerId, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
 import { health } from "../../../lib/api/health";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import { setup as setupApi } from "../../../lib/api/setup";
+import type { SetupStatus, SiteConfig, WireIntegration } from "../../../lib/types";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Field, OptionCard } from "../new-run/step-shell";
@@ -39,8 +40,9 @@ import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
 import { CapabilityTable } from "./integration-detail";
+import { setDefaultFor, type DefaultForMark } from "./actions";
 import type { Lane } from "../../../lib/scm-provider";
-import { relativeTime } from "../../../lib/format";
+import { getErrorMessage, relativeTime } from "../../../lib/format";
 
 // Where the search-first Add flow (add-service-dialog.tsx) hands off TO. That
 // flow is the ONLY way in here — the old "AI provider or SCM host?" category
@@ -70,6 +72,7 @@ export function AddIntegrationDialog({
   status,
   siteConfig,
   existingAiRows,
+  secretNames,
   reload,
   target,
   onBackToSearch,
@@ -79,6 +82,11 @@ export function AddIntegrationDialog({
   status: SetupStatus;
   siteConfig: SiteConfig;
   existingAiRows: IntegrationRow[];
+  /** Every currently-stored secret name — so the credential dialogs this
+   *  hands off to (App PEM / PAT / SSH key / API key) can arm their own
+   *  overwrite gate on a name collision (SCM-SEAM-4) instead of silently
+   *  clobbering an in-use secret. */
+  secretNames: string[];
   reload: () => void;
   /** What the search-first flow picked — this dialog always opens ON it. */
   target: AddIntegrationTarget;
@@ -120,6 +128,7 @@ export function AddIntegrationDialog({
         siteConfig={localSiteConfig}
         reloadSiteConfig={reloadSiteConfig}
         saveSiteConfig={saveSiteConfig}
+        secretNames={secretNames}
         onBack={onBackToSearch}
         onDone={finish}
       />
@@ -143,6 +152,7 @@ export function AddIntegrationDialog({
       hostCli={step.hostCli}
       bedrockLane={step.bedrockLane}
       existingAiRows={existingAiRows}
+      secretNames={secretNames}
       status={status}
       onBack={() => setStep({ s: "ai_type", preselect: step.type })}
       onDone={finish}
@@ -156,12 +166,14 @@ function ScmHandoff({
   siteConfig,
   reloadSiteConfig,
   saveSiteConfig,
+  secretNames,
   onBack,
   onDone,
 }: {
   siteConfig: SiteConfig;
   reloadSiteConfig: () => Promise<void>;
   saveSiteConfig: (next: SiteConfig) => Promise<void>;
+  secretNames: string[];
   onBack: () => void;
   onDone: () => void;
 }) {
@@ -182,7 +194,21 @@ function ScmHandoff({
     try {
       const hosts = Array.from(new Set([...(siteConfig.scm_hosts ?? []), h]));
       await saveSiteConfig({ ...siteConfig, scm_hosts: hosts });
+      // SCM-SEAM-2: the ONLY disclosure a hosted (GitHub/ADO/GitLab/Bitbucket)
+      // pick gets — Panel2's own inline note renders for the generic kind
+      // only. Every pick still widens every future run's egress allowlist, so
+      // every pick gets told so, even after the fact.
+      toast.info(`${h} added to the egress allowlist`, {
+        description: "Every future run can now reach it, credential or not — delete the integration to revoke that.",
+      });
       return true;
+    } catch (e) {
+      // SCM-SEAM-3: this used to have no catch at all — a rejected write left
+      // the spinner stopping with no toast, no inline error, and the host
+      // never registered. Matches the retired predecessor step's own
+      // addHost (scm-provider-step.tsx, pre-7f8d091).
+      toast.error("Failed to add the SCM host", { description: getErrorMessage(e) });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -219,6 +245,7 @@ function ScmHandoff({
         onOpenChange={(o) => !o && setSecretDialog(null)}
         initialName={secretDialog?.name ?? ""}
         lockName
+        existingNames={secretNames}
         host={secretDialog?.host}
         lane={secretDialog?.lane}
         onSaved={() => setSecretDialog(null)}
@@ -246,8 +273,8 @@ function AiTypePanel({
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [bedrockLane, setBedrockLane] = React.useState<BedrockLane>("bearer");
   // Sealed control plane (wardynd itself runs in a container): the host-CLI
-  // subscription lane can never be satisfied here — same gate llm-access.tsx
-  // uses for its own "Set up Claude subscription" framing.
+  // subscription lane can never be satisfied here — the same rule the funnel
+  // applied before it folded into Integrations.
   const sealed = status.deployment?.host_like === false;
 
   const continueClick = () => {
@@ -470,6 +497,7 @@ function ConnectReviewPanel({
   hostCli,
   bedrockLane,
   existingAiRows,
+  secretNames,
   status,
   onBack,
   onDone,
@@ -478,11 +506,17 @@ function ConnectReviewPanel({
   hostCli?: boolean;
   bedrockLane?: BedrockLane;
   existingAiRows: IntegrationRow[];
+  secretNames: string[];
   status: SetupStatus;
   onBack: () => void;
   onDone: () => void;
 }) {
-  const [name, setName] = React.useState(aiRowName(type, hostCli));
+  // UI-WS-2: the Name field used to be an editable Input that nothing ever
+  // read back — deriveAiRows always renders aiRowName() for these four types
+  // regardless of what's stored, so a typed rename silently vanished on Add.
+  // A fact, not a control, closes the gap honestly instead of wiring a write
+  // path deriveAiRows would still ignore.
+  const name = aiRowName(type, hostCli);
   const capRows = AI_TYPES[type].capabilityPreview(hostCli);
   const residency = aiResidency(type, hostCli, bedrockLane);
   const resMeta = RESIDENCY_META[residency];
@@ -498,6 +532,7 @@ function ConnectReviewPanel({
   const [checkedFeat, setCheckedFeat] = React.useState(canFeat && type !== "anthropic_subscription");
   const replacesAgent = checkedAgent ? defaultHolder(existingAiRows, AGENT_SLOT) : undefined;
   const replacesFeat = checkedFeat ? defaultHolder(existingAiRows, FEATURES_SLOT) : undefined;
+  const [submitting, setSubmitting] = React.useState(false);
 
   const [secretDialogName, setSecretDialogName] = React.useState<string | null>(null);
 
@@ -511,6 +546,43 @@ function ConnectReviewPanel({
           : type === "bedrock" && bedrockLane === "bearer"
             ? "bedrock-api-key"
             : undefined;
+
+  // UI-WS-2: persist the two DefaultFor checkboxes — Add used to patch only
+  // local state, so a pre-checked "replaces X" note never actually replaced
+  // anything. `status` (this dialog's own prop) is a snapshot from BEFORE the
+  // credential above was saved, so it re-GETs rather than trusting it — the
+  // same staleness discipline reloadSiteConfig uses for site config.
+  const handleAdd = async () => {
+    const marks: [DefaultForMark, boolean][] = [];
+    if (canAgent) marks.push(["agent_runs", checkedAgent]);
+    if (canFeat) marks.push(["wardyn_features", checkedFeat]);
+    const serverId = aiServerId(type, hostCli);
+    if (serverId && marks.length) {
+      setSubmitting(true);
+      try {
+        const fresh = await setupApi.getSetupStatus();
+        let wire: WireIntegration | undefined = fresh.integrations?.find((w) => w.id === serverId);
+        // Nothing to adopt/PUT yet (e.g. the operator never entered the
+        // credential) — the defaults simply don't persist; Add still succeeds.
+        if (wire) {
+          for (const [mark, on] of marks) {
+            if (on === !!wire.default_for?.includes(mark)) continue;
+            await setDefaultFor(wire, mark, on);
+            // setDefaultFor's own PUT is a full replace of whatever `wire` it's
+            // handed — advance the local copy so a SECOND mark in this same
+            // loop doesn't PUT a stale default_for and clobber the first.
+            const df: string[] = wire.default_for ?? [];
+            wire = { ...wire, source: "stored", default_for: on ? [...df, mark] : df.filter((m: string) => m !== mark) };
+          }
+        }
+      } catch (e) {
+        toast.error("Couldn't set the default", { description: getErrorMessage(e) });
+      } finally {
+        setSubmitting(false);
+      }
+    }
+    onDone();
+  };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onBack()}>
@@ -529,8 +601,8 @@ function ConnectReviewPanel({
         </DialogHeader>
 
         <div className="min-w-0 space-y-4 py-1">
-          <Field label="Name" htmlFor="int-name" hint="Yours to change — it's how rows read in lists and pickers.">
-            <Input id="int-name" value={name} onChange={(e) => setName(e.target.value)} />
+          <Field label="Name" hint="How this row reads in lists and pickers.">
+            <p className="text-sm text-foreground">{name}</p>
           </Field>
 
           <div className="space-y-2 rounded-xl border border-border p-3.5">
@@ -600,10 +672,12 @@ function ConnectReviewPanel({
         <div className="min-w-0 flex flex-col gap-2">
           <p className="text-right text-[0.6875rem] text-muted-foreground">{T.STORE_NOTE}</p>
           <DialogFooter>
-            <Button variant="outline" onClick={onBack}>
+            <Button variant="outline" onClick={onBack} disabled={submitting}>
               Back
             </Button>
-            <Button onClick={onDone}>Add integration</Button>
+            <Button onClick={() => void handleAdd()} disabled={submitting}>
+              {submitting ? "Adding…" : "Add integration"}
+            </Button>
           </DialogFooter>
         </div>
       </DialogContent>
@@ -613,6 +687,7 @@ function ConnectReviewPanel({
         onOpenChange={(o) => !o && setSecretDialogName(null)}
         lockName
         initialName={secretDialogName ?? ""}
+        existingNames={secretNames}
         onSaved={() => setSecretDialogName(null)}
       />
     </Dialog>

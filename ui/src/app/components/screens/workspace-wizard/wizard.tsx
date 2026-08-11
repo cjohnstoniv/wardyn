@@ -4,7 +4,8 @@
  */
 
 // The "Add workspace" wizard — the single front door replacing the old
-// 6-step import dialog. Rail: Sources -> Base image -> Requirements -> Done.
+// 6-step import dialog. Rail (WIZARD_STEPS, wizard-types.ts): Sources -> Base
+// image -> Integrations -> Build -> Requirements -> Verify -> Done.
 // Owns the rail + all step state; each step-*.tsx is a pure controlled view.
 // Mirrors mockup/wardyn-workspaces.js's AddWorkspaceWizard/V2 shell (Dialog +
 // StepRail + scrollable body + footer), rebuilt against the REAL API surface
@@ -77,6 +78,7 @@ import {
   type WorkspaceSourceInput,
   type WorkspaceSourceKind,
   setRequirementLane,
+  operatorOverlay,
 } from "./wizard-types";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -117,6 +119,10 @@ interface WizardState {
   savingIntegrations: boolean;
   savingRequirements: boolean;
   buildState: WorkspaceBuildState | null;
+  // UI-WS-10: lifted out of WizardVerifySession's own local state — that
+  // component only mounts while s.step === "verify", so a live session's id
+  // must live HERE to survive a Back/rail click away from Verify and back.
+  verifyRunId: string | null;
 }
 
 // initial, when given, hydrates the wizard onto an ALREADY-onboarded
@@ -149,6 +155,7 @@ function initialState(initial?: Workspace): WizardState {
     savingIntegrations: false,
     savingRequirements: false,
     buildState: null,
+    verifyRunId: null,
   };
 }
 
@@ -354,7 +361,24 @@ export function WorkspaceWizard({
           sources: s.initialSources ?? s.sources.map((r) => toSourceInput(r, s.sources)),
           base_image: toBaseImageInput(s.baseImage, detectedChips),
         });
-        patch({ creating: false, workspace: updated });
+        patch({
+          creating: false,
+          workspace: updated,
+          // UI-WS-3: `s.initialSources === null` here means sources were
+          // genuinely TOUCHED this session (every mutator nulls it on edit) —
+          // the server just wiped Requirements/Profile/ApprovedEgress for
+          // exactly that reason (sourcesChanged, internal/api/workspaces.go).
+          // Mirror that reset client-side, or the wizard's own map — still
+          // reviewed against the OLD composition — rides along on the next
+          // save (continueFromIntegrations/saveAndContinue) and re-applies
+          // rows (including auto-granting operator_set ones) nobody reviewed
+          // against the new sources. requirementsSeeded:false lets the
+          // Requirements step's own effect re-derive fresh defaults once the
+          // new scan lands, same as a first-time create.
+          ...(s.initialSources === null
+            ? { requirements: updated.requirements ?? {}, requirementsSeeded: false }
+            : {}),
+        });
         void startScan(updated);
       } catch (e) {
         patch({ creating: false });
@@ -447,7 +471,16 @@ export function WorkspaceWizard({
     if (!s.workspace) return;
     patch({ savingRequirements: true });
     try {
-      const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
+      // UI-WS-7: PUT /requirements REPLACES the workspace OVERLAY, which must
+      // carry ONLY operator-authored rows — the scan_seeded half lives on the
+      // SOURCE's own contract and rebuilds there on every rescan, folding into
+      // effective_requirements server-side. A zero-edit "accept the scan
+      // defaults, click through" walk therefore PUTs {} (the fold still
+      // supplies the seeds); persisting the scan_seeded rows into the overlay
+      // would freeze them past the rescan that's supposed to refresh them —
+      // the exact defect operatorOverlay() exists to prevent (same filter
+      // requirements-card.tsx's persist uses).
+      const updated = await workspacesApi.setRequirements(s.workspace.id, operatorOverlay(s.requirements));
       patch({ savingRequirements: false, workspace: updated, step: "verify" });
     } catch (e) {
       patch({ savingRequirements: false });
@@ -500,7 +533,10 @@ export function WorkspaceWizard({
     }
     patch({ savingIntegrations: true });
     try {
-      const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
+      // UI-WS-7: overlay = operator-authored rows only — see saveAndContinue's
+      // own comment above; same reasoning applies to this earlier save (a picked
+      // integration is stamped operator_set, so it survives the filter).
+      const updated = await workspacesApi.setRequirements(s.workspace.id, operatorOverlay(s.requirements));
       patch({ savingIntegrations: false, workspace: updated, step: "build" });
     } catch (e) {
       patch({ savingIntegrations: false });
@@ -653,12 +689,24 @@ export function WorkspaceWizard({
             <StepIntegrations
               status={s.setupStatus ?? null}
               requirements={s.requirements}
-              setLane={(key, level) => patch({ requirements: setRequirementLane(s.requirements, key, level) })}
-              clear={(key) => {
-                const next = { ...s.requirements };
-                delete next[key];
-                patch({ requirements: next });
-              }}
+              // UI-WS-13: functional setState, not patch()'s eager `p` built
+              // from the render-time `s` closure — adopt-then-setLane defers
+              // this call behind a network round trip (integrationsApi.
+              // adoptIntegration().then(...)), so by the time it fires, `s`
+              // here could be stale relative to a SECOND row named in the
+              // meantime. Reading `cur` inside the updater (React's own
+              // latest state at apply time, not this render's) means neither
+              // order can clobber the other.
+              setLane={(key, level) =>
+                setState((cur) => ({ ...cur, requirements: setRequirementLane(cur.requirements, key, level) }))
+              }
+              clear={(key) =>
+                setState((cur) => {
+                  const next = { ...cur.requirements };
+                  delete next[key];
+                  return { ...cur, requirements: next };
+                })
+              }
             />
           )}
           {s.step === "build" && s.workspace && (
@@ -679,6 +727,8 @@ export function WorkspaceWizard({
                 <WizardVerifySession
                   ws={s.workspace}
                   nothingResolves={powerSource.kind === "none"}
+                  runId={s.verifyRunId}
+                  onRunIdChange={(verifyRunId) => patch({ verifyRunId })}
                   onContractChanged={() => void absorbServerContract()}
                 />
               }

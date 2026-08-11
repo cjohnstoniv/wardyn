@@ -130,6 +130,27 @@ export function aiRowName(type: AiType, hostCli?: boolean): string {
 const AGENT_SLOT = /Claude Code|Codex/;
 const FEATURES_SLOT = /^Wardyn features/;
 
+// The server-side adoptable id for a legacy AI row of this type/lane — the
+// SAME ids deriveAiRows below stamps as serverId, factored out so a caller
+// that hasn't loaded a derived row yet (the Add dialog, before its first
+// reload) can still resolve which wire row to adopt/PUT (UI-WS-2). Undefined
+// for azure_openai: no site-config field / SetupCheck id exists for it yet
+// (see the azure branch below), so there is nothing to adopt.
+export function aiServerId(type: AiType, hostCli?: boolean): string | undefined {
+  switch (type) {
+    case "anthropic_api_key":
+      return "anthropic_api_key";
+    case "anthropic_subscription":
+      return hostCli ? "anthropic_subscription:resident_host" : "anthropic_subscription:managed";
+    case "bedrock":
+      return "bedrock";
+    case "openai_api_key":
+      return "openai_api_key";
+    case "azure_openai":
+      return undefined;
+  }
+}
+
 // Overlays the REAL default_for state onto a type's static capability
 // preview: `def` (the "default" chip/label) flips on live state once a server
 // identity (`wire`) backs the row, instead of the static per-type guess the
@@ -187,10 +208,9 @@ export function defaultHolder(rows: IntegrationRow[], capability: RegExp): Integ
   return rows.find((r) => r.chips.some((c) => !c.muted && capability.test(c.label) && c.label.includes("· default")));
 }
 
-// resolveBedrockAuth's precedence (internal/api/runs_bedrock.go, mirrored in
-// llm-access.tsx's bedrockRow): bearer > AWS SSO session > host ~/.aws mount >
-// static access keys. Undefined when only region/model are set — no
-// credential lane is actually active yet.
+// resolveBedrockAuth's precedence (internal/api/runs_bedrock.go): bearer >
+// AWS SSO session > host ~/.aws mount > static access keys. Undefined when
+// only region/model are set — no credential lane is actually active yet.
 function activeBedrockLane(status: SetupStatus): BedrockLane | undefined {
   const b = status.bedrock;
   if (!b) return undefined;
@@ -220,7 +240,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (present.includes("anthropic-api-key")) {
     rows.push({
       id: "ai:anthropic_api_key",
-      serverId: "anthropic_api_key",
+      serverId: aiServerId("anthropic_api_key"),
       category: "ai_provider",
       name: aiRowName("anthropic_api_key"),
       typeLabel: AI_TYPE_LABEL.anthropic_api_key,
@@ -236,7 +256,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (claude?.logged_in && claude.auth_mode === "subscription") {
     rows.push({
       id: "ai:anthropic_subscription:host",
-      serverId: "anthropic_subscription:resident_host",
+      serverId: aiServerId("anthropic_subscription", true),
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", true),
       typeLabel: subscriptionTypeLabel(true),
@@ -255,7 +275,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (managed) {
     rows.push({
       id: "ai:anthropic_subscription:managed",
-      serverId: "anthropic_subscription:managed",
+      serverId: aiServerId("anthropic_subscription", false),
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", false),
       typeLabel: subscriptionTypeLabel(false),
@@ -289,7 +309,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     }
     rows.push({
       id: "ai:bedrock",
-      serverId: "bedrock",
+      serverId: aiServerId("bedrock"),
       category: "ai_provider",
       name: aiRowName("bedrock"),
       typeLabel: AI_TYPE_LABEL.bedrock,
@@ -307,7 +327,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (present.includes("openai-api-key")) {
     rows.push({
       id: "ai:openai_api_key",
-      serverId: "openai_api_key",
+      serverId: aiServerId("openai_api_key"),
       category: "ai_provider",
       name: aiRowName("openai_api_key"),
       typeLabel: AI_TYPE_LABEL.openai_api_key,
@@ -352,9 +372,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
 
 // Only the kinds a stored credential can actually produce (deriveProviders
 // only pushes a lane when its secret/App flag is real) — brokered for the App,
-// resident for a written key/token. A host with zero lanes isn't a stored
-// connection yet (just an egress-allowlist entry from the SCM Provider step),
-// so it's not "an integration" on this screen.
+// resident for a written key/token.
 function scmResidency(lanes: Lane[]): ResidencyKind {
   const kinds = new Set(lanes.map((l) => LANE_META[l].residency));
   return kinds.size === 1 ? [...kinds][0] : "varies";
@@ -362,42 +380,60 @@ function scmResidency(lanes: Lane[]): ResidencyKind {
 
 function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, present: string[]): IntegrationRow[] {
   const rows = deriveProviders(present, siteConfig?.scm_hosts ?? [], status.secrets.github_app);
-  return rows
-    .filter((r) => r.lanes.length > 0)
-    .map((r) => {
-      const isGithubApp = r.host === "github.com" && r.lanes.includes("app");
-      const slug = slugHost(r.host);
-      const secretNames = isGithubApp
-        ? ["github-app-id", "github-app-key"]
-        : r.lanes
-            .filter((l) => l !== "app")
-            .map((l) => (l === "ssh" ? `ssh-key-${slug}` : `git-pat-${slug}`))
-            .filter((n) => present.includes(n));
+  return rows.map((r) => {
+    // SCM-SEAM-2: a host registered in scm_hosts but with no stored credential
+    // yet still widens every future run's egress allowlist the moment it's
+    // added — dropping the row here (as this used to) makes that add look
+    // like a no-op while it silently keeps widening egress. Render it as a
+    // minimal, real, deletable row instead of hiding it. `derivedFrom` guess
+    // rows never reach this branch (deriveProviders always seeds one lane for
+    // those), so this is exactly the scm_hosts-registered, credential-less case.
+    if (r.lanes.length === 0) {
       return {
         id: `scm:${r.host}`,
-        // The server-side adoptable id for this host (internal/api/
-        // integrations.go): the GitHub App row is minted as the fixed id
-        // "github_app" (:517), every other git host as "git_host:<host>"
-        // (:660) — even github.com gets that id when the app lane isn't the
-        // one present. Without this, an SCM host can never be adopted/named
-        // in a workspace requirements contract the way every AI row already can.
-        serverId: isGithubApp ? "github_app" : `git_host:${r.host}`,
         category: "scm_host" as const,
         name: r.brand,
         typeLabel: r.host,
-        chips: r.lanes.map((l) => ({ label: LANE_META[l].label, tone: LANE_META[l].tone, tooltip: LANE_META[l].tooltip })),
-        residency: scmResidency(r.lanes),
-        // W5: the ref-confinement check that would answer Ref-confined/
-        // Unconfined doesn't exist server-side yet — Unknown is the honest
-        // default until it does. Re-check still refreshes real local facts
-        // (e.g. the Stored check below), so it's wired, not decorative.
-        posture: isGithubApp ? { kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" } : { kind: "configured" },
-        secretNames,
-        checkIds: ["scm_provider"],
-        canReCheck: isGithubApp,
-        isGithubApp,
+        chips: [],
+        residency: "notbuilt" as const,
+        posture: { kind: "configured" as const },
+        secretNames: [],
+        checkIds: [],
       };
-    });
+    }
+    const isGithubApp = r.host === "github.com" && r.lanes.includes("app");
+    const slug = slugHost(r.host);
+    const secretNames = isGithubApp
+      ? ["github-app-id", "github-app-key"]
+      : r.lanes
+          .filter((l) => l !== "app")
+          .map((l) => (l === "ssh" ? `ssh-key-${slug}` : `git-pat-${slug}`))
+          .filter((n) => present.includes(n));
+    return {
+      id: `scm:${r.host}`,
+      // The server-side adoptable id for this host (internal/api/
+      // integrations.go): the GitHub App row is minted as the fixed id
+      // "github_app" (:517), every other git host as "git_host:<host>"
+      // (:660) — even github.com gets that id when the app lane isn't the
+      // one present. Without this, an SCM host can never be adopted/named
+      // in a workspace requirements contract the way every AI row already can.
+      serverId: isGithubApp ? "github_app" : `git_host:${r.host}`,
+      category: "scm_host" as const,
+      name: r.brand,
+      typeLabel: r.host,
+      chips: r.lanes.map((l) => ({ label: LANE_META[l].label, tone: LANE_META[l].tone, tooltip: LANE_META[l].tooltip })),
+      residency: scmResidency(r.lanes),
+      // W5: the ref-confinement check that would answer Ref-confined/
+      // Unconfined doesn't exist server-side yet — Unknown is the honest
+      // default until it does. Re-check still refreshes real local facts
+      // (e.g. the Stored check below), so it's wired, not decorative.
+      posture: isGithubApp ? { kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" } : { kind: "configured" },
+      secretNames,
+      checkIds: ["scm_provider"],
+      canReCheck: isGithubApp,
+      isGithubApp,
+    };
+  });
 }
 
 // ---- Host proxy / egress redirection: NOT derived here ----------------------
@@ -605,9 +641,12 @@ export const genericIntegrationsApi = {
     if (!res.ok) throw new Error(await errText(res));
   },
   // DELETE /api/v1/integrations/{id}. The operator's stored secrets are NOT
-  // deleted — the surface says so where it offers this.
+  // deleted — the surface says so where it offers this. Throws HttpError (not a
+  // bare Error) so a caller can tell a 404 ("no stored integration" — a legacy
+  // row that was never adopted has nothing to delete) from a real failure;
+  // actions.ts's deleteIntegration relies on that distinction.
   async remove(id: string): Promise<void> {
     const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await errText(res));
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 };

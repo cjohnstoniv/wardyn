@@ -25,19 +25,40 @@ import { C, RD2 } from "../../../lib/workspace-copy";
 export function WizardVerifySession({
   ws,
   nothingResolves,
+  runId,
+  onRunIdChange,
   onContractChanged,
 }: {
   ws: Workspace;
   /** Hides the agent-flavored button (RD2.RECORD_NEEDS renders above it). */
   nothingResolves: boolean;
+  /** UI-WS-10: lifted into the WIZARD's own state, not local — this
+   *  component only mounts while the wizard is on the Verify step, so local
+   *  state orphaned the run the instant a Back/rail click unmounted it: the
+   *  session kept going server-side (C.SESSION_SURVIVES) with no way back to
+   *  it from here, and relaunching hit a 409. */
+  runId: string | null;
+  onRunIdChange: (runId: string | null) => void;
   /** Called after the session ends — the wizard refetches and absorbs the
    *  rows the server wrote (approved hosts land as contract rows live). */
   onContractChanged: () => void;
 }) {
-  const [runId, setRunId] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [finished, setFinished] = React.useState(false);
+
+  // Reattach to a session already running server-side that this mount never
+  // saw start — the wizard's own lifted state only survives a Back/rail click
+  // WITHIN one mounted wizard; a fresh "Edit workspace…" open (or a page
+  // refresh) has none of that, so re-derive it from the workspace itself.
+  // record.go always stores the wizard's Verify session under the fixed key
+  // "verify:verify" (verifyKeyOf("verify"), session-helpers.ts).
+  React.useEffect(() => {
+    if (runId) return;
+    const rr = ws.record_results?.["verify:verify"];
+    if (rr?.status === "recording") onRunIdChange(rr.run_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.record_results]);
 
   const launch = async () => {
     setBusy(true);
@@ -49,7 +70,7 @@ export function WizardVerifySession({
         setNotice(r.detail ?? "The session did not start.");
         return;
       }
-      setRunId(r.record_run_id);
+      onRunIdChange(r.record_run_id);
     } catch (e) {
       toast.error("Verify session failed to start", { description: getErrorMessage(e) });
     } finally {
@@ -62,7 +83,7 @@ export function WizardVerifySession({
     setBusy(true);
     try {
       await runsApi.killRun(runId);
-      setRunId(null);
+      onRunIdChange(null);
       setFinished(true);
       onContractChanged();
     } catch (e) {

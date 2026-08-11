@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { baseStatus } from "../../components/screens/setup/test-fixtures";
 import { T } from "../integrations";
 import {
+  aiServerId,
   deriveIntegrations,
   proxyBannerNeeded,
   describePosture,
@@ -14,6 +15,24 @@ import {
   type IntegrationRow,
 } from "./integrations";
 import type { SetupStatus, SiteConfig } from "../types";
+
+// UI-WS-2: the Add dialog resolves which wire row to adopt/PUT via this
+// helper, BEFORE its first reload can hand it a derived IntegrationRow of its
+// own — pinned here as the single source of truth deriveAiRows' own serverId
+// values are drawn from, so the two can't drift apart.
+describe("aiServerId", () => {
+  it("matches deriveAiRows' own serverId for every type that has one", () => {
+    expect(aiServerId("anthropic_api_key")).toBe("anthropic_api_key");
+    expect(aiServerId("anthropic_subscription", true)).toBe("anthropic_subscription:resident_host");
+    expect(aiServerId("anthropic_subscription", false)).toBe("anthropic_subscription:managed");
+    expect(aiServerId("bedrock")).toBe("bedrock");
+    expect(aiServerId("openai_api_key")).toBe("openai_api_key");
+  });
+
+  it("is undefined for azure_openai — no site-config field/SetupCheck id exists to adopt", () => {
+    expect(aiServerId("azure_openai")).toBeUndefined();
+  });
+});
 
 describe("deriveIntegrations — empty inputs", () => {
   it("derives nothing when nothing is configured", () => {
@@ -125,9 +144,30 @@ describe("deriveIntegrations — AI providers", () => {
 });
 
 describe("deriveIntegrations — SCM hosts", () => {
-  it("a registered host with no stored credential is not an integration yet", () => {
+  // SCM-SEAM-2: this used to drop the row entirely — an add that registered
+  // the host into scm_hosts (widening every future run's egress allowlist)
+  // but skipped the optional credential read as a silent no-op, with no row
+  // anywhere to reveal, inspect, or delete what was actually just widened.
+  it("a registered host with no stored credential still renders — egress only, no chips, no secret", () => {
     const data = deriveIntegrations(baseStatus(), { scm_hosts: ["gitlab.com"] }, []);
-    expect(data.scm).toHaveLength(0);
+    expect(data.scm).toHaveLength(1);
+    const [row] = data.scm;
+    expect(row.typeLabel).toBe("gitlab.com");
+    expect(row.residency).toBe("notbuilt");
+    expect(row.chips).toEqual([]);
+    expect(row.secretNames).toEqual([]);
+    // No server-side integration entity to adopt for a credential-less row.
+    expect(row.serverId).toBeUndefined();
+  });
+
+  it("an orphan secret's derivedFrom guess (never registered) is unaffected — it always had a real lane", () => {
+    // git-pat-unknown-host matches no scmHosts entry, so deriveProviders
+    // reconstructs a guessed host from the secret name itself — that row has
+    // a real PAT lane from the start, never the zero-lane branch.
+    const data = deriveIntegrations(baseStatus(), null, ["git-pat-unknown-host"]);
+    expect(data.scm).toHaveLength(1);
+    expect(data.scm[0].secretNames).toEqual(["git-pat-unknown-host"]);
+    expect(data.scm[0].residency).not.toBe("notbuilt");
   });
 
   it("a github-pat secret yields a resident_env row, not the live-check row", () => {
