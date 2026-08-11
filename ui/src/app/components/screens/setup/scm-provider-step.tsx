@@ -320,16 +320,24 @@ export function AddProviderPanel2({
                 tooltip={LANE_META.pat.tooltip}
               >
                 <CredCta label="Add PAT" name={`git-pat-${slug}`} host={host} lane="pat" onOpen={onOpenSecret} />
-                {showHostedNote && (
-                  <p className="text-[0.6875rem] text-muted-foreground">
-                    Also registers the hostname so runs can reach it.
-                  </p>
-                )}
               </Rung>
               <p className="text-[0.6875rem] text-muted-foreground">{SSH_LIMIT}</p>
             </>
           )}
         </div>
+        {/* Pinned to the row that actually performs the write (Done calls
+            addHost — saving a credential above does not) rather than the PAT
+            button above: that claimed the registration the moment you saved a
+            secret, but closing the dialog (X/Esc → back to search) right
+            after leaves the promise unfulfilled — the secret is stored, the
+            host never is, and the integrations list shows it under a guessed
+            hostname instead. */}
+        {kind === "generic" && showHostedNote && (
+          <p className="text-[0.6875rem] text-muted-foreground">
+            Clicking Done also registers the hostname so runs can reach it — closing this dialog first leaves the
+            credential saved but the host unregistered.
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onBack}>
             Back

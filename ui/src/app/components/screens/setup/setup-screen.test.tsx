@@ -273,6 +273,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
   });
 
+  // UI-SETUP-1: recheck() used to refresh status+site-config only — secret
+  // names were fetched once at mount and never again, so the Integrations
+  // rail badge (which derives from them) couldn't see a secret-backed
+  // integration added OR deleted inside the embedded step until a full page
+  // reload. loadSecrets is now folded into the SAME recheck every "Re-check"
+  // button on this screen already calls.
+  it("Re-check also re-fetches secret names, not just status and site-config", async () => {
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    expect(listSecretsMock).toHaveBeenCalledTimes(1); // the mount-time fetch
+
+    await user.click(screen.getByRole("button", { name: /^re-check$/i }));
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    expect(listSecretsMock).toHaveBeenCalledTimes(2);
+  });
+
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
     it("the footer's button IS the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
@@ -374,6 +390,33 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^back$/i }));
       expect(await screen.findByText("Can't test here")).toBeInTheDocument();
     });
+
+    // UI-SETUP-11: steps.ts states the invariant outright ("There is no
+    // click-past"), but that was enforced on the footer's Next button only —
+    // the always-visible rail let the SAME jump happen in one click with no
+    // friction. Blocking it here is what actually makes the stated rule true.
+    it("the rail can't click past a blocked gate — same rule the footer's Next enforces; backward jumps are unaffected", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+
+      // Untested (blocked): clicking Integrations in the rail is a no-op.
+      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
+      expect(screen.getByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+
+      // Backward is never gated — only forward click-PAST is what the rule guards.
+      await user.click(within(nav).getByRole("button", { name: /environment/i }));
+      expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+      await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+
+      // Proven: the identical rail click now works.
+      await clearCorpNetworkGate();
+      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
+      expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
+    });
   });
 
   it("the Integrations step embeds the real list (not a second copy) and the rail badge counts a connection", async () => {
@@ -397,6 +440,27 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     const nav = screen.getByRole("navigation", { name: /setup steps/i });
     const btn = within(nav).getByRole("button", { name: /integrations/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
+  });
+
+  // UX-1: integrationsCount used to add up only the two legacy categories
+  // (AI + SCM) — the eight generic categories this range shipped (package
+  // feeds, container registries, cloud, data, MCP, work tracking,
+  // observability, other) read as nothing connected no matter how many rows
+  // the step body itself showed, and a Next past the step would stamp
+  // "Skipped" on an operator who had just connected one.
+  it("the Integrations badge counts a generic-category connection too, not just AI/SCM", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "jira-1", category: "work_tracking", type: "jira", name: "Jira" }] }),
+    );
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+
+    const nav = screen.getByRole("navigation", { name: /setup steps/i });
+    const btn = within(nav).getByRole("button", { name: /integrations/i });
+    expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
+    expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
   });
 
   // A4 — "Skipped" state: an optional step the operator navigated past without

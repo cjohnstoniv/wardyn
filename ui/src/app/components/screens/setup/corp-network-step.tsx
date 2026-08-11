@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Corporate network — Getting Started step 2 of 10, BEFORE Integrations (see
+// Corporate network — Getting Started step 2 of 12, BEFORE Integrations (see
 // steps.ts for why the order itself is the fix). Two sub-tabs: Host proxy
 // (evidence read from this host, over the config sandboxes actually use, over
 // a real Test probe) and Egress redirection (the SiteConfig.egress_redirects
@@ -492,22 +492,22 @@ function HostProxyTab({
 
       <div className="space-y-3 rounded-xl border border-border bg-card p-3.5">
         <BlockLabel>{T.CONFIG_HEAD}</BlockLabel>
-        {useSecret ? (
-          <ConfigStatusLine tone={siteConfig?.upstream_proxy_secret_ref ? "success" : "neutral"}>
-            {siteConfig?.upstream_proxy_secret_ref ? (
-              <>
-                Chaining through the URL in secret <Mono className="text-xs">{siteConfig.upstream_proxy_secret_ref}</Mono> — write-only, so
-                the URL can&apos;t be shown here
-              </>
-            ) : (
-              T.NOT_CONFIGURED
-            )}
-          </ConfigStatusLine>
-        ) : (
-          <ConfigStatusLine tone={configured ? "success" : "neutral"}>
-            {configured ? <>Chaining through <Mono className="text-xs">{siteConfig?.upstream_proxy_url}</Mono></> : T.NOT_CONFIGURED}
-          </ConfigStatusLine>
-        )}
+        {/* Driven by what's actually SAVED (siteConfig), never by which input
+            mode (useSecret) happens to be open — switching to "Enter a URL
+            instead" on a secret-only config must keep naming the secret, not
+            claim "Chaining through" a plain URL that was never set. */}
+        <ConfigStatusLine tone={configured ? "success" : "neutral"}>
+          {siteConfig?.upstream_proxy_url ? (
+            <>Chaining through <Mono className="text-xs">{siteConfig.upstream_proxy_url}</Mono></>
+          ) : siteConfig?.upstream_proxy_secret_ref ? (
+            <>
+              Chaining through the URL in secret <Mono className="text-xs">{siteConfig.upstream_proxy_secret_ref}</Mono> — write-only, so
+              the URL can&apos;t be shown here
+            </>
+          ) : (
+            T.NOT_CONFIGURED
+          )}
+        </ConfigStatusLine>
 
         {!useSecret && !configured && candidates.length === 1 && !url && (
           <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 p-2.5">
@@ -576,7 +576,16 @@ function HostProxyTab({
                 </Button>
               </>
             ) : (
-              <Button size="sm" disabled={!operator || saving} onClick={() => saveUrl(url)}>
+              <Button
+                size="sm"
+                // An empty URL here would PUT both upstream_proxy_url and
+                // upstream_proxy_secret_ref undefined — fine when nothing was
+                // configured yet, but a silent delete of a configured proxy
+                // (e.g. switching from the secret field via "Enter a URL
+                // instead" without typing one) otherwise.
+                disabled={!operator || saving || (!url.trim() && isProxyConfigured(siteConfig))}
+                onClick={() => saveUrl(url)}
+              >
                 {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
               </Button>
             )}
@@ -682,6 +691,7 @@ export function CorpNetworkStep({
   saveSiteConfig,
   gate,
   onGateChange,
+  onRecheck = reloadSiteConfig,
   gateResult,
   registerActions,
   tab: tabProp,
@@ -698,6 +708,13 @@ export function CorpNetworkStep({
   onGateChange: (
     patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">>,
   ) => void;
+  /** The evidence block's own "Re-check" button (host-proxy detection only) —
+   *  the orchestrator's FULL recheck (status + site-config), the SAME one the
+   *  persistent host-status strip already calls, so both buttons named
+   *  "Re-check" actually refresh the same host_proxy detection. Falls back to
+   *  reloadSiteConfig (site-config only — detection never changes) for
+   *  standalone/test renders that don't wire the orchestrator up. */
+  onRecheck?: () => void;
   /** The orchestrator's computed gate (the SAME corpNetworkGate call that
    *  drives the footer) — this step only READS on/action from it, to suppress
    *  the panel's own Test button while the gate row carries the action. One
@@ -721,7 +738,11 @@ export function CorpNetworkStep({
   // ---- The probe, owned HERE (not in HostProxyTab): the gate row can fire it
   // from either tab, and its UI state must survive tab switches. ----
   const [test, setTest] = React.useState<ProbeUiState>(() =>
-    gate.proxyProbe ? { kind: "done", result: gate.proxyProbe } : { kind: "idle" },
+    gate.probeRunning
+      ? { kind: "running", elapsedSec: 0 }
+      : gate.proxyProbe
+        ? { kind: "done", result: gate.proxyProbe }
+        : { kind: "idle" },
   );
   const [customReject, setCustomReject] = React.useState<string | null>(null);
   const runTest = async (customUrl?: string) => {
@@ -756,6 +777,20 @@ export function CorpNetworkStep({
   };
   const elapsed = useElapsedTimer(test.kind === "running");
   const liveTest: ProbeUiState = test.kind === "running" ? { ...test, elapsedSec: elapsed } : test;
+
+  // The `test` state seeds from `gate` once at mount. If the operator leaves
+  // mid-probe and returns before it resolves, the in-flight runTest resolves in
+  // the prior (unmounted) instance — its setTest is a no-op, but its onGateChange
+  // still lands the verdict on the surviving orchestrator gate. Without this,
+  // the remounted instance stays stuck on the seeded "Testing…" forever. Adopt
+  // the gate's outcome whenever it reports the probe finished while we still show
+  // running. (During our OWN probe gate.probeRunning is true, so this never
+  // clobbers a live test.)
+  React.useEffect(() => {
+    if (test.kind === "running" && !gate.probeRunning) {
+      setTest(gate.proxyProbe ? { kind: "done", result: gate.proxyProbe } : { kind: "idle" });
+    }
+  }, [gate.probeRunning, gate.proxyProbe, test.kind]);
 
   // What the builtin probe is about to traverse, named up front (the mock's
   // probeLine) — endpoints mirror internal/api/site_config_probe.go's targets.
@@ -839,7 +874,7 @@ export function CorpNetworkStep({
           mutate={mutate}
           saving={saving}
           operator={operator}
-          onRecheck={reloadSiteConfig}
+          onRecheck={onRecheck}
           probe={{
             state: liveTest,
             onTest: () => runTest(),
@@ -866,6 +901,7 @@ export function CorpNetworkStep({
             onGateChange({ redirectProbes: next });
           }}
           testAllSignal={testAllSignal}
+          onTestAllConsumed={() => setTestAllSignal(0)}
         />
       )}
     </div>

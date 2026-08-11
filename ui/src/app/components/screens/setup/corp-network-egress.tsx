@@ -214,7 +214,7 @@ function RedirectRowExpanded({
   );
 }
 
-function FromCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function FromCombobox({ id, value, onChange }: { id?: string; value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = React.useState(false);
   // The suggestions are a shortcut, not the menu: redirecting a private host or
   // a bare IP is the whole reason this stopped being "artifact registries".
@@ -232,7 +232,7 @@ function FromCombobox({ value, onChange }: { value: string; onChange: (v: string
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-mono">
+        <Button id={id} type="button" variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-mono">
           <span className={cn("truncate", !value && "font-sans text-muted-foreground")}>{value || "https://…, host, or IP"}</span>
           <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
         </Button>
@@ -313,7 +313,7 @@ function AddRedirectForm({ onAdd, operator }: { onAdd: (r: EgressRedirect) => vo
     <div className="space-y-3 rounded-xl border border-border p-4">
       <div className="grid grid-cols-2 gap-2.5">
         <Field label="From" htmlFor="eg-add-from" hint="The public endpoint a run would reach — pick a common source or type any URL, host, or IP.">
-          <FromCombobox value={from} onChange={setFrom} />
+          <FromCombobox id="eg-add-from" value={from} onChange={setFrom} />
         </Field>
         <Field label="To" htmlFor="eg-add-to">
           <Input id="eg-add-to" value={to} onChange={(e) => setTo(e.target.value)} placeholder="https://artifactory.corp.internal/… — or a host/IP" className="font-mono" />
@@ -336,6 +336,7 @@ export function EgressTab({
   initialProbes,
   onProbeResult,
   testAllSignal = 0,
+  onTestAllConsumed,
 }: {
   siteConfig: SiteConfig | null;
   mutate: (next: SiteConfig, errorMessage: string) => Promise<boolean>;
@@ -346,9 +347,15 @@ export function EgressTab({
   onProbeResult: (from: string, result: ProxyTestResult) => void;
   /** Bumped by the footer's "Test all redirects" gate action (corp-network-step.tsx) — each increment fires testAll once this tab is mounted. */
   testAllSignal?: number;
+  /** Fired the moment a bumped testAllSignal is consumed, so the OWNER (which
+   *  survives this tab unmounting on a tab switch) can zero it back down —
+   *  without that, a remount (leaving Egress and coming back) sees the SAME
+   *  stale non-zero signal as "new" and re-fires the whole sweep, each row a
+   *  real throwaway sandbox launch the operator never asked for again. */
+  onTestAllConsumed?: () => void;
 }) {
   const redirects = siteConfig?.egress_redirects ?? [];
-  const [expandedIdx, setExpandedIdx] = React.useState<number | null>(null);
+  const [expandedFrom, setExpandedFrom] = React.useState<string | null>(null);
   // Seeded once at mount only (the lazy-initializer form runs exactly once) —
   // same rationale as HostProxyTab's `test` state and the file's existing
   // seededRef pattern: a later reload must never stomp in-progress state.
@@ -381,14 +388,19 @@ export function EgressTab({
   };
   const testAll = () => redirects.forEach((r) => runTest(r));
   // The footer's gate action lands as a bumped counter: the step switches to
-  // this tab and increments, and the freshly-mounted tab fires the sweep.
-  const firedSignal = React.useRef(0);
+  // this tab and increments, and the freshly-mounted tab fires the sweep. A
+  // ref here would NOT do — this component unmounts whenever the step's tab
+  // ternary switches to Host proxy, and remounts fresh (firedSignal reset to
+  // 0) on the way back, re-reading the SAME already-handled testAllSignal as
+  // new. Reporting consumption up to the owner (which survives the unmount)
+  // and having it zero the prop back down is what actually makes this a
+  // ONE-SHOT trigger.
   React.useEffect(() => {
-    if (testAllSignal > 0 && testAllSignal !== firedSignal.current) {
-      firedSignal.current = testAllSignal;
+    if (testAllSignal > 0) {
+      onTestAllConsumed?.();
       testAll();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- testAll is re-created per render; the signal is the trigger
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- testAll/onTestAllConsumed re-created per render; the signal is the trigger
   }, [testAllSignal]);
 
   return (
@@ -398,31 +410,29 @@ export function EgressTab({
         <>
           <div className="rounded-lg border border-border">
             {redirects.map((r, i) =>
-              i === expandedIdx ? (
-                <div key={i} className={i > 0 ? "border-t border-border" : undefined}>
+              r.from === expandedFrom ? (
+                <div key={r.from} className={i > 0 ? "border-t border-border" : undefined}>
                   <RedirectRowExpanded
                     r={r}
-                    onCancel={() => setExpandedIdx(null)}
+                    onCancel={() => setExpandedFrom(null)}
                     onSave={(next) => {
-                      const copy = [...redirects];
-                      copy[i] = next;
-                      setRedirects(copy);
-                      setExpandedIdx(null);
+                      setRedirects(redirects.map((row) => (row.from === r.from ? next : row)));
+                      setExpandedFrom(null);
                     }}
                     onRemove={() => {
-                      setRedirects(redirects.filter((_, j) => j !== i));
-                      setExpandedIdx(null);
+                      setRedirects(redirects.filter((row) => row.from !== r.from));
+                      setExpandedFrom(null);
                     }}
                   />
                 </div>
               ) : (
-                <div key={i} className={i > 0 ? "border-t border-border" : undefined}>
+                <div key={r.from} className={i > 0 ? "border-t border-border" : undefined}>
                   <TickingRow
                     r={r}
                     testState={testStates[r.from] ?? { kind: "idle" }}
-                    onExpand={() => setExpandedIdx(i)}
+                    onExpand={() => setExpandedFrom(r.from)}
                     onTest={() => runTest(r)}
-                    onRemove={() => setRedirects(redirects.filter((_, j) => j !== i))}
+                    onRemove={() => setRedirects(redirects.filter((row) => row.from !== r.from))}
                     operator={operator}
                   />
                 </div>

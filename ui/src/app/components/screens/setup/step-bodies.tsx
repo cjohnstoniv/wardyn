@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step bodies still standing after the 13->9 Getting Started collapse:
-// Workspaces, Review, and Launch. HostProxyStep/ArtifactRepoStep used to live
+// Step bodies surviving today: CheckRow (shared), ReviewStep,
+// useSiteConfigStep, the three workspace tiers (SourcesStep / ImagesStep /
+// WorkspacesStep), and LaunchStep. HostProxyStep/ArtifactRepoStep used to live
 // here too, kept alive only by the Integrations "Add integration" dialog's
 // mirror/proxy hand-off; that hand-off retired when Corporate network became
-// the single home for both, and the two bodies went with it. Mostly
-// presentational — the caller owns SetupStatus AND the fetched SiteConfig (the
-// sole owner — see useSiteConfigStep below), while each body owns its OWN
-// writes (scanWorkspace, and the SiteConfig saves via the caller-owned
-// saveSiteConfig).
+// the single home for both, and the two bodies went with it (part of the
+// 13->9 Getting Started collapse). Mostly presentational — the caller owns
+// SetupStatus AND the fetched SiteConfig (the sole owner — see
+// useSiteConfigStep below), while each body owns its OWN writes (scanWorkspace,
+// and the SiteConfig saves via the caller-owned saveSiteConfig).
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Info, Loader2, Plus, CircleCheck, Rocket, RotateCw, ScanSearch } from "lucide-react";
 import type {
   SetupCheck,
@@ -33,6 +33,7 @@ import { Button } from "../../ui/button";
 import { SourcesLibrary } from "../sources-library";
 import { ImageCatalog } from "../image-catalog";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
+import { sourceSubLine } from "../workspaces";
 import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
@@ -295,10 +296,19 @@ export function WorkspacesStep({
 }) {
   // Onboard/scan are workspace writes — operator-only (see http.go).
   const operator = useOperator();
-  const navigate = useNavigate();
   // "Add workspace" now routes through the four-step wizard (Sources -> Base
   // image -> Requirements -> Done) instead of the retired guided Import panel.
   const [wizardOpen, setWizardOpen] = React.useState(false);
+  // Resumes an EXISTING (possibly mid-wizard) workspace — the same
+  // WorkspaceWizard, hydrated via `initial`, that /workspaces' own "Edit
+  // workspace…" opens (workspaces.tsx). The funnel used to have no such
+  // affordance at all: a not-yet-usable row's only button navigated to
+  // /workspaces/:id, a route the first-run gate bounces back to /setup,
+  // restarting the funnel and discarding the in-memory corp-network proof;
+  // a usable-but-unfinished row (scanned, but no image/reqs/verify yet) had
+  // no resume control whatsoever. Opening the SAME wizard in-dialog needs no
+  // new route and no gate change.
+  const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
 
   // Best-effort scan → always refresh (repo scans run async and return 202, local
@@ -354,17 +364,17 @@ export function WorkspacesStep({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-foreground">{w.name}</span>
                   <span className="block truncate font-mono text-xs text-muted-foreground">
-                    {w.kind === "repo" ? "repo" : "local dir"} · {w.source}
+                    {sourceSubLine(w)}
                   </span>
                   {summary && (
                     <span className="block truncate text-[0.6875rem] text-muted-foreground">{summary}</span>
                   )}
                   {statusTone(w.status).tone === "danger" && (
-                    // The failure reason itself is only in the import overlay's scan
-                    // pane (the toast is ephemeral) — point at the recovery path
-                    // inline instead of leaving a bare red chip.
+                    // The import overlay this used to point at ("Resume import")
+                    // was deleted with the guided-import panel — Edit workspace…
+                    // below is the one surviving affordance that opens it.
                     <span className="block text-[0.6875rem] text-danger">
-                      Scan failed — Resume import to see what went wrong and retry.
+                      Scan failed — open the workspace to see what went wrong and retry.
                     </span>
                   )}
                 </span>
@@ -377,28 +387,28 @@ export function WorkspacesStep({
                     {statusWord(w.status)}
                   </Chip>
                 )}
-                {isUsable(w.status) ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => scan(w)}
-                    disabled={!operator || scanning.has(w.id)}
-                  >
-                    <ScanSearch className="size-3.5" /> Scan
+                <span className="flex shrink-0 items-center gap-1">
+                  {isUsable(w.status) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => scan(w)}
+                      disabled={!operator || scanning.has(w.id)}
+                    >
+                      <ScanSearch className="size-3.5" /> Scan
+                    </Button>
+                  )}
+                  {/* The ONLY resume affordance for a workspace whose wizard was
+                      closed part-way — usable-but-unfinished (image/reqs/verify
+                      still pending) rows had nothing but Scan before this, and a
+                      not-yet-usable row's old "Open" button navigated OUT of the
+                      funnel to a route the first-run gate immediately bounces
+                      back from /setup. Mounts the identical in-dialog wizard
+                      /workspaces uses (below), never a route. */}
+                  <Button variant="ghost" size="sm" onClick={() => setEditTarget(w)} disabled={!operator}>
+                    Edit workspace…
                   </Button>
-                ) : (
-                  // Resuming an import is now the detail page's job (its own
-                  // primary action offers Scan now / Retry scan contextually) —
-                  // this just opens it. Navigation, not a write, so it isn't
-                  // operator-gated.
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => navigate(`/workspaces/${encodeURIComponent(w.id)}`)}
-                  >
-                    <ScanSearch className="size-3.5" /> Open
-                  </Button>
-                )}
+                </span>
               </li>
               );
             })}
@@ -411,15 +421,37 @@ export function WorkspacesStep({
 
       {/* The four-step "Add workspace" wizard — its own Dialog on top; returns
           here via onClose (like NewRunDialog returns to SetupScreen). Mounted
-          only while open (its Dialog is unconditionally open internally). */}
+          only while open (its Dialog is unconditionally open internally).
+          onOpenWorkspace (the Done step's "Make it stronger" cards) closes
+          back to the funnel rather than navigating to /workspaces/:id — that
+          route is behind the first-run gate this funnel IS, and would bounce
+          the operator straight back to /setup, step 1, gate proof discarded. */}
       {wizardOpen && (
         <WorkspaceWizard
           origin="setup"
           onClose={() => setWizardOpen(false)}
           onWorkspaceCreated={onReload}
-          onOpenWorkspace={(id) => {
-            setWizardOpen(false);
-            navigate(`/workspaces/${encodeURIComponent(id)}`);
+          onOpenWorkspace={() => setWizardOpen(false)}
+        />
+      )}
+
+      {/* Resumes an existing workspace in place — the funnel's own "Edit
+          workspace…" (row buttons above), mounting the identical wizard
+          component /workspaces uses with `initial` set so it lands wherever
+          that workspace actually left off (initialStepFor), never a blank
+          Sources step. Same onOpenWorkspace reasoning as above: stay in-dialog. */}
+      {editTarget && (
+        <WorkspaceWizard
+          key={editTarget.id}
+          origin="setup"
+          initial={editTarget}
+          onClose={() => {
+            setEditTarget(null);
+            onReload();
+          }}
+          onOpenWorkspace={() => {
+            setEditTarget(null);
+            onReload();
           }}
         />
       )}

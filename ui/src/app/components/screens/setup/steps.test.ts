@@ -386,6 +386,46 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
       "Fix https://registry.npmjs.org and https://pypi.org/simple above — every configured redirect must prove reached before this step hands off. Or remove the rows.",
     );
     expect(g.action).toEqual({ label: "Open Egress redirection", kind: "open_egress" });
+    // UI-SETUP-6: the badge counting configured (not proven) redirects would
+    // read "Reached · proxy + 2 redirects" in success tone right beside a
+    // gate that's locked on those exact two rows — an operator scanning the
+    // rail (the rail's whole job) would conclude the opposite of the truth.
+    // No "+ N redirects" clause at all until every configured row proves it.
+    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
+      text: "Reached · proxy",
+      tone: "success",
+    });
+  });
+
+  // UI-SETUP-13: off the egress tab, "Open Egress redirection" navigates
+  // there and is worth offering. Already on it, the identical click does
+  // nothing — no navigation, no state change — because the operator is
+  // looking straight at the rows the reason names; the panel's own "Test
+  // all"/remove/edit controls are the real recovery.
+  it("the failing-redirect action drops out once the egress tab is already showing — no dead click", () => {
+    const corpNetwork = {
+      ...unset,
+      proxyProbe: reached,
+      redirectCount: 2,
+      redirectProbes: { "https://registry.npmjs.org": bypass, "https://pypi.org/simple": blocked },
+    };
+    const redirects: EgressRedirect[] = [
+      { from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" },
+      { from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" },
+    ];
+    const onEgress = corpNetworkGate(corpNetwork, redirects, "egress");
+    expect(onEgress.head).toBe(T.GATE_HEAD_EGRESS_FAILING);
+    expect(onEgress.action).toBeUndefined();
+    // On the proxy tab (or the default, untouched call) the real fix-it
+    // navigation still renders.
+    expect(corpNetworkGate(corpNetwork, redirects, "proxy").action).toEqual({
+      label: "Open Egress redirection",
+      kind: "open_egress",
+    });
+    expect(corpNetworkGate(corpNetwork, redirects).action).toEqual({
+      label: "Open Egress redirection",
+      kind: "open_egress",
+    });
   });
 
   // The mock's own self-contradiction (prose says "proxy + 3 redirects" but
@@ -403,7 +443,7 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
       redirectCount: 4,
       redirectProbes: Object.fromEntries(froms.map((f) => [f, reached])),
     };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
       text: "Reached · proxy + 4 redirects",
       tone: "success",
     });

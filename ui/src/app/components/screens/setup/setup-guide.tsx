@@ -3,25 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// SetupGuide — a reusable dialog for the "set up thru the UI" actions that the
-// daemon can't perform itself (installing a confinement runtime, logging in a
-// CLI). It shows a single copy-paste command the operator runs on the host with
-// their own privileges, a manual-steps fallback, and a Re-check that re-probes
-// /setup/status. (API-key setup stays one-click via AddSecretDialog; only the
-// host-side actions route through here — wardynd holds no host privileges.)
-import * as React from "react";
-import { Loader2, RotateCw } from "lucide-react";
-import { Button, buttonVariants } from "../../ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../ui/dialog";
-import { Mono } from "../../wardyn/code-block";
-import { CopyButton } from "../../wardyn/copy-button";
+// SetupGuide — per-tier runtime-install guidance: the single `wardyn setup
+// <tier>` command EnvironmentStep renders inline for a todo confinement
+// class. PROVIDER_GUIDES (CLI-login guides) and the dialog that rendered them
+// (SetupGuideDialog) were deleted with the host-CLI login flow they
+// described — the container-login range replaced "log in to the Claude CLI
+// on the host" with the managed in-container login, and the guide that told
+// operators to do the retired thing went with it. TIER_GUIDES is the only
+// surviving reader-facing export; keep this file scoped to it so a future
+// host-run-this-command dialog doesn't get built on top of guides for a flow
+// that no longer exists.
 import type { ConfinementClass } from "../../../lib/types";
 
 export interface SetupGuide {
@@ -66,102 +57,3 @@ export const TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
     ],
   },
 };
-
-// CLI logins are interactive by nature — guided only.
-export const PROVIDER_GUIDES: Record<string, SetupGuide> = {
-  claude: {
-    title: "Connect your Claude subscription",
-    description:
-      "Log in to the Claude CLI on the host so agents can use your Claude.ai subscription — no API key needed.",
-    command: "claude login",
-    docNote: "Opens an interactive login in your terminal. Then Re-check.",
-  },
-  codex: {
-    title: "Install & connect Codex",
-    description:
-      "Codex isn't on this host's PATH yet. Install the Codex CLI, then log in so agents can use it — about two minutes.",
-    command: "npm i -g @openai/codex && codex login",
-    docNote:
-      "Installs the Codex CLI globally, then opens an interactive login in your terminal. It runs with your own privileges; Wardyn's daemon never installs anything. Then click Re-check.",
-    manualSteps: [
-      "Install the Codex CLI (see https://github.com/openai/codex) so `codex` is on the wardynd host PATH.",
-      "Run `codex login` to authenticate interactively.",
-      "Re-check — Codex shows Ready once the host reports it installed and logged in.",
-    ],
-  },
-};
-
-export function SetupGuideDialog({
-  guide,
-  onClose,
-  onRecheck,
-  rechecking,
-}: {
-  guide: SetupGuide | null;
-  onClose: () => void;
-  onRecheck: () => void;
-  rechecking: boolean;
-}) {
-  const [showManual, setShowManual] = React.useState(false);
-  React.useEffect(() => {
-    if (guide) setShowManual(false);
-  }, [guide]);
-  if (!guide) return null;
-
-  return (
-    <Dialog open={!!guide} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{guide.title}</DialogTitle>
-          {guide.description && <DialogDescription>{guide.description}</DialogDescription>}
-        </DialogHeader>
-
-        <div className="space-y-4 py-1">
-          <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">Run this on the Wardyn host:</p>
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2">
-              <Mono className="min-w-0 flex-1 truncate text-sm text-foreground">{guide.command}</Mono>
-              <CopyButton
-                text={guide.command}
-                label="Copy command"
-                className={buttonVariants({ variant: "ghost", size: "sm" })}
-              />
-            </div>
-          </div>
-
-          {guide.docNote && (
-            <p className="text-xs leading-snug text-muted-foreground">{guide.docNote}</p>
-          )}
-
-          {guide.manualSteps && guide.manualSteps.length > 0 && (
-            <div>
-              <button
-                onClick={() => setShowManual((v) => !v)}
-                className="text-xs font-medium text-info underline-offset-2 hover:underline"
-              >
-                {showManual ? "Hide manual steps" : "Or set it up manually"}
-              </button>
-              {showManual && (
-                <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs leading-snug text-muted-foreground">
-                  {guide.manualSteps.map((s, i) => (
-                    <li key={i}>{s}</li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-          <Button onClick={onRecheck} disabled={rechecking}>
-            {rechecking ? <Loader2 className="size-4 animate-spin" /> : <RotateCw className="size-4" />}
-            Re-check
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}

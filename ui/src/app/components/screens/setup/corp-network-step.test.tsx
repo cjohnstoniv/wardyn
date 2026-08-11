@@ -205,6 +205,30 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.queryByLabelText(/proxy url/i)).not.toBeInTheDocument();
   });
 
+  // UI-SETUP-8: switching to URL mode on a secret-only proxy used to keep
+  // asking `configured` (either field) but display ONLY upstream_proxy_url —
+  // true, so-configured, but undefined, so the status line rendered
+  // "Chaining through" a Mono with nothing in it: an affirmative claim naming
+  // no value at all.
+  it("switching to URL mode on a secret-only proxy still names the secret — never 'Chaining through' nothing", async () => {
+    renderStep({ siteConfig: { upstream_proxy_secret_ref: "my-proxy-secret" } });
+    await userEvent.click(screen.getByRole("button", { name: /enter a url instead/i }));
+    expect(screen.getByText(/chaining through the url in secret/i)).toBeInTheDocument();
+    expect(screen.getByText("my-proxy-secret")).toBeInTheDocument();
+  });
+
+  // UI-SETUP-7: Save on an empty Proxy URL field unconditionally PUTs both
+  // upstream_proxy_url AND upstream_proxy_secret_ref undefined — fine when
+  // nothing was configured, a silent delete of a real corporate proxy
+  // otherwise (exactly what switching from the secret field via "Enter a URL
+  // instead" without typing anything leaves on screen).
+  it("Save is disabled on an empty URL once a proxy is already configured — never a silent clear", async () => {
+    renderStep({ siteConfig: { upstream_proxy_secret_ref: "my-proxy-secret" } });
+    await userEvent.click(screen.getByRole("button", { name: /enter a url instead/i }));
+    expect(screen.getByLabelText(/proxy url/i)).toHaveValue("");
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+  });
+
   it("'Use a stored secret instead' disclosure toggles the secret-name field into view", async () => {
     renderStep();
     expect(screen.queryByLabelText(/secret name/i)).not.toBeInTheDocument();
@@ -242,6 +266,26 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
     expect(screen.getByText(T.NOPROXY_NOTE)).toBeInTheDocument();
     // Exactly one usable row (http_proxy) — NO_PROXY must not add a second.
     expect(screen.getAllByRole("button", { name: /^use this$/i })).toHaveLength(1);
+  });
+
+  // UI-SETUP-5: this block's own "Re-check" used to reload site-config only
+  // (reloadSiteConfig), which carries no host-proxy detection at all — the
+  // rows above it could never actually refresh from the button sitting right
+  // there. onRecheck is the orchestrator's FULL recheck (status + site-config,
+  // the same one the persistent host-status strip's identically-labelled
+  // button already calls).
+  it("Re-check calls the orchestrator's full recheck, not merely reloadSiteConfig", async () => {
+    const onRecheck = vi.fn();
+    renderStep({ onRecheck });
+    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
+    expect(onRecheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to reloadSiteConfig when onRecheck is omitted (standalone/test renders)", async () => {
+    const { reloadSiteConfig } = renderStep();
+    reloadSiteConfig.mockClear(); // drop the mount-effect call, isolate the button click
+    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
+    expect(reloadSiteConfig).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -375,6 +419,18 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     }
   });
 
+  // UI-SETUP-14: the "From" <Field label> pointed htmlFor="eg-add-from" at an
+  // id the combobox trigger never carried — every sibling field here (To,
+  // Token secret name) is wired correctly, so a screen-reader user tabbing
+  // this form heard THOSE announced by name and this one only by its
+  // placeholder content.
+  it("the From field has an accessible name — getByLabelText resolves it, not just a placeholder", async () => {
+    renderStep();
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    expect(screen.getByLabelText("From")).toBeInTheDocument();
+    expect(screen.getByLabelText("From")).toHaveAttribute("role", "combobox");
+  });
+
   it("a CUSTOM host can be typed and saved — redirecting a private host or IP is the point of this tab", async () => {
     // The suggestions are a shortcut, not the menu. Without a CommandInput the
     // combobox was select-only, so an internal host or a bare IP — the reason
@@ -421,6 +477,95 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
         }),
       ),
     );
+  });
+
+  // UI-SETUP-9: the fire-once guard used to be a ref INSIDE EgressTab, which
+  // the step's tab ternary unmounts on every switch away — a fresh mount
+  // reset the ref to 0 while the lifted testAllSignal counter (owned by
+  // CorpNetworkStep) still held the LAST dispatch, so returning to the tab
+  // read it as new and re-fired the whole real-sandbox sweep, unrequested.
+  it("leaving the Egress tab and coming back does not re-fire 'Test all' — each dispatch runs exactly once", async () => {
+    testRedirectMock.mockResolvedValue({ state: "reached", detail: "reachable via the mirror" });
+    let actions: CorpStepActions | null = null;
+    renderStep({
+      siteConfig: {
+        egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+      },
+      registerActions: (a) => {
+        actions = a;
+      },
+    });
+
+    await act(async () => actions!.testRedirects());
+    await waitFor(() => expect(testRedirectMock).toHaveBeenCalledTimes(1));
+
+    // Switch away (unmounts EgressTab) and back (remounts it fresh).
+    await userEvent.click(screen.getByRole("tab", { name: /host proxy/i }));
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+
+    // Still exactly one real probe — no unrequested re-sweep from the remount.
+    expect(testRedirectMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ------------------------------------------------------------
+// The redirect editor's identity — keyed by `from`, matching testStates/
+// redirectProbes, not a positional array index.
+// ------------------------------------------------------------
+describe("Egress redirect editor — expansion keyed by `from`, not a shifting index (UI-SETUP-2)", () => {
+  // A minimal stateful stand-in for the orchestrator's own siteConfig
+  // round-trip: mutate()/saveSiteConfig "land" by writing straight back into
+  // React state, so a Remove/Save click is actually REFLECTED in what
+  // renders next — renderStep()'s mocked saveSiteConfig never feeds back,
+  // which would hide this exact bug (the list would just stay [A,B,C]).
+  function StatefulEgress({ initial }: { initial: SiteConfig["egress_redirects"] }) {
+    const [redirects, setRedirects] = React.useState(initial);
+    return (
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <CorpNetworkStep
+            status={baseStatus()}
+            siteConfig={{ egress_redirects: redirects }}
+            reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
+            saveSiteConfig={async (next) => {
+              setRedirects(next.egress_redirects ?? []);
+            }}
+            gate={unsetGate()}
+            onGateChange={vi.fn()}
+            tab="egress"
+          />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+  }
+
+  it("removing an earlier row while a later one is expanded keeps editing the SAME row, and leaves its sibling untouched", async () => {
+    const redirects: SiteConfig["egress_redirects"] = [
+      { from: "a.example.com", to: "mirror-a.corp.internal" },
+      { from: "b.example.com", to: "mirror-b.corp.internal" },
+      { from: "c.example.com", to: "mirror-c.corp.internal" },
+    ];
+    render(<StatefulEgress initial={redirects} />);
+
+    // Expand B.
+    await userEvent.click(screen.getByText("b.example.com"));
+    expect(await screen.findByDisplayValue("b.example.com")).toBeInTheDocument();
+
+    // Remove A — with an index-keyed expansion this shifts B into A's old
+    // slot and C into B's, so the STILL-mounted expanded editor (key=1) would
+    // silently start showing/saving C's values instead.
+    await userEvent.click(screen.getByRole("button", { name: /remove a\.example\.com redirect/i }));
+    await waitFor(() => expect(screen.queryByText("a.example.com")).not.toBeInTheDocument());
+
+    // Still editing B's own values.
+    expect(screen.getByDisplayValue("b.example.com")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("mirror-b.corp.internal")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    // C survived, unedited and undestroyed — never overwritten by B's values.
+    expect(await screen.findByTitle("c.example.com → mirror-c.corp.internal")).toBeInTheDocument();
+    expect(screen.queryByTitle("c.example.com → mirror-b.corp.internal")).not.toBeInTheDocument();
   });
 });
 
@@ -493,6 +638,19 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
     expect(screen.getByText("reached in 42ms")).toBeInTheDocument();
     // No re-test needed to see it — the button is idle, offering a re-test.
     expect(screen.getByRole("button", { name: /^test again$/i })).toBeEnabled();
+  });
+
+  // UI-SETUP-3: re-entering the step MID-probe (jump to another rail step and
+  // back while the first click's sandbox is still out) used to seed only from
+  // gate.proxyProbe, which is undefined until the probe resolves — the panel
+  // read "Not tested" with an ENABLED Test button while the footer, reading
+  // the same gate.probeRunning the orchestrator carries, said "Probe in
+  // flight". Clicking the panel's button launched a duplicate probe.
+  it("re-entering the step MID-probe seeds 'Testing…' (disabled) instead of a false 'Not tested' with an enabled button", () => {
+    renderStep({ gate: { ...unsetGate(), probeRunning: true } });
+    expect(screen.getByText(/starting a throwaway sandbox/i)).toBeInTheDocument();
+    expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^testing…$/i })).toBeDisabled();
   });
 
   it("switching tabs reports NOTHING — the gate has no visit rung to feed", async () => {

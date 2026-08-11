@@ -114,9 +114,9 @@ export const PHASES: PhaseDef[] = [
 
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
 
-// Steps that render an "Optional" chip in the shell (everything outside the two
-// Essentials and two Finish steps). Exported so the layout and its test share
-// one list instead of each hardcoding the same membership.
+// Steps that render an "Optional" chip in the shell (everything outside the
+// three Essentials and two Finish steps). Exported so the layout and its test
+// share one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // Corporate network is NOT optional (see corpNetworkGate below):
   // proof of internet access gates Next, on the theory that everything after
@@ -216,7 +216,16 @@ function listJoin(names: string[]): string {
 // to Egress redirection — a host with no proxy and no redirects passes this
 // step with one click of Test connectivity. Anything configured must still
 // prove itself.
-export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]): CorpNetworkGate {
+export function corpNetworkGate(
+  c: CorpNetworkState,
+  redirects: EgressRedirect[],
+  // Which sub-tab is showing right now — ONLY consulted for the
+  // failing-redirect rung's action below: "Open Egress redirection" is a
+  // dead click when that's already the tab on screen (the real recovery,
+  // fixing/removing a row or the panel's own "Test all", lives right there).
+  // Defaulted so every other call site (stepDone, most tests) is unaffected.
+  tab: "proxy" | "egress" = "proxy",
+): CorpNetworkGate {
   const p = c.proxyProbe;
   if (c.probeRunning) return { on: false, head: T.GATE_HEAD_RUNNING, reason: T.GATE_RUNNING, tone: "neutral" };
   if (p?.state === "no_runner") return { on: true, head: T.GATE_HEAD_NORUNNER, reason: T.NORUNNER_NOTE, tone: "neutral" };
@@ -241,7 +250,10 @@ export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]
       head: T.GATE_HEAD_EGRESS_FAILING,
       reason: `Fix ${listJoin(bad.map((red) => red.from))} above — every configured redirect must prove reached before this step hands off. Or remove the rows.`,
       tone: "warning",
-      action: { label: "Open Egress redirection", kind: "open_egress" },
+      // Off the egress tab, the action navigates there. Already there, there
+      // is nothing left for the footer to DO — no action beats a button that
+      // clicks to nowhere.
+      action: tab === "egress" ? undefined : { label: "Open Egress redirection", kind: "open_egress" },
     };
   }
   const untested = redirects.filter((red) => c.redirectProbes[red.from]?.state !== "reached");
@@ -263,7 +275,7 @@ export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]
 // egress side still holds Next — the gate note and the egress tab's own dot
 // carry that, and stepDone (gate.on && reached) owns the checkmark. Amber
 // until proven, never green for anything unproven, counts always DERIVED.
-function corpNetworkBadge(c: CorpNetworkState): StepBadge {
+function corpNetworkBadge(c: CorpNetworkState, redirects: EgressRedirect[]): StepBadge {
   const p = c.proxyProbe;
   if (c.probeRunning) return { text: "Testing…", tone: "info" };
   if (p?.state === "no_runner") return { text: "Untested · no runner", tone: "neutral" };
@@ -278,7 +290,13 @@ function corpNetworkBadge(c: CorpNetworkState): StepBadge {
   // redirect arithmetic — the claim is only "an endpoint of yours answered".
   if (p.custom) return { text: "Reached · custom endpoint", tone: "info" };
   const via = p.via ?? (c.proxyConfigured ? "proxy" : "direct");
-  const plus = c.redirectCount > 0 ? ` + ${c.redirectCount} redirect${c.redirectCount === 1 ? "" : "s"}` : "";
+  // "+ N redirects" is a PROVEN claim, not a configured-count — a row whose
+  // own probe came back blocked/bypass must never inflate this success-tone
+  // line (the "never green for anything unproven" contract above). Checked
+  // against the CURRENT redirect list, not c.redirectProbes' raw size: a
+  // since-removed redirect's stale "reached" entry must not count either.
+  const allProven = redirects.length > 0 && redirects.every((r) => c.redirectProbes[r.from]?.state === "reached");
+  const plus = allProven ? ` + ${redirects.length} redirect${redirects.length === 1 ? "" : "s"}` : "";
   return { text: `Reached · ${via === "direct" ? "direct" : "proxy"}${plus}`, tone: "success" };
 }
 
@@ -292,6 +310,9 @@ export function stepBadges(
   // this pure function only needs the resulting number.
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
+  // The SAME list corpNetworkGate/stepDone already take (below) — corpNetworkBadge
+  // needs it to know which configured redirects are actually proven.
+  corpNetworkRedirects: EgressRedirect[] = [],
   // Tier-1/2 library sizes — defaulted so pre-split call sites stand unchanged.
   sourcesCount = 0,
   imagesCount = 0,
@@ -307,7 +328,7 @@ export function stepBadges(
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
       : { text: "Needs setup", tone: "warning" },
-    corp_network: corpNetworkBadge(corpNetwork),
+    corp_network: corpNetworkBadge(corpNetwork, corpNetworkRedirects),
     // Ladder: Optional -> Skipped (visited, left unconfigured — applied by the
     // orchestrator's generic visited-steps override, see setup-screen.tsx) ->
     // Ready · N connected.

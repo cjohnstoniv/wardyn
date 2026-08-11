@@ -21,7 +21,7 @@ import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/typ
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { deriveIntegrations } from "../../../lib/api/integrations";
+import { deriveIntegrations, genericIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { NewRunDialog } from "../new-run/new-run-dialog";
@@ -176,8 +176,22 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // marks the same per-browser decision the old explicit control did and the
   // step reads Skipped with its checkmark. Backing off it decides nothing.
   const integrationsCountRef = React.useRef(0);
+  // corpNetworkGate's latest `.on` (steps.ts) — read by selectStep below so a
+  // rail jump obeys the SAME rule as the footer's Next button: "There is no
+  // click-past" (steps.ts's own stated invariant) means every forward exit
+  // from Corporate network, not just the one button. Updated wherever
+  // corpGateResult itself is computed (below); defaults open so a rail click
+  // is never blocked before that first computation lands.
+  const corpGateOnRef = React.useRef(true);
   const selectStep = React.useCallback(
     (next: SetupStepId) => {
+      if (
+        stepId === "corp_network" &&
+        STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("corp_network") &&
+        !corpGateOnRef.current
+      ) {
+        return; // same block the footer's Next enforces — no click-past via the rail either
+      }
       if (next !== stepId) {
         markStepVisited(stepId);
         setVisitedSteps((s) => (s.has(stepId) ? s : new Set(s).add(stepId)));
@@ -215,6 +229,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     [reloadSiteConfig],
   );
 
+  const loadSecrets = React.useCallback(() => {
+    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
+  }, []);
+
   const recheck = React.useCallback(() => {
     setRechecking(true);
     // Resync SiteConfig too (F2): the rail's Integrations badge count is
@@ -223,6 +241,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // config (or the initial null) in place, never clobbers it. This is the
     // ORCHESTRATOR'S sole GET path.
     reloadSiteConfig();
+    // Secret names feed the SAME Integrations badge (deriveIntegrations) —
+    // without this, adding/deleting a secret-backed integration inside the
+    // embedded step never reaches the rail, which keeps reading the
+    // mount-time snapshot until a full page reload.
+    loadSecrets();
     return setupApi
       .getSetupStatus()
       .then((s) => {
@@ -232,15 +255,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setRecheckCount((n) => n + 1);
       })
       .finally(() => setRechecking(false));
-  }, [reloadSiteConfig]);
-
-  const loadSecrets = React.useCallback(() => {
-    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
-  }, []);
+  }, [reloadSiteConfig, loadSecrets]);
 
   React.useEffect(() => {
-    recheck(); // also performs the initial SiteConfig GET (see recheck)
-    loadSecrets();
+    recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
     loadWorkspaces();
     // run once on mount — the loaders are stable (useCallback([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -305,13 +323,17 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }
 
   // The one number the rail's Integrations badge and the embedded step body
-  // both need — the same rows /integrations itself derives (lib/api/
-  // integrations.ts), so the funnel can never disagree with that page. AI +
-  // SCM only: host proxy / egress redirection moved to their own Corporate
-  // network step (its own "Ready · proxy + N redirects" badge below) — counting
-  // them here too would double-count the same configuration under two steps.
+  // both need — the SAME rows /integrations itself derives and totals
+  // (integrations-screen.tsx's totalRows), so the funnel can never disagree
+  // with that page: AI + SCM (deriveIntegrations) PLUS the eight generic
+  // categories (genericIntegrations — pkg/registry/cloud/data/mcp/work/obs/
+  // other). Host proxy / egress redirection are NOT counted here: those moved
+  // to their own Corporate network step (its own "Ready · proxy + N redirects"
+  // badge below) — counting them here too would double-count the same
+  // configuration under two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
-  const integrationsCount = integrationsData.ai.length + integrationsData.scm.length;
+  const integrationsCount =
+    integrationsData.ai.length + integrationsData.scm.length + genericIntegrations(status).length;
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {
@@ -320,7 +342,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     redirectCount: corpRedirects.length,
     ...corpGate,
   };
-  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, tierCounts.sources, tierCounts.images);
+  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects, tierCounts.sources, tierCounts.images);
   const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects, tierCounts.sources, tierCounts.images);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
@@ -366,7 +388,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // disabled Next — one launch point that names what it will do); while it is
   // ON a head/reason can still be present (no_runner / a custom-endpoint
   // pass) and renders as a neutral standing note beside the ENABLED button.
-  const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects) : null;
+  const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects, corpTab) : null;
+  // Read by selectStep (a stable useCallback that can't see this render's
+  // local const) so a rail click obeys the same gate — see corpGateOnRef.
+  corpGateOnRef.current = corpGateResult ? corpGateResult.on : true;
   const dispatchCorpAction = (kind: CorpGateActionKind) => {
     const a = corpActionsRef.current;
     if (!a) return;
@@ -426,6 +451,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             saveSiteConfig={saveSiteConfig}
             gate={corpGate}
             onGateChange={onCorpGateChange}
+            onRecheck={recheck}
             gateResult={corpGateResult ?? undefined}
             registerActions={(a) => {
               corpActionsRef.current = a;

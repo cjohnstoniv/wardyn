@@ -52,9 +52,10 @@ describe("SetupLayout", () => {
     expect(onSelect).toHaveBeenCalledWith("corp_network");
   });
 
-  // No phase is collapsible in the 9-step rail, so the phase-level skip control
-  // never renders — every optional step (including Integrations) is simply one
-  // you click past, with its own in-step skip control instead.
+  // No phase is collapsible in the rail, so the phase-level skip control never
+  // renders — every optional step (including Integrations) is simply one you
+  // Next past; there is no separate in-step skip control any more (dfb51d8
+  // deleted the last of them).
   it("offers no phase-level skip control now that no phase is collapsible", () => {
     renderLayout({ current: "integrations" });
     expect(screen.queryByRole("button", { name: /skip corporate network/i })).not.toBeInTheDocument();
@@ -184,7 +185,7 @@ describe("SetupLayout", () => {
   });
 });
 
-describe("Optional chip — set-exact across all nine steps", () => {
+describe("Optional chip — set-exact across all twelve steps", () => {
   for (const step of STEP_ORDER) {
     it(`${OPTIONAL_STEPS.has(step) ? "shows" : "hides"} the Optional chip on ${step}`, () => {
       renderLayout({ current: step });
