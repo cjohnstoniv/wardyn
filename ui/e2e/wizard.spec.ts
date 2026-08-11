@@ -188,7 +188,14 @@ test.describe("New Run wizard", () => {
     // valid regardless (github disabled). The seeded backend has no
     // ai_provider integration, so the card shows the honest "none" line.
     await expect(dlg.getByText(/model access — resolved from integrations/i)).toBeVisible();
-    await expect(dlg.getByText(/no integration can drive claude code/i)).toBeVisible();
+    // Generous timeout, deliberately: this line renders only after the card's
+    // three self-fetches settle, and /setup/status (host/deployment probes) can
+    // exceed the 5s default on a freshly-booted e2e backend still shouldering
+    // the previous spec's teardown. The "Resolving model access…" interim state
+    // is the honest loading gate, not a bug — the test just has to outwait it.
+    await expect(dlg.getByText(/no integration can drive claude code/i)).toBeVisible({
+      timeout: 15000,
+    });
     await next(dlg);
 
     // Step 3 — Egress (default has api.anthropic.com preset selected → valid)
@@ -487,17 +494,22 @@ test.describe("New Run wizard — default tier prefill & compare matrix", () => 
     // Persisted Wall is available → it is the single pressed tier; Fence/Vault not.
     // Tier cards are located by their per-tier guidance copy (step-confinement's
     // TIER_GUIDANCE), the same convention the disabled-tiers test above uses.
-    await expect(dlg.getByRole("button", { name: /Real work on real repos/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const wall = dlg.getByRole("button", { name: /Real work on real repos/ });
+    const vault = dlg.getByRole("button", { name: /Untrusted code, or secrets nearby/ });
+    await expect(wall).toHaveAttribute("aria-pressed", "true");
     await expect(dlg.getByRole("button", { name: /Trying things out/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    await expect(
-      dlg.getByRole("button", { name: /Untrusted code, or secrets nearby/ }),
-    ).toHaveAttribute("aria-pressed", "false");
+    await expect(vault).toHaveAttribute("aria-pressed", "false");
+
+    // N5/D13: the persisted pick (Wall) is honored over the strongest
+    // available tier (Vault) — two true, disagreeing facts, so the screen
+    // must not badge both "Recommended". The pressed Wall card owns the
+    // pick; Vault, not selected, is labelled by what it actually is.
+    await expect(dlg.getByText("Recommended")).toHaveCount(0);
+    await expect(wall.getByText("Your saved default")).toBeVisible();
+    await expect(vault.getByText("Strongest available")).toBeVisible();
   });
 
   test("degrades to the strongest available tier when the persisted one is gone", async ({
@@ -509,14 +521,19 @@ test.describe("New Run wizard — default tier prefill & compare matrix", () => 
     const dlg = await openWizard(page);
     await toBarrier(dlg);
 
-    await expect(dlg.getByRole("button", { name: /Real work on real repos/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const wall = dlg.getByRole("button", { name: /Real work on real repos/ });
+    await expect(wall).toHaveAttribute("aria-pressed", "true");
     // Vault isn't runnable here → its card is disabled and unpressed.
     const vault = dlg.getByRole("button", { name: /Untrusted code, or secrets nearby/ });
     await expect(vault).toBeDisabled();
     await expect(vault).toHaveAttribute("aria-pressed", "false");
+
+    // N5/D13: the un-runnable persisted pick can't be honored, so
+    // resolveDefaultCc already fell back to the strongest available tier —
+    // the two computations coincide here, so the chip stays singular.
+    await expect(wall.getByText("Recommended")).toBeVisible();
+    await expect(dlg.getByText("Your saved default")).toHaveCount(0);
+    await expect(dlg.getByText("Strongest available")).toHaveCount(0);
   });
 
   test("the barrier step's 'Compare all three' opens the honest tier matrix", async ({ page }) => {

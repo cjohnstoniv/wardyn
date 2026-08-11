@@ -17,7 +17,6 @@ import {
   Skull,
   CircleCheck,
   CircleX,
-  Plus,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { audit as api } from "../../lib/api/audit";
@@ -46,7 +45,6 @@ import {
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
-import { NewRunDialog } from "./new-run/new-run-dialog";
 import { cn } from "../ui/utils";
 
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
@@ -221,7 +219,6 @@ export function AuditScreen() {
   const [runFilter, setRunFilter] = React.useState("");
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
-  const [newRunOpen, setNewRunOpen] = React.useState(false);
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
   // Drill-in run context (id + agent + task + repo + barrier), fetched via the
@@ -423,8 +420,12 @@ export function AuditScreen() {
               title="The trail starts with your first run."
               description="Every egress decision, credential broker, approval, and enforcement action gets recorded here the moment you launch a run."
               action={
-                <Button onClick={() => setNewRunOpen(true)}>
-                  <Plus className="size-4" /> Launch your first run
+                // #11: an audit screen doesn't need to own a run-launcher —
+                // /runs is already the canonical "Launch your first run" CTA
+                // (its own empty state). This just points there instead of
+                // duplicating a second NewRunDialog mount.
+                <Button variant="outline" onClick={() => navigate("/runs")}>
+                  Open Runs
                 </Button>
               }
             />
@@ -458,17 +459,6 @@ export function AuditScreen() {
         </div>
       )}
 
-      <NewRunDialog
-        open={newRunOpen}
-        onOpenChange={setNewRunOpen}
-        onCreated={(r) => {
-          setNewRunOpen(false);
-          // One post-launch rule: every entry point lands on the run it
-          // launched (§7). Navigating away unmounts this screen; re-entry
-          // reloads via its own effect, so there's nothing to refresh here.
-          navigate(`/runs/${encodeURIComponent(r.id)}`);
-        }}
-      />
     </div>
   );
 }

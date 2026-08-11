@@ -124,4 +124,57 @@ describe("StepConfinement copy", () => {
     const wallCard = screen.getByRole("button", { name: /Wall/ });
     expect(within(wallCard).getByText("Recommended")).toBeInTheDocument();
   });
+
+  // N5/D13: the wizard seeds state.confinementClass from resolveDefaultCc,
+  // which honors a still-runnable persisted pick over the strongest tier —
+  // so the persisted pick and this step's own "Recommended" chip can
+  // legitimately disagree. The screen must not argue with itself about it.
+  describe("persisted default vs strongest available (N5/D13)", () => {
+    it("splits the chips when the persisted pick differs from the strongest available tier", () => {
+      renderStep({
+        state: { ...initialWizardState(), confinementClass: "CC2" },
+        availableClasses: ["CC1", "CC2", "CC3"],
+        persistedDefaultCc: "CC2",
+      });
+      const vaultCard = screen.getByRole("button", { name: /Vault/ });
+      const wallCard = screen.getByRole("button", { name: /Wall/ });
+      expect(within(vaultCard).getByText("Strongest available")).toBeInTheDocument();
+      expect(within(wallCard).getByText("Your saved default")).toBeInTheDocument();
+      // Neither card claims plain "Recommended" once they disagree.
+      expect(screen.queryByText("Recommended")).toBeNull();
+    });
+
+    it("keeps the single Recommended chip when the persisted pick and the strongest tier coincide", () => {
+      renderStep({
+        state: { ...initialWizardState(), confinementClass: "CC2" },
+        availableClasses: ["CC1", "CC2"],
+        persistedDefaultCc: "CC2",
+      });
+      expect(screen.getAllByText("Recommended")).toHaveLength(1);
+      expect(screen.queryByText("Strongest available")).toBeNull();
+      expect(screen.queryByText("Your saved default")).toBeNull();
+    });
+
+    it("keeps the single Recommended chip when nothing is persisted yet", () => {
+      renderStep({ availableClasses: ["CC1", "CC2", "CC3"], persistedDefaultCc: null });
+      expect(screen.getAllByText("Recommended")).toHaveLength(1);
+      expect(screen.queryByText("Your saved default")).toBeNull();
+    });
+
+    it("keeps the single Recommended chip when the persisted pick isn't runnable here", () => {
+      // resolveDefaultCc would already have fallen back to strongest in this
+      // case (default-confinement.ts), so there's no genuine disagreement to
+      // show — a "Your saved default" chip on an unavailable tier would be
+      // pointing at a pick the wizard isn't honoring anyway.
+      renderStep({ availableClasses: ["CC1", "CC2"], persistedDefaultCc: "CC3" });
+      expect(screen.getAllByText("Recommended")).toHaveLength(1);
+      expect(screen.queryByText("Your saved default")).toBeNull();
+    });
+
+    it("never forks while still probing (availableClasses null)", () => {
+      renderStep({ availableClasses: null, persistedDefaultCc: "CC1" });
+      expect(screen.queryByText("Strongest available")).toBeNull();
+      expect(screen.queryByText("Your saved default")).toBeNull();
+    });
+  });
 });

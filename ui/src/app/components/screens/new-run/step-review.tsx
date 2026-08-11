@@ -15,7 +15,7 @@ import { Mono, YamlBlock } from "../../wardyn/code-block";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
 import { Field } from "./step-shell";
-import { buildSpec, comesWithLine, type WizardState } from "./wizard-types";
+import { buildSpec, comesWithLine, impliedEgressHosts, type WizardState } from "./wizard-types";
 // Reused rather than re-derived: the SAME resolution preview step-access.tsx's
 // card computes, so Review can't disagree with Access about what this run's
 // model access resolves to.
@@ -30,6 +30,17 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import type { PreflightResult, RunPolicy, WireIntegration, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
+
+// D6/claim3: the Egress summary used to print a bare count — the one screen
+// whose job is "show what you're launching" made the operator open the raw
+// JSON to learn which hosts a grant silently added. Names them instead,
+// truncated so a long allowlist doesn't blow out the summary grid; the full
+// list is still exact in the YamlBlock below regardless.
+function truncatedHostList(hosts: string[], max = 4): string {
+  if (hosts.length === 0) return "none";
+  if (hosts.length <= max) return hosts.join(", ");
+  return `${hosts.slice(0, max).join(", ")}, +${hosts.length - max} more`;
+}
 
 export function StepReview({
   state,
@@ -161,7 +172,20 @@ export function StepReview({
           ? `, ${inline_policy.denied_domains.length} denied`
           : ""
       }`
-    : `${inline_policy.allowed_domains.length} allowed${
+    : `${truncatedHostList(
+        // Implied (grant-added) hosts FIRST: buildSpec appends them last, so a
+        // ≥4-host allowlist would truncate away exactly the hosts this row
+        // exists to reveal (D6). Order here is display-only — the enforced
+        // list in the YamlBlock below is untouched.
+        (() => {
+          const implied = impliedEgressHosts(state, workspaces).map((h) => h.host);
+          const impliedSet = new Set(implied);
+          return [
+            ...implied.filter((h) => inline_policy.allowed_domains.includes(h)),
+            ...inline_policy.allowed_domains.filter((h) => !impliedSet.has(h)),
+          ];
+        })(),
+      )}${
         inline_policy.denied_domains?.length
           ? `, ${inline_policy.denied_domains.length} denied`
           : ""

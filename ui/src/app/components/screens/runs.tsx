@@ -138,6 +138,19 @@ export function RunsScreen() {
   const location = useLocation();
   React.useEffect(load, [load, location.key]);
 
+  // workspace-detail's "Start a run" CTA (#10/D14) lands here with route
+  // state instead of a stale pre-seed promise — this dialog already opens on
+  // the workspace-first picker, so opening it on arrival is the whole fix.
+  // Clear the state right after so a back-navigation or refresh can't reopen
+  // it a second time.
+  React.useEffect(() => {
+    const s = location.state as { openNewRun?: boolean } | null;
+    if (!s?.openNewRun) return;
+    setNewMounted(true);
+    setNewOpen(true);
+    navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.state, navigate]);
+
   // Background refresh: update in place, silent on failure (a blip shouldn't
   // blow the board away — keep last-good data and recover next tick).
   const refresh = React.useCallback(() => {

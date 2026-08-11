@@ -19,8 +19,6 @@ function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {
     onRecheck: vi.fn(),
     onSelect: vi.fn(),
     onFinish: vi.fn(),
-    onLaunch: vi.fn(),
-    canLaunch: true,
     children: <div>step body</div>,
     ...overrides,
   };
@@ -164,14 +162,15 @@ describe("SetupLayout", () => {
     });
   });
 
-  it("last step renders the Launch button disabled when canLaunch is false", () => {
-    renderLayout({ current: "launch", canLaunch: false });
-    expect(screen.getByRole("button", { name: /launch your first run/i })).toBeDisabled();
-  });
-
-  it("last step renders the Launch button enabled when canLaunch is true", () => {
-    renderLayout({ current: "launch", canLaunch: true });
-    expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
+  // #11: the footer used to render its OWN "Launch your first run" button
+  // (gated on canLaunch) — an exact duplicate of step-bodies.tsx's LaunchStep,
+  // which renders inside `children` on the last step and owns that gating
+  // now (see step-bodies.test.tsx). Deleted here; nothing left to test at
+  // this layer once the shell stopped taking onLaunch/canLaunch at all.
+  it("renders no launch button of its own on the last step — only 'Finish setup' and 'Back'", () => {
+    renderLayout({ current: "launch" });
+    expect(screen.queryByRole("button", { name: /launch your first run/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /finish setup/i })).toBeInTheDocument();
   });
 
   // The fast-path banner ("You're ready — launch your first run now" + Keep
@@ -179,7 +178,7 @@ describe("SetupLayout", () => {
   // shouted over the step the operator was actually working on. Launching early
   // is still available from the rail's Launch step at any time.
   it("renders no fast-path banner even when fully ready", () => {
-    renderLayout({ current: "workspaces", canLaunch: true });
+    renderLayout({ current: "workspaces" });
     expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
   });

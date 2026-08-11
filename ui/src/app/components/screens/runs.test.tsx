@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
 // fix: the board's "Kill run" action used to fire api.killRun immediately
@@ -24,6 +24,14 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+// new-run-dialog.tsx is a sibling-owned, API-heavy component (workspaces,
+// composer backends, setup status…) — stubbed here so these tests exercise
+// ONLY runs.tsx's own mount/open wiring, not that component's internals.
+vi.mock("./new-run/new-run-dialog", () => ({
+  NewRunDialog: ({ open }: { open: boolean }) =>
+    open ? <div role="dialog" aria-label="new run dialog stub" /> : null,
 }));
 
 import { RunsScreen } from "./runs";
@@ -101,5 +109,41 @@ describe("RunsScreen board — Kill run confirms before killing", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("menu")).toBeInTheDocument();
     expect(screen.queryByText("detail for {id}")).not.toBeInTheDocument();
+  });
+});
+
+// #10/D14: workspace-detail's "Start a run" CTA navigates here with route
+// state instead of a stale pre-seed promise — this dialog already opens on
+// the workspace-first picker, so opening it on arrival is the whole fix.
+describe("RunsScreen — opens the New Run dialog from route state (workspace-detail's Start-a-run CTA)", () => {
+  it("mounts and opens the dialog when arriving with location.state.openNewRun", async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/runs", state: { openNewRun: true } }]}>
+        <RunsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("dialog", { name: "new run dialog stub" })).toBeInTheDocument();
+  });
+
+  it("does not open the dialog on an ordinary arrival with no route state", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /run actions/i }); // the board settled
+    expect(screen.queryByRole("dialog", { name: "new run dialog stub" })).not.toBeInTheDocument();
+  });
+
+  it("clears the route state after opening, so a back-navigation or refresh can't reopen it", async () => {
+    function LocationProbe() {
+      const location = useLocation();
+      const s = location.state as { openNewRun?: boolean } | null;
+      return <span data-testid="probe">{s?.openNewRun ? "OPEN" : "CLOSED"}</span>;
+    }
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/runs", state: { openNewRun: true } }]}>
+        <RunsScreen />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("dialog", { name: "new run dialog stub" });
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("CLOSED"));
   });
 });

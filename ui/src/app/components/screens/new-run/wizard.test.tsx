@@ -426,6 +426,95 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     expect(createRunMock.mock.calls[0][0].inline_policy).toBeUndefined();
   });
 
+  // D11/claim6: a recorded PROFILE sets selectedProfile but (unlike a saved
+  // policy) never selectedPolicyId, so the old detach branch — keyed only off
+  // selectedPolicyId — never fired for it. After a hand edit, Basics kept
+  // claiming the profile and Review kept hiding "Save as a reusable policy"
+  // on the stated rationale "re-saving the same spec is redundant" — which is
+  // exactly what it no longer was.
+  it("detaches a recorded PROFILE back to inline as soon as a step is edited (D11)", async () => {
+    const wsWithRec: Workspace = {
+      ...workspace,
+      record_results: {
+        "build-test": { run_id: "rec-1", label: "build & test", mode: "interactive", status: "recorded" },
+      },
+    };
+    listWorkspacesMock.mockReset();
+    listWorkspacesMock.mockResolvedValue([wsWithRec]);
+    profileRunMock.mockResolvedValue({
+      proposed: { inline_policy: { min_confinement_class: "CC2", allowed_domains: ["registry.npmjs.org"] } },
+    });
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Applying the profile is ITSELF a patch() call carrying selectedProfile —
+    // it must not immediately self-detach.
+    const profile = await screen.findByTestId("basics-profile-build-test");
+    await user.click(within(profile).getByRole("radio"));
+    await waitFor(() => expect(profileRunMock).toHaveBeenCalledWith("rec-1"));
+
+    await user.click(await screen.findByRole("button", { name: /review now/i }));
+    // Attached: re-saving the same spec is redundant, so the switch is hidden.
+    expect(screen.queryByText("Save as a reusable policy")).toBeNull();
+
+    // Jump back and hand-edit Egress — the run must no longer claim to be
+    // that recording.
+    await user.click(screen.getByRole("button", { name: /egress/i }));
+    await user.click(screen.getByRole("switch", { name: /allow all egress/i }));
+
+    // Basics stops claiming the profile...
+    await user.click(screen.getByRole("button", { name: /basics/i }));
+    expect(screen.getByRole("radio", { name: /configure manually/i })).toBeChecked();
+
+    // ...and Review's save-as-policy switch un-hides.
+    await goToLastStep(user);
+    expect(await screen.findByText("Save as a reusable policy")).toBeInTheDocument();
+  });
+
+  // Review F1: the detach exemption must be PER-FIELD, not per-patch. A patch
+  // that names selectedProfile alone (applying a recorded profile, a Basics
+  // workspace change) must still clear a live selectedPolicyId — the per-patch
+  // exemption left the stale policy id behind while every UI signal read
+  // "detached", and launch sent policy_id: the STORED spec, its workspace
+  // mounts included, instead of the inline one on screen.
+  it("switching from a saved policy to a recorded profile drops the stale policy_id (F1)", async () => {
+    const wsWithRec: Workspace = {
+      ...workspace,
+      record_results: {
+        "build-test": { run_id: "rec-1", label: "build & test", mode: "interactive", status: "recorded" },
+      },
+    };
+    listWorkspacesMock.mockReset();
+    listWorkspacesMock.mockResolvedValue([wsWithRec]);
+    listPoliciesMock.mockResolvedValue([savedPolicy]);
+    profileRunMock.mockResolvedValue({
+      proposed: { inline_policy: { min_confinement_class: "CC2", allowed_domains: ["registry.npmjs.org"] } },
+    });
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("radio", { name: /payments-strict/ }));
+    const profile = await screen.findByTestId("basics-profile-build-test");
+    await user.click(within(profile).getByRole("radio"));
+    await waitFor(() => expect(profileRunMock).toHaveBeenCalledWith("rec-1"));
+
+    await user.click(await screen.findByRole("button", { name: /review now/i }));
+    // The recording's spec, sent verbatim — never the abandoned policy's
+    // stored spec by reference.
+    expect(screen.queryByText(/sent by reference as policy_id/i)).toBeNull();
+    await user.click(await screen.findByRole("button", { name: /launch run/i }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(createRunMock.mock.calls[0][0].policy_id).toBeUndefined();
+    expect(createRunMock.mock.calls[0][0].inline_policy).toMatchObject({
+      allowed_domains: expect.arrayContaining(["registry.npmjs.org"]),
+    });
+  });
+
   it("detaches back to an inline policy as soon as a step is edited", async () => {
     listPoliciesMock.mockResolvedValue([savedPolicy]);
     createRunMock.mockResolvedValue(createdRun);

@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSpec,
   comesWithLine,
+  impliedEgressHosts,
   initialWizardState,
   isValidDomain,
   secretAutoGrants,
@@ -516,6 +517,111 @@ describe("buildSpec — runType (agent run vs governed command)", () => {
     const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "npm test" });
     expect(run.task_mode).toBe("exec");
     expect(run.task).toBe("npm test");
+  });
+});
+
+// D6/claim3: buildSpec unions these hosts into allowed_domains without the
+// operator ever toggling them on the Egress step. impliedEgressHosts is the
+// ONE list both buildSpec and step-egress.tsx's "Added by grants:" row read,
+// so the two can never drift on what counts as implied.
+describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx renders (D6/claim3)", () => {
+  it("returns nothing when no grant is active and no repo workspace is selected", () => {
+    expect(impliedEgressHosts(initialWizardState())).toEqual([]);
+  });
+
+  it("names the model-key host when an LLM secret is selected", () => {
+    const state = { ...initialWizardState(), llmSecretName: "anthropic-api-key" };
+    expect(impliedEgressHosts(state)).toEqual([{ host: "api.anthropic.com", why: "model key" }]);
+  });
+
+  it("names the OpenAI model-key host for codex-cli", () => {
+    const state = { ...initialWizardState(), agent: "codex-cli" as const, llmSecretName: "openai-key" };
+    expect(impliedEgressHosts(state)).toEqual([{ host: "api.openai.com", why: "model key" }]);
+  });
+
+  it("names GitHub access hosts when the GitHub grant is enabled", () => {
+    const state = { ...initialWizardState(), githubEnabled: true };
+    expect(impliedEgressHosts(state)).toEqual([
+      { host: "github.com", why: "GitHub access" },
+      { host: "*.githubusercontent.com", why: "GitHub access" },
+    ]);
+  });
+
+  // Claim 3's sharpest sub-case: selecting a repo workspace silently widens
+  // egress even with the GitHub switch untouched — the operator never visits
+  // a control that mentions GitHub. Same two hosts, a different "why".
+  it("names the SAME hosts 'repo workspace' when a repo is selected without the GitHub grant", () => {
+    const repoWs = {
+      id: "ws-1",
+      name: "app",
+      kind: "repo",
+      source: "acme/app",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+    } as Workspace;
+    const state = { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] };
+    expect(impliedEgressHosts(state, [repoWs])).toEqual([
+      { host: "github.com", why: "repo workspace" },
+      { host: "*.githubusercontent.com", why: "repo workspace" },
+    ]);
+  });
+
+  it("prefers 'GitHub access' over 'repo workspace' when both are true", () => {
+    const repoWs = {
+      id: "ws-1",
+      name: "app",
+      kind: "repo",
+      source: "acme/app",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+    } as Workspace;
+    const state = {
+      ...initialWizardState(),
+      githubEnabled: true,
+      workspaces: [{ workspaceId: "ws-1" }],
+    };
+    expect(impliedEgressHosts(state, [repoWs])).toEqual([
+      { host: "github.com", why: "GitHub access" },
+      { host: "*.githubusercontent.com", why: "GitHub access" },
+    ]);
+  });
+
+  // D5/claim4: a host typed with no secret selected must never claim to be
+  // "added by grants" — the SAME gate as buildSpec's grant emission.
+  it("names the Git PAT host only once host+secret are both configured", () => {
+    const configured = {
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "dev.azure.com",
+      gitPatSecretName: "ado-pat",
+    };
+    expect(impliedEgressHosts(configured)).toEqual([{ host: "dev.azure.com", why: "Git PAT" }]);
+
+    const halfConfigured = {
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "dev.azure.com",
+      gitPatSecretName: "",
+    };
+    expect(impliedEgressHosts(halfConfigured)).toEqual([]);
+  });
+
+  it("buildSpec's allowed_domains always contains every host this helper names — one list, can't drift", () => {
+    const state = {
+      ...initialWizardState(),
+      allowedDomains: ["pypi.org"],
+      llmSecretName: "anthropic-api-key",
+      githubEnabled: true,
+      gitPatEnabled: true,
+      gitPatHost: "gitlab.com",
+      gitPatSecretName: "gl-pat",
+    };
+    const impliedHosts = impliedEgressHosts(state).map((h) => h.host);
+    expect(impliedHosts.length).toBeGreaterThan(0);
+    const { inline_policy } = buildSpec(state);
+    for (const host of impliedHosts) expect(inline_policy.allowed_domains).toContain(host);
   });
 });
 

@@ -276,11 +276,13 @@ export function WorkspaceDetailScreen() {
       </Button>
     );
   } else {
-    // ponytail: New Run has no pre-seed-a-workspace entry point yet, so this
-    // just opens Runs — upgrade to a real deep-link once new-run exposes one.
+    // Runs' NewRunDialog opens on a workspace-first picker where this
+    // workspace is already one of the cards — no pre-seed deep-link needed
+    // (#10/D14, pass3-ux-proposal.md §4). Route state just tells /runs to
+    // open the dialog on arrival.
     primary = (
-      <Button size="sm" onClick={() => navigate("/runs")}>
-        Start a run with this workspace
+      <Button size="sm" onClick={() => navigate("/runs", { state: { openNewRun: true } })}>
+        Start a run
       </Button>
     );
   }

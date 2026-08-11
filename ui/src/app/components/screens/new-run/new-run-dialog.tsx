@@ -18,8 +18,6 @@
 // "Edit in wizard" hands a composer proposal to the wizard, prefilled (its own
 // workspace wins over the one picked here — see wizard.tsx's initialWorkspaces).
 import * as React from "react";
-import { Link } from "react-router-dom";
-import { TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import type {
   AgentRun,
@@ -63,6 +61,7 @@ import { surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
 import {
   toRunWorkspacesWire,
   wizardStateFromProposal,
+  workspaceProfileOptions,
   type RunWorkspaceSelection,
   type WizardState,
 } from "./wizard-types";
@@ -178,6 +177,16 @@ export function NewRunDialog({
   }, [result, satisfiedOverrides]);
 
   const composerEnabled = !!backends && backends.length > 0;
+
+  // Item 12: the recorded-profiles hint under Describe's "Configure manually" —
+  // reads the PRIMARY selection against the workspace list this dialog already
+  // loads (no new fetch). Saved policies get no hint here (they aren't
+  // workspace-scoped, so one would be noise) — this dialog has no concept of
+  // "saved policies" at all, only the manual wizard's own Basics step does.
+  const primaryWorkspace = workspaceSelections[0]
+    ? workspaces.find((w) => w.id === workspaceSelections[0].workspaceId)
+    : undefined;
+  const recordedProfiles = workspaceProfileOptions(primaryWorkspace);
 
   // On open: probe backends. While probing we show the chooser skeleton; once we
   // know whether the composer is available we land on the right initial mode. A
@@ -559,29 +568,16 @@ export function NewRunDialog({
             </div>
           )}
 
-          {/* Halved (H8): composerReady is the ONLY fact left here — the
-              ModelAccessCard rendered just below in ComposeForm states the
-              llmReady fact more precisely (resolved integration + "Applies
-              because"), so repeating it here would say the same thing twice.
-              composerReady still needs its own banner: it answers "does an
-              integration power Wardyn's OWN AI features" (this composer
-              included), which the ModelAccessCard — scoped to the AGENT's
-              model access — never claims either way. */}
-          {mode === "describe" && composerEnabled && setupHint && !setupHint.composerReady && (
-            <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle p-3 text-xs leading-relaxed text-warning">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              <div className="space-y-1.5">
-                <p>No integration powers Wardyn&apos;s own AI features yet — this composer included.</p>
-                <p>
-                  <Link to="/integrations" className="font-medium underline underline-offset-2 hover:text-warning">
-                    Add an integration
-                  </Link>
-                  .
-                </p>
-              </div>
-            </div>
-          )}
-
+          {/* Halved (H8): composerReady is the ONLY fact ComposeForm's own
+              banner states here — the ModelAccessCard just above it in that
+              form states the llmReady fact more precisely (resolved
+              integration + "Applies because"), so repeating it would say the
+              same thing twice. composerReady still needs its own banner: it
+              answers "does an integration power Wardyn's OWN AI features"
+              (this composer included), which the ModelAccessCard — scoped to
+              the AGENT's model access — never claims either way. Body order
+              (§1) puts it after model access, before "More options", so it
+              renders INSIDE ComposeForm now, not above the whole form. */}
           {mode === "describe" && composerEnabled && (
             <ComposeForm
               prompt={prompt}
@@ -608,6 +604,7 @@ export function NewRunDialog({
               }}
               onCompose={runCompose}
               error={composeError}
+              setupHint={setupHint}
             />
           )}
           {mode === "describe" && composing && (
@@ -659,7 +656,7 @@ export function NewRunDialog({
             the same workspace choice — exactly what the deleted "choose"
             card's own button did (workspaceSelections already carries it). */}
         {mode === "describe" && (
-          <div className="flex items-center justify-between border-t border-border pt-4">
+          <div className="space-y-1.5 border-t border-border pt-4">
             <div className="flex items-center gap-2">
               <Button variant="ghost" onClick={() => setMode("workspace")} disabled={composing}>
                 Back
@@ -668,6 +665,19 @@ export function NewRunDialog({
                 Configure manually
               </Button>
             </div>
+            {/* Item 12: cheapest coherent treatment for recorded profiles — they
+                stay manual-only, but this names the count so the operator
+                doesn't have to open the wizard to discover they exist. One
+                template-literal expression (not split JSX text) — a line break
+                between adjacent {expr} runs gets trimmed by JSX's whitespace
+                collapsing, which would silently eat the separating space. */}
+            {recordedProfiles.length > 0 && (
+              <p className="pl-1 text-[0.6875rem] leading-snug text-muted-foreground">
+                {`This workspace has ${recordedProfiles.length} recorded setup${
+                  recordedProfiles.length > 1 ? "s" : ""
+                } — Configure manually to start from one.`}
+              </p>
+            )}
           </div>
         )}
         </DialogContent>

@@ -74,6 +74,7 @@ export function StepConfinement({
   patch,
   availableClasses,
   minClass,
+  persistedDefaultCc,
 }: {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
@@ -87,6 +88,12 @@ export function StepConfinement({
   // (the server 422s a weaker request). Tiers below this render disabled with a
   // clear reason instead of letting the operator build an unlaunchable run.
   minClass?: ConfinementClass;
+  // The operator's RAW persisted Getting-started pick (default-confinement.ts's
+  // getDefaultCc(), read by the caller) — NOT state.confinementClass, which
+  // moves the moment the operator clicks a different card here. Used only to
+  // detect N5's disagreement below; undefined/null (no persisted pick yet, the
+  // common case) never forks the chip.
+  persistedDefaultCc?: ConfinementClass | null;
 }) {
   const probing = availableClasses === null;
   const available = new Set(
@@ -95,6 +102,20 @@ export function StepConfinement({
   // Never recommend off the placeholder full-CC_ORDER set used while probing —
   // that would claim Vault before the health probe has actually said so.
   const recommended = probing ? null : strongestAvailable(available, minClass);
+  // N5/D13: the wizard seeds state.confinementClass from resolveDefaultCc,
+  // which HONORS the persisted pick over the strongest tier whenever the host
+  // can still run it — so the two can legitimately disagree, on the tier that
+  // grades HIGH. Fork the chip only in that genuine-disagreement case (gated
+  // on !probing for the same reason `recommended` itself is, and on the
+  // persisted pick actually being usable here); otherwise keep the single
+  // "Recommended" chip so the screen never argues with itself over nothing.
+  const minClassIdx = minClass ? CC_ORDER.indexOf(minClass) : 0;
+  const persistedUsable =
+    !probing &&
+    !!persistedDefaultCc &&
+    available.has(persistedDefaultCc) &&
+    CC_ORDER.indexOf(persistedDefaultCc) >= minClassIdx;
+  const defaultDisagrees = persistedUsable && persistedDefaultCc !== recommended;
   // "Compare all three" opens the pricing-table matrix (E1) — detail on demand,
   // never a replacement for the picker above.
   const [showMatrix, setShowMatrix] = React.useState(false);
@@ -150,7 +171,12 @@ export function StepConfinement({
                 </div>
                 {recommended === cc && (
                   <Chip tone="primary" className="mt-1.5 uppercase tracking-wide">
-                    Recommended
+                    {defaultDisagrees ? "Strongest available" : "Recommended"}
+                  </Chip>
+                )}
+                {defaultDisagrees && persistedDefaultCc === cc && (
+                  <Chip tone="neutral" className="mt-1.5 uppercase tracking-wide">
+                    Your saved default
                   </Chip>
                 )}
                 <p className="mt-2.5 text-[0.75rem] leading-snug text-foreground/80">

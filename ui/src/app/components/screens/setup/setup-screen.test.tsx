@@ -242,14 +242,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    // launch step — its h2 heading + the launch CTA (the footer nav button and
-    // LaunchStep's own inline button both read "Launch your first run").
+    // launch step — its h2 heading + LaunchStep's own inline CTA. #11: the
+    // footer nav used to render an IDENTICAL second "Launch your first run"
+    // button 20px away — deleted, so exactly one renders now.
     expect(
       await screen.findByRole("heading", { name: /launch your first run/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: /^launch your first run$/i }).length,
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /^launch your first run$/i })).toHaveLength(1);
     // last step: no more Next
     expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
 

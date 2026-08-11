@@ -19,6 +19,12 @@
 // no longer enterable; only pre-onboarded workspaces attach. The seeded backend
 // onboards ONE workspace ("payments", a local_dir at /home/me/projects/payments).
 // A workspace is now OPTIONAL when composing (empty => ephemeral scratch dir).
+// The picker itself now sits behind a collapsed "context line" <details> whose
+// summary states the answer (Workspace: <name> / "No workspace — …") — open it
+// (openWorkspaceContext below) before interacting with the combobox or any
+// per-workspace control inside it. Attachments, source URLs, the backend
+// select and the clarify-mode select likewise moved behind a single "More
+// options" <details> (openMoreOptions below).
 //
 // The seeded backend (scripts/e2e-backend.sh) wires a deterministic 'fake'
 // composer with four backends:
@@ -96,10 +102,31 @@ async function openDescribe(page: Page): Promise<Locator> {
   return dlg;
 }
 
+// Opens ComposeForm's collapsed workspace context line (§5) — its <summary>
+// reads the answer ("Workspace: <name>" vs. the honest empty-scratch line), so
+// the caller says which state it expects. Every WorkspacePicker control
+// (combobox, "primary" chip, "Comes with:" line, per-workspace toggles) lives
+// INSIDE this <details> and is genuinely hidden — not just visually secondary
+// — until it's open.
+async function openWorkspaceContext(dlg: Locator, opts: { attached?: boolean } = {}): Promise<void> {
+  const summary = opts.attached
+    ? dlg.getByText(/^Workspace: /)
+    : dlg.getByText("No workspace — an empty scratch directory inside the sandbox.");
+  await summary.click();
+}
+
+// Opens the "More options" disclosure (§6) — the backend select, the
+// clarify-mode select, attachments and source URLs all live inside it.
+async function openMoreOptions(dlg: Locator): Promise<void> {
+  await dlg.getByText("More options").click();
+}
+
 // Attach the seeded onboarded workspace ("payments", a local_dir seeded by
 // scripts/e2e-backend.sh) via the WorkspacePicker combobox — the same idiom the
 // wizard's Basics step uses (ui/e2e/wizard.spec.ts fillValidBasics). Options render
-// in a portal OUTSIDE the dialog.
+// in a portal OUTSIDE the dialog. Every call site reaches this from the ad-hoc
+// (no workspace yet) entry, so the context line always starts on the empty
+// summary — open it first.
 //
 // Attaching it mounts the dir READ-ONLY: the seeded "payments" workspace has no
 // requirements contract at all (never scanned — see e2e-backend.sh), so it has
@@ -113,6 +140,7 @@ async function openDescribe(page: Page): Promise<Locator> {
 // "payments" doesn't. So a read-write / HIGH-risk proposal needs a DIFFERENT
 // trigger — see the fake-risky backend tests below, not this workspace.
 async function selectWorkspace(page: Page, dlg: Locator): Promise<void> {
+  await openWorkspaceContext(dlg);
   await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
   await page.getByRole("option", { name: /payments/ }).click();
   await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
@@ -169,6 +197,8 @@ test.describe("AI Run Composer — Describe your task", () => {
     // Lands DIRECTLY on Describe — no separate Describe/Configure chooser to
     // click through — already attached as the primary, no combobox interaction.
     await expect(dlg.getByLabel("Describe your task")).toBeVisible();
+    await expect(dlg.getByText(/^Workspace: /)).toBeVisible();
+    await openWorkspaceContext(dlg, { attached: true });
     await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
     await expect(dlg.getByText("Comes with:")).toBeVisible();
 
@@ -184,6 +214,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
+    await openMoreOptions(dlg);
 
     // The picker is a Radix Select (role="combobox") whose Field label is
     // "Which integration analyzes your task" (compose-form.tsx) — it names the
@@ -308,6 +339,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     // fake-risky proposes CC1 (the Fence — weakest isolation), graded HIGH, so
     // the separated high-risk section appears and launch is gated.
     const dlg = await openDescribe(page);
+    await openMoreOptions(dlg);
     const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-risky/ }).click();
@@ -432,6 +464,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
+    await openMoreOptions(dlg);
     const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-interview/ }).click();
@@ -453,12 +486,15 @@ test.describe("AI Run Composer — Describe your task", () => {
 
   test("Skip questions mode proposes one-shot even for an interview backend", async ({ page }) => {
     const dlg = await openDescribe(page);
+    await openMoreOptions(dlg);
     const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-interview/ }).click();
 
     // Switch the clarify mode to "Skip questions" — the interview is bypassed.
-    await dlg.getByLabel("Clarify mode").click();
+    // The select now carries a real visible label, "Clarifying questions"
+    // (compose-form.tsx §6), not the old bare aria-label "Clarify mode".
+    await dlg.getByLabel("Clarifying questions").click();
     await page.getByRole("listbox").getByRole("option", { name: /Skip questions/ }).click();
 
     await dlg.getByLabel("Describe your task").fill("Just propose it.");

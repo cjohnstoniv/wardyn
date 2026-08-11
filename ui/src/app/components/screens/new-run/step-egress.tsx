@@ -18,17 +18,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../ui/select";
-import type { FirstUseMode } from "../../../lib/types";
+import type { FirstUseMode, Workspace } from "../../../lib/types";
 import { cn } from "../../ui/utils";
+import { Chip } from "../../wardyn/primitives";
 import { DomainPillList, Field } from "./step-shell";
-import { PRESET_DOMAINS, isValidDomain, type WizardState } from "./wizard-types";
+import { PRESET_DOMAINS, impliedEgressHosts, isValidDomain, type WizardState } from "./wizard-types";
 
 export function StepEgress({
   state,
   patch,
+  workspaces = [],
 }: {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
+  // Resolves state.workspaces against onboarded workspaces, so a selected
+  // repo-kind workspace can be recognized as an implied-egress reason below
+  // (D6/claim3) — same list buildSpec resolves against. Optional/defaulted:
+  // omitting it just means a repo selection won't explain itself yet.
+  workspaces?: Workspace[];
 }) {
   const [customDraft, setCustomDraft] = React.useState("");
   const [customError, setCustomError] = React.useState<string | null>(null);
@@ -85,6 +92,10 @@ export function StepEgress({
   };
 
   const allowAll = state.allowAllEgress;
+  // D6/claim3: buildSpec unions these into allowed_domains regardless of what
+  // this grid shows — the SAME predicate/host-list (wizard-types.ts), so this
+  // row can never disagree with what actually ships.
+  const implied = impliedEgressHosts(state, workspaces);
 
   return (
     <div className="space-y-5">
@@ -129,6 +140,32 @@ export function StepEgress({
               );
             })}
           </div>
+          {/* Non-removable: these hosts stay allowed regardless of what's
+              toggled above — a grant (or a repo workspace, which is not a
+              grant, hence "automatically") needs them, so untoggling a
+              coincidentally-matching preset above wouldn't actually close
+              them off. The why rides srLabel too — title alone is hover-only
+              and invisible to keyboard/screen-reader users on the one screen
+              that owns egress. */}
+          {implied.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-1.5 pt-1 text-[0.6875rem] text-muted-foreground"
+              data-testid="egress-implied-hosts"
+            >
+              <span>Added automatically:</span>
+              {implied.map((h, i) => (
+                <Chip
+                  key={`${h.why}-${h.host}-${i}`}
+                  tone="neutral"
+                  mono
+                  title={h.why}
+                  srLabel={`${h.host} — added by ${h.why}`}
+                >
+                  {h.host}
+                </Chip>
+              ))}
+            </div>
+          )}
         </Field>
       )}
 

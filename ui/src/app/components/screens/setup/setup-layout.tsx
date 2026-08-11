@@ -7,10 +7,11 @@
 // presentational/composable: it renders the phase rail an orchestrator hands
 // it, a single host-status strip, the step heading + optional badge, the
 // step body (children), and the footer nav — it computes NO readiness itself
-// (fastPath/canLaunch/connectedModelLabel all come from the caller). Reads the
-// step data layer (./steps.ts) and the StatusChip API.
+// (that comes from the caller). Reads the step data layer (./steps.ts) and
+// the StatusChip API. #11: the last step's own launch CTA lives in its body
+// (step-bodies.tsx's LaunchStep) — this shell's footer does not duplicate it.
 import { type ReactNode, useState } from "react";
-import { ArrowLeft, ArrowRight, Eye, Rocket, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { HostStatusBar } from "./host-status-bar";
@@ -32,8 +33,6 @@ export function SetupLayout({
   onRecheck,
   onSelect,
   onFinish,
-  onLaunch,
-  canLaunch,
   nextGate,
   backOverride,
   children,
@@ -48,8 +47,6 @@ export function SetupLayout({
   // WITHOUT requiring a launched run. The end-of-flow completion action — there
   // is no early "skip" escape any more (the gate keeps the operator in setup).
   onFinish: () => void;
-  onLaunch: () => void;
-  canLaunch: boolean;
   // The current step's Next-gate, if it has one (only Corporate network
   // today — steps.ts's corpNetworkGate, mapped by setup-screen.tsx). Generic
   // on purpose: this shared layout has no idea which step or why.
@@ -192,16 +189,10 @@ export function SetupLayout({
                 )}
               </>
             ) : (
-              <>
-                <Button variant="outline" onClick={onLaunch} disabled={!canLaunch}>
-                  Launch your first run
-                  <Rocket className="size-4" aria-hidden />
-                </Button>
-                <Button onClick={onFinish}>
-                  Finish setup
-                  <ArrowRight className="size-4" aria-hidden />
-                </Button>
-              </>
+              <Button onClick={onFinish}>
+                Finish setup
+                <ArrowRight className="size-4" aria-hidden />
+              </Button>
             )}
           </footer>
         </div>

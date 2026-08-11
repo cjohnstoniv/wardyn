@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
@@ -92,6 +92,15 @@ function setupStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   };
 }
 
+// Reads location.state so the CTA's contract with /runs (#10/D14: route
+// state opens the New-Run dialog on arrival) is provable from THIS side
+// without depending on the real RunsScreen or its own API surface.
+function RunsRouteProbe() {
+  const location = useLocation();
+  const state = location.state as { openNewRun?: boolean } | null;
+  return <div>runs screen{state?.openNewRun ? " (openNewRun)" : ""}</div>;
+}
+
 function renderDetail(id = "ws-1", operator = true) {
   return render(
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
@@ -99,7 +108,7 @@ function renderDetail(id = "ws-1", operator = true) {
         <Routes>
           <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
           <Route path="/workspaces" element={<div>back on the list</div>} />
-          <Route path="/runs" element={<div>runs screen</div>} />
+          <Route path="/runs" element={<RunsRouteProbe />} />
           <Route path="/runs/:id" element={<div>run detail screen</div>} />
         </Routes>
       </OperatorProvider>
@@ -164,13 +173,18 @@ describe("WorkspaceDetailScreen — header: status chip + story sentence + one p
     await waitFor(() => expect(scanWorkspaceMock).toHaveBeenCalledWith("ws-1"));
   });
 
-  it("usable: offers Start a run with this workspace", async () => {
+  // #10/D14: the old label promised a pre-seed ("Start a run with this
+  // workspace") but just navigated to a bare list — two extra clicks and a
+  // re-pick. Runs' NewRunDialog is workspace-first now (this workspace is
+  // already one of its cards), so the fix is a label that stops overpromising
+  // plus route state that actually opens the dialog on arrival.
+  it("usable: offers Start a run, which navigates to /runs with route state to open the New-Run dialog", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderDetail();
     expect(await screen.findByText("Usable")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /start a run with this workspace/i }));
-    expect(await screen.findByText("runs screen")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^start a run$/i }));
+    expect(await screen.findByText("runs screen (openNewRun)")).toBeInTheDocument();
   });
 });
 

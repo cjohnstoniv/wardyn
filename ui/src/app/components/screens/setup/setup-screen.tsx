@@ -406,10 +406,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onRecheck={recheck}
         onSelect={selectStep}
         onFinish={finish}
-        onLaunch={() => setNewRunOpen(true)}
-        // A barrier is enough to launch (an interactive run works with no model —
-        // the operator drives it over an attached terminal).
-        canLaunch={readiness.ready}
         nextGate={nextGate}
         backOverride={stepId === "corp_network" && corpTab === "egress" ? () => setCorpTab("proxy") : undefined}
       >

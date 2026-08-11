@@ -132,11 +132,24 @@ export function PermissionWizard({
   // run must stop launching by policy_id and fall back to its inline policy.
   const patch = React.useCallback(
     (p: Partial<WizardState>) =>
-      setState((s) =>
-        s.selectedPolicyId && !("selectedPolicyId" in p)
-          ? { ...s, ...p, selectedPolicyId: undefined, selectedProfile: undefined }
-          : { ...s, ...p },
-      ),
+      setState((s) => {
+        // DETACHING (D11/claim6): a hand edit after EITHER a saved policy OR a
+        // recorded profile populated steps 2-4 means the composed spec no
+        // longer equals the stored/recorded one (buildSpec normalizes and
+        // doesn't round-trip either) — so Basics must stop claiming it and
+        // Review's "Save as a reusable policy" must un-hide. The exemption is
+        // PER-FIELD, not per-patch: a patch that sets selectedProfile alone
+        // (applyProfile, Basics' workspace change) must still clear a live
+        // selectedPolicyId, or the stale id survives every UI signal of
+        // detachment and runRequest() launches the STORED spec — its
+        // workspace mounts included — instead of the inline one on screen.
+        const next = { ...s, ...p };
+        if (s.selectedPolicyId || s.selectedProfile) {
+          if (!("selectedPolicyId" in p)) next.selectedPolicyId = undefined;
+          if (!("selectedProfile" in p)) next.selectedProfile = undefined;
+        }
+        return next;
+      }),
     [],
   );
 
@@ -446,13 +459,20 @@ export function PermissionWizard({
                 onAddSecret={() => secretFix.openManual()}
               />
             )}
-            {step.id === "egress" && <StepEgress state={state} patch={patch} />}
+            {step.id === "egress" && (
+              <StepEgress state={state} patch={patch} workspaces={workspaces} />
+            )}
             {step.id === "confinement" && (
               <StepConfinement
                 state={state}
                 patch={patch}
                 availableClasses={availableClasses}
                 minClass={initialState?.confinementClass}
+                // Chip-fork premise holds only when THIS run's class came from
+                // resolveDefaultCc (a fresh entry). An Edit-in-wizard prefill
+                // carries the proposal's class — labeling a tier "Your saved
+                // default" there argues about a setting the screen isn't using.
+                persistedDefaultCc={initialState ? undefined : getDefaultCc()}
               />
             )}
             {step.id === "review" && (

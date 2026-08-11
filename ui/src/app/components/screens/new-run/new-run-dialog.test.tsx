@@ -1032,3 +1032,54 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     expect(screen.queryByText(/start from an onboarded workspace and its policies/i)).not.toBeInTheDocument();
   });
 });
+
+// Item 12: the recorded-profiles hint under Describe's "Configure manually" —
+// workspaceProfileOptions(primary) read straight off the workspace list this
+// dialog already loads, no new fetch.
+describe("NewRunDialog — recorded-profiles hint (item 12)", () => {
+  const withRecordedProfile: Workspace = {
+    id: "ws-1",
+    name: "payments",
+    kind: "repo",
+    source: "acme/payments",
+    status: "scanned",
+    created_at: "now",
+    updated_at: "now",
+    record_results: {
+      "my-session": { run_id: "run-9", mode: "auto", status: "recorded" },
+    },
+  };
+  const withoutRecordedProfile: Workspace = {
+    id: "ws-2",
+    name: "scratch-tool",
+    kind: "local_dir",
+    source: "/home/me/scratch-tool",
+    status: "scanned",
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  it("names the recorded-setup count under Configure manually when the primary workspace has one", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([withRecordedProfile]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /payments/i }));
+    expect(await screen.findByLabelText(/describe your task/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("This workspace has 1 recorded setup — Configure manually to start from one."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no hint for a workspace with no recorded profiles, or with no workspace attached", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([withoutRecordedProfile]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /scratch-tool/i }));
+    expect(await screen.findByLabelText(/describe your task/i)).toBeInTheDocument();
+    expect(screen.queryByText(/recorded setup/i)).not.toBeInTheDocument();
+  });
+});

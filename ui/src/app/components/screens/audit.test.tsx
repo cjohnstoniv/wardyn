@@ -187,6 +187,30 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText(/Denied egress to evil\.example\.com/)).toBeInTheDocument();
   });
 
+  // #11: audit no longer owns a run-launcher — its truly-empty state used to
+  // mount its OWN NewRunDialog (import + state + a second "Launch your first
+  // run" button); it now just points at /runs, the canonical CTA (its own
+  // empty state already owns "Launch your first run").
+  it("empty state renders 'Open Runs' (navigates to /runs) instead of mounting its own dialog", async () => {
+    listAuditMock.mockResolvedValue([]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/audit"]}>
+        <Routes>
+          <Route path="/audit" element={<AuditScreen />} />
+          <Route path="/runs" element={<div>runs screen</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const openRuns = await screen.findByRole("button", { name: /^open runs$/i });
+    expect(screen.queryByRole("button", { name: /launch your first run/i })).not.toBeInTheDocument();
+
+    await user.click(openRuns);
+    expect(await screen.findByText("runs screen")).toBeInTheDocument();
+  });
+
   // A dead or missing kernel sensor is the ABSENCE of events, so the list can
   // never show it — only this chip can. Nothing is claimed when the daemon
   // doesn't report the field at all.

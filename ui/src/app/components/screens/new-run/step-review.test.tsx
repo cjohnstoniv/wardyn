@@ -345,6 +345,107 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
   });
 });
 
+// D6/claim3: the Egress row used to print a bare count — "3 allowed" — so an
+// operator who trimmed the allow-list to one host had to open the raw JSON to
+// learn which two hosts a grant silently added. Names them now, truncated so
+// a long list doesn't blow out the summary grid.
+describe("StepReview — Egress row shows host NAMES, not a bare count (D6/claim3)", () => {
+  it("comma-lists the allowed hosts", () => {
+    render(
+      <StepReview
+        state={{ ...initialWizardState("CC2"), allowedDomains: ["api.anthropic.com", "github.com"] }}
+        patch={() => {}}
+      />,
+    );
+    expect(screen.getByText("api.anthropic.com, github.com")).toBeInTheDocument();
+  });
+
+  it("truncates beyond ~4 hosts with a '+N more' suffix", () => {
+    render(
+      <StepReview
+        state={{
+          ...initialWizardState("CC2"),
+          allowedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com", "f.com"],
+        }}
+        patch={() => {}}
+      />,
+    );
+    expect(screen.getByText("a.com, b.com, c.com, d.com, +2 more")).toBeInTheDocument();
+  });
+
+  it("still appends the denied count alongside the truncated host list", () => {
+    render(
+      <StepReview
+        state={{
+          ...initialWizardState("CC2"),
+          allowedDomains: ["api.anthropic.com"],
+          deniedDomains: ["evil.example.com"],
+        }}
+        patch={() => {}}
+      />,
+    );
+    expect(screen.getByText("api.anthropic.com, 1 denied")).toBeInTheDocument();
+  });
+
+  // The sharpest sub-case from claim 3: a repo workspace silently unions
+  // github.com/*.githubusercontent.com into allowed_domains — now visible by
+  // NAME on the one screen whose job is showing what's about to launch.
+  // Implied hosts render FIRST: buildSpec appends them last, so first-4
+  // truncation on a long allowlist would hide exactly these (review F2).
+  it("includes grant-implied hosts by name (a repo workspace's github.com)", () => {
+    const repoWs = {
+      id: "ws-1",
+      name: "app",
+      kind: "repo",
+      source: "acme/app",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+    } as Workspace;
+    render(
+      <StepReview
+        state={{
+          ...initialWizardState("CC2"),
+          allowedDomains: ["api.anthropic.com"],
+          workspaces: [{ workspaceId: "ws-1" }],
+        }}
+        patch={() => {}}
+        workspaces={[repoWs]}
+      />,
+    );
+    expect(screen.getByText("github.com, *.githubusercontent.com, api.anthropic.com")).toBeInTheDocument();
+  });
+
+  // Implied-first is the load-bearing half of the fix: with ≥4 operator
+  // presets, first-4 truncation used to drop the grant-added tail entirely,
+  // degrading the row back into the count-only defect it replaced.
+  it("keeps implied hosts visible ahead of a long operator allowlist", () => {
+    const repoWs = {
+      id: "ws-1",
+      name: "app",
+      kind: "repo",
+      source: "acme/app",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+    } as Workspace;
+    render(
+      <StepReview
+        state={{
+          ...initialWizardState("CC2"),
+          allowedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com"],
+          workspaces: [{ workspaceId: "ws-1" }],
+        }}
+        patch={() => {}}
+        workspaces={[repoWs]}
+      />,
+    );
+    expect(
+      screen.getByText("github.com, *.githubusercontent.com, a.com, b.com, +3 more"),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("StepReview — Model access (resolved from integrations)", () => {
   it("shows the resolved integration's name + type", async () => {
     listIntegrationsMock.mockResolvedValueOnce({ ai: [teamKey], scm: [], mirror: [], proxy: [] });

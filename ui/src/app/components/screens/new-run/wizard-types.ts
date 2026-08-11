@@ -346,6 +346,14 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     runType: "agent",
     agent: "claude-code",
     workspaces: [],
+    // Deliberately the OPPOSITE of the AI Composer's default (autonomous) —
+    // not a mismatch to "fix" into uniformity. Describe always seeds a
+    // described TASK, so there is by construction something to run
+    // unattended; this envelope-first path has no task yet, so interactive is
+    // what keeps a fresh wizard reachable at zero required keystrokes (an
+    // ephemeral run needs neither workspace nor task). Forcing Task required
+    // here to match the composer would trade that shortcut for cosmetic
+    // parity. See pass3-ux-proposal.md §4.
     mode: "interactive",
     task: "",
 
@@ -492,6 +500,54 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   integration_id?: string;
 };
 
+// Why buildSpec unions a host into allowed_domains without the operator ever
+// toggling it on the Egress step (D6/claim3).
+export type ImpliedEgressWhy = "GitHub access" | "model key" | "Git PAT" | "repo workspace";
+
+export interface ImpliedEgressHost {
+  host: string;
+  why: ImpliedEgressWhy;
+}
+
+// The ONE list of grant-implied egress hosts — buildSpec unions these into
+// allowed_domains (below) so a granted capability is never silently gated
+// behind first-use approval; step-egress.tsx renders the SAME list as
+// non-removable "Added by grants:" chips so the one screen that owns egress
+// can't disagree with what actually ships. Extracted here so the two call
+// sites share one predicate/host-list and can never drift (D6/claim3).
+export function impliedEgressHosts(
+  state: WizardState,
+  workspaces: Workspace[] = [],
+): ImpliedEgressHost[] {
+  const out: ImpliedEgressHost[] = [];
+  if (state.llmSecretName) {
+    out.push({ host: llmHostForSecret(state.agent, state.llmSecretName), why: "model key" });
+  }
+  // Any repo-kind selection implies the GitHub clone hosts even with the
+  // GitHub grant untouched — claim 3's sharpest sub-case. When the grant IS
+  // on, name that as the reason instead; same two hosts either way.
+  const hasRepoSelection = state.workspaces.some(
+    (sel) => resolveWorkspace(sel, workspaces)?.kind === "repo",
+  );
+  if (state.githubEnabled) {
+    out.push(
+      { host: "github.com", why: "GitHub access" },
+      { host: "*.githubusercontent.com", why: "GitHub access" },
+    );
+  } else if (hasRepoSelection) {
+    out.push(
+      { host: "github.com", why: "repo workspace" },
+      { host: "*.githubusercontent.com", why: "repo workspace" },
+    );
+  }
+  // Gated on the SAME predicate as the grant emission (D5/claim4): a host
+  // typed with no secret selected must never claim to be "added by grants".
+  if (gitPatConfigured(state)) {
+    out.push({ host: state.gitPatHost.trim(), why: "Git PAT" });
+  }
+  return out;
+}
+
 // buildSpec is the contract chokepoint: state in, canonical wire shapes out.
 // `workspaces` is the onboarded-workspace list each selection resolves against
 // (the wizard fetches it via listWorkspaces(); tests that don't touch
@@ -540,13 +596,11 @@ export function buildSpec(
   // selections are just attached alongside it.
   const workspaceMounts: WorkspaceMount[] = [];
   const workspaceRepos: WorkspaceRepo[] = [];
-  let hasRepoSelection = false;
   state.workspaces.forEach((sel, i) => {
     const w = resolveWorkspace(sel, workspaces);
     if (!w) return; // stale selection — defensively skip rather than dangle
     const target = sel.target?.trim() || w.default_target?.trim() || undefined;
     if (w.kind === "repo") {
-      hasRepoSelection = true;
       const entry: WorkspaceRepo = { repo: w.source };
       if (target) entry.target = target;
       workspaceRepos.push(entry);
@@ -639,29 +693,10 @@ export function buildSpec(
 
   // Ensure the egress allowlist covers the hosts the run's OWN grants need, so a
   // selected LLM key or a GitHub clone isn't silently gated behind a first-use
-  // approval. This only unions in hosts the operator already opted into via the
-  // Access step — it never broadens beyond the run's own granted capabilities.
-  const requiredHosts: string[] = [];
-  if (state.llmSecretName) {
-    requiredHosts.push(llmHostForSecret(state.agent, state.llmSecretName));
-  }
-  // any repo-kind selection unions the GitHub clone hosts — the
-  // overwhelmingly common case. A repo onboarded from a non-GitHub host still
-  // works (its clone egress comes from the workspace's own scanned profile
-  // server-side, or from the operator's custom allowed_domains / git_pat host
-  // below); this just covers the default GitHub case without parsing the URL.
-  if (state.githubEnabled || hasRepoSelection) {
-    requiredHosts.push("github.com", "*.githubusercontent.com");
-  }
-  // git_pat is reached over plain CONNECT egress (like github), NOT a proxy
-  // injection rule — so union its host into allowed_domains here. Forgetting
-  // this gates the clone behind first-use approval. Gated on the SAME
-  // gitPatConfigured predicate as the grant above (D5/claim4): a host typed
-  // with no secret selected must never widen egress for a grant that was
-  // never emitted.
-  if (gitPatConfigured(state)) {
-    requiredHosts.push(state.gitPatHost.trim());
-  }
+  // approval. impliedEgressHosts is the ONE list (D6/claim3) — step-egress.tsx
+  // renders the SAME hosts as "Added by grants:" chips, so the two can never
+  // disagree about what buildSpec actually unions in here.
+  const requiredHosts = impliedEgressHosts(state, workspaces).map((h) => h.host);
 
   // Allow-all egress: deny-list only. allowed_domains may be empty and first-use
   // approval is inert, so we drop the run's own required hosts (everything
