@@ -594,6 +594,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `docs/OPERATIONS.md` ("One replica, by construction") for the full mechanism
   and what remains per-process by design — the secret-masking registry,
   notably, still fails open across replicas.
+  **Upgrade note:** nothing migrates existing on-disk recordings into
+  Postgres — they stay on the `recordings` volume, but `Replay` now queries a
+  table that has never seen those keys and 404s. Set
+  `WARDYN_RECORDING_STORE=fs` to keep replaying pre-upgrade casts (the Helm
+  chart already keeps this default for that reason).
 
 ### Fixed
 

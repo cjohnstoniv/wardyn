@@ -216,11 +216,17 @@ func (r *Reaper) Run(ctx context.Context) {
 // exported so that integration callers and tests can drive it directly; in
 // production code always use Run instead.
 //
-// The whole tick runs under a one-Interval deadline: the advisory-lock
-// connection is held for the tick's duration, so a single wedged StopRun must
-// not pin the lock (and with it, reaping cluster-wide) until process restart.
+// The whole tick runs under an Interval+defaultStopTimeout deadline: the
+// advisory-lock connection is held for the tick's duration, so a single
+// wedged StopRun must not pin the lock (and with it, reaping cluster-wide)
+// past that bound. defaultStopTimeout is added on top of Interval, not
+// folded into it — a child context.WithTimeout can only SHORTEN its parent's
+// deadline, so budgeting the tick at bare Interval silently capped every
+// per-stop deadline below at whatever was left of Interval, never the full
+// defaultStopTimeout the constant promises (a stop past ~1 minute failed on
+// every tick and was retried forever, never actually stopping the run).
 func (r *Reaper) Tick(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, r.interval)
+	ctx, cancel := context.WithTimeout(ctx, r.interval+defaultStopTimeout)
 	defer cancel()
 	if r.tickLock != nil {
 		release, ok := r.tickLock(ctx)

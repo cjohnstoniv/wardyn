@@ -85,6 +85,7 @@ type gitTokEntry struct {
 func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	orgRepo, rest, ok := parseGitBrokerPath(r.URL.Path)
 	if !ok {
+		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		http.Error(w, "invalid git broker path", http.StatusNotFound)
 		return
 	}
@@ -99,6 +100,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
+		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}

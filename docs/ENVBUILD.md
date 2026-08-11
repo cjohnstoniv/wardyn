@@ -95,6 +95,11 @@ run's confinement tier. See threatmodel/THREAT-MODEL.md §5 (residual 13).
   ENVBUILDER_CACHE_REPO
 - ENVBUILDER_INIT_SCRIPT — "exit 0"; make the post-build exec return so the
   build container exits after the push instead of idling forever
+- ENVBUILDER_INSECURE — "true" when WARDYN_ENVBUILD_REGISTRY_INSECURE opts in
+  (see "Build sandbox" below); skips TLS verification for EVERY registry
+  envbuilder talks to (push, pull, cache probe alike — envbuilder exposes no
+  narrower per-registry form). Omitted (envbuilder's own default: verify)
+  otherwise.
 
 Note: there is NO ENVBUILDER_IMAGE_DEST — that variable does not exist in any
 envbuilder release and was silently ignored. Delivery is the registry push,
@@ -116,7 +121,22 @@ and its blast radius minimised. Builder applies, by default:
 - Build-time NETWORK defaults to "none" (Builder.BuildNetwork /
   WARDYN_ENVBUILD_BUILD_NETWORK): the untrusted build code gets no network
   reachability — no exfiltration, no SSRF to host-local services, no fetching
-  of second-stage payloads — unless an operator explicitly opts in.
+  of second-stage payloads — unless an operator explicitly opts in. **Never
+  set this to "host"** on a deployment that also publishes anything
+  loopback-only for its own convenience (the compose stack's control-plane
+  Postgres and admin API, for instance): "host" puts the untrusted build in
+  the SAME network namespace as the operator, with the SAME reach to
+  whatever is bound to 127.0.0.1 — including default demo credentials
+  published in this repo. The compose stack instead defaults this to the
+  wardyn-internal bridge (opting in to *that* network only, not the host's),
+  and reaches its own registry sidecar by compose service name
+  (`registry:5000`) rather than the loopback publish a host-networked build
+  container could otherwise use; WARDYN_ENVBUILD_REGISTRY_INSECURE tells
+  envbuilder that registry has no TLS to verify, since a non-loopback address
+  gets no automatic exemption from that check. A repo's OWN devcontainer
+  build still runs on whatever network is configured — this bounds where the
+  build container reaches, not what a devcontainer explicitly configured to
+  reach it does with that reachability.
 - Privileges are dropped: CapDrop ALL + no-new-privileges.
 - Resource caps (memory, swap-disabled, CPU, PID limit) bound the DoS /
   blast-radius surface; an optional StorageOpt "size" cap

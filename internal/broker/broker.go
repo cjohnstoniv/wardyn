@@ -564,10 +564,17 @@ func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
 	if !b.requireRefRuleset {
 		return nil
 	}
+	// ONE deadline for the whole grant, not one fresh refRulesetProbeTimeout per
+	// repo: the loop runs inside mint()'s transaction, holding the grant row's
+	// FOR UPDATE lock and a pooled connection for as long as it takes, and a
+	// per-repo deadline lets that grow unbounded with the repo count (12 repos
+	// against a blackholed api.github.com = 12 independent 15s waits). Sized
+	// from len(repos) so a legitimately large grant still gets each repo its
+	// existing budget, just under one shared, explicit ceiling.
+	probeCtx, cancel := context.WithTimeout(ctx, refRulesetProbeTimeout*time.Duration(len(repos)))
+	defer cancel()
 	for _, r := range repos {
-		probeCtx, cancel := context.WithTimeout(ctx, refRulesetProbeTimeout)
 		confined, detail, err := b.github.VerifyRefRuleset(probeCtx, r)
-		cancel()
 		switch {
 		case err != nil:
 			return fmt.Errorf("%w: could not verify %s: %w. Create the ruleset (see docs/POLICIES.md, \"Bound the token itself\") or unset %s",

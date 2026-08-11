@@ -218,7 +218,8 @@ func TestPreflight_UnknownSecret422Passthrough(t *testing.T) {
 // must carry the SAME deterministic risk grade the AI Run Composer's Review
 // renders, so the manual wizard's Review can gate launch behind the identical
 // HIGH-only acknowledgment (compose-review.tsx's RiskPanel). allow_all_egress
-// is an unambiguous single HIGH trigger (risk.go:124-126).
+// is an unambiguous single HIGH trigger (see the spec.AllowAllEgress case in
+// composer.Grade, risk.go).
 func TestPreflight_RiskAssessment_HighItem(t *testing.T) {
 	h := newHarness(t)
 	body := `{"agent":"claude-code","repo":"ephemeral","interactive":true,"inline_policy":{` +

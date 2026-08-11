@@ -19,12 +19,12 @@ const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from
 // wardyn-aws-sso running inside the AWS SSO container-login run (see
 // cmd/wardyn-aws-sso and harnesscred.go's captureViaHelper doc). It is the
-// structural sibling of handleUploadScanResult/handleUploadVerifyResult:
-// run-token auth with the cross-run-pollution guard (claimsForRunUpload), then
-// a check against TRUSTED server state — never sandbox input — that the run
-// is actually the aws-sso harness-login run before a credential can land.
+// structural sibling of handleUploadScanResult: run-token auth with the
+// cross-run-pollution guard (claimsForRunUpload), then a check against
+// TRUSTED server state — never sandbox input — that the run is actually the
+// aws-sso harness-login run before a credential can land.
 //
-// Unlike scan/verify, this run has no WorkspaceID (it is a login run, not a
+// Unlike scan, this run has no WorkspaceID (it is a login run, not a
 // workspace run), so authSandboxRunUpload doesn't fit; the run-kind check
 // here is harnessLoginTask + awsSSOAgent instead of a non-nil WorkspaceID.
 func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {

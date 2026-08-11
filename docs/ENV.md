@@ -189,6 +189,7 @@ pointed at `/data/audit/audit.log`.
 | `WARDYN_ENVBUILD_MAX_CONTEXT_MB` | int | (builder default) | max build-context size (MB) |
 | `WARDYN_ENVBUILD_TOOLS_DIR` | string | (unset) | host tools dir injected into the built image |
 | `WARDYN_ENVBUILD_PUSHED_REF` | string | (unset) | pushed image ref recorded after a daemonless push |
+| `WARDYN_ENVBUILD_REGISTRY_INSECURE` | bool | `false` | skip TLS verification against CacheRepo (`ENVBUILDER_INSECURE`); only for a registry that never spoke TLS |
 
 ## Sidecar / sandbox-injected (read inside the run container)
 

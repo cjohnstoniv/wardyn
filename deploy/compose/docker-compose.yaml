@@ -30,10 +30,16 @@
 services:
   # Local OCI registry backing devcontainer builds: envbuilder is daemonless
   # and can only PUSH its result, so the recommended per-workspace build needs
-  # a registry to round-trip through. Publishing on host LOOPBACK is the whole
-  # trick — Docker exempts 127.0.0.1 registries from TLS, so the daemon pulls
-  # and a host-networked build container pushes with zero certificate or
-  # insecure-registry configuration. Not reachable off-host by construction.
+  # a registry to round-trip through. TWO reach paths on purpose, for two
+  # different callers (PLATREST-2): the loopback publish below is for the HOST
+  # DAEMON's own pull at FINALIZE time only (Docker exempts 127.0.0.1
+  # registries from TLS, zero daemon config needed) — the untrusted BUILD
+  # CONTAINER never touches it, because it no longer shares the host network
+  # namespace (see WARDYN_ENVBUILD_BUILD_NETWORK on wardynd below). Instead the
+  # build container reaches this registry by compose service name over the
+  # wardyn-internal bridge (registry:5000, WARDYN_ENVBUILD_REGISTRY_INSECURE
+  # standing in for the TLS exemption a bridge address doesn't get for free).
+  # Still not reachable off-host either way.
   registry:
     image: registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
     container_name: ${WARDYN_NS:-wardyn}-registry
@@ -42,6 +48,8 @@ services:
       - "127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}:5000"
     volumes:
       - registry_data:/var/lib/registry
+    networks:
+      - wardyn
 
   postgres:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
@@ -201,15 +209,35 @@ services:
       # default the deployment can't honor reads as "command not found" inside
       # the first verify session. The registry sidecar above supplies the
       # round-trip envbuilder needs (daemonless: push-then-finalize; the old
-      # docker.sock commit knob stays retired), and the build container runs
-      # host-network by default HERE — it must reach ghcr.io for features and
-      # 127.0.0.1 for the registry. The recommended recipe is Wardyn-generated
-      # (not repo content); a repo's OWN devcontainer build carries the usual
-      # build-step network caveat (docs/ENVBUILD.md "Residual"). Opt out with
-      # WARDYN_ENVBUILD=false; host-mode setups keep the explicit knobs.
+      # docker.sock commit knob stays retired). The build container runs on the
+      # wardyn-internal bridge by default HERE, NOT host (PLATREST-2): "host"
+      # would hand the untrusted build (Dockerfile RUN, feature installs,
+      # onCreate/updateContent — see internal/envbuild's package doc) the
+      # operator's whole loopback, including the control-plane Postgres and
+      # admin API published on it above/below with well-known demo credentials.
+      # docs/ENVBUILD.md "Build sandbox" spells out what that residual would be.
+      # The recommended recipe is Wardyn-generated (not repo content); a repo's
+      # OWN devcontainer build carries the usual build-step network caveat
+      # (docs/ENVBUILD.md "Residual"). Opt out with WARDYN_ENVBUILD=false;
+      # host-mode setups keep the explicit knobs.
       WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-true}"
-      WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}/wardyn/devcontainers}"
-      WARDYN_ENVBUILD_BUILD_NETWORK: "${WARDYN_ENVBUILD_BUILD_NETWORK:-host}"
+      # Reachable from the (now bridge-networked, not host-networked) build
+      # container by the registry's OWN compose service name + container port
+      # — see the registry service's comment above for why this is a DIFFERENT
+      # address than the finalize pull below uses.
+      WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-registry:5000/wardyn/devcontainers}"
+      WARDYN_ENVBUILD_BUILD_NETWORK: "${WARDYN_ENVBUILD_BUILD_NETWORK:-${WARDYN_NS:-wardyn}-internal}"
+      # The FINALIZE stage's pull runs on the HOST DAEMON (FROM + COPY, outside
+      # the build container entirely), so it is unaffected by
+      # WARDYN_ENVBUILD_BUILD_NETWORK above; it keeps resolving the image
+      # envbuilder just pushed at the loopback address, unchanged from before
+      # this range, which Docker exempts from TLS with zero daemon config.
+      WARDYN_ENVBUILD_PUSHED_REF: "${WARDYN_ENVBUILD_PUSHED_REF:-127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}/wardyn/devcontainers}"
+      # registry:5000 (unlike 127.0.0.1) gets no free TLS exemption, and this
+      # registry has never spoken TLS either way — tell envbuilder so directly
+      # rather than silently failing every push. Never set this against a real
+      # external CacheRepo (docs/ENVBUILD.md "Build sandbox").
+      WARDYN_ENVBUILD_REGISTRY_INSECURE: "${WARDYN_ENVBUILD_REGISTRY_INSECURE:-true}"
       # Runner tools the finalize stage layers onto built images — shipped IN
       # the wardynd image (Dockerfile.wardynd), so this is zero-config too.
       WARDYN_ENVBUILD_TOOLS_DIR: "${WARDYN_ENVBUILD_TOOLS_DIR:-/wardyn-tools}"

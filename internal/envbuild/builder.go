@@ -97,6 +97,15 @@ const (
 	// envPushedRef overrides the FROM ref of the finalize stage when envbuilder's
 	// pushed image is not resolvable at the plain CacheRepo ref (see pushedBaseRef).
 	envPushedRef = "WARDYN_ENVBUILD_PUSHED_REF"
+
+	// envRegistryInsecure opts envbuilder's registry traffic (CacheRepo push,
+	// base-image pull, cache probe — every registry call kaniko makes, this is
+	// a blanket toggle, not scoped to one host) out of TLS verification
+	// (ENVBUILDER_INSECURE). Off by default: a CacheRepo pointed at a real
+	// external registry must not silently go unverified. The compose stack
+	// turns it on because its bundled registry sidecar has never spoken TLS —
+	// see docs/ENVBUILD.md "Build sandbox".
+	envRegistryInsecure = "WARDYN_ENVBUILD_REGISTRY_INSECURE"
 )
 
 // requiredTools is the SINGLE canonical declaration of the Wardyn runner tools
@@ -272,6 +281,13 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	if err != nil {
 		return "", err
 	}
+	insecure, err := b.effectiveRegistryInsecure()
+	if err != nil {
+		return "", err
+	}
+	if insecure {
+		env = append(env, "ENVBUILDER_INSECURE=true")
+	}
 
 	timeout := b.BuildTimeout
 	if timeout <= 0 {
@@ -338,6 +354,15 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 			defer close(streamDone)
 			b.streamLogs(ctx, containerID, logSink)
 		}()
+		// Every return below MUST join this goroutine, not just the success
+		// path: on any of the four failure returns in the select, the caller
+		// (or a Retry) can install a fresh DefaultLogSink write target for the
+		// NEXT build while this one's streamLogs is still writing to the old
+		// sink, racing it. The explicit join before finalizeImage further down
+		// additionally ORDERS the success path (streamLogs must finish before
+		// finalizeImage writes the same sink); this defer is then a no-op
+		// there, since streamDone is already closed.
+		defer func() { <-streamDone }()
 	}
 
 	// Wait for the container to exit. v29 folds the old (status, error) channel
@@ -499,6 +524,24 @@ func (b *Builder) effectiveBuildNetwork() string {
 		return v
 	}
 	return defaultBuildNetwork
+}
+
+// effectiveRegistryInsecure resolves whether envbuilder should be told to
+// skip TLS verification against its registries (ENVBUILDER_INSECURE, see
+// envRegistryInsecure). Unset/empty is false (secure); a present-but-garbage
+// value is an ERROR rather than a silent false, matching envInt64's fail-
+// closed contract — a typo'd override must not quietly leave a plaintext
+// registry looking like it's still being verified.
+func (b *Builder) effectiveRegistryInsecure() (bool, error) {
+	v := strings.TrimSpace(os.Getenv(envRegistryInsecure))
+	if v == "" {
+		return false, nil
+	}
+	insecure, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("envbuild: %s=%q is not a valid bool", envRegistryInsecure, v)
+	}
+	return insecure, nil
 }
 
 // effectiveMemoryBytes resolves the build-container memory cap.

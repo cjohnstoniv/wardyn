@@ -119,7 +119,7 @@ for tool in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper wardyn-scan;
     || warn "tool ${tool} not present in ${AGENT_IMAGE} (continuing)"
 done
 docker rm -f "${tools_ctr}" >/dev/null
-for required in agent-run wardyn-git-helper; do
+for required in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper; do
   [[ -f "${TOOLS_DIR}/${required}" ]] || die "required runner tool ${required} missing from ${AGENT_IMAGE}"
 done
 export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"

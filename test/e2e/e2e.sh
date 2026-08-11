@@ -187,12 +187,12 @@ log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
 # confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
 # and first-use review alike). Asserted both ways: refused AND no approval.
 log "(d) brokered github.com is HARD-DENIED on the direct route (deny beats first-use review)"
-GH_DIRECT="$(docker exec "${AGENT}" curl -sS -m 20 --connect-timeout 10 \
+GH_DIRECT_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_code}' \
           -x http://wardyn-proxy:3128 https://github.com/ 2>&1 || true)"
-if echo "${GH_DIRECT}" | grep -q '403'; then
+if [[ "${GH_DIRECT_CODE}" == "403" ]]; then
   ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains for that name"
 else
-  bad "(d) direct github.com was NOT refused — git-broker confinement not in force: ${GH_DIRECT}"
+  bad "(d) direct github.com was NOT refused (http_code=${GH_DIRECT_CODE}) — git-broker confinement not in force"
 fi
 
 DENY="$(docker exec "${AGENT}" curl -sS -m 12 --connect-timeout 8 \
@@ -401,7 +401,6 @@ fi
 # (ii-b) Poll for the credential ApprovalRequest — raised by the BROKER route's
 # server-side mint when agent-run cloned through /wardyn/gh/ at run start.
 log "(ii-b) credential ApprovalRequest raised by the broker's server-side mint (kind=credential, PENDING)"
-log "(ii) credential ApprovalRequest raised (kind=credential, PENDING)"
 CRED_APID=""
 for _ in $(seq 1 15); do
   CRED_APID="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/approvals?state=PENDING" \

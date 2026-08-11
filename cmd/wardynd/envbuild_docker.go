@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/envbuild"
@@ -82,10 +83,19 @@ func (e envBuilderAdapter) tee(logSink io.Writer) io.Writer {
 // fails closed.
 // slogLineWriter forwards build output lines to slog so a failed build's
 // reason lands in wardynd's own logs instead of vanishing with the removed
-// container (the old behavior left only "exit code 1").
-type slogLineWriter struct{ buf []byte }
+// container (the old behavior left only "exit code 1"). One instance is
+// shared as Builder.DefaultLogSink for the process lifetime (see
+// newEnvBuilder below), and concurrent builds (two workspace builds, or a
+// build plus a BYOI FinalizeBase) both write through it, so buf is guarded by
+// mu rather than assuming single-writer use.
+type slogLineWriter struct {
+	mu  sync.Mutex
+	buf []byte
+}
 
 func (w *slogLineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.buf = append(w.buf, p...)
 	for {
 		i := bytes.IndexByte(w.buf, '\n')

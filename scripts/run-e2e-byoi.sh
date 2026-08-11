@@ -27,7 +27,7 @@
 # hold; the recording-cast assertion is the one that needs the callback).
 #
 # Requires a wardynd already started with -envbuild and WARDYN_ENVBUILD_TOOLS_DIR
-# pointing at a dir holding agent-run, wardyn-rec, wardyn-verify and
+# pointing at a dir holding agent-run, agent-run-lib.sh, wardyn-rec and
 # wardyn-git-helper (the `test-envbuild-integration` make target shows how those
 # are staged). This script does NOT start one — see the healthz die below.
 set -uo pipefail
