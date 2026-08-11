@@ -343,6 +343,14 @@ func selectionsByWorkspaceID(sels []client.WorkspaceSelection) map[string]client
 // discards them — see requirementAuditEntry).
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
+	// Resolved AT MOST ONCE per call, lazily on the first integration: key
+	// found (PLATFORM-API-8) — effectiveIntegrations reads the site-config
+	// store, a full secret listing, and peeks the subscription/Bedrock state,
+	// so recomputing it per requirement (a workspace with 6 integration
+	// requirements = 6 full derivations) multiplied that I/O by the
+	// requirement count on every POST /runs and /runs/preflight.
+	var integrationRows []integrationRow
+	integrationRowsLoaded := false
 	for _, ws := range wsRefs {
 		if len(effectiveRequirements(ws)) == 0 {
 			continue
@@ -395,7 +403,12 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 				// operator act. The trust boundary that rule protects (untrusted
 				// repo content routing the operator's stored secrets into a run)
 				// has no path here.
-				if ev, ok := s.applyIntegrationRequirement(ctx, spec, name); ok {
+				if !integrationRowsLoaded {
+					present := s.presentSecretNames(ctx)
+					integrationRows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
+					integrationRowsLoaded = true
+				}
+				if ev, ok := s.applyIntegrationRequirement(ctx, integrationRows, spec, name); ok {
 					events = append(events, ev)
 				}
 			case "write":

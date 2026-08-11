@@ -51,11 +51,8 @@ func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspac
 // re-laned required/optional by another attachment, or restated by the overlay,
 // survives in the folded contract, so it is NOT off). This is the set to subtract
 // from the merged scan-profile union so an "off" egress override actually closes
-// egress rather than being defeated by the profile path (GAP-EGRESS-5).
-//
-// ponytail: latent until an Overrides writer lands (WSPIPE-7) — WorkspaceAttachment.
-// Overrides is a real field FoldWorkspaceContract already honors, so this reads it
-// correctly today (usually empty); it just has no producer yet.
+// egress rather than being defeated by the profile path (GAP-EGRESS-5, closed
+// together with WSPIPE-7's Overrides writer — upsertAndAttach, sources.go).
 func egressOverriddenOff(ws types.Workspace) map[string]bool {
 	off := map[string]bool{}
 	for _, att := range ws.Attachments {

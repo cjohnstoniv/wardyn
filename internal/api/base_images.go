@@ -111,26 +111,6 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, created)
 }
 
-// handleGetBaseImage returns one catalog row.
-//
-//	GET /api/v1/base-images/{id}
-func (s *Server) handleGetBaseImage(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "base image")
-	if !ok {
-		return
-	}
-	b, err := s.cfg.Store.GetBaseImage(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no such base image")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get base image: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, b)
-}
-
 // handleDeleteBaseImage removes a catalog row. In use → 409 naming the
 // workspaces; ?force=1 detaches them, which is HONEST here rather than
 // destructive: a detached workspace's base_image_id goes NULL, and NULL means

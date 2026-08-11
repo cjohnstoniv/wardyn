@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
@@ -54,8 +55,15 @@ type Source struct {
 	Name string `json:"name"`
 	// Requirements is this source's OWN contract. See the type doc above.
 	Requirements map[string]WorkspaceRequirement `json:"requirements,omitempty"`
-	// Profile is this source's scan result (workspacescan.WorkspaceProfile).
-	Profile []byte `json:"profile,omitempty"`
+	// Profile is this source's scan result (workspacescan.WorkspaceProfile),
+	// opaque here — this type never interprets it, only persists/returns it
+	// (matching Workspace.Profile's own doc). json.RawMessage, not a plain
+	// []byte: encoding/json base64-encodes a bare []byte, which shipped a
+	// tier-1 source's scan profile to GET /sources as an opaque base64 string
+	// instead of real JSON (WIRE-2) — the one other place a source's profile
+	// crossed the wire (source_scan.go) already worked around this by hand
+	// (json.RawMessage(fresh.Profile)).
+	Profile json.RawMessage `json:"profile,omitempty"`
 	// Status is the source's scan lifecycle — the same one-word states the
 	// workspace used to own: pending_scan | scanning | scanned | error.
 	Status WorkspaceStatus `json:"status"`

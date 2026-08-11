@@ -176,7 +176,17 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 
 // PutSiteConfig replaces the operator-wide site config and returns the persisted
 // value. PUT /api/v1/site-config.
+//
+// Integrations is stripped from cfg before the request: the server rejects a
+// non-empty one outright (integrations are managed through their own
+// endpoints, never PUT /site-config), so the documented disaster-recovery
+// round-trip — `wardyn site-config get > f` before a reset, `wardyn
+// site-config apply f` after — 400ed outright the moment any integration was
+// ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
+// remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
+// TS side).
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	cfg.Integrations = nil
 	var out types.SiteConfig
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &out)
 	return out, err

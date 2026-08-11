@@ -302,6 +302,26 @@ func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
 	}
 }
 
+// TestHandlePutIntegration_DefaultForRejectsNonAIProvider pins PLATFORM-API-3:
+// only an ai_provider row may carry default_for. Both marks are defined only
+// for that category (types.Integration.DefaultFor's doc), and both readers
+// (defaultAgentRunsIntegration, WardynFeaturesBackend) already filter on it —
+// so a non-ai_provider row that took the mark would STEAL it from the real
+// ai_provider default (applyDefaultForRadio clears every other row's mark
+// regardless of category) while never being able to serve it itself: silent,
+// site-wide loss of model access through a write that validated clean.
+func TestHandlePutIntegration_DefaultForRejectsNonAIProvider(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
+	body := `{"category":"container_registry","type":"acme-registry","default_for":["agent_runs"]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-registry", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 (default_for is ai_provider-only); body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 0 {
+		t.Errorf("rejected write must not persist, got %+v", fake.cfg.Integrations)
+	}
+}
+
 // TestHandlePutIntegration_DefaultForClear completes the DefaultFor write-path
 // coverage (set + radio-steal are pinned above): PUT is a FULL REPLACEMENT, so
 // PUTting a row again with default_for omitted clears its own marks — the

@@ -163,28 +163,23 @@ func composerSpecFromIntegrations(secrets secretstore.Store, sc types.SiteConfig
 //	bedrock                -> wire "anthropic", transport "bedrock" (the SAME
 //	                          wire the -composer-config path already uses for
 //	                          Bedrock; needs no api key)
-//	anthropic_subscription  lane "managed"      -> wire "sandbox" (the
-//	                          container-mode subscription composer)
-//	                        lane "resident_host" -> wire "cli" (the host CLI
-//	                          login) — REMEMBER this wire is opt-in/disabled-
-//	                          by-default (backends.BackendSpec.enabledDefault):
-//	                          it shells out to the operator's OWN personal
-//	                          `claude` login, which is subscription-ToS-
-//	                          sensitive. Reaching this branch at all already
-//	                          means the operator explicitly turned the
-//	                          capability on (WardynFeaturesBackend only ever
-//	                          picks an integration whose wardyn_features cell
-//	                          reads "available" — capabilitiesFor's
-//	                          subscriptionCaps defaults resident_host's
-//	                          wardyn_features to OFF precisely because it is
-//	                          opt-in), so Enabled is set true here to carry
-//	                          that gate through rather than falling back to
-//	                          the factory's cli-defaults-off rule.
+//	anthropic_subscription -> wire "sandbox" (the container-mode subscription
+//	                          composer), regardless of Config.lane.
+//
+// PLATFORM-API-6: the resident_host lane (the host CLI login, wire "cli") has
+// NO mapping here on purpose — deleted, not stubbed. WardynFeaturesBackend
+// only ever picks an integration whose wardyn_features capability reads
+// "available", and capabilitiesFor's subscriptionCaps hard-codes that cell
+// OFF for resident_host with no operator-facing switch that turns it on
+// (integrations.go) — so this function can never actually be called with
+// one. A mapping (and its "Enabled carries the operator's opt-in through"
+// comment) claiming otherwise is worse than none: it reads as a working path
+// to whoever wires the real opt-in signal next, when there is nothing here
+// to reach it.
 //
 // ok=false for any other type (there is no sandbox lane to map it to).
 func wardynFeaturesBackendSpec(in types.Integration) (backends.BackendSpec, bool) {
 	var cfg struct {
-		Lane   string `json:"lane"`
 		Region string `json:"region"`
 		Model  string `json:"model"`
 	}
@@ -203,12 +198,7 @@ func wardynFeaturesBackendSpec(in types.Integration) (backends.BackendSpec, bool
 	case "bedrock":
 		spec.Wire, spec.Transport, spec.Region = "anthropic", "bedrock", cfg.Region
 	case "anthropic_subscription":
-		if cfg.Lane == "resident_host" {
-			enabled := true
-			spec.Wire, spec.Transport, spec.Enabled = "cli", "claude", &enabled
-		} else {
-			spec.Wire = "sandbox"
-		}
+		spec.Wire = "sandbox"
 	default:
 		return backends.BackendSpec{}, false
 	}

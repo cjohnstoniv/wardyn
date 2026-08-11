@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -81,7 +83,7 @@ func (s PG) UpsertSource(ctx context.Context, src types.Source) (types.Source, e
 		RETURNING ` + sourceCols
 	return scanSource(s.Pool.QueryRow(ctx, q,
 		src.ID, string(src.Kind), src.Locator, src.Ref, src.Name,
-		sourceRequirementsParam(src.Requirements), src.Profile, string(src.Status),
+		sourceRequirementsParam(src.Requirements), workspaceProfileParam(src.Profile), string(src.Status),
 		src.ActiveRunID, src.CreatedAt, src.UpdatedAt,
 	))
 }
@@ -147,12 +149,47 @@ func scanName(row pgx.Row) (string, error) {
 	return n, err
 }
 
+// workspacesOrphanedBySource returns the names of workspaces whose
+// attachments consist ENTIRELY of source id — i.e. detaching id (DeleteSource
+// with detach=true) would empty attachments to '[]'. hydrateWorkspace reads
+// an empty attachments array as the PRE-SPLIT marker and falls back to the
+// workspace's stale legacy `sources` column (store.go's
+// workspaceAttachmentsParam doc), so the deleted source would silently
+// reappear in the API/UI and the run mount gate would still admit it (STORE-1)
+// — a workspace with an ephemeral attachment alongside this source is NOT
+// orphaned (attachments stays non-empty), so it is excluded.
+func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]string, error) {
+	return collect(ctx, s.Pool, "list", "workspaces orphaned by source detach", `
+		SELECT name FROM workspaces
+		WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
+		  AND NOT EXISTS (
+		    SELECT 1 FROM jsonb_array_elements(attachments) e
+		    WHERE e->>'source_id' IS DISTINCT FROM $1::text
+		  )
+		ORDER BY name`, []any{id.String()}, scanName)
+}
+
 // DeleteSource removes a library source. detach=true first strips every
-// workspace attachment referencing it (the ?force=1 escape); detach=false
-// refuses in ONE atomic statement — the in-use check and the delete can never
-// split into two round trips a concurrent attach could land between.
+// workspace attachment referencing it (the ?force=1 escape) — UNLESS doing so
+// would leave a workspace with zero attachments (workspacesOrphanedBySource):
+// 0029 makes a workspace a composition of one-or-more sources, and
+// decodeWorkspaceRequest already guarantees every write keeps that true, so
+// '[]' must stay unreachable (STORE-1). That check and the detach are two
+// statements — narrows the window against a workspace attaching uniquely to
+// this source between them, same as detach=false's own residual race below;
+// neither closes it (STORE-2's finding on this exact file: READ COMMITTED
+// against two independently-written tables can narrow a TOCTOU to one
+// statement, never fully close it without an explicit lock on both sides).
 func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
+		orphaned, err := s.workspacesOrphanedBySource(ctx, id)
+		if err != nil {
+			return fmt.Errorf("store: check source detach: %w", err)
+		}
+		if len(orphaned) > 0 {
+			return fmt.Errorf("%w: force-deleting would leave workspace(s) with no attachments: %s",
+				ErrConflict, strings.Join(orphaned, ", "))
+		}
 		if _, err := s.Pool.Exec(ctx, `
 			UPDATE workspaces
 			SET attachments = COALESCE((
@@ -172,13 +209,17 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 		}
 		return nil
 	}
-	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, so a
-	// workspace attach landing after a caller's own WorkspacesAttaching probe
-	// can never slip a delete through — the exact orphaning the doc above
-	// refuses. Zero rows affected means either "still attached" or "no such
-	// id" — the DELETE has already refused either way, so a follow-up
-	// existence probe cannot reopen the TOCTOU it closed; it only picks which
-	// honest error to report (a genuinely-absent id must still 404, not 409).
+	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, narrowing
+	// — not closing (STORE-2) — the window against a concurrent attach: one
+	// that already COMMITTED by the time this statement runs is always seen
+	// (a caller's own WorkspacesAttaching probe can't be beaten by an attach
+	// that lands and commits after it), but READ COMMITTED does not block on
+	// a STILL-OPEN attach transaction writing the unrelated `workspaces`
+	// table, so that one interleaving survives. Zero rows affected means
+	// either "still attached" or "no such id" — the DELETE has already
+	// refused either way, so a follow-up existence probe cannot reopen the
+	// TOCTOU; it only picks which honest error to report (a genuinely-absent
+	// id must still 404, not 409).
 	tag, err := s.Pool.Exec(ctx, `
 		DELETE FROM sources WHERE id=$1 AND NOT EXISTS (
 			SELECT 1 FROM workspaces
@@ -347,10 +388,12 @@ func (s PG) WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]strin
 // DeleteBaseImage removes a catalog row; detach=true first drops every
 // workspace reference (those workspaces fall back to the derived recommended
 // build — NULL is the marker, so "detach" is honest, not destructive).
-// detach=false refuses in ONE atomic statement — mirrors DeleteSource: the
-// in-use check and the delete can never split into two round trips a
-// concurrent attach could land between (before this, that race surfaced as a
-// raw Postgres foreign-key-violation 500 instead of a clean 409).
+// detach=false narrows the in-use check and the delete to ONE statement —
+// mirrors DeleteSource, including its residual race (STORE-2): a concurrent
+// workspace UPDATE committing base_image_id=id between this statement's own
+// NOT EXISTS check and its commit is caught by the base_image_id FK
+// (0031:61) instead, surfacing as a raw 23503 — mapped to ErrConflict below
+// so that loses race still answers a clean 409, not a raw Postgres 500.
 func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		if _, err := s.Pool.Exec(ctx,
@@ -367,15 +410,25 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 		return nil
 	}
 	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, the same
-	// guarantee DeleteSource makes. Zero rows affected means either "still in
-	// use" or "no such id" — the DELETE has already refused either way, so a
-	// follow-up existence probe cannot reopen the TOCTOU; it only picks which
-	// honest error to report (a genuinely-absent id must still 404, not 409).
+	// narrowed (not closed — STORE-2) guarantee DeleteSource makes. Zero rows
+	// affected means either "still in use" or "no such id" — the DELETE has
+	// already refused either way, so a follow-up existence probe cannot
+	// reopen the TOCTOU; it only picks which honest error to report (a
+	// genuinely-absent id must still 404, not 409).
 	tag, err := s.Pool.Exec(ctx, `
 		DELETE FROM base_images WHERE id=$1 AND NOT EXISTS (
 			SELECT 1 FROM workspaces WHERE base_image_id=$1
 		)`, id)
 	if err != nil {
+		// The residual race the doc above admits: a concurrent workspace
+		// UPDATE committing base_image_id=id between this statement's own
+		// NOT EXISTS check and its commit is caught by the FK (0031:61)
+		// instead of NOT EXISTS — map that to the SAME clean 409 the
+		// zero-rows branch below gives, not a raw Postgres 500.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrConflict
+		}
 		return fmt.Errorf("store: delete base image: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -530,12 +583,12 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 		case types.SourceLocalDir:
 			derived = append(derived, types.WorkspaceSource{
 				Type: types.WorkspaceSourceTypeLocalDir, Path: src.Locator,
-				Target: att.Target, Writable: att.Writable,
+				Target: att.Target, Writable: att.Writable, Overrides: att.Overrides,
 			})
 		case types.SourceRepo:
 			derived = append(derived, types.WorkspaceSource{
 				Type: types.WorkspaceSourceTypeRepo, Source: src.Locator,
-				Ref: src.Ref, Target: att.Target,
+				Ref: src.Ref, Target: att.Target, Overrides: att.Overrides,
 			})
 		}
 		if len(src.Profile) > 0 {

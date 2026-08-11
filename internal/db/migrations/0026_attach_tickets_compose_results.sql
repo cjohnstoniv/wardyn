@@ -15,6 +15,7 @@
 -- stragglers (a ticket nobody redeemed, a proposal nobody took) are swept
 -- opportunistically by the next insert. Both are a handful of rows.
 
+-- token is hashed at rest as of migration 0032 (STORE-3) — see that file.
 CREATE TABLE IF NOT EXISTS attach_tickets (
     token      TEXT        PRIMARY KEY,
     run_id     UUID        NOT NULL,

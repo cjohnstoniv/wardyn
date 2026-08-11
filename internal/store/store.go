@@ -609,10 +609,6 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// hydratedScan wraps scanWorkspace for the single-row writers: decode the row,
-// then materialize the derived view (attachments → Sources/Profile/Status/
-// BaseImage + the folded EffectiveRequirements).
-
 // hydrateIfOK hydrates ws when err is nil — the mixed-return writers' shim.
 func (s PG) hydrateIfOK(ctx context.Context, ws types.Workspace, err error) (types.Workspace, error) {
 	if err != nil {
@@ -621,6 +617,9 @@ func (s PG) hydrateIfOK(ctx context.Context, ws types.Workspace, err error) (typ
 	return s.hydrated(ctx, ws)
 }
 
+// hydratedScan wraps scanWorkspace for the single-row writers: decode the row,
+// then materialize the derived view (attachments → Sources/Profile/Status/
+// BaseImage + the folded EffectiveRequirements).
 func (s PG) hydratedScan(ctx context.Context, row pgx.Row) (types.Workspace, error) {
 	ws, err := scanWorkspace(row)
 	if err != nil {

@@ -139,6 +139,15 @@ type WorkspaceSource struct {
 	// default, so there is no unsafe zero value to guard against). local_dir
 	// only.
 	Writable bool `json:"writable,omitempty"`
+	// Overrides is this attachment's stance on requirement keys ITS SOURCE
+	// declares: reqKey -> off|optional|required (workspace_contract.go's
+	// AttachmentOverride* constants); local_dir/repo only (ephemeral has no
+	// library contract to override). nil (the field omitted) means "say
+	// nothing here" — the server carries forward whatever this source's
+	// attachment already had (upsertAndAttach), so a plain composition edit
+	// (e.g. a rename) can never silently wipe an override set on an earlier
+	// PUT; an explicit map, empty or not, REPLACES it outright.
+	Overrides map[string]string `json:"overrides,omitempty"`
 }
 
 // WorkspaceBaseImage is a Workspace's base-image choice: what the sandbox's
@@ -350,9 +359,11 @@ type Integration struct {
 	ID       string              `json:"id"`
 	Name     string              `json:"name"`
 	Category IntegrationCategory `json:"category"`
-	// Type is the specific provider within Category, e.g. "anthropic"|"bedrock"
-	// (ai_provider), "github"|"gitlab"|"azure_devops" (scm_host). Open-ended on
-	// purpose — a new provider type is just a new string, no schema change.
+	// Type is the specific provider within Category, e.g. "anthropic_api_key"|
+	// "bedrock" (ai_provider), "github_app"|"git_host" (scm_host) — the CLOSED
+	// sets validateIntegrationWrite actually accepts for those two; a GENERIC
+	// category's Type is open-ended by contrast, e.g. "jira" (work_tracking) —
+	// a new provider type there is just a new string, no schema change.
 	// Closed per category for the TYPED categories only; see
 	// IntegrationCategory.
 	Type string `json:"type"`

@@ -167,12 +167,14 @@ var genAgentToolInstalls = map[string]string{
 // genAgentToolDockerfile returns the .devcontainer/Dockerfile that bakes tools
 // into the image, or "" when nothing in tools is bakeable (including the
 // no-tools case) — callers must then emit no Dockerfile at all and leave
-// devcontainer.json on the plain `image` base.
+// devcontainer.json on the plain `image` base. baseImage is the FROM line;
+// "" falls back to genBaseImage (WSPIPE-9 — a non-recommended base pick's own
+// image, not the universal convention one, when baseOrBuild's caller names it).
 //
 // Every RUN leads with "set -eu" so a failed install fails the BUILD rather
 // than silently producing an image that claims a tool it does not carry: that
 // inventory honesty is the whole point of this feature.
-func genAgentToolDockerfile(tools []string) string {
+func genAgentToolDockerfile(tools []string, baseImage string) string {
 	var b strings.Builder
 	for _, t := range tools {
 		if body, ok := genAgentToolInstalls[t]; ok {
@@ -182,7 +184,10 @@ func genAgentToolDockerfile(tools []string) string {
 	if b.Len() == 0 {
 		return ""
 	}
-	return "FROM " + genBaseImage + "\n\n" + b.String()
+	if baseImage == "" {
+		baseImage = genBaseImage
+	}
+	return "FROM " + baseImage + "\n\n" + b.String()
 }
 
 // AgentToolsForIntegrationTypes derives the agent CLIs implied by naming
@@ -251,14 +256,23 @@ type genBuild struct {
 	Dockerfile string `json:"dockerfile"`
 }
 
-// baseOrBuild points a devcontainer at either the plain base image or the
-// generated Dockerfile, and returns the extra files to emit alongside it.
+// baseOrBuild points a devcontainer at either the resolved base image or the
+// generated Dockerfile (whose own FROM is that same base), and returns the
+// extra files to emit alongside it. baseRef is the workspace's OWN resolved
+// base (a registry/custom/byo pick's Image; "" for "recommended"/nil, which
+// keeps the universal genBaseImage default) — WITHOUT it, EmitEnvAsCode
+// described the generic devcontainer base regardless of what Wardyn actually
+// boots for that workspace (WSPIPE-9). GenerateDevcontainer is reached only
+// for the recommended/derived build, so it always passes "".
 // Shared by EmitEnvAsCode and GenerateDevcontainer so the committable export
 // and the image Wardyn builds can never drift on what they carry.
-func baseOrBuild(dc *genDevcontainer, tools []string) map[string]string {
-	dockerfile := genAgentToolDockerfile(tools)
+func baseOrBuild(dc *genDevcontainer, tools []string, baseRef string) map[string]string {
+	dockerfile := genAgentToolDockerfile(tools, baseRef)
 	if dockerfile == "" {
-		dc.Image = genBaseImage
+		dc.Image = baseRef
+		if dc.Image == "" {
+			dc.Image = genBaseImage
+		}
 		return nil
 	}
 	dc.Build = &genBuild{Dockerfile: "Dockerfile"}
@@ -285,9 +299,12 @@ func baseOrBuild(dc *genDevcontainer, tools []string) map[string]string {
 // tools is AgentToolsForIntegrationTypes' output (the caller derives it from
 // the workspace's named integrations) — see genAgentToolInstalls for the
 // bake-lane rule; pass nil when nothing is named.
-func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []string) (map[string]string, error) {
+//
+// baseRef is the workspace's OWN resolved base-image ref (a registry/custom/
+// byo pick's Image), or "" for "recommended"/nil — see baseOrBuild.
+func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []string, baseRef string) (map[string]string, error) {
 	var dc genDevcontainer
-	extra := baseOrBuild(&dc, tools)
+	extra := baseOrBuild(&dc, tools, baseRef)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
@@ -491,7 +508,11 @@ func genAgentsMD(p WorkspaceProfile) string {
 // AgentToolsForIntegrationTypes' output; pass nil when nothing is named.
 func GenerateDevcontainer(p WorkspaceProfile, tools []string) (files map[string]string, err error) {
 	var dc genDevcontainer
-	out := baseOrBuild(&dc, tools)
+	// Always "" (the universal genBaseImage default): this path is reached
+	// only for the recommended/derived build (resolveWorkspaceImage falls
+	// through to it precisely when the workspace names no explicit base
+	// image), which by definition has no OTHER base to resolve.
+	out := baseOrBuild(&dc, tools, "")
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}

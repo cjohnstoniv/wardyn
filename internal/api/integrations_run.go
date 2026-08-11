@@ -35,29 +35,52 @@ import (
 // resolved spec, returning the audit entry for the caller to record (launch
 // does; preflight discards — see requirementAuditEntry).
 //
-// ok=false — no grant, no mutation, nothing audited — when the row cannot
-// deliver anything: the id names nothing in the EFFECTIVE set (stored ∪
-// legacy-derived, so a well-known derived id works with no adoption step), or
-// the row is Disabled, or it names no hosts. Those are silent degrades, matching
-// applyRequiredSecretGrant's own rule that a missing/unusable credential must
-// never brick a run — the Integrations surface is where the gap is visible.
+// rows is the caller's already-computed effective integration set
+// (s.effectiveIntegrations) — a caller folding several requirements in one
+// request (applyWorkspaceRequirements, launchRecordRun) computes it ONCE and
+// passes it to every call, instead of resolveIntegrationRef silently
+// recomputing it (a full secret listing + subscription/Bedrock peek) once per
+// requirement (PLATFORM-API-8).
 //
-// Hosts are unioned UNCONDITIONALLY, even under AllowAllEgress: the proxy's
-// credential injector requires an explicit exact allowlist entry and
-// deliberately does not honor allow-all (Policy.AllowedExactHost), so without
-// the entry an allow-all run would reach the host and still fail to present the
-// credential.
-func (s *Server) applyIntegrationRequirement(ctx context.Context, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
-	integ, found := s.resolveIntegrationRef(ctx, id)
+// ok=false — no grant, no mutation, nothing audited — when the row cannot
+// deliver anything: the id names nothing in rows, the row is Disabled, or it
+// names no hosts. Those are silent degrades, matching applyRequiredSecretGrant's
+// own rule that a missing/unusable credential must never brick a run — the
+// Integrations surface is where the gap is visible.
+//
+// A per-capability off switch (DisabledCapabilities, PLATFORM-API-1) narrows
+// which half applies: "egress_host" skips the host union, "credential" skips
+// the injection — matching what the read matrix (applyDisabled,
+// integrations.go) already reports for those cells, so an operator who turned
+// a capability off there sees the SAME thing actually happen to a run, not a
+// credential still silently presented on the wire.
+//
+// Hosts are unioned UNCONDITIONALLY (net of the egress_host switch above),
+// even under AllowAllEgress: the proxy's credential injector requires an
+// explicit exact allowlist entry and deliberately does not honor allow-all
+// (Policy.AllowedExactHost), so without the entry an allow-all run would reach
+// the host and still fail to present the credential.
+func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integrationRow, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
+	integ, found := resolveIntegrationRefFrom(rows, id)
 	if !found || integ.Disabled || len(integ.Hosts) == 0 {
 		return requirementAuditEntry{}, false
 	}
-	addedEgress := unionAllowedDomains(spec, integ.Hosts)
-	grantedHosts := s.applyIntegrationInjection(ctx, spec, integ)
+	disabledCap := make(map[string]bool, len(integ.DisabledCapabilities))
+	for _, capID := range integ.DisabledCapabilities {
+		disabledCap[capID] = true
+	}
+	var addedEgress, grantedHosts []string
+	if !disabledCap["egress_host"] {
+		addedEgress = unionAllowedDomains(spec, integ.Hosts)
+	}
+	if !disabledCap["credential"] {
+		grantedHosts = s.applyIntegrationInjection(ctx, spec, integ)
+	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
 		// Everything this row offers was already on the spec (another workspace
-		// requires the same integration, or a policy already listed its hosts).
-		// Nothing changed, so there is nothing to audit.
+		// requires the same integration, or a policy already listed its hosts),
+		// or both capabilities are switched off. Nothing changed, so there is
+		// nothing to audit.
 		return requirementAuditEntry{}, false
 	}
 	return requirementAuditEntry{

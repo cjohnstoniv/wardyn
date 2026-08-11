@@ -509,6 +509,43 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// dispatch below so a bedrock-bound workspace records its OWN region, not the
 	// global default.
 	var injections []runner.InjectionGrant
+
+	// The workspace's REQUIRED integration: rows ride a session the SAME way
+	// they ride a real run (SEAM-2): a confined replay whose install step
+	// needs Artifactory (say) must reach AND authenticate to it, not merely
+	// reach it — without this the held-then-approved request the operator
+	// approves below goes out credential-less and 401s, and the approve hook
+	// (learnVerifyEgress) durably writes a DUPLICATE egress: row for a host
+	// the integration: row already provides. Folded through the same
+	// chokepoint applyWorkspaceRequirements uses for a real run
+	// (applyIntegrationRequirement), independent of the LLM mode below — an
+	// integration credential is never skipped just because this session
+	// happens to be subscription-mounted.
+	if ids := requiredIntegrationIDs(ws); len(ids) > 0 {
+		present := s.presentSecretNames(ctx)
+		rows := s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
+		for _, id := range ids {
+			before := len(policy.EligibleGrants)
+			if _, applied := s.applyIntegrationRequirement(ctx, rows, &policy, id); !applied {
+				continue
+			}
+			for _, g := range policy.EligibleGrants[before:] {
+				if g.Kind != types.GrantAPIKey || g.RequiresApproval {
+					continue
+				}
+				grantID := uuid.New()
+				if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+					ID: grantID, RunID: runID, CreatedAt: now, Spec: g,
+				}); gerr != nil {
+					return types.AgentRun{}, false, abort(fmt.Errorf("create integration grant: %w", gerr))
+				}
+				if rule, rerr := injectionRuleFromScope(g.Scope); rerr == nil {
+					injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
+				}
+			}
+		}
+	}
+
 	var integKind string
 	var bedrockRef *types.WorkspaceBedrockRef
 	// Only when the workspace carries its OWN binding: the record session honors the
@@ -591,6 +628,26 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// comment — surfaced the same way the ordinary create-run path does.
 		EphemeralDirs: ephemeralDirs,
 	}), weakCC, nil
+}
+
+// requiredIntegrationIDs returns the integration ids every REQUIRED
+// integration:<id> row in ws's effective contract names, in deterministic
+// order. Shared by launchRecordRun (which folds each through
+// applyIntegrationRequirement) and promoteSkipHosts' integration plumbing
+// (record.go), so the two can never disagree about which integrations a
+// session's egress already covers as contract plumbing.
+func requiredIntegrationIDs(ws types.Workspace) []string {
+	reqs := effectiveRequirements(ws)
+	var ids []string
+	for _, key := range sortedKeys(reqs) {
+		if reqs[key].Level != "required" {
+			continue
+		}
+		if typ, id, ok := splitRequirementKey(key); ok && typ == "integration" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // wireWorkspaceSource points run+policy at EVERY one of the workspace's
@@ -795,6 +852,13 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 	if ws.ActiveRunID == nil || *ws.ActiveRunID != runID {
 		return
 	}
+	// LEGACY ROWS ONLY (STORE-4): for an attachment-backed workspace, hydrate
+	// derives ws.Status as the worst-of-attached-sources status
+	// (store_sources.go), so WorkspaceScanning here can only mean an attached
+	// SOURCE is scanning — already handled above by the run.SourceID != nil
+	// branch, which reconciles at the source, not the workspace. This switch
+	// still fires for a genuinely pre-split row's own whole-workspace scan
+	// run (run.WorkspaceID set, no per-source run).
 	switch ws.Status {
 	case types.WorkspaceScanning:
 		// A repo scan run ended without uploading facts — leave a clear error via a

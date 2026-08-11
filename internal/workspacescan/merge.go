@@ -88,7 +88,12 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 		addAll(github, p.GitRemotes.GitHub)
 		addAll(otherHosts, p.GitRemotes.OtherHosts)
 		for _, n := range p.RequiredSecrets {
-			if _, dup := secretByName[n.Name]; !dup {
+			// Strongest-wins (required beats optional), matching
+			// FoldWorkspaceContract's rule 5 (workspace_contract.go) — a
+			// first-wins keep here let attachment ORDER decide whether a
+			// secret both surfaces agree exists reads as optional or required
+			// (WSPIPE-10).
+			if prev, dup := secretByName[n.Name]; !dup || (prev.Optional && !n.Optional) {
 				secretByName[n.Name] = n
 			}
 		}

@@ -59,7 +59,7 @@ func TestPG_WorkspaceCRUD_CompositionRoundTrip(t *testing.T) {
 			t.Fatalf("get workspace: %v", err)
 		}
 
-		if len(got.Sources) != 1 || got.Sources[0] != in.Sources[0] {
+		if len(got.Sources) != 1 || !reflect.DeepEqual(got.Sources[0], in.Sources[0]) {
 			t.Errorf("sources = %+v, want %+v", got.Sources, in.Sources)
 		}
 		if got.BaseImage == nil || !reflect.DeepEqual(*got.BaseImage, *in.BaseImage) {
@@ -111,7 +111,7 @@ func TestPG_WorkspaceCRUD_CompositionRoundTrip(t *testing.T) {
 		if len(got.Sources) != 2 {
 			t.Fatalf("sources round-trip: got %d entries, want 2: %+v", len(got.Sources), got.Sources)
 		}
-		if got.Sources[0] != in.Sources[0] || got.Sources[1] != in.Sources[1] {
+		if !reflect.DeepEqual(got.Sources[0], in.Sources[0]) || !reflect.DeepEqual(got.Sources[1], in.Sources[1]) {
 			t.Errorf("sources = %+v, want %+v", got.Sources, in.Sources)
 		}
 		if got.BaseImage != nil {

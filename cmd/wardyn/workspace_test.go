@@ -4,6 +4,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -56,7 +57,7 @@ func TestParseWorkspaceSourceArg(t *testing.T) {
 			t.Errorf("parseWorkspaceSourceArg(%q): unexpected error: %v", c.in, err)
 			continue
 		}
-		if got != c.want {
+		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("parseWorkspaceSourceArg(%q) = %+v, want %+v", c.in, got, c.want)
 		}
 	}

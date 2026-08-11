@@ -274,6 +274,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
+	// SEAM-1: serializes this read-modify-write (it carries the STORED
+	// Integrations forward from its own read, below) against the three
+	// integration-write handlers' own RMWs on the same document
+	// (setup_integrations.go) — see handleAdoptIntegration's comment.
+	s.siteConfigMu.Lock()
+	defer s.siteConfigMu.Unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "get existing site config: "+err.Error())

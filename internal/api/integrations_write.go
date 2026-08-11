@@ -201,6 +201,17 @@ func validateIntegrationWrite(in types.Integration) error {
 	if len(in.Docs) > 2048 {
 		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))
 	}
+	if len(in.DefaultFor) > 0 && in.Category != types.IntegrationAIProvider {
+		// PLATFORM-API-3: both marks are defined only for ai_provider
+		// (types.Integration.DefaultFor's doc), and both readers
+		// (applyDefaultForRadio's clear, defaultAgentRunsIntegration,
+		// WardynFeaturesBackend) already filter on it — so a non-ai_provider
+		// row taking a mark here just STEALS it from the real ai_provider row
+		// (applyDefaultForRadio clears it from every OTHER row regardless of
+		// category) while never being able to SERVE it itself: silent,
+		// site-wide loss of model access through a write that validated clean.
+		return fmt.Errorf("default_for: only an ai_provider integration may set this (category is %q)", in.Category)
+	}
 	for _, d := range in.DefaultFor {
 		if !validIntegrationDefaultFor[d] {
 			return fmt.Errorf("default_for: unknown %q (want agent_runs and/or wardyn_features)", d)
@@ -256,23 +267,41 @@ func applyDefaultForRadio(rows []types.Integration, id string, newDefaultFor []s
 	}
 }
 
+// resolveIntegrationRefFrom is resolveIntegrationRef's pure half: resolves
+// ref against an ALREADY-COMPUTED effective set. Factored out (PLATFORM-API-8)
+// so a caller resolving several refs in one request (applyWorkspaceRequirements,
+// namedIntegrationTypes, launchRecordRun) can compute effectiveIntegrations
+// ONCE instead of once per ref — effectiveIntegrations reads the site-config
+// store, a full secret listing, and peeks the subscription/Bedrock state, so
+// recomputing it per ref multiplied that I/O by the requirement count. ok=false
+// when ref is empty or names nothing at all.
+func resolveIntegrationRefFrom(rows []integrationRow, ref string) (types.Integration, bool) {
+	if ref == "" {
+		return types.Integration{}, false
+	}
+	for _, row := range rows {
+		if row.ID == ref {
+			return row.Integration, true
+		}
+	}
+	return types.Integration{}, false
+}
+
 // resolveIntegrationRef resolves ref against the EFFECTIVE integration set
 // (stored ∪ legacy-derived — effectiveIntegrations above) into the concrete
 // types.Integration it names. Effective, not stored-only, so a run/workspace
 // binding "just works" against a well-known legacy id (e.g.
 // "anthropic_api_key") with no adoption step required first — the entire
 // point of deriving legacy rows in the first place. ok=false when ref is
-// empty or names nothing at all.
+// empty or names nothing at all. The single-ref convenience form — a caller
+// resolving MULTIPLE refs in one request should compute effectiveIntegrations
+// once and call resolveIntegrationRefFrom directly (PLATFORM-API-8).
 func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.Integration, bool) {
 	if ref == "" {
 		return types.Integration{}, false
 	}
-	for _, row := range s.effectiveIntegrations(ctx) {
-		if row.ID == ref {
-			return row.Integration, true
-		}
-	}
-	return types.Integration{}, false
+	present := s.presentSecretNames(ctx)
+	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present)), ref)
 }
 
 // namedIntegrationTypes returns the .Type of every integration ws's
@@ -284,14 +313,26 @@ func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.I
 // Feeds workspacescan.AgentToolsForIntegrationTypes so the recommended build
 // bakes the matching agent CLI (gen.go). Best-effort: a ref that resolves to
 // nothing (named before the integration exists) is skipped, not an error.
+//
+// effectiveIntegrations is computed AT MOST ONCE per call, lazily on the
+// first integration: key found (PLATFORM-API-8) — most workspaces name none,
+// and the common case must not pay for a full secret listing + Bedrock probe
+// it will throw away.
 func (s *Server) namedIntegrationTypes(ctx context.Context, ws types.Workspace) []string {
 	var out []string
+	var rows []integrationRow
+	loaded := false
 	for key := range effectiveRequirements(ws) {
 		typ, rest, ok := splitRequirementKey(key)
 		if !ok || typ != "integration" {
 			continue
 		}
-		if in, ok := s.resolveIntegrationRef(ctx, rest); ok {
+		if !loaded {
+			present := s.presentSecretNames(ctx)
+			rows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
+			loaded = true
+		}
+		if in, ok := resolveIntegrationRefFrom(rows, rest); ok {
 			out = append(out, in.Type)
 		}
 	}

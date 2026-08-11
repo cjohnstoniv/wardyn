@@ -410,6 +410,18 @@ type Server struct {
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
+	// siteConfigMu serializes the single site-config document's four
+	// read-modify-write writers (PUT /site-config, PUT/DELETE/POST-adopt
+	// /integrations/{id}) — an unconditional Postgres upsert (store.go's
+	// PutSiteConfig) with no CAS, so two overlapping RMWs on one process can
+	// otherwise silently erase each other's write (SEAM-1: a hand-authored
+	// integration row, a default_for:[agent_runs] mark, or the just-saved
+	// corp proxy/redirect config). Correct because replicas>1 is refused by
+	// construction (deployment.yaml) — a single in-process mutex covers every
+	// writer that can ever exist. Zero value is ready to use. ponytail:
+	// promote to a PG advisory lock (gt_rotator.go's pattern) if
+	// allowMultiReplica ever becomes real.
+	siteConfigMu sync.Mutex
 }
 
 // New constructs a Server and builds its router. It does not start listening.

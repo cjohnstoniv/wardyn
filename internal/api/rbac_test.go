@@ -46,6 +46,16 @@ func (rbacStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
 
+// PutSiteConfig is NOT actually 4xx-gated before the store the way this
+// file's own doc comment above claims: an empty "{}" body validates clean
+// (validateSiteConfig has nothing to reject in a zero-value SiteConfig), so
+// PUT /api/v1/site-config reaches the store for real in these tests —
+// without this, every gatedRoutes case reaching it panics on the embedded
+// nil Store instead of exercising the operator gate this file exists to test.
+func (rbacStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return cfg, nil
+}
+
 // rbacServer builds a server with OIDC configured (so the SSO branch of
 // humanOrAdminAuth is live), a secret store (so the secrets + harness-credential
 // routes mount), the harness's approval service (so GET /approvals answers) and
@@ -187,10 +197,12 @@ var gatedRoutes = []struct{ method, path string }{
 	// ticket and get the same PTY. Both are listed because both must refuse.
 	{http.MethodPost, "/api/v1/runs/r1/attach-ticket"},
 	{http.MethodGet, "/api/v1/runs/r1/attach"},
-	// 8. source library (tier 1) + base-image catalog (tier 2)
+	// 8. source library (tier 1) + base-image catalog (tier 2). DEADCODE-1: no
+	// PUT /sources/{id} — a source's contract is authored through POST
+	// /sources instead (re-POSTing an existing identity now applies the
+	// submitted requirements, WSPIPE-8).
 	{http.MethodPost, "/api/v1/sources"},
 	{http.MethodPost, "/api/v1/sources/src1/scan"},
-	{http.MethodPut, "/api/v1/sources/src1"},
 	{http.MethodDelete, "/api/v1/sources/src1"},
 	{http.MethodPost, "/api/v1/base-images"},
 	{http.MethodDelete, "/api/v1/base-images/bi1"},

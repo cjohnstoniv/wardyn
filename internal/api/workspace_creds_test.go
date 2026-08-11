@@ -279,6 +279,44 @@ func TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef(t
 	}
 }
 
+// TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin
+// pins SECMODEL-3: a resident_host subscription mounts the OPERATOR's own
+// resident ~/.claude OAuth credentials, a durable property of whichever
+// workspace the operator pinned it to (§5.1a) — not a bearer token any run
+// author may claim by naming its integration_id. The run-explicit tier may
+// carry a resident_host lane ONLY when the run's own primary workspace is
+// pinned to that exact same integration.
+func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-sub-host", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+		Config: mustJSON(map[string]any{"lane": "resident_host"}),
+	}})
+
+	// No workspace pin at all (a run with no workspace, or one the operator
+	// never pinned) — the explicit tier must refuse, not silently grant it.
+	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", ""); ok {
+		t.Error("resident_host claimed by run-explicit id with no workspace pin at all")
+	}
+	// A DIFFERENT workspace's own pin does not launder an unrelated run's claim.
+	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", "some-other-integration"); ok {
+		t.Error("resident_host claimed by run-explicit id while the primary workspace is pinned elsewhere")
+	}
+	// The workspace genuinely pinned to THIS integration may still use it via
+	// the explicit tier — the two tiers naming the same row is consent, not a conflict.
+	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", "acme-sub-host"); !ok {
+		t.Error("resident_host refused even though the run's own primary workspace is pinned to it")
+	}
+	// The managed lane (no resident host credentials involved) is untouched by
+	// this gate — an explicit id alone is enough, exactly as before.
+	managed := integrationTestServer(t, []types.Integration{{
+		ID: "acme-sub-managed", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+		Config: mustJSON(map[string]any{"lane": "managed"}),
+	}})
+	if _, ok := managed.resolveRunIntegration(context.Background(), "acme-sub-managed", ""); !ok {
+		t.Error("managed-lane subscription must still resolve via the explicit tier alone")
+	}
+}
+
 // TestApplyWorkspaceCreds_NoBindingIsNoOp restores TestApplyWorkspaceCreds_NoBindingIsNoOp
 // (both the original pre-Integration version and its interim W5-stub
 // replacement): nil binding, an empty ref, a non-LLM agent, and — now that

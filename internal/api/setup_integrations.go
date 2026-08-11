@@ -55,9 +55,10 @@ func toIntegrationView(row integrationRow) integrationView {
 // store — the readiness signals capabilitiesFor cannot derive from an
 // integrationView alone. Read-only throughout (Peek/host-CLI detection,
 // never a refresh or a write).
-func (s *Server) liveCapEnv(ctx context.Context) capEnv {
-	present := s.presentSecretNames(ctx)
-	providers, _ := s.setupProviders()
+//
+// present/providers are taken as parameters (PLATFORM-API-7), not recomputed:
+// see integrationsWithCapabilities' doc for why.
+func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, providers []SetupProvider) capEnv {
 	residentLive := false
 	if s.cfg.SubscriptionToken != nil {
 		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
@@ -90,10 +91,24 @@ type SetupIntegration struct {
 // integrationsWithCapabilities computes the full effective integration set
 // enriched with each row's live capabilities — the one computation GET
 // /integrations and SetupStatus.Integrations both call, so they can never
-// disagree.
+// disagree. The zero-cost convenience form: computes its own live signals.
 func (s *Server) integrationsWithCapabilities(ctx context.Context) []SetupIntegration {
-	rows := s.effectiveIntegrations(ctx)
-	env := s.liveCapEnv(ctx)
+	present := s.presentSecretNames(ctx)
+	providers, _ := s.setupProviders()
+	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present))
+}
+
+// integrationsWithCapabilitiesUsing is integrationsWithCapabilities' pure-ish
+// half, taking the three live signals capabilitiesFor's inputs are built from
+// (present secret names, detected providers, Bedrock readiness) as parameters
+// instead of recomputing them (PLATFORM-API-7): /setup/status ALREADY
+// computes all three for its own checklist rows, and this used to silently
+// redo each 1-2 more times on the SAME polled request — a full secret
+// listing, a filesystem CLI-detection sweep + subscription peek, an
+// AWS-SSO-blob age decrypt, each 2-3x instead of once.
+func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) []SetupIntegration {
+	rows := s.effectiveIntegrations(ctx, present, bedrock)
+	env := s.liveCapEnv(ctx, present, providers)
 	out := make([]SetupIntegration, len(rows))
 	for i, row := range rows {
 		out[i] = SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), env)}
@@ -124,7 +139,9 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 			continue
 		}
 		row := integrationRow{Integration: in, Source: "stored"}
-		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), s.liveCapEnv(ctx))}
+		present := s.presentSecretNames(ctx)
+		providers, _ := s.setupProviders()
+		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), s.liveCapEnv(ctx, present, providers))}
 	}
 	return SetupIntegration{}
 }
@@ -188,6 +205,12 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// SEAM-1: serializes this read-modify-write against the site config's
+	// other three writers (handleDeleteIntegration, handleAdoptIntegration,
+	// handlePutSiteConfig) — see handleAdoptIntegration's comment for why an
+	// unguarded RMW here can silently erase a concurrent one.
+	s.siteConfigMu.Lock()
+	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
@@ -232,6 +255,9 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
 	id := integrationIDParam(r)
 	ctx := r.Context()
+	// SEAM-1: see handleAdoptIntegration's comment.
+	s.siteConfigMu.Lock()
+	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
@@ -263,12 +289,23 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 // handleAdoptIntegration persists a DERIVED legacy row VERBATIM so it becomes
 // editable. 409 when id already names a STORED row (nothing to adopt — it
 // already is one); 404 when id names neither a stored nor a legacy-derived
-// row.
+// row; 400 when the derived row itself fails validateIntegrationWrite
+// (PLATFORM-API-2) — a half-set derivation (e.g. Bedrock region set with no
+// model) would otherwise persist as a row every subsequent PUT then rejects,
+// leaving it stored and un-editable through this same endpoint.
 //
 //	POST /api/v1/integrations/{id}/adopt
 func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) {
 	id := integrationIDParam(r)
 	ctx := r.Context()
+	// SEAM-1: brackets the read-modify-write against the other three
+	// site-config writers (handlePutIntegration, handleDeleteIntegration,
+	// this handler) — legacyIntegrations below runs a full secret listing +
+	// CLI detection + subscription/Bedrock peek BETWEEN the read and the
+	// write, a real window for one of the other three to land its own write
+	// in and have this PutSiteConfig silently carry it away.
+	s.siteConfigMu.Lock()
+	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
@@ -282,7 +319,8 @@ func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, fmt.Sprintf("integration %q is already stored", id))
 		return
 	}
-	legacy := s.legacyIntegrations(ctx, sc, stored)
+	present := s.presentSecretNames(ctx)
+	legacy := s.legacyIntegrations(ctx, sc, stored, present, s.setupBedrock(ctx, present))
 	idx := slices.IndexFunc(legacy, func(row integrationRow) bool { return row.ID == id })
 	if idx < 0 {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("no derived integration %q to adopt", id))
@@ -290,6 +328,10 @@ func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) 
 	}
 	now := s.cfg.Now().UTC()
 	in := legacy[idx].Integration
+	if verr := validateIntegrationWrite(in); verr != nil {
+		writeError(w, http.StatusBadRequest, "invalid integration: "+verr.Error())
+		return
+	}
 	in.CreatedAt, in.UpdatedAt = now, now
 	rows := append(slices.Clone(sc.Integrations), in)
 	applyDefaultForRadio(rows, in.ID, in.DefaultFor) // defensive; a derived row never carries DefaultFor today

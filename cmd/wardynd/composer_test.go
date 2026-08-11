@@ -102,9 +102,13 @@ func TestWardynFeaturesBackendSpec_Mapping(t *testing.T) {
 			types.Integration{Type: "anthropic_subscription"}, "sandbox", "", true,
 		},
 		{
-			"anthropic_subscription resident_host -> cli",
+			// PLATFORM-API-6: resident_host has no mapping — WardynFeaturesBackend
+			// can never select a row whose lane is resident_host in the first
+			// place (subscriptionCaps hard-codes its wardyn_features cell OFF), so
+			// it falls to the same "sandbox" default every other lane value gets.
+			"anthropic_subscription resident_host -> sandbox (no dead cli mapping)",
 			types.Integration{Type: "anthropic_subscription", Config: mustJSONForTest(map[string]any{"lane": "resident_host"})},
-			"cli", "claude", true,
+			"sandbox", "", true,
 		},
 		{"unmapped type -> not ok", types.Integration{Type: "git_host"}, "", "", false},
 	}
@@ -121,24 +125,6 @@ func TestWardynFeaturesBackendSpec_Mapping(t *testing.T) {
 				t.Errorf("spec = %+v, want wire=%s transport=%s", spec, c.wantWire, c.wantTransp)
 			}
 		})
-	}
-}
-
-// TestWardynFeaturesBackendSpec_ResidentHost_EnabledOptIn pins the opt-in
-// carve-out: the cli wire defaults OFF (backends.BackendSpec.enabledDefault),
-// but reaching THIS branch at all already means WardynFeaturesBackend picked
-// an integration whose wardyn_features capability read "available" — an
-// explicit operator signal — so the mapped spec must carry Enabled=true
-// rather than silently falling back to the factory's cli-off default.
-func TestWardynFeaturesBackendSpec_ResidentHost_EnabledOptIn(t *testing.T) {
-	spec, ok := wardynFeaturesBackendSpec(types.Integration{
-		Type: "anthropic_subscription", Config: mustJSONForTest(map[string]any{"lane": "resident_host"}),
-	})
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if spec.Enabled == nil || !*spec.Enabled {
-		t.Errorf("Enabled = %v, want a non-nil true (opt-in carried through)", spec.Enabled)
 	}
 }
 

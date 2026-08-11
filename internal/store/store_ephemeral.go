@@ -11,6 +11,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -20,6 +22,19 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// hashAttachTicket returns hex(sha256(token)) — what's actually stored in
+// attach_tickets.token_sha256 (STORE-3). The raw token never leaves the
+// minting process: MintAttachTicket hashes before INSERT and
+// ConsumeAttachTicket hashes before the DELETE ... RETURNING, so every
+// consume-once/expiry property is unchanged (the hash is just as unique and
+// just as unguessable as the token it's derived from) while a live-DB reader
+// (a reporting role, a hot standby, a pg_dump) can no longer read a usable
+// bearer credential off the row.
+func hashAttachTicket(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 
 // AttachTicket is what one redeemed single-use WS attach ticket carries: the run
 // it is bound to and the principal that minted it (attribution — the
@@ -42,9 +57,9 @@ type AttachTicket struct {
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $6)
-		INSERT INTO attach_tickets (token, run_id, actor_type, principal, expires_at)
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, expires_at)
 		VALUES ($1, $2, $3, $4, $5)`,
-		token, t.RunID, string(t.ActorType), t.Principal, expiresAt, now,
+		hashAttachTicket(token), t.RunID, string(t.ActorType), t.Principal, expiresAt, now,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -67,9 +82,9 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	var actorType string
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
-		WHERE token = $1 AND expires_at > $2
+		WHERE token_sha256 = $1 AND expires_at > $2
 		RETURNING run_id, actor_type, principal`,
-		token, now,
+		hashAttachTicket(token), now,
 	).Scan(&t.RunID, &actorType, &t.Principal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil

@@ -185,6 +185,16 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 			return "invalid target: " + err.Error()
 		}
 	}
+	// WSPIPE-7: Overrides' three values are a closed set (workspace_contract.go);
+	// a key the source doesn't (yet) declare is a harmless no-op by construction
+	// (FoldWorkspaceContract only ever consults Overrides against ITS source's
+	// own requirement keys), so only the VALUE is worth rejecting — a garbage
+	// value there would otherwise silently no-op forever with a 200 and no signal.
+	for key, stance := range src.Overrides {
+		if stance != types.OverrideOff && stance != types.OverrideOptional && stance != types.OverrideRequired {
+			return fmt.Sprintf("overrides[%q]: must be %q, %q, or %q", key, types.OverrideOff, types.OverrideOptional, types.OverrideRequired)
+		}
+	}
 	return ""
 }
 
@@ -285,9 +295,11 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 			continue
 		}
 		if !namesLoaded {
-			// Don't hard-block onboarding on a transient secret-store read error;
-			// the run-time grant path still gates the actual clone.
-			names, _ = s.listUserSecretNames(ctx)
+			var err error
+			names, err = s.listUserSecretNames(ctx)
+			if err != nil {
+				return "" // don't hard-block onboarding on a transient secret-store read error; the run-time grant path still gates the actual clone
+			}
 			namesLoaded = true
 		}
 		if slices.Contains(names, secretName) {
@@ -369,7 +381,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		Name:      req.Name,
 		Sources:   req.Sources,
-		BaseImage: req.BaseImage,
+		BaseImage: normalizeRecommended(req.BaseImage),
 		LLMCred:   req.LLMCred,
 		Status:    types.WorkspacePendingScan,
 		CreatedAt: now,
@@ -379,8 +391,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// the same dir/repo named by two workspaces is ONE library entry with ONE
 	// contract. The embedded columns are still written too (expand posture;
 	// 0032 drops them), and the store's hydrate pass makes attachments the
-	// authoritative read the moment they exist.
-	atts, baseImageID, aerr := s.upsertAndAttach(r.Context(), req.Sources, req.BaseImage)
+	// authoritative read the moment they exist. No prior attachments to carry
+	// Overrides forward from — this is a brand-new workspace.
+	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
 	if aerr != nil {
 		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
 		return
@@ -429,13 +442,16 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
 	// write back a stale profile; identity edits are rare and the remedy is a
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
-	sourcesChanged := !slices.Equal(ws.Sources, req.Sources)
+	sourcesChanged := !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
 	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
-	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, req.BaseImage
+	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
 	// Three-tier: the edited composition upserts+attaches through the library
 	// exactly as create does — the hydrated read makes attachments
-	// authoritative, so they must track every composition edit.
-	atts, baseImageID, aerr := s.upsertAndAttach(r.Context(), req.Sources, req.BaseImage)
+	// authoritative, so they must track every composition edit. existing
+	// (the PRE-edit attachments) carries any per-source Overrides forward by
+	// SourceID (WSPIPE-7) — must be read before the next line overwrites
+	// ws.Attachments.
+	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
 	if aerr != nil {
 		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
 		return
@@ -444,11 +460,16 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if sourcesChanged {
 		// New CONTENT: everything reviewed against the old sources is stale.
 		// (Tier-1 contracts are untouched — they live on the sources.)
-		ws.Profile = nil
+		//
+		// Profile and Status are NOT reset here (STORE-4): every workspace
+		// reaching this handler now has a non-empty Attachments (upsertAndAttach
+		// always attaches at least the composition floor's ephemeral source), so
+		// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
+		// the fresh sources on every read — a write here is provably discarded
+		// before this request's own response leaves the store.
 		ws.ApprovedEgress = nil
 		ws.Requirements = nil
 		ws.RecordResults = nil
-		ws.Status = types.WorkspacePendingScan
 	}
 	if sourcesChanged || imageChanged {
 		// The build cache keys on the old profile/base — a different base
@@ -474,9 +495,42 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// workspaceSourceContentEqual compares everything about a WorkspaceSource
+// EXCEPT Overrides: content — Type/Path/Source/Ref/Target/Writable — is what
+// "sourcesChanged" (handleUpdateWorkspace) means by "everything reviewed
+// against the old sources is stale". A plain Overrides edit changes which
+// requirement rows apply, never what's mounted, so it must not itself reset
+// ApprovedEgress/Requirements/RecordResults — and types.WorkspaceSource's
+// Overrides map makes the type non-comparable, so slices.Equal (which needs
+// `comparable`) can no longer compare a []WorkspaceSource directly.
+func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
+	return a.Type == b.Type && a.Path == b.Path && a.Source == b.Source &&
+		a.Ref == b.Ref && a.Target == b.Target && a.Writable == b.Writable
+}
+
+// normalizeRecommended collapses an explicit {"kind":"recommended"} — what
+// the wizard's continueFromSources/continueFromImage steps always send
+// (wizard-types.ts's baseImageRequest) — onto nil, the shape hydrateWorkspace
+// reads back (store_sources.go: ws.BaseImage=nil unless BaseImageID is set;
+// upsertAndAttach deliberately leaves BaseImageID nil for kind "recommended").
+// Without this, write and hydrated-read disagreed on one spelling of
+// "recommended" (WSPIPE-2): baseImageEqual saw the wizard's explicit form as
+// different from the hydrated nil on every edit and threw away the built
+// image, and the legacy embedded base_image column stored a non-NULL blob a
+// pre-split row would never have carried.
+func normalizeRecommended(b *types.WorkspaceBaseImage) *types.WorkspaceBaseImage {
+	if b != nil && b.Kind == "recommended" {
+		return nil
+	}
+	return b
+}
+
 // baseImageEqual reports whether two base-image choices are equivalent
-// (nil-safe; Steps compared by content).
+// (nil-safe; Steps compared by content; "recommended" normalized to nil on
+// both sides first, so the wizard's explicit form and the hydrated nil never
+// read as a change — WSPIPE-2).
 func baseImageEqual(a, b *types.WorkspaceBaseImage) bool {
+	a, b = normalizeRecommended(a), normalizeRecommended(b)
 	if a == nil || b == nil {
 		return a == b
 	}
@@ -599,7 +653,14 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 	}
 	switch typ {
 	case "secret":
-		if !validSecretRef(rest) {
+		// sinkReservedSecret, not validSecretRef (WSPIPE-6): this key feeds
+		// applyRequiredSecretGrant, a real credential SINK (runs_create.go),
+		// which every other sink (policy.go, inline_policy.go) guards with
+		// sinkReservedSecret — validSecretRef's plain reservedSecret misses the
+		// three resident AWS SigV4 names, so a "required" row naming one
+		// validated clean here and only 403'd at the run's first model call,
+		// the real reason buried in an audit event instead of this write-time 400.
+		if !secretNameRE.MatchString(rest) || sinkReservedSecret(rest) {
 			return fmt.Sprintf("requirement %q: invalid secret name", key)
 		}
 	case "integration":
@@ -664,11 +725,66 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
 		func(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceRequirements(ctx, id, reqs)
+			return s.cfg.Store.SetWorkspaceRequirements(ctx, id, s.dropSourceContributedScanSeeded(ctx, id, reqs))
 		},
 		func(reqs map[string]types.WorkspaceRequirement) map[string]any {
 			return map[string]any{"count": len(reqs)}
 		})
+}
+
+// dropSourceContributedScanSeeded strips provenance:"scan_seeded" rows from
+// reqs whose key an ATTACHED SOURCE already contributes to this workspace's
+// fold — WSPIPE-3's server-side belt. The overlay this endpoint writes is
+// meant to carry only the OPERATOR's own edits (setRequirementLane always
+// stamps operator_set); a scan_seeded row here can only be the wizard's
+// client-side seeding, which FoldWorkspaceContract's rule 6 makes win over
+// the SOURCE's own (correctly rescanned) contract forever — a name a rescan
+// drops from the source stays stuck in the overlay with no way to remove it.
+// Dropped silently, never rejected: the wizard still sends these until its
+// own fix lands (source_scan.go's design note), and a dropped row is
+// provably redundant — the source already contributes it — never a lost
+// operator intent, unlike WSPIPE-8's identity-hit case. Best-effort: a store
+// read error leaves reqs untouched (fail OPEN on the belt; the write itself
+// must not become unavailable because of it).
+func (s *Server) dropSourceContributedScanSeeded(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) map[string]types.WorkspaceRequirement {
+	hasScanSeeded := false
+	for _, req := range reqs {
+		if req.Provenance == "scan_seeded" {
+			hasScanSeeded = true
+			break
+		}
+	}
+	if !hasScanSeeded {
+		return reqs
+	}
+	ws, err := s.cfg.Store.GetWorkspace(ctx, id)
+	if err != nil || len(ws.Attachments) == 0 {
+		return reqs
+	}
+	var sourceIDs []uuid.UUID
+	for _, att := range ws.Attachments {
+		if att.SourceID != nil {
+			sourceIDs = append(sourceIDs, *att.SourceID)
+		}
+	}
+	sources, err := s.cfg.Store.GetSourcesByIDs(ctx, sourceIDs)
+	if err != nil {
+		return reqs
+	}
+	contributed := map[string]bool{}
+	for _, src := range sources {
+		for key := range src.Requirements {
+			contributed[key] = true
+		}
+	}
+	out := make(map[string]types.WorkspaceRequirement, len(reqs))
+	for key, req := range reqs {
+		if req.Provenance == "scan_seeded" && contributed[key] {
+			continue // redundant: an attached source's OWN contract already carries this
+		}
+		out[key] = req
+	}
+	return out
 }
 
 // Observed-egress synthesis bounds: scan the most recent runs that reference
@@ -835,7 +951,15 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	// devcontainer and the one Wardyn itself builds never drift on what they
 	// claim to carry.
 	tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(r.Context(), ws))
-	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, tools)
+	// baseRef: the SAME "explicit non-recommended choice" predicate
+	// resolveWorkspaceImage uses (workspace_run.go) — WITHOUT it every export
+	// described the generic devcontainer base regardless of what this
+	// workspace's own registry/custom/byo pick actually boots (WSPIPE-9).
+	var baseRef string
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
+		baseRef = b.Image
+	}
+	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, tools, baseRef)
 	if gerr != nil {
 		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
 		return nil, false

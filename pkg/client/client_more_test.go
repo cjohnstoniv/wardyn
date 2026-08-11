@@ -447,3 +447,43 @@ func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
 		t.Error("Authorization header missing on the raw-stream path")
 	}
 }
+
+// TestPutSiteConfig_StripsIntegrations pins PLATFORM-API-5: the server
+// hard-rejects a PUT /site-config body carrying a non-empty integrations (they
+// are managed through their own endpoints), so the documented disaster-recovery
+// round-trip (`wardyn site-config get > f` before a reset, `wardyn site-config
+// apply f` after) must not resend whatever GetSiteConfig returned verbatim —
+// PutSiteConfig strips it, once, so no caller has to remember to.
+func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/site-config" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeJSON(w, http.StatusOK, types.SiteConfig{})
+	}))
+	defer srv.Close()
+
+	captured := types.SiteConfig{
+		ScmHosts: []string{"github.example.com"},
+		Integrations: []types.Integration{
+			{ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"},
+		},
+	}
+	if _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, present := gotBody["integrations"]; present {
+		t.Errorf("integrations must be stripped from the request body, got: %v", gotBody["integrations"])
+	}
+	if gotBody["scm_hosts"] == nil {
+		t.Error("stripping integrations must not touch the rest of the document")
+	}
+	// The caller's own copy must be untouched (cfg is passed by value, but
+	// prove it): a caller reusing `captured` afterward (e.g. to print what it
+	// meant to send) must not find it silently emptied.
+	if len(captured.Integrations) != 1 {
+		t.Errorf("PutSiteConfig must not mutate the caller's SiteConfig, got %d integrations", len(captured.Integrations))
+	}
+}

@@ -676,22 +676,27 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	writeJSON(w, http.StatusOK, SetupStatus{
-		Ready:        ready,
-		Checks:       checks,
-		Auth:         SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
-		Runner:       rnr,
-		Composer:     comp,
-		Providers:    providers,
-		Secrets:      sec,
-		AgeKey:       SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
-		HasRuns:      hasRuns,
-		Platform:     SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
-		HostProxy:    hostProxy,
-		SCM:          scmPosture,
-		Bedrock:      bedrock,
-		Deployment:   SetupDeployment{HostLike: deploymentHostLike(providers)},
-		Harness:      harnessCreds,
-		Integrations: s.integrationsWithCapabilities(ctx),
+		Ready:      ready,
+		Checks:     checks,
+		Auth:       SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Runner:     rnr,
+		Composer:   comp,
+		Providers:  providers,
+		Secrets:    sec,
+		AgeKey:     SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		HasRuns:    hasRuns,
+		Platform:   SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
+		HostProxy:  hostProxy,
+		SCM:        scmPosture,
+		Bedrock:    bedrock,
+		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
+		Harness:    harnessCreds,
+		// present/providers/bedrock are ALREADY computed above for this
+		// handler's own checklist rows — reuse them (PLATFORM-API-7) instead
+		// of integrationsWithCapabilities' zero-arg form silently redoing a
+		// full secret listing, a filesystem CLI sweep + subscription peek,
+		// and an AWS-SSO-blob age decrypt on the SAME polled request.
+		Integrations: s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock),
 		Harnesses:    setupHarnessTools(),
 	})
 }

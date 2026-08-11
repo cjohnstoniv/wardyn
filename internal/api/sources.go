@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -31,16 +30,26 @@ import (
 // attached to many workspaces) and the shared registry/custom/byo images
 // ("recommended" is derived per workspace, never a row). Reads humanOrAdmin,
 // writes operatorOnly — the workspaces block's exact posture.
+//
+// DEADCODE-1: there is no PUT /sources/{id} or GET /base-images/{id} — a
+// source's own contract is authored through POST /sources instead:
+// re-POSTing an existing identity with a new requirements body now APPLIES
+// it (WSPIPE-8), so a contract edit lands on the SAME endpoint console/CLI/
+// SDK already call to create a source, rather than a second route no
+// console button, CLI flag or SDK method ever reached (the SDK's
+// client.SourceRequest already carries Requirements; a CLI flag to drive it
+// is the remaining gap, tracked separately). The write-once,
+// discard-on-conflict handler that route used to be (handleUpdateSource) and
+// its base-image GET-by-id twin (handleGetBaseImage, whose only caller was
+// its own now-removed route) are gone, not stubbed.
 func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
 	r.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
 	r.Get("/sources/{id}", s.handleGetSource)
 	operatorOnly.Post("/sources/{id}/scan", s.handleScanSource)
-	operatorOnly.Put("/sources/{id}", s.handleUpdateSource)
 	operatorOnly.Delete("/sources/{id}", s.handleDeleteSource)
 	r.Get("/base-images", s.handleListBaseImages)
 	operatorOnly.Post("/base-images", s.handleCreateBaseImage)
-	r.Get("/base-images/{id}", s.handleGetBaseImage)
 	operatorOnly.Delete("/base-images/{id}", s.handleDeleteBaseImage)
 }
 
@@ -129,6 +138,16 @@ func validateSourceWrite(src types.Source) string {
 		if typ, _, ok := types.SplitRequirementKey(key); ok && typ == "integration" {
 			return fmt.Sprintf("requirement %q: integrations compose at the workspace, not on a source — attach the source and require the integration there", key)
 		}
+		// WSPIPE-5: mirror FoldWorkspaceContract rule 4 at the write boundary.
+		// The fold silently DROPS a write:<path> row whose path is not this
+		// source's own Locator (a shared source may only claim write on
+		// itself, never widen a sibling mount), so validating it here without
+		// that check let an operator PUT a row that answers 200, shows up on
+		// GET, and can never take effect — the build fails at run time with
+		// nothing anywhere explaining why.
+		if typ, path, ok := types.SplitRequirementKey(key); ok && typ == "write" && path != src.Locator {
+			return fmt.Sprintf("requirement %q: a source's write: key must name its own locator (%q) — a shared source may only declare write on itself; declare a sibling path on the attaching workspace's own contract instead", key, src.Locator)
+		}
 		if msg := validateWorkspaceRequirement(key, src.Requirements[key]); msg != "" {
 			return msg
 		}
@@ -156,7 +175,14 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sources": list})
 }
 
-// handleCreateSource upserts a library source by identity.
+// handleCreateSource upserts a library source by identity. Re-POSTing an
+// identity already in the library is not merely a no-op read of the existing
+// row: a non-nil req.Requirements is APPLIED to it (WSPIPE-8) — the only way
+// to author a source's own contract from any shipped surface (console, CLI,
+// or a script driving the SDK directly), now that there is no separate PUT
+// route for it (DEADCODE-1). Without this, UpsertSource's ON CONFLICT clause
+// only ever bumps updated_at, so a bootstrap script's re-run with a NEW
+// contract silently kept the OLD one and still audited "success".
 //
 //	POST /api/v1/sources
 func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +211,14 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if created.ID != src.ID {
 		status = http.StatusOK // identity already in the library — that IS the feature
+		if req.Requirements != nil {
+			updated, uerr := s.cfg.Store.UpdateSourceConfig(r.Context(), created.ID, created.Name, req.Requirements)
+			if uerr != nil {
+				writeError(w, http.StatusInternalServerError, "apply requirements to existing source: "+uerr.Error())
+				return
+			}
+			created = updated
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"source.write", created.ID.String(), "success", mustJSON(map[string]any{
@@ -213,50 +247,6 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, src)
 }
 
-// handleUpdateSource replaces a source's operator-editable fields: name and
-// its OWN requirements contract. Identity (kind/locator/ref) is immutable —
-// the same rule a workspace source-change follows: different code is a
-// different source, with a fresh contract, not an edit.
-//
-//	PUT /api/v1/sources/{id}
-func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "source")
-	if !ok {
-		return
-	}
-	var req struct {
-		Name         string                                `json:"name"`
-		Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitempty"`
-	}
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	cur, err := s.cfg.Store.GetSource(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no such source")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get source: "+err.Error())
-		return
-	}
-	cur.Name, cur.Requirements = strings.TrimSpace(req.Name), req.Requirements
-	if msg := validateSourceWrite(cur); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	updated, err := s.cfg.Store.UpdateSourceConfig(r.Context(), id, cur.Name, cur.Requirements)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update source: "+err.Error())
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"source.write", id.String(), "success", mustJSON(map[string]any{
-			"requirements": len(updated.Requirements),
-		})))
-	writeJSON(w, http.StatusOK, updated)
-}
-
 // handleDeleteSource removes a library source — LOUDLY refusing while
 // workspaces attach it. A dangling attachment silently un-mounts code and
 // turns runs into unexplained 422s at the mount gate, so in-use is a 409
@@ -281,6 +271,14 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.cfg.Store.DeleteSource(r.Context(), id, force); err != nil {
 		if errors.Is(err, store.ErrConflict) {
+			if force {
+				// STORE-1: force still refuses when detaching would leave a
+				// workspace with ZERO attachments (the store's own error names
+				// which ones) — never the "pass ?force=1" hint, force is
+				// already set.
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
 			writeError(w, http.StatusConflict, fmt.Sprintf(
 				"source is attached by %d workspace(s): %s — detach them first, or pass ?force=1 to detach everywhere and delete",
 				len(names), strings.Join(names, ", ")))
@@ -309,15 +307,42 @@ func lastPathSegment(locator string) string {
 	return path.Base(locator)
 }
 
+// overridesBySourceID indexes existing's per-source Overrides by source id —
+// upsertAndAttach's carry-forward lookup (WSPIPE-7): a plain composition edit
+// (e.g. a rename) that doesn't itself touch Overrides must not silently wipe
+// a stance the operator set on an earlier PUT, since upsertAndAttach rebuilds
+// every attachment from scratch on every call.
+func overridesBySourceID(existing []types.WorkspaceAttachment) map[uuid.UUID]map[string]string {
+	out := make(map[uuid.UUID]map[string]string, len(existing))
+	for _, att := range existing {
+		if att.SourceID != nil && att.Overrides != nil {
+			out[*att.SourceID] = att.Overrides
+		}
+	}
+	return out
+}
+
 // upsertAndAttach turns a request's embedded sources + base image into the
 // three-tier shape: each dir/repo upserts into the shared library (dedupe on
 // canonical identity — the request "already configured this" case lands on the
 // existing entry, contract and all) and becomes an attachment carrying the
-// request's per-attachment target/writable; ephemerals stay inline. A
-// registry/custom/byo base image upserts into the catalog; "recommended"/nil
+// request's per-attachment target/writable/overrides; ephemerals stay inline.
+// A registry/custom/byo base image upserts into the catalog; "recommended"/nil
 // yields a nil id — NULL is the derived-build marker.
-func (s *Server) upsertAndAttach(ctx context.Context, srcs []types.WorkspaceSource, baseImage *types.WorkspaceBaseImage) ([]types.WorkspaceAttachment, *uuid.UUID, error) {
+//
+// existing is the workspace's CURRENT attachments before this edit (nil for a
+// brand-new workspace) — its per-source Overrides carry forward by SourceID
+// (WSPIPE-7) onto a source the request doesn't explicitly set Overrides for.
+//
+// r (not a bare ctx) so a genuinely NEW library row can be audited under the
+// request's own actor (WSPIPE-4): a plain "sources": <count> on
+// workspace.create/update names no host path, so an incident review asking
+// which directory was exposed, and whether read-write, had no answer in the
+// trail besides the mutable workspace row itself.
+func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, baseImage *types.WorkspaceBaseImage, existing []types.WorkspaceAttachment) ([]types.WorkspaceAttachment, *uuid.UUID, error) {
+	ctx := r.Context()
 	now := s.cfg.Now().UTC()
+	carried := overridesBySourceID(existing)
 	atts := make([]types.WorkspaceAttachment, 0, len(srcs))
 	for _, src := range srcs {
 		switch src.Type {
@@ -334,17 +359,32 @@ func (s *Server) upsertAndAttach(ctx context.Context, srcs []types.WorkspaceSour
 			locator = src.Source
 		}
 		locator, ref := canonicalSourceIdentity(kind, locator, src.Ref)
+		newID := uuid.New()
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
-			ID: uuid.New(), Kind: kind, Locator: locator, Ref: ref,
+			ID: newID, Kind: kind, Locator: locator, Ref: ref,
 			Name: lastPathSegment(locator), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {
 			return nil, nil, err
 		}
+		if row.ID == newID {
+			// A genuinely NEW library row, not a hit on an existing identity —
+			// audit it (WSPIPE-4), including the writable consent: it is the
+			// operator's authorization for a sandboxed agent's changes to
+			// persist to a HOST directory, so it belongs in the trail.
+			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"source.write", row.ID.String(), "success", mustJSON(map[string]any{
+					"kind": string(row.Kind), "locator": row.Locator, "ref": row.Ref, "writable": src.Writable,
+				})))
+		}
 		id := row.ID
+		overrides := src.Overrides
+		if overrides == nil {
+			overrides = carried[id]
+		}
 		atts = append(atts, types.WorkspaceAttachment{
-			SourceID: &id, Target: src.Target, Writable: src.Writable,
+			SourceID: &id, Target: src.Target, Writable: src.Writable, Overrides: overrides,
 		})
 	}
 	var baseImageID *uuid.UUID

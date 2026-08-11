@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -383,10 +384,20 @@ func TestPG_MergeWorkspaceRequirements_AtomicAndCapped(t *testing.T) {
 }
 
 // Delete-in-use is loud: names, 409-shaped; force detaches.
+// TestPG_DeleteSourceInUse pins STORE-1: a workspace whose ONLY attachment is
+// the source being force-deleted must NOT be silently emptied to '[]' —
+// hydrate reads an empty attachments array as the pre-split marker and
+// resurrects the deleted source from the workspace's stale legacy `sources`
+// column, so DeleteSource(force=true) refuses instead, naming the
+// would-be-orphaned workspaces. A workspace that attaches the SAME source
+// alongside something else (an ephemeral scratch dir here) is unaffected by
+// the refusal and force-detaches normally.
 func TestPG_DeleteSourceInUse(t *testing.T) {
 	s := hydrateStore(t)
 	ctx := context.Background()
 	src := mkSource(t, s, types.SourceRepo, "acme/widgets", nil)
+	// ws-a and ws-b attach ONLY this source: force-deleting it would leave
+	// them with zero attachments.
 	for _, name := range []string{"ws-a", "ws-b"} {
 		if _, err := s.CreateWorkspace(ctx, types.Workspace{
 			ID: uuid.New(), Name: name, Status: types.WorkspacePendingScan,
@@ -397,24 +408,81 @@ func TestPG_DeleteSourceInUse(t *testing.T) {
 			t.Fatalf("create %s: %v", name, err)
 		}
 	}
+	// ws-c attaches the SAME source ALONGSIDE an ephemeral scratch dir —
+	// force-detaching it leaves ws-c with one attachment, not zero.
+	if _, err := s.CreateWorkspace(ctx, types.Workspace{
+		ID: uuid.New(), Name: "ws-c", Status: types.WorkspacePendingScan,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral}},
+		Attachments: []types.WorkspaceAttachment{
+			{SourceID: &src.ID}, {Ephemeral: true, Target: "/home/agent/scratch"},
+		},
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create ws-c: %v", err)
+	}
 	names, err := s.WorkspacesAttaching(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 2 || names[0] != "ws-a" || names[1] != "ws-b" {
-		t.Fatalf("attaching = %v, want both names, sorted", names)
+	if len(names) != 3 || names[0] != "ws-a" || names[1] != "ws-b" || names[2] != "ws-c" {
+		t.Fatalf("attaching = %v, want all three, sorted", names)
 	}
-	// Force-detach then delete: attachments shrink, library row gone.
-	if err := s.DeleteSource(ctx, src.ID, true); err != nil {
-		t.Fatalf("force delete: %v", err)
+
+	// Refused: ws-a/ws-b would be orphaned. Nothing detaches — not even ws-c,
+	// which would have survived on its own (all-or-nothing per force call).
+	err = s.DeleteSource(ctx, src.ID, true)
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("force delete with a would-be-orphaned workspace = %v, want ErrConflict", err)
+	}
+	if !strings.Contains(err.Error(), "ws-a") || !strings.Contains(err.Error(), "ws-b") {
+		t.Errorf("error must name the would-be-orphaned workspaces, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "ws-c") {
+		t.Errorf("ws-c is not orphaned (it keeps its ephemeral attachment) and must not be named: %v", err)
 	}
 	left, err := s.WorkspacesAttaching(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(left) != 0 {
-		t.Errorf("attachments must be stripped on force delete, still: %v", left)
+	if len(left) != 3 {
+		t.Errorf("a refused force-delete must not detach anyone, still: %v", left)
 	}
+
+	// Delete ws-a/ws-b outright (their attachment IS the source's only use to
+	// them) — now nothing would be orphaned, and the SAME force-delete succeeds.
+	for _, name := range []string{"ws-a", "ws-b"} {
+		id := findWorkspaceIDByName(ctx, t, s, name)
+		if err := s.DeleteWorkspace(ctx, id); err != nil {
+			t.Fatalf("delete %s: %v", name, err)
+		}
+	}
+	if err := s.DeleteSource(ctx, src.ID, true); err != nil {
+		t.Fatalf("force delete once nothing would be orphaned: %v", err)
+	}
+	left, err = s.WorkspacesAttaching(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("attachments must be stripped on a successful force delete, still: %v", left)
+	}
+}
+
+// findWorkspaceIDByName is TestPG_DeleteSourceInUse's helper: the store keys
+// workspaces by id, but the test only ever named them.
+func findWorkspaceIDByName(ctx context.Context, t *testing.T, s store.PG, name string) uuid.UUID {
+	t.Helper()
+	all, err := s.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range all {
+		if ws.Name == name {
+			return ws.ID
+		}
+	}
+	t.Fatalf("no workspace named %q", name)
+	return uuid.UUID{}
 }
 
 // A genuinely-absent id must read as NotFound, not Conflict: the atomic

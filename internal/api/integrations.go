@@ -234,10 +234,18 @@ func subscriptionCaps(v integrationView, env capEnv) []Capability {
 	// "available" here would promise Composer a session it will not use — and
 	// would default Wardyn's own calls onto the operator's personal login. The
 	// managed lane has no such caveat: it sends Claude-Code-shaped requests
-	// through the sandbox wire.
+	// through the sandbox wire — but ONLY once a managed token is actually
+	// connected (PLATFORM-API-4): without this gate the cell read "available"
+	// for a lane that is not — the exact drift bedrockCaps below refuses to
+	// tell — because tool:claude-code (right below) already needs the SAME
+	// managed-blob signal to leave needs_setup, and WardynFeaturesBackend
+	// selects on this cell alone.
 	features := Capability{ID: "wardyn_features", State: CapAvailable, Residency: residency}
-	if lane == "resident_host" {
+	switch {
+	case lane == "resident_host":
 		features = Capability{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: residency}
+	case !envManagedBlobPresent(env, "anthropic"):
+		features = Capability{ID: "wardyn_features", State: CapNeedsSetup, Reason: "no managed Claude subscription connected", Residency: residency}
 	}
 	return []Capability{
 		{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -431,7 +439,14 @@ type integrationRow struct {
 // of map/store iteration order upstream. A nil/erroring Store degrades to
 // "no stored rows, no SiteConfig-derived legacy rows" rather than failing —
 // this is a read surface, never a gate.
-func (s *Server) effectiveIntegrations(ctx context.Context) []integrationRow {
+//
+// present/bedrock are legacyIntegrations' two live signals, taken as
+// parameters (PLATFORM-API-7) rather than recomputed here: a caller resolving
+// several refs in one request (resolveIntegrationRef, namedIntegrationTypes)
+// computes each ONCE and reuses it, instead of paying a full secret listing +
+// Bedrock age-decrypt probe per call — /setup/status, the endpoint the wizard
+// polls, used to redo both 2-3x per request this way.
+func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]bool, bedrock SetupBedrock) []integrationRow {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
@@ -444,7 +459,7 @@ func (s *Server) effectiveIntegrations(ctx context.Context) []integrationRow {
 		stored[in.ID] = true
 		rows = append(rows, integrationRow{Integration: in, Source: "stored"})
 	}
-	rows = append(rows, s.legacyIntegrations(ctx, sc, stored)...)
+	rows = append(rows, s.legacyIntegrations(ctx, sc, stored, present, bedrock)...)
 	slices.SortFunc(rows, func(a, b integrationRow) int {
 		if c := cmp.Compare(a.Category, b.Category); c != 0 {
 			return c
@@ -461,9 +476,11 @@ func (s *Server) effectiveIntegrations(ctx context.Context) []integrationRow {
 // "stored row wins" rule): an operator who explicitly configures an
 // integration under one of these ids takes over that slot and stops seeing
 // the synthesized duplicate; a stored row under any OTHER id coexists
-// alongside these untouched.
-func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, stored map[string]bool) []integrationRow {
-	present := s.presentSecretNames(ctx) // the ONE present-secret map every other verdict is computed from (secrets.go)
+// alongside these untouched. present is the ONE present-secret map every
+// other verdict is computed from (secrets.go); bedrock is setupBedrock's own
+// "is Bedrock touched at all" verdict — both taken as parameters, not
+// recomputed (PLATFORM-API-7; see effectiveIntegrations' doc).
+func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, stored map[string]bool, present map[string]bool, bedrock SetupBedrock) []integrationRow {
 	var rows []integrationRow
 	add := func(id string, in types.Integration) {
 		if stored[id] {
@@ -508,10 +525,10 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 	// ai_provider: Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock
 	// touched at all" predicate (region/model/AWS profile/any bedrock secret)
 	// rather than re-deriving it a second way.
-	if b := s.setupBedrock(ctx, present); b.configured() {
+	if bedrock.configured() {
 		add("bedrock", types.Integration{
 			Name: "AWS Bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
-			Config: mustJSON(map[string]any{"lane": "auto", "region": b.Region, "model": b.Model}),
+			Config: mustJSON(map[string]any{"lane": "auto", "region": bedrock.Region, "model": bedrock.Model}),
 		})
 	}
 

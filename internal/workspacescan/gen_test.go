@@ -266,13 +266,13 @@ func TestGenAgentToolInstalls(t *testing.T) {
 // "set -eu" so a failed install fails the BUILD rather than shipping an image
 // that claims a tool it does not carry.
 func TestGenAgentToolDockerfile(t *testing.T) {
-	if got := genAgentToolDockerfile(nil); got != "" {
+	if got := genAgentToolDockerfile(nil, ""); got != "" {
 		t.Errorf("no tools must emit no Dockerfile, got %q", got)
 	}
-	if got := genAgentToolDockerfile([]string{"codex-cli"}); got != "" {
+	if got := genAgentToolDockerfile([]string{"codex-cli"}, ""); got != "" {
 		t.Errorf("nothing bakeable must emit no Dockerfile, got %q", got)
 	}
-	df := genAgentToolDockerfile([]string{"claude-code"})
+	df := genAgentToolDockerfile([]string{"claude-code"}, "")
 	if !strings.HasPrefix(df, "FROM "+genBaseImage+"\n") {
 		t.Errorf("Dockerfile must FROM the same base image: %s", df)
 	}

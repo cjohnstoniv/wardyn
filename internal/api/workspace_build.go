@@ -181,10 +181,14 @@ var _ io.Writer = (*buildLogWriter)(nil)
 type buildResponse struct {
 	// State: "building" | "done" | "failed" | "none" (nothing built yet) |
 	// "nothing_to_build" (an explicit image boots verbatim).
-	State     string    `json:"state"`
-	Image     string    `json:"image,omitempty"`
-	Detail    string    `json:"detail,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
+	State  string `json:"state"`
+	Image  string `json:"image,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// StartedAt is a pointer (WIRE-6): encoding/json's omitempty is a no-op for
+	// a struct, so a plain time.Time shipped the zero instant
+	// ("0001-01-01T00:00:00Z") on every non-"building" response instead of
+	// omitting the field the TS WorkspaceBuildState declares optional/absent.
+	StartedAt *time.Time `json:"started_at,omitempty"`
 	// Log is the build's output tail (see buildState.Log) — present only while
 	// the tracker actually knows about a build THIS process ran; a cache-hit
 	// "done" resolved from the workspace row's own ImageRef never populates it
@@ -210,7 +214,7 @@ func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) build
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
-		return buildResponse{State: "building", StartedAt: st.StartedAt, Log: st.Log}
+		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: st.Log}
 	case st.Error != "":
 		return buildResponse{State: "failed", Detail: st.Error, Log: st.Log}
 	case st.Image != "":
@@ -281,7 +285,8 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.cfg.Now().UTC()
 	if !s.builds.begin(ws.ID, now) {
-		writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: s.builds.get(ws.ID).StartedAt})
+		already := s.builds.get(ws.ID)
+		writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: &already.StartedAt})
 		return
 	}
 	buildID := uuid.New() // audit correlation for a build with no run
@@ -313,5 +318,5 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		s.builds.finish(ws.ID, built, "")
 	}()
-	writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: now})
+	writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: &now})
 }

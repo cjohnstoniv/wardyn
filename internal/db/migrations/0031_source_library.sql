@@ -9,8 +9,8 @@
 -- EXPAND-ONLY. Migrations are forward-only (internal/db/db.go), so a purely
 -- additive 0031 is the entire rollback story: a bad deploy reverts the binary
 -- and every pre-split column is still there, untouched. The contract half
--- (dropping workspaces.sources/base_image and the scan-owned columns) is 0032,
--- which must ship in a LATER release, never this one.
+-- (dropping workspaces.sources/base_image and the scan-owned columns) ships
+-- in a LATER migration, never this one.
 --
 -- Requirement rows deliberately DO NOT move: every existing row stays in the
 -- workspace's own requirements column (the "overlay"), and the contract fold

@@ -184,9 +184,21 @@ func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 
 // TestUpdateWorkspace_ContentChangeClearsEveryReviewedField pins the reset a new
 // field is easy to forget (this is exactly how the verified_* stamp survived it):
-// everything reviewed against the OLD source — profile, image, approvals,
-// recorded evidence and the "PROVEN to install/build/test" stamp — must be gone
-// when source/kind/ref changes, since the store UPDATE rewrites every column.
+// everything reviewed against the OLD source — image, approvals, recorded
+// evidence and the "PROVEN to install/build/test" stamp — must be gone when
+// source/kind/ref changes, since the store UPDATE rewrites every column.
+//
+// Profile/Status are deliberately NOT asserted here (STORE-4): every workspace
+// reaching this handler now has a non-empty Attachments (upsertAndAttach always
+// attaches at least the composition floor), so the REAL store's hydrate pass
+// unconditionally RE-DERIVES both from the fresh sources on every read — a
+// handler-side reset is provably discarded before this request's own response
+// leaves the store. workspaceStoreFake.UpdateWorkspace is a bare echo (no
+// hydrate simulation), so asserting them here would pin the handler to writing
+// bytes the real store never reads back, not any observable behavior; the fold
+// itself (an attachment-backed, freshly-attached-and-unscanned source derives
+// Profile=nil / Status=pending_scan) is store_sources.go's hydrateWorkspace,
+// covered at the store layer.
 func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New()
@@ -205,8 +217,8 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	got := fake.updated
-	if got.Profile != nil || got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
-		got.Requirements != nil || got.RecordResults != nil || got.Status != types.WorkspacePendingScan {
+	if got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
+		got.Requirements != nil || got.RecordResults != nil {
 		t.Errorf("source change must clear every field reviewed against the old source; got %+v", got)
 	}
 }

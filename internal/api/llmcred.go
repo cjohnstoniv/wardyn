@@ -335,6 +335,20 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		if !ok || in.Category != types.IntegrationAIProvider {
 			return types.Integration{}, false
 		}
+		// SECMODEL-3: a resident_host subscription mounts the OPERATOR'S OWN
+		// resident ~/.claude credentials — §5.1a's consent model is "a
+		// workspace pin or the operator's DefaultFor:agent_runs default", a
+		// durable WORKSPACE property (74d1b16), never a bearer token any run
+		// author may claim by naming its id. This tier may carry a
+		// resident_host lane ONLY when the run's OWN primary workspace is
+		// pinned to that EXACT integration — otherwise it refuses (yields
+		// nothing, same as an unresolvable/miscategorized id above) rather
+		// than handing a run whose task an attacker authored a live,
+		// refreshable copy of the operator's OAuth credentials because it
+		// named a workspace the operator never pinned.
+		if in.Type == "anthropic_subscription" && subscriptionLane(in) == "resident_host" && workspaceRef != integrationID {
+			return types.Integration{}, false
+		}
 		return in, true
 	}
 	if workspaceRef != "" {

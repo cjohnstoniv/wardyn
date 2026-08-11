@@ -266,6 +266,13 @@ func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirec
 			return redirectToken{}, "token_integration_ref names no configured integration"
 		case integ.Disabled:
 			return redirectToken{}, "the integration named by token_integration_ref is disabled"
+		case slices.Contains(integ.DisabledCapabilities, "credential"):
+			// PLATFORM-API-1's sibling: the read matrix reports this
+			// integration's "credential" cell off (applyDisabled,
+			// integrations.go) — dispatch must actually honor that, not just
+			// the read surface, or the operator sees "off" while the token
+			// keeps injecting on every matching run.
+			return redirectToken{}, "the integration named by token_integration_ref has its credential capability disabled"
 		}
 		secretName := integ.Credentials[types.IntegrationCredentialToken]
 		if integ.Header == "" || secretName == "" {

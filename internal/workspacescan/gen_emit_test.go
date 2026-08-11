@@ -19,7 +19,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 			{Stage: "test", Command: "go test ./..."},
 		},
 	}
-	files, err := EmitEnvAsCode(p, nil, nil)
+	files, err := EmitEnvAsCode(p, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 
 func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Java"}, PackageManagers: []string{"maven"}}
-	files, err := EmitEnvAsCode(p, nil, nil)
+	files, err := EmitEnvAsCode(p, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 // to carry.
 func TestEmitEnvAsCode_AgentToolBake(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"JavaScript"}, Confidence: "high", Source: "deterministic"}
-	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"})
+	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,13 +115,47 @@ func TestEmitEnvAsCode_AgentToolBake(t *testing.T) {
 	}
 }
 
+// TestEmitEnvAsCode_ResolvedBaseRef pins WSPIPE-9: a workspace pinned to a
+// non-recommended base image (registry/custom/byo) must export a devcontainer
+// naming THAT image, not the universal genBaseImage default — otherwise a
+// committed devcontainer.json describes an environment nobody actually boots.
+// Covers both the plain-image branch and the generated-Dockerfile FROM line
+// (a named tool still bakes, but onto the caller's own base).
+func TestEmitEnvAsCode_ResolvedBaseRef(t *testing.T) {
+	const custom = "mycorp/build:2024.3"
+	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
+
+	files, err := EmitEnvAsCode(p, nil, nil, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc := files[".devcontainer/devcontainer.json"]
+	var parsed struct {
+		Image string `json:"image"`
+	}
+	if err := json.Unmarshal([]byte(dc), &parsed); err != nil {
+		t.Fatalf("devcontainer.json not valid JSON: %v", err)
+	}
+	if parsed.Image != custom {
+		t.Errorf("image = %q, want the resolved base ref %q (not the generic devcontainer base)", parsed.Image, custom)
+	}
+
+	files, err = EmitEnvAsCode(p, nil, []string{"claude-code"}, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if df := files[".devcontainer/Dockerfile"]; !strings.HasPrefix(df, "FROM "+custom+"\n") {
+		t.Errorf("generated Dockerfile must FROM the resolved base ref, got: %s", df)
+	}
+}
+
 // TestEmitEnvAsCode_NoToolsNoAgentBake pins the negative case: no named
 // tools must add no agent-CLI bake (no generated Dockerfile), and no path
 // emits a lifecycle command (which would bake nothing into the pushed image
 // anyway).
 func TestEmitEnvAsCode_NoToolsNoAgentBake(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
-	files, err := EmitEnvAsCode(p, nil, nil)
+	files, err := EmitEnvAsCode(p, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

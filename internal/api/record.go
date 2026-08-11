@@ -368,10 +368,31 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 	// bedrock-runtime.<region> host was offered for promotion into permanent
 	// ApprovedEgress, writing harness plumbing for the wrong lane.
 	add(s.workspaceModelProviderHosts(ctx, ws))
+	// The workspace's REQUIRED integration: rows (SEAM-2): launchRecordRun
+	// folds these into every session's egress unconditionally — contract
+	// plumbing, not an observed workspace need — same honesty rule as the
+	// model-provider entries above.
+	add(s.integrationRequirementHosts(ctx, ws))
 	add(workspaceCloneEgress(ws)) // every repo source, not just the derived mirror
 	add(gitBrokerManagedHosts)
 	add(gitBrokerSSHHosts()) // bare hosts: this map keys on the raw lowercased host
 	return skip
+}
+
+// integrationRequirementHosts returns the hosts every REQUIRED integration:
+// row in ws's effective contract opens (requiredIntegrationIDs,
+// workspace_run.go) — used by promoteSkipHosts so a record session never
+// offers one for promotion into permanent ApprovedEgress: launchRecordRun
+// already wires it in unconditionally as contract plumbing, mirroring
+// workspaceModelProviderHosts above.
+func (s *Server) integrationRequirementHosts(ctx context.Context, ws types.Workspace) []string {
+	var hosts []string
+	for _, id := range requiredIntegrationIDs(ws) {
+		if integ, ok := s.resolveIntegrationRef(ctx, id); ok {
+			hosts = append(hosts, integ.Hosts...)
+		}
+	}
+	return hosts
 }
 
 // workspaceModelProviderHosts returns the model-provider egress hosts a
