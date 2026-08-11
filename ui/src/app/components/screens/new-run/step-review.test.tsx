@@ -324,7 +324,11 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
     );
     expect(screen.getByText("Workspace")).toBeInTheDocument();
     expect(screen.getByText("payments-service")).toBeInTheDocument();
-    expect(screen.getByText("local dir · /home/me/payments")).toBeInTheDocument();
+    // UX-4: the sub-line now comes from the shared composition-aware sourceSubLine
+    // (a single local dir shows its path; a multi-source workspace would read
+    // "2 dirs · 1 repo") — never the synthetic "Repo: local:<basename>" label.
+    // The path also appears in the enforced-policy JSON below, hence getAllByText.
+    expect(screen.getAllByText("/home/me/payments").length).toBeGreaterThan(0);
     expect(screen.queryByText("Repo")).toBeNull();
     expect(screen.queryByText(/local:payments-service/)).toBeNull();
   });

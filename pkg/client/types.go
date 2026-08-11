@@ -199,8 +199,10 @@ const (
 // GrantKind values.
 const (
 	GrantGitHubToken = types.GrantGitHubToken
+	GrantGitPAT      = types.GrantGitPAT
 	GrantCloudSTS    = types.GrantCloudSTS
 	GrantAPIKey      = types.GrantAPIKey
+	GrantSSHKey      = types.GrantSSHKey
 )
 
 // ApprovalKind values.

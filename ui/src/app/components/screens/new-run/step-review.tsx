@@ -15,6 +15,7 @@ import { Mono, YamlBlock } from "../../wardyn/code-block";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
 import { Field } from "./step-shell";
+import { sourceSubLine } from "../workspaces";
 import {
   agentLabel,
   buildSpec,
@@ -307,7 +308,7 @@ export function StepReview({
               <div>
                 <div className="text-foreground">{primaryWorkspace.name}</div>
                 <div className="text-[0.6875rem] text-muted-foreground">
-                  {primaryWorkspace.kind === "repo" ? "repo" : "local dir"} · {primaryWorkspace.source}
+                  {sourceSubLine(primaryWorkspace)}
                 </div>
               </div>
             }
