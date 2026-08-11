@@ -28,6 +28,10 @@ export interface EgressRedirect {
   from: string;
   to: string;
   token_secret_ref?: string;
+  // The token sourced from a stored Integration's credential instead of a
+  // bare secret ref — mutually exclusive with token_secret_ref (WIRE-3;
+  // internal/api/site_config.go 400s a body setting both).
+  token_integration_ref?: string;
   ecosystem?: string;
 }
 

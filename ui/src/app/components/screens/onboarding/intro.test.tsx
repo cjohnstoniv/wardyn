@@ -57,6 +57,19 @@ describe("hasLlmPath — honesty guard for the fake composer backend, now via th
     ).toBe(true);
   });
 
+  // UI-LIB-3: auth_mode is only set once Wardyn peeks a real subscription
+  // token (setup.go's subOK) — but the server's own llm_provider check calls
+  // ANY logged-in CLI real access. This used to read false here while the
+  // same payload's llm_provider check read "ok".
+  it("counts a resident CLI login even when auth_mode can't confirm a subscription", () => {
+    expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true, logged_in: true }] }))).toBe(true);
+    expect(
+      hasLlmPath(
+        status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "api_key" }] }),
+      ),
+    ).toBe(true);
+  });
+
   it("counts an anthropic key secret", () => {
     expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }))).toBe(true);
   });
@@ -136,6 +149,13 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
     );
     expect(r.llmReady).toBe(true);
     expect(r.llmLabel).toBe("Claude subscription (host CLI)");
+    expect(r.composerReady).toBe(false);
+  });
+
+  it("a resident CLI login with an unconfirmed auth_mode still powers agent runs, honestly labeled apart from a confirmed subscription", () => {
+    const r = deriveReadiness(status({ providers: [{ tool: "claude", installed: true, logged_in: true }] }));
+    expect(r.llmReady).toBe(true);
+    expect(r.llmLabel).toBe("Claude Code CLI (resident login)");
     expect(r.composerReady).toBe(false);
   });
 

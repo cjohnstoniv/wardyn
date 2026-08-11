@@ -269,6 +269,29 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       hostCli: true,
       checkIds: ["llm_provider"],
     });
+  } else if (claude?.logged_in) {
+    // UI-LIB-3: auth_mode is set ONLY once Wardyn PEEKS a real subscription
+    // OAuth token (setup.go's subOK) — but the server's own llm_provider check
+    // (llmProvenance: "A logged-in CLI is real access") counts ANY logged-in
+    // claude CLI as real model access, an api-key session or an unreadable
+    // subscription alike. Without this row the console read "Needs setup" on
+    // the exact payload the funnel's own Review step showed as "ok" (identical
+    // for a codex-only login, but the suggested fix — and the server's own
+    // detail string this mirrors — is scoped to claude). No serverId: this is
+    // a passive detection, not an entity Wardyn could adopt/store.
+    rows.push({
+      id: "ai:anthropic_cli_login",
+      category: "ai_provider",
+      name: "Claude Code CLI (resident login)",
+      typeLabel: "anthropic · cli login detected",
+      chips: capabilityChips("anthropic_subscription", true),
+      residency: aiResidency("anthropic_subscription", true, undefined),
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      hostCli: true,
+      checkIds: ["llm_provider"],
+    });
   }
 
   const managed = status.harness?.find((h) => h.provider === "anthropic" && h.captured);
@@ -573,16 +596,35 @@ function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): Resi
   return "notbuilt";
 }
 
+// The ids deriveAiRows/deriveScmRows above stamp on a legacy row — built from
+// aiServerId (UI-WS-2's own "what id does a legacy AI row get" source of
+// truth) plus the two fixed SCM schemes (internal/api/integrations.go:517,
+// :660), so this can't drift from what the derivation above actually claims.
+// genericIntegrations uses it to skip ONLY the ids legacy derivation already
+// renders (with real posture/lanes/capability chips a generic row can't
+// produce) — never the whole model/scm category, which would also hide a
+// stored row under any OTHER id (UI-LIB-1: e.g. a hand-named "corp-anthropic").
+const LEGACY_AI_IDS = new Set<string>(
+  (["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"] as AiType[]).flatMap(
+    (t) => [aiServerId(t), aiServerId(t, true), aiServerId(t, false)].filter((id): id is string => !!id),
+  ),
+);
+function isLegacyClaimedId(id: string): boolean {
+  return LEGACY_AI_IDS.has(id) || id === "github_app" || id.startsWith("git_host:");
+}
+
 // genericIntegrations selects the rows belonging to the eight generic categories
-// and pairs each with its section and catalog entry. Rows in the two legacy
-// categories are left out deliberately — they are rendered from the derivation
-// above, which knows about lanes, posture and capability chips a generic row
-// simply doesn't have.
+// and pairs each with its section and catalog entry. A wire row under a legacy
+// id is left out deliberately — it is rendered from the derivation above,
+// which knows about lanes, posture and capability chips a generic row simply
+// doesn't have; every OTHER model/scm row (a hand-named id the legacy
+// derivation doesn't recognize) renders here instead of vanishing.
 export function genericIntegrations(status: SetupStatus): GenericIntegrationRow[] {
   const rows: GenericIntegrationRow[] = [];
   for (const wire of status.integrations ?? []) {
     const group = GROUP_BY_CATEGORY.get(wire.category);
-    if (!group || group.id === "model" || group.id === "scm") continue;
+    if (!group) continue;
+    if ((group.id === "model" || group.id === "scm") && isLegacyClaimedId(wire.id)) continue;
     const meta = integrationTypeById(wire.type);
     rows.push({
       wire,
@@ -606,8 +648,12 @@ export function genericSections(rows: GenericIntegrationRow[]): { group: Integra
 /** The body PUT /integrations/{id} takes — every operator-settable field.
  *  REPLACE semantics, not a merge (putIntegrationRequest's own doc comment):
  *  a field omitted here is written back as its zero value, silently wiping
- *  whatever the stored row had. Round-trip a GET and spread onto it before
- *  changing one field, same discipline as SiteConfig's PUT. */
+ *  whatever the stored row had. WIRE-4: a GET's response carries five
+ *  read-only echo fields this body does NOT accept (id, created_at,
+ *  updated_at, source, capabilities) — putIntegrationRequest decodes with
+ *  DisallowUnknownFields, so spreading a GET straight in 400s. Hand-pick the
+ *  twelve fields below off the wire row instead, before changing one — the
+ *  same discipline actions.ts's setDefaultFor already uses. */
 export interface IntegrationWrite {
   name: string;
   category: string;
@@ -632,13 +678,15 @@ export interface IntegrationWrite {
 
 export const genericIntegrationsApi = {
   // PUT /api/v1/integrations/{id} — create or REPLACE (no partial merge).
+  // Throws HttpError, not a bare Error (UI-LIB-6) — same status-preserving
+  // contract as every other write below and elsewhere in lib/api/.
   async put(id: string, body: IntegrationWrite): Promise<void> {
     const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(await errText(res));
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
   // DELETE /api/v1/integrations/{id}. The operator's stored secrets are NOT
   // deleted — the surface says so where it offers this. Throws HttpError (not a

@@ -6,8 +6,8 @@
 import { test, expect, gotoConsole, navTo, passCorpNetworkGate } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
-// Corporate network — Getting Started step 2 of 10 (steps.ts PHASES; see
-// getting-started.spec.ts for the 10-step rail this sits inside), right
+// Corporate network — Getting Started step 2 of 12 (steps.ts PHASES; see
+// getting-started.spec.ts for the 12-step rail this sits inside), right
 // before Integrations. Two sub-tabs: Host proxy (evidence read from the
 // host's env vars, over the config sandboxes actually use, over a real Test
 // probe) and Egress redirection (From -> To rows; an ecosystem-recognized

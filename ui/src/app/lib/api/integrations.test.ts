@@ -97,6 +97,29 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.residency).toBe("resident_mount");
   });
 
+  // UI-LIB-3: auth_mode is only ever set once Wardyn PEEKS a real subscription
+  // token — but the server's own llm_provider check counts ANY logged-in CLI
+  // as real access (an api-key session, or a subscription it simply can't
+  // read). Without this row the console read "Needs setup" on a payload the
+  // funnel's own Review step showed as "ok".
+  it("a resident CLI login with no confirmed subscription still renders — real access either way", () => {
+    const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true }] });
+    const [row] = deriveIntegrations(status, null, []).ai;
+    expect(row.id).toBe("ai:anthropic_cli_login");
+    expect(row.serverId).toBeUndefined();
+    expect(row.hostCli).toBe(true);
+    expect(row.chips.find((c) => c.label === "Claude Code" && !c.muted)).toBeTruthy();
+  });
+
+  // The two rows are mutually exclusive — a CONFIRMED subscription must never
+  // also render the unconfirmed row's honest-but-vaguer name.
+  it("a confirmed subscription (auth_mode: subscription) takes the real row, not the unconfirmed one", () => {
+    const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] });
+    const { ai } = deriveIntegrations(status, null, []);
+    expect(ai).toHaveLength(1);
+    expect(ai[0].id).toBe("ai:anthropic_subscription:host");
+  });
+
   it("a managed subscription reads Captured Xd ago when fresh, and Reconnect soon when aging", () => {
     const fresh = baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: new Date(Date.now() - 3 * 86400_000).toISOString() }] });
     const freshRow = deriveIntegrations(fresh, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;

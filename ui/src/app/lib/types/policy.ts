@@ -9,7 +9,10 @@ import type { ConfinementClass } from "./runs";
 // git_pat = a stored Personal Access Token brokered to git for a non-GitHub host
 // (Azure DevOps / GitLab / ...). Unlike api_key (proxy-injected, value never
 // returned) the PAT value reaches git via the credential helper as a password.
-export type GrantKind = "github_token" | "cloud_sts" | "api_key" | "git_pat";
+// ssh_key = a resident private key written to disk for git's SSH transport
+// (WIRE-5; internal/types/types.go's GrantKind carries all five — this union
+// was missing the one lane approvals.tsx already has a dedicated banner for).
+export type GrantKind = "github_token" | "cloud_sts" | "api_key" | "git_pat" | "ssh_key";
 
 export interface GrantSpec {
   kind: GrantKind | (string & {});

@@ -409,6 +409,49 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getAllByText("network only")).toHaveLength(1);
   });
 
+  // WIRE-3: an integration-backed redirect used to render identically to an
+  // untokened one — the operator concluded the token was lost.
+  it("an integration-sourced token renders its own distinct chip, not the bare-secret one", async () => {
+    renderEgress({
+      egress_redirects: [{ from: "artifactory.corp.internal", to: "mirror.corp.internal", token_integration_ref: "corp-artifactory" }],
+    });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    expect(screen.queryByText("token")).not.toBeInTheDocument();
+    expect(screen.getByText("integration")).toHaveAttribute(
+      "title",
+      expect.stringContaining("token via integration: corp-artifactory"),
+    );
+  });
+
+  // WIRE-3: typing a bare secret name into the expanded editor's Token field
+  // and saving used to leave the row's OWN token_integration_ref standing
+  // (spread from `...r`) alongside the freshly-set token_secret_ref — a
+  // both-token-sources body the server hard-400s.
+  it("saving a bare token typed over an integration-sourced row clears token_integration_ref", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { saveSiteConfig, container } = renderEgress({
+      egress_redirects: [{ from: "artifactory.corp.internal", to: "mirror.corp.internal", token_integration_ref: "corp-artifactory" }],
+    });
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByText("artifactory.corp.internal"));
+    // Two "Token secret name" fields are on screen at once (this row's editor
+    // + the always-present AddRedirectForm below it) — the edit form's is the
+    // one with the stable id the component ships (corp-network-egress.tsx).
+    const tokenInput = container.querySelector<HTMLInputElement>("#eg-edit-token")!;
+    await user.type(tokenInput, "artifactory-token");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(saveSiteConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          egress_redirects: [
+            expect.objectContaining({ token_secret_ref: "artifactory-token", token_integration_ref: undefined }),
+          ],
+        }),
+      ),
+    );
+  });
+
   it("the From combobox lists the suggested sources (label = URL, ecosystem a muted hint)", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderStep();

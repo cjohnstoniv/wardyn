@@ -186,6 +186,15 @@ export interface WireIntegration {
   format?: string;
   docs?: string;
   credentials?: Record<string, string>;
+  // Type-specific knobs (e.g. "lane", "ecosystems") — arbitrary JSON, mirrors
+  // the server's json.RawMessage (types.Integration.Config). UI-LIB-5: PUT
+  // /integrations/{id} is a full replacement (IntegrationWrite, api/
+  // integrations.ts), so a round-tripping caller needs this field on the GET
+  // shape too, or it silently writes the zero value back.
+  config?: Record<string, unknown>;
+  // Capability ids the operator turned off individually. Same round-trip
+  // reason as `config` above (UI-LIB-5).
+  disabled_capabilities?: string[];
   default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
   // The server's live per-capability matrix for this row
@@ -250,8 +259,11 @@ export interface SetupStatus {
   // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —
   // which tools Wardyn knows how to run and whether it can wire each one a
   // managed model credential or a container-login subscription. Distinct
-  // from `harness` above (a CAPTURED credential's live readiness). Optional
-  // for the same fixture-compat reason as `bedrock`.
+  // from `harness` above (a CAPTURED credential's live readiness). DEADCODE-2:
+  // not read client-side yet (same as `capabilities` above) — new-run's
+  // WizardAgent literal union and the Tools tab's hand-written rows are
+  // hand-maintained copies of the same facts, pending consolidation onto this
+  // field. Optional for the same fixture-compat reason as `bedrock`.
   harnesses?: SetupHarnessTool[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not

@@ -309,6 +309,13 @@ describe("attentionItems / sourceSubLine — pure helpers", () => {
     expect(sourceSubLine(ws({}, { kind: "repo", source: "acme/x", ref: "main" }))).toBe("acme/x @main");
     expect(sourceSubLine(ws({}, { kind: "local_dir", source: "/srv/x" }))).toBe("/srv/x");
   });
+
+  // UI-LIB-8: ephemeral carries neither Path nor Source (store.go's
+  // deriveWorkspaceMirrors), so ws.source is always "" — the row must name
+  // the kind instead of rendering a blank mono line.
+  it("sourceSubLine names the kind for an ephemeral workspace, whose Source is always empty", () => {
+    expect(sourceSubLine(ws({}, { kind: "ephemeral", source: "" }))).toBe("ephemeral — scratch space");
+  });
 });
 
 // WorkspaceLLMCredDialog — the standalone editor for an EXISTING workspace's

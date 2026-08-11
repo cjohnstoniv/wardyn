@@ -18,7 +18,12 @@ export type RunMode = "interactive" | "autonomous";
 export const RUN_MODE: Record<RunMode, { label: string; blurb: string }> = {
   interactive: {
     label: "Interactive",
-    blurb: "You drive; it asks before it acts.",
+    // UX-7: an interactive run execs NO agent at all (internal/types/types.go:
+    // "no agent task is exec'd and no completion watcher is started — the
+    // human drives via wardyn attach") — the old blurb described per-action
+    // approval, an autonomous-shaped behavior this mode doesn't have. Matches
+    // compose-form.tsx's own Field hint for the same toggle.
+    blurb: "Comes up idle — you attach and drive it over a terminal.",
   },
   autonomous: {
     label: "Autonomous",

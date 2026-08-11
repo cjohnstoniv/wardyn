@@ -88,14 +88,6 @@ export async function deleteIntegration(row: IntegrationRow): Promise<void> {
 /** The two DefaultFor marks the console can toggle (types.Integration.DefaultFor's closed set). */
 export type DefaultForMark = "agent_runs" | "wardyn_features";
 
-// WireIntegration (lib/types/setup.ts) doesn't model config/disabled_capabilities
-// yet, but the server echoes them on every read (types.Integration's own json
-// tags) — read them off the wire object directly so a default-for PUT
-// round-trips the row's full state. Skipping this would be a silent, real
-// regression for any row Config carries (a Bedrock's region/model, a
-// subscription's lane), not a cosmetic gap.
-type FullWireIntegration = WireIntegration & { config?: unknown; disabled_capabilities?: string[] };
-
 // Toggle one DefaultFor mark on a row, adopting it first when it has no
 // stored identity yet (an unadopted legacy row can't be PUT directly — POST
 // .../adopt persists it VERBATIM first, so this never has to reconstruct
@@ -116,7 +108,6 @@ type FullWireIntegration = WireIntegration & { config?: unknown; disabled_capabi
 export async function setDefaultFor(wire: WireIntegration, mark: DefaultForMark, on: boolean): Promise<void> {
   const adopted = wire.source !== "stored";
   if (adopted) await integrationsApi.adoptIntegration(wire.id);
-  const full = wire as FullWireIntegration;
   const current = wire.default_for ?? [];
   const default_for = on ? [...current, mark] : current.filter((m) => m !== mark);
   try {
@@ -130,8 +121,8 @@ export async function setDefaultFor(wire: WireIntegration, mark: DefaultForMark,
       format: wire.format,
       docs: wire.docs,
       credentials: wire.credentials,
-      config: full.config as Record<string, unknown> | undefined,
-      disabled_capabilities: full.disabled_capabilities,
+      config: wire.config,
+      disabled_capabilities: wire.disabled_capabilities,
       default_for,
     });
   } catch (e) {

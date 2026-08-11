@@ -94,12 +94,6 @@ export const RD = {
   AGENT_AT_REVIEW_LINE: "Model access resolves from the proposal's agent at review.",
 };
 
-// ============================ Power-source line (verbatim, ×3 variants) ============================
-// mockup/wardyn-rundeltas.js's powerLine(): a fixed "Agent runs here use: "
-// lead-in followed by one of three resolved-source clauses. The mock bolds the
-// clause in JSX; this module carries the plain text only (no React) — flattened
-// into one string per variant so the words stay byte-exact regardless of how a
-// later page chooses to style them.
 // ============================ S3 record-last canon (verbatim) ============================
 // mockup/wardyn-workspaces.js's `RD2` — the requirements step's dependency-order
 // redesign: Reach · Secrets · Files & services · Verify. Verify consumes what

@@ -5,7 +5,11 @@
 
 // ============================================================
 // Wardyn API types — mirror the real REST API under /api/v1.
-// All wire fields are snake_case.
+// All wire fields are snake_case, with one documented exception: types/
+// compose.ts's ComposeAssistContext (currentQuestion/proposalSummary) — its
+// handler (internal/api/compose_assist.go) decodes leniently, not via
+// decodeStrict, so a one-sided rename to snake_case would drop those fields
+// silently instead of failing loudly (WIRE-7).
 //
 // Split by domain under ./types/*.ts; this barrel preserves the existing
 // `.../lib/types` import path (type-only re-exports => zero consumer churn).

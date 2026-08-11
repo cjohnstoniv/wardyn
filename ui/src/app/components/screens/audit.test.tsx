@@ -169,6 +169,44 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
+  // DEADCODE-4: nine tier-1/tier-2/integration actions shipped with zero
+  // ACTION_VERB rows, so they rendered as raw dotted strings — the audit
+  // trail for exactly the work that range shipped.
+  it("renders prose, not raw dotted actions, for the tier-1/tier-2/integration range", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "source.scan", target: "src-1" }),
+      ev({ id: "e2", action: "base_image.write", target: "img-1" }),
+      ev({ id: "e3", action: "integration.adopt", target: "anthropic_subscription:managed" }),
+      ev({ id: "e4", action: "workspace.requirement.write", target: "ws-1" }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText(/Scanned a source — src-1/)).toBeInTheDocument();
+    expect(screen.getByText(/Added a base image — img-1/)).toBeInTheDocument();
+    expect(screen.getByText(/Adopted an integration — anthropic_subscription:managed/)).toBeInTheDocument();
+    expect(screen.getByText(/Added a workspace requirement — ws-1/)).toBeInTheDocument();
+    expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
+  });
+
+  // DEADCODE-4: an integration IS credential material by reference — it
+  // belongs beside secret.*/credential.* under the Credentials facet, not the
+  // Lifecycle catch-all every one of these nine actions defaulted to.
+  it("classifies integration.* actions under the Credentials facet, not Lifecycle", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "integration.write", target: "corp-anthropic" }),
+      ev({ id: "e2", action: "run.create" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(/Stored an integration/);
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Credentials$/i }));
+
+    expect(screen.getByText(/Stored an integration/)).toBeInTheDocument();
+    expect(screen.queryByText("Created the run")).not.toBeInTheDocument();
+  });
+
   it("filters by event kind via the Event facet select", async () => {
     listAuditMock.mockResolvedValue([
       ev({ id: "e1", action: "run.create" }),

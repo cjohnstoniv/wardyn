@@ -71,7 +71,12 @@ export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: 
 export function sourceSubLine(ws: Workspace): string {
   const multi = compositionSummary(ws);
   if (multi) return multi;
-  return ws.kind === "repo" && ws.ref ? `${ws.source} @${ws.ref}` : ws.source;
+  const single = ws.kind === "repo" && ws.ref ? `${ws.source} @${ws.ref}` : ws.source;
+  // UI-LIB-8: an ephemeral-only workspace carries neither Path nor Source
+  // (store.go's deriveWorkspaceMirrors) — the floor scratch dir has no
+  // host-side location to show, so name the kind instead of rendering a blank
+  // mono line indistinguishable from a source that failed to render.
+  return single || `${KIND_META[ws.kind].label} — scratch space`;
 }
 
 export interface AttentionItem {

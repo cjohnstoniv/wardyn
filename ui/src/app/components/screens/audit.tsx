@@ -96,7 +96,15 @@ function eventKind(action: string): EventKind {
   if (action === "run.kill") return "enforcement";
   if (action.startsWith("egress.") || action.startsWith("llm.scan.")) return "egress";
   if (action.startsWith("kernel.") || action === "run.exec") return "tool";
-  if (action.startsWith("credential.") || action.startsWith("identity.") || action.startsWith("secret.")) {
+  if (
+    action.startsWith("credential.") ||
+    action.startsWith("identity.") ||
+    action.startsWith("secret.") ||
+    // DEADCODE-4: an integration IS credential material by reference (hosts/
+    // header/credentials) — writing, deleting or adopting one belongs beside
+    // secret.*/credential.*, not lumped into the lifecycle catch-all.
+    action.startsWith("integration.")
+  ) {
     return "credentials";
   }
   if (action.startsWith("approval.")) return "approvals";
@@ -144,6 +152,17 @@ const ACTION_VERB: Record<string, string> = {
   "kernel.file.write": "observed a write to a sensitive path",
   "kernel.sensor.heartbeat": "sensor heartbeat",
   "kernel.sensor.blind": "kernel sensor blind — no ground truth for this run",
+  // DEADCODE-4: the tier-1/tier-2/integration surfaces' own actions — shipped
+  // with zero rows here, so they rendered as raw dotted strings.
+  "source.write": "added a source",
+  "source.delete": "removed a source",
+  "source.scan": "scanned a source",
+  "base_image.write": "added a base image",
+  "base_image.delete": "removed a base image",
+  "integration.write": "stored an integration",
+  "integration.delete": "deleted an integration",
+  "integration.adopt": "adopted an integration",
+  "workspace.requirement.write": "added a workspace requirement",
 };
 
 function capitalize(s: string): string {

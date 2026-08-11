@@ -310,7 +310,7 @@ export function SourcesLibrary({
                       </Mono>
                     </TableCell>
                     <TableCell>
-                      <Chip tone={tone.tone} pulse={tone.pulse}>
+                      <Chip tone={tone.tone} dot pulse={tone.pulse}>
                         {statusWord(src.status)}
                       </Chip>
                     </TableCell>

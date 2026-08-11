@@ -40,8 +40,12 @@ export const T = {
   // The pair of pointers at the SAME consolidation, one per surface: the
   // Getting Started embed points one step back, the full page points forward
   // into Getting started. Both verbatim from the mock (round G).
+  // UX-8: was "...shows the same two categories" — false in both directions
+  // (the embed renders all ten, and the full page's Tools tab isn't in the
+  // embed). State what's actually true instead of a category count that can
+  // go stale the next time a category is added.
   EMBED_SCOPE_NOTE:
-    "This is the whole of it — the full Integrations page shows the same two categories. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+    "This is the full Integrations page, minus its Tools tab. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
   CORP_POINTER:
     "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
   EVIDENCE_HEAD: "What Wardyn found on this host",

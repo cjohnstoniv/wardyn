@@ -4,7 +4,8 @@
  */
 
 // Core run identity/state types + the run-create input/result shapes.
-// All wire fields are snake_case.
+// All wire fields are snake_case (see lib/types.ts's barrel comment for the
+// one documented exception, in a different domain module).
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open

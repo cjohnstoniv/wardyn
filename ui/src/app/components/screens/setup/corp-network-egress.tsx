@@ -84,6 +84,19 @@ function TokenChip({ tokenRef }: { tokenRef: string }) {
   );
 }
 
+// WIRE-3: a distinct chip for a redirect wired to an Integration's credential
+// (token_integration_ref) rather than a bare secret ref — without this the
+// row looked identical to an untokened one, and typing a secret name into the
+// empty Token field on save produced a both-token-sources body the server
+// hard-rejects.
+function IntegrationTokenChip({ integrationRef }: { integrationRef: string }) {
+  return (
+    <Chip tone="info" mono className="shrink-0 text-[0.625rem]" title={`token via integration: ${integrationRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
+      integration
+    </Chip>
+  );
+}
+
 function NetworkOnlyChip() {
   return (
     <Chip tone="neutral" className="shrink-0 text-[0.625rem] opacity-70" title={T.NET_ONLY_TIP}>
@@ -111,7 +124,7 @@ function RedirectRow({
   return (
     <div
       className="flex cursor-pointer items-center gap-2.5 p-2.5 hover:bg-muted/40"
-      title={`${r.from} → ${r.to}${r.token_secret_ref ? ` · token: ${r.token_secret_ref}` : ""}`}
+      title={`${r.from} → ${r.to}${r.token_secret_ref ? ` · token: ${r.token_secret_ref}` : r.token_integration_ref ? ` · token via integration: ${r.token_integration_ref}` : ""}`}
       onClick={onExpand}
     >
       <Mono className="shrink-0 text-xs text-foreground">{compactEndpoint(r.from)}</Mono>
@@ -119,6 +132,7 @@ function RedirectRow({
       <Mono className="min-w-0 flex-1 truncate text-xs text-foreground">{compactEndpoint(r.to)}</Mono>
       {!r.ecosystem && <NetworkOnlyChip />}
       {r.token_secret_ref && <TokenChip tokenRef={r.token_secret_ref} />}
+      {!r.token_secret_ref && r.token_integration_ref && <IntegrationTokenChip integrationRef={r.token_integration_ref} />}
       {testState.kind === "idle" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">Not tested</span>}
       {testState.kind === "running" && (
         <span className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-info">
@@ -199,7 +213,23 @@ function RedirectRowExpanded({
           : T.NET_ONLY_TIP}
       </p>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => onSave({ ...r, from: from.trim(), to: to.trim(), token_secret_ref: token.trim() || undefined })}>
+        <Button
+          size="sm"
+          onClick={() => {
+            // WIRE-3: typing a bare secret name here is the operator switching
+            // AWAY from the integration-sourced token — clear it, or a
+            // token_integration_ref surviving the spread alongside a freshly
+            // non-empty token_secret_ref is the both-set body the server 400s.
+            const bareToken = token.trim();
+            onSave({
+              ...r,
+              from: from.trim(),
+              to: to.trim(),
+              token_secret_ref: bareToken || undefined,
+              token_integration_ref: bareToken ? undefined : r.token_integration_ref,
+            });
+          }}
+        >
           Save
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>

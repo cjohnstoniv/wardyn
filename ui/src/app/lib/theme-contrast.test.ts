@@ -213,10 +213,34 @@ describe("light-theme WCAG AA contrast (C004)", () => {
         .forEach((ln, i) => {
           // Any --muted-foreground dilution drops the borderline 4.74:1 token below
           // AA. (text-foreground is near-black and safe even diluted, so not forbidden.)
-          if (/text-muted-foreground\/[0-9]0/.test(ln)) offenders.push(`${f}:${i + 1}`);
+          // TESTSPEC-5: numeric compare, not a multiples-of-ten regex — the old
+          // /[0-9]0/ pattern matched /70 or /90 but missed /75, a standard
+          // Tailwind step this comment already claimed was caught.
+          const m = ln.match(/text-muted-foreground\/(\d{1,3})\b/);
+          if (m && +m[1] < 100) offenders.push(`${f}:${i + 1}`);
         });
     }
     expect(offenders, `diluted muted/foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
+
+  // UI-LIB-2: placeholder:text-muted-foreground is the exact dark-theme defect
+  // this file documents below (2.16:1) — input.tsx/textarea.tsx moved to
+  // placeholder:text-placeholder-foreground; forbid the old token everywhere,
+  // INCLUDING components/ui/ (command.tsx was the regression this gate
+  // couldn't see, since it only checked the token definition, never call sites).
+  it("no placeholder:text-muted-foreground anywhere in src/app", () => {
+    const offenders: string[] = [];
+    for (const f of walkTsx("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (ln.includes("placeholder:text-muted-foreground")) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(
+      offenders,
+      `placeholder:text-muted-foreground — use placeholder:text-placeholder-foreground:\n${offenders.join("\n")}`,
+    ).toHaveLength(0);
   });
 
   // /S3: raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
@@ -233,7 +257,11 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // coverage config): their destructive MENU variant is upstream API, and no
   // app call site uses it for body/error copy.
   it("no raw palette text colors in src/app — use text-warning/success/danger", () => {
-    const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|blue|indigo|violet|purple|pink)-[0-9]{2,3}\b|\btext-destructive\b/;
+    // TESTSPEC-5: the full Tailwind default palette (22 families) — the old
+    // list omitted sky/fuchsia and the five gray-scale families (slate/gray/
+    // zinc/neutral/stone), each just as capable of shipping sub-AA text as
+    // the 15 already guarded.
+    const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|sky|blue|indigo|violet|purple|pink|fuchsia|slate|gray|zinc|neutral|stone)-[0-9]{2,3}\b|\btext-destructive\b/;
     const offenders: string[] = [];
     for (const f of walkTsx("src/app")) {
       if (f.includes("components/ui/")) continue; // vendored shadcn primitives

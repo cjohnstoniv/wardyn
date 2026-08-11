@@ -61,10 +61,13 @@ describe("integrations — T canon sentinel pins", () => {
     );
     expect(T.CORP_LEDE).not.toContain("Required");
     expect(T.EMBED_SCOPE_NOTE).toBe(
-      "This is the whole of it — the full Integrations page shows the same two categories. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+      "This is the full Integrations page, minus its Tools tab. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
     );
     // …and NOT the old tail claiming the full page still shows all four.
     expect(T.EMBED_SCOPE_NOTE).not.toContain("all four categories");
+    // …and not UX-8's false claim either — the embed renders all ten
+    // categories (INTEGRATION_GROUPS), not "the same two".
+    expect(T.EMBED_SCOPE_NOTE).not.toContain("same two categories");
     expect(T.NOPROXY_NOTE).toBe("Not applied — Wardyn's own egress allowlist decides what a sandbox may reach.");
     expect(T.NOT_CONFIGURED).toBe("Not configured — sandboxes go direct");
     expect(T.CRED_URL_NOTE).toBe(

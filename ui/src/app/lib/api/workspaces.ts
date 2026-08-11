@@ -4,10 +4,9 @@
  */
 
 // Onboarded workspaces + the guided Import flow (scan/record). Verify/finalize
-// are retired from the interim import panel (see import-panel.tsx); env-as-code
-// generation stays available standalone via getEnvAsCode below. Run-creation
-// pickers offer ONLY these onboarded workspaces; a run may not reference any
-// other source.
+// are retired from the interim import panel; env-as-code generation stays
+// available standalone via getEnvAsCode below. Run-creation pickers offer
+// ONLY these onboarded workspaces; a run may not reference any other source.
 import type {
   Workspace,
   WorkspaceBaseImageInput,

@@ -136,8 +136,9 @@ function agentCapableRows(rows: IntegrationRow[]): IntegrationRow[] {
 
 // Whether a coding agent (Claude Code / Codex CLI) has somewhere to call —
 // ≥1 integration with an agent-tool capability ON and a resolved credential.
-// Used directly by callers that only need the boolean (import-panel.tsx,
-// record-pane.tsx's model-readiness warning) without the rest of Readiness.
+// Used directly by callers that only need the boolean (workspace-detail.tsx,
+// feeding record-pane.tsx's model-readiness warning) without the rest of
+// Readiness.
 export function hasLlmPath(status: SetupStatus): boolean {
   return agentCapableRows(aiIntegrationRows(status)).length > 0;
 }

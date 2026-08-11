@@ -243,4 +243,29 @@ describe("setDefaultFor", () => {
     expect(adoptIntegrationMock).toHaveBeenCalledWith("bedrock");
     expect(removeIntegrationMock).not.toHaveBeenCalled();
   });
+
+  // UI-LIB-5: config/disabled_capabilities now live on WireIntegration itself
+  // (no FullWireIntegration cast) — a Bedrock row's {lane, region, model} must
+  // still round-trip through the PUT, not silently zero out.
+  it("round-trips config and disabled_capabilities off the wire row, untouched", async () => {
+    putIntegrationMock.mockResolvedValue(undefined);
+
+    await setDefaultFor(
+      legacyWire({
+        source: "stored",
+        config: { lane: "auto", region: "us-east-1", model: "anthropic.claude-3" },
+        disabled_capabilities: ["wardyn_features"],
+      }),
+      "agent_runs",
+      true,
+    );
+
+    expect(putIntegrationMock).toHaveBeenCalledWith(
+      "bedrock",
+      expect.objectContaining({
+        config: { lane: "auto", region: "us-east-1", model: "anthropic.claude-3" },
+        disabled_capabilities: ["wardyn_features"],
+      }),
+    );
+  });
 });

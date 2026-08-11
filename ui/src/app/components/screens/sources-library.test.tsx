@@ -105,6 +105,17 @@ describe("SourcesLibrary", () => {
     expect(screen.getByText("1 workspace")).toBeInTheDocument();
   });
 
+  // UI-LIB-9: Chip only renders `pulse` inside its `dot` — without `dot` an
+  // actively-scanning row looked identical to a never-scanned (pending_scan)
+  // one for the whole 4s-polled duration of a real scan.
+  it("shows a pulsing dot while a source is actively scanning, not a static chip", async () => {
+    listSourcesMock.mockResolvedValue([src({ status: "scanning" })]);
+    const { container } = render(<SourcesLibrary workspaces={[]} />);
+
+    await screen.findByText("payments");
+    expect(container.querySelector(".animate-ping")).toBeInTheDocument();
+  });
+
   it("adds a repo through the dialog AND scans it immediately — never parked at Setting up", async () => {
     createSourceMock.mockResolvedValue(src({ id: "s-9", name: "lib" }));
     scanSourceMock.mockResolvedValue({ scan_run_id: "r-1" });
