@@ -26,24 +26,41 @@ import { asJson, errText, HttpError, wfetch } from "./core";
 // every scanned local dir, so an un-enabled toggle is the COMMON case, not a
 // corner one).
 import {
+  resolvableSources,
   resolvedMountReadOnly,
   type RunWorkspaceSelection,
 } from "../../components/screens/new-run/wizard-types";
 
 // Resolve one WorkspaceSelection (from the compose form's onboarded multi-select)
-// against the fetched Workspace[] list into the compose wire shape. Mirrors
-// wizard-types.ts's buildSpec resolution (repo -> "git", local_dir -> "local").
-// Returns undefined for a stale selection (the workspace was deleted after it
-// was picked) — the caller skips those rather than sending a dangling reference.
+// against the fetched Workspace[] list into the compose wire shape(s). Mirrors
+// wizard-types.ts's buildSpec resolution (repo -> "git", local_dir -> "local") —
+// including its PARITY-2 fix: ONE entry per repo/local_dir SOURCE the workspace
+// carries (resolvableSources), never flattened to the workspace's single-mirror
+// kind/source — which is EMPTY for a multi-source or migrated-ephemeral
+// workspace, so the old flatten silently sent nothing for exactly those.
+// applyWorkspaces (compose.go) already handles a flat multi-entry list fine
+// (it derives its own per-entry mount target, collision-avoided). Returns []
+// for a stale selection (the workspace was deleted after it was picked) or a
+// purely-ephemeral one — the caller flat-maps this, so an empty result is
+// simply dropped rather than sending a dangling/garbage reference.
 export function resolveComposeWorkspace(
   sel: RunWorkspaceSelection,
   workspaces: Workspace[],
-): ComposeWorkspace | undefined {
+): ComposeWorkspace[] {
   const w = workspaces.find((x) => x.id === sel.workspaceId);
-  if (!w) return undefined;
-  return w.kind === "repo"
-    ? { kind: "git", repo: w.source }
-    : { kind: "local", path: w.source, read_write: !resolvedMountReadOnly(w, sel) };
+  if (!w) return [];
+  const out: ComposeWorkspace[] = [];
+  for (const src of resolvableSources(w)) {
+    if (src.type === "repo" && src.source) {
+      out.push({ kind: "git", repo: src.source });
+    } else if (src.type === "local_dir" && src.path) {
+      out.push({ kind: "local", path: src.path, read_write: !resolvedMountReadOnly(w, sel, src.path) });
+    }
+    // ephemeral: no descriptor to send — applyWorkspaces server-side only
+    // treats a SOLE ephemeral selection as defining the workspace; a mixed
+    // multi-source pick is already defined by its real dirs/repos.
+  }
+  return out;
 }
 
 export const composer = {
@@ -81,9 +98,9 @@ export const composer = {
     // Falls back to the legacy singular `workspace` only when no selections were
     // made (ephemeral by default) — the workspace-picker offers no other way to
     // reference an un-onboarded local path/repo (onboarded-only, by design).
-    const resolvedWorkspaces = (req.workspaceSelections ?? [])
-      .map((sel) => resolveComposeWorkspace(sel, availableWorkspaces))
-      .filter((w): w is ComposeWorkspace => w !== undefined);
+    const resolvedWorkspaces = (req.workspaceSelections ?? []).flatMap((sel) =>
+      resolveComposeWorkspace(sel, availableWorkspaces),
+    );
     if (resolvedWorkspaces.length) {
       body.workspaces = resolvedWorkspaces;
     } else {

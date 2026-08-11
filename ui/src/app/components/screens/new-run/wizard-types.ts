@@ -454,12 +454,115 @@ function resolveWorkspace(sel: WorkspaceSelection, workspaces: Workspace[]): Wor
 // resolution, the same way buildSpec below uses it for the manual wizard's
 // workspace_mounts[]. Two derivations that can disagree is exactly the defect
 // class this function exists to close.
-export function resolvedMountReadOnly(ws: Workspace, sel: RunWorkspaceSelection): boolean {
-  const s = summarizeWorkspaceRequirements(ws);
-  const enabled = new Set(sel.enabledOptional ?? []);
-  const grantedDefault = s.requiredWrite || s.optionalWriteKeys.some((k) => enabled.has(k));
+//
+// `path` is the SOURCE's own locator — the write:<locator> requirement key is
+// scoped to ONE source (source_scan.go:134's seed["write:"+locator]), never
+// the whole workspace. Defaults to ws.source (the single-source mirror) so
+// every existing 2-arg call site keeps its old whole-workspace behavior
+// unchanged; a multi-source caller (resolveWorkspaceMounts below,
+// resolveComposeWorkspace) passes each source's own path explicitly — a
+// multi-source workspace can carry several write:<path> rows with DIFFERENT
+// levels, which a single aggregated "does ANY of them grant write" flag would
+// blur across sources (PARITY-2).
+export function resolvedMountReadOnly(
+  ws: Workspace,
+  sel: RunWorkspaceSelection,
+  path: string = ws.source,
+): boolean {
+  const req = workspaceRequirements(ws)[`write:${path}`];
+  const grantedDefault = req?.level === "required" || (sel.enabledOptional ?? []).includes(`write:${path}`);
   if (!grantedDefault) return true;
   return sel.readOnly === true;
+}
+
+// The workspace's REAL source list a mount/repo resolution should iterate —
+// ws.sources[] when the record carries it (every server-fetched Workspace
+// does — PARITY-2), else a SYNTHETIC single-entry list built from the legacy
+// kind/source mirror, so a hand-built fixture (or a stale cached record) that
+// never populated .sources resolves EXACTLY as the old single-mirror code
+// did. Exported so lib/api/compose.ts's resolveComposeWorkspace shares the
+// SAME fallback resolveWorkspaceMounts uses below — two derivations of "what
+// are this workspace's sources" that could disagree is the exact defect class
+// this function exists to close.
+export function resolvableSources(ws: Workspace): WorkspaceSourceInput[] {
+  if (ws.sources?.length) return ws.sources;
+  if (ws.kind === "local_dir") {
+    return [{ type: "local_dir", path: ws.source, target: ws.default_target }];
+  }
+  if (ws.kind === "repo") {
+    return [{ type: "repo", source: ws.source, target: ws.default_target }];
+  }
+  // "ephemeral", or an unrecognized/empty kind (a genuinely multi-source
+  // record whose sources[] wasn't fetched) — no host path to mount, no repo
+  // to clone; callers correctly emit nothing for it rather than a garbage
+  // empty-string mount source (the exact PARITY-2 bug).
+  return [{ type: "ephemeral", target: ws.default_target }];
+}
+
+// Resolve ONE workspace selection into its workspace_mounts[]/workspace_repos[]
+// entries — one WorkspaceMount per local_dir source, one WorkspaceRepo per repo
+// source, nothing for ephemeral (PARITY-2: the old code flattened to the
+// workspace's single-mirror kind/source, which is EMPTY for a multi-source or
+// migrated-ephemeral workspace, so it silently mounted nothing at all).
+// Exported so StepReview's own preview (if it ever needs one) and buildSpec
+// below share the identical per-source resolution.
+export function resolveWorkspaceMounts(
+  w: Workspace,
+  sel: RunWorkspaceSelection,
+): { mounts: WorkspaceMount[]; repos: WorkspaceRepo[] } {
+  const mounts: WorkspaceMount[] = [];
+  const repos: WorkspaceRepo[] = [];
+  resolvableSources(w).forEach((src, i) => {
+    // The picker's single "Target override" field (workspace-picker.tsx) only
+    // ever meant one mount point per workspace — apply it to the FIRST source
+    // only; every other source keeps its own onboarded target.
+    const override = i === 0 ? sel.target?.trim() : undefined;
+    if (src.type === "repo" && src.source) {
+      const target = override || src.target?.trim();
+      const entry: WorkspaceRepo = { repo: src.source };
+      if (target) entry.target = target;
+      repos.push(entry);
+    } else if (src.type === "local_dir" && src.path) {
+      mounts.push({
+        source: src.path,
+        // Mount at the agent's working dir (~/work = /home/agent/work) by
+        // convention — that's where `claude` and the `wardyn attach` shell
+        // start. A source's own target, or a per-run override, takes
+        // precedence.
+        target: override || src.target?.trim() || "/home/agent/work",
+        // The workspace's requirements contract decides write access now (a
+        // Required write, or an enabled Optional one) — not a bare per-run
+        // flag. See resolvedMountReadOnly.
+        read_only: resolvedMountReadOnly(w, sel, src.path),
+      });
+    }
+    // ephemeral: no host path to mount and no repo to clone — the server
+    // mkdirs the scratch target itself; nothing for the policy to carry.
+  });
+  return { mounts, repos };
+}
+
+// primaryWorkspaceId mirrors the server's own primary pick (referencedWorkspaces,
+// internal/api/workspace_run.go): it walks the RESOLVED spec's workspace_mounts
+// in FULL before workspace_repos, so the primary is whichever SELECTED
+// workspace contributes the FIRST local_dir mount — never simply
+// selections[0] (PARITY-3). A workspace's OWN composition decides eligibility
+// (resolvableSources, so a multi-source workspace with a local_dir source
+// anywhere in it still counts — PARITY-2), never the flattened single-mirror
+// kind. Used everywhere a "primary workspace" drives a decision (the
+// model-access binding, Review's summary) so the console can't name a
+// different workspace's credential than the run actually inherits.
+export function primaryWorkspaceId(
+  selections: RunWorkspaceSelection[],
+  workspaces: Workspace[],
+): string | undefined {
+  const resolved = selections
+    .map((sel) => ({ id: sel.workspaceId, w: resolveWorkspace(sel, workspaces) }))
+    .filter((x): x is { id: string; w: Workspace } => !!x.w);
+  const local = resolved.find(({ w }) => resolvableSources(w).some((s) => s.type === "local_dir"));
+  if (local) return local.id;
+  const repo = resolved.find(({ w }) => resolvableSources(w).some((s) => s.type === "repo"));
+  return repo?.id;
 }
 
 // One entry of CreateRunRequest.Workspaces (pkg/client/client.go's
@@ -498,6 +601,14 @@ export function toRunWorkspacesWire(selections: RunWorkspaceSelection[]): RunWor
 export type CreateRunInputWithComposition = CreateRunInput & {
   workspaces?: RunWorkspaceSelectionWire[];
   integration_id?: string;
+  // The PRIMARY workspace's id, sent ONLY when the selection resolves to no
+  // mount/repo (a pure-ephemeral / migrated-0029 container workspace). Such a
+  // workspace has no source the server's referencedWorkspaces can match, so its
+  // base_image would be silently dropped; workspace_id routes it through
+  // seedRequestWorkspace, which seeds the scratch target and its base_image.
+  // Safe from double-mounting precisely because there is no mount/repo to
+  // duplicate — never set when buildSpec already emitted workspace_mounts/repos.
+  workspace_id?: string;
 };
 
 // Why buildSpec unions a host into allowed_domains without the operator ever
@@ -526,9 +637,12 @@ export function impliedEgressHosts(
   // Any repo-kind selection implies the GitHub clone hosts even with the
   // GitHub grant untouched — claim 3's sharpest sub-case. When the grant IS
   // on, name that as the reason instead; same two hosts either way.
-  const hasRepoSelection = state.workspaces.some(
-    (sel) => resolveWorkspace(sel, workspaces)?.kind === "repo",
-  );
+  // resolvableSources (not the flattened w.kind) so a multi-source workspace
+  // whose repo isn't sources[0] is still recognized (PARITY-2).
+  const hasRepoSelection = state.workspaces.some((sel) => {
+    const w = resolveWorkspace(sel, workspaces);
+    return !!w && resolvableSources(w).some((s) => s.type === "repo");
+  });
   if (state.githubEnabled) {
     out.push(
       { host: "github.com", why: "GitHub access" },
@@ -599,28 +713,19 @@ export function buildSpec(
   state.workspaces.forEach((sel, i) => {
     const w = resolveWorkspace(sel, workspaces);
     if (!w) return; // stale selection — defensively skip rather than dangle
-    const target = sel.target?.trim() || w.default_target?.trim() || undefined;
-    if (w.kind === "repo") {
-      const entry: WorkspaceRepo = { repo: w.source };
-      if (target) entry.target = target;
-      workspaceRepos.push(entry);
-    } else {
-      workspaceMounts.push({
-        source: w.source,
-        // Mount at the agent's working dir (~/work = /home/agent/work) by
-        // convention — that's where `claude` and the `wardyn attach` shell
-        // start. A workspace's own default_target, or a per-run override,
-        // takes precedence.
-        target: target || "/home/agent/work",
-        // The workspace's requirements contract decides write access now (a
-        // Required write, or an enabled Optional one) — not a bare per-run
-        // flag. See resolvedMountReadOnly.
-        read_only: resolvedMountReadOnly(w, sel),
-      });
-    }
+    // One entry per SOURCE this workspace carries (PARITY-2) — a multi-source
+    // or migrated-ephemeral workspace has no single mount/repo to flatten to;
+    // the old w.kind/w.source read was EMPTY for exactly those cases, so it
+    // silently attached nothing at all.
+    const { mounts, repos } = resolveWorkspaceMounts(w, sel);
+    workspaceMounts.push(...mounts);
+    workspaceRepos.push(...repos);
     if (i === 0) {
-      // Synthetic repo label so the run row reads meaningfully.
-      run.repo = w.kind === "repo" ? w.source : `local:${basename(w.source)}`;
+      // Synthetic repo label so the run row reads meaningfully — the first
+      // resolved repo/mount from the PRIMARY selection, never a bare "" for a
+      // workspace w.source can't represent on its own.
+      if (repos[0]) run.repo = repos[0].repo;
+      else if (mounts[0]) run.repo = `local:${basename(mounts[0].source)}`;
     }
   });
 
@@ -630,6 +735,20 @@ export function buildSpec(
   // doc comment on the Go side).
   const runWorkspaces = toRunWorkspacesWire(state.workspaces);
   if (runWorkspaces.length) run.workspaces = runWorkspaces;
+
+  // Residual PARITY-2: a pure-ephemeral (migrated-0029 container) primary
+  // contributes no mount/repo, so the per-source resolution above emits nothing
+  // the server can match a workspace to — referencedWorkspaces reads only the
+  // spec's mounts/repos, so wsRefs is empty and the workspace's custom
+  // base_image (and scratch target) is silently dropped, launching on the
+  // DEFAULT image. Convey the workspace's IDENTITY via workspace_id so the
+  // server's seedRequestWorkspace resolves its base_image. Gated on "buildSpec
+  // produced no mount/repo" so it can never double-mount a local_dir/repo the
+  // resolution already emitted; the first resolvable selection is the primary.
+  if (!workspaceMounts.length && !workspaceRepos.length) {
+    const primary = state.workspaces.find((sel) => resolveWorkspace(sel, workspaces));
+    if (primary) run.workspace_id = primary.workspaceId;
+  }
 
   // --- eligible grants ---
   const grants: GrantSpec[] = [];
@@ -734,6 +853,13 @@ export function buildSpec(
   if (autoStopAfterSec !== undefined) inline_policy.auto_stop_after_sec = autoStopAfterSec;
 
   return { run, inline_policy };
+}
+
+// The agent's human display label — shared by every surface that names it in
+// prose (RD.NONE_LINE, step-access.tsx's OverridePeek) so "Codex CLI" can
+// never come out as the hardcoded "Claude Code" default.
+export function agentLabel(agent: WizardAgent): string {
+  return agent === "codex-cli" ? "Codex CLI" : "Claude Code";
 }
 
 // The LLM key target host. Anthropic for Claude Code, OpenAI for Codex.
@@ -887,7 +1013,8 @@ export function workspaceProfileOptions(ws: Workspace | undefined): WorkspacePro
 
 // applyProfileSpecToState loads a recorded profile's synthesized spec into the wizard's
 // steps 2-4 (access, egress, confinement) while KEEPING the operator's Basics choices
-// (agent, mode, task, workspace). Sets selectedProfile so the footer can fast-track.
+// (runType, agent, mode, task, workspace, image). Sets selectedProfile so the footer
+// can fast-track.
 export function applyProfileSpecToState(
   state: WizardState,
   spec: RunPolicySpec,
@@ -907,10 +1034,16 @@ export function applyProfileSpecToState(
   const applied = wizardStateFromProposal(run, spec, workspaces);
   return {
     ...applied,
+    // UI-RUN-3: runType and image are Basics choices this function's own
+    // contract promises to keep — dropping them (they were missing here)
+    // silently converted a governed command into an agent run and discarded
+    // a BYOI image the instant a saved policy/recorded profile was picked.
+    runType: state.runType,
     agent: state.agent,
     mode: state.mode,
     task: state.task,
     workspaces: state.workspaces,
+    image: state.image,
     selectedProfile: profileKey,
     // Already based on a saved profile — don't also offer to re-save it as a policy.
     saveAsProfile: false,

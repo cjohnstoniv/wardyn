@@ -19,6 +19,7 @@
 // workspace wins over the one picked here — see wizard.tsx's initialWorkspaces).
 import * as React from "react";
 import { toast } from "sonner";
+import { Plus } from "lucide-react";
 import type {
   AgentRun,
   ComposeAttachment,
@@ -39,6 +40,7 @@ import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { Chip } from "../../wardyn/primitives";
+import { StatusChip } from "../../wardyn/status-chip";
 import { Mono } from "../../wardyn/code-block";
 import { deriveReadiness } from "../onboarding/intro";
 import { Button } from "../../ui/button";
@@ -86,6 +88,23 @@ export function NewRunDialog({
   onCreated: (run: AgentRun) => void;
 }) {
   const [mode, setMode] = React.useState<Mode>("workspace");
+  // UI-RUN-4: `mode` must already read "workspace" on the SAME commit `open`
+  // flips true — the dialog stays permanently mounted at every call site, so
+  // a stale mode==="wizard" from the PRIOR (manual) session otherwise takes
+  // the `mode === "wizard"` early return below and mounts the ABANDONED
+  // wizard for one commit, firing its own real health()/listSecrets()/
+  // reloadWorkspaces()/listPolicies() calls — before the passive reset effect
+  // (which fires AFTER children's effects) swaps it back. React's documented
+  // render-time state-adjustment pattern (comparing against a STATE-held
+  // previous value, not a ref — react.dev/learn/you-might-not-need-an-effect)
+  // fixes it: catch the open transition DURING render, synchronously, so the
+  // very first render after opening already reflects it and the wizard never
+  // mounts at all.
+  const [prevOpen, setPrevOpen] = React.useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) setMode("workspace");
+  }
   const [backends, setBackends] = React.useState<ComposerBackend[] | null>(null);
   // Onboarded workspaces — fetched once per dialog-open. Feeds the Describe-mode
   // multi-select picker AND (for "Edit in wizard") resolves a composed
@@ -193,8 +212,8 @@ export function NewRunDialog({
   // disabled composer (404 / empty / error) goes straight to the manual wizard.
   React.useEffect(() => {
     if (!open) return;
-    // reset all transient state for a clean dialog each open
-    setMode("workspace");
+    // reset all OTHER transient state for a clean dialog each open — `mode`
+    // itself already reset synchronously above, on the same commit (UI-RUN-4).
     setBackends(null);
     setPrompt("");
     setWorkspaceSelections([]);
@@ -525,45 +544,83 @@ export function NewRunDialog({
               {workspacesLoading && workspaces.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Loading workspaces…</p>
               ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {workspaces.map((w) => {
-                    const KindIcon = (KIND_META[w.kind] ?? KIND_META.local_dir).Icon;
-                    return (
-                      <OptionCard
-                        key={w.id}
-                        selected={false}
-                        // The backends probe is still in flight while
-                        // backends === null — chooseWorkspace reads
-                        // composerEnabled (derived from it) AT CLICK TIME, so
-                        // a click landing inside that window would route to
-                        // the manual wizard even when the composer is really
-                        // enabled, with no way back to "Describe your task".
-                        disabled={backends === null}
-                        onClick={() => chooseWorkspace({ workspaceId: w.id })}
-                        className="h-full"
-                        title={
-                          <span className="flex items-center gap-2">
-                            <KindIcon
-                              className="size-4 shrink-0 text-muted-foreground"
-                              aria-hidden="true"
-                            />
-                            {w.name}
-                            <Chip tone={statusTone(w.status).tone}>{statusWord(w.status)}</Chip>
-                          </span>
-                        }
-                        hint={<Mono className="text-[0.6875rem]">{w.source}</Mono>}
-                      />
-                    );
-                  })}
-                  <OptionCard
-                    selected={false}
-                    disabled={backends === null}
-                    onClick={() => chooseWorkspace(null)}
-                    className="h-full"
-                    title="No workspace — ad-hoc run"
-                    hint="An empty scratch directory inside the sandbox. Nothing on your machine is reachable."
-                  />
-                </div>
+                <>
+                  {/* UI-RUN-7: the composer-backends probe still gates every
+                      card below (chooseWorkspace reads composerEnabled AT
+                      CLICK TIME — see its own comment) — say so instead of
+                      just greying the whole grid out with no explanation. */}
+                  {backends === null && (
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <StatusChip status="checking" /> Checking which run modes are available…
+                    </p>
+                  )}
+                  {/* UX-5: the first decision of the first-run journey must
+                      never present an empty grid with no explanation and no
+                      way to fix it — WorkspacePicker's own empty state
+                      (workspace-picker.tsx) says the same thing. */}
+                  {workspaces.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No workspaces added yet — runs can only attach what exists here.
+                    </p>
+                  )}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {workspaces.map((w) => {
+                      const KindIcon = (KIND_META[w.kind] ?? KIND_META.local_dir).Icon;
+                      return (
+                        <OptionCard
+                          key={w.id}
+                          selected={false}
+                          // The backends probe is still in flight while
+                          // backends === null — chooseWorkspace reads
+                          // composerEnabled (derived from it) AT CLICK TIME, so
+                          // a click landing inside that window would route to
+                          // the manual wizard even when the composer is really
+                          // enabled, with no way back to "Describe your task".
+                          disabled={backends === null}
+                          onClick={() => chooseWorkspace({ workspaceId: w.id })}
+                          className="h-full"
+                          title={
+                            <span className="flex items-center gap-2">
+                              <KindIcon
+                                className="size-4 shrink-0 text-muted-foreground"
+                                aria-hidden="true"
+                              />
+                              {w.name}
+                              <Chip tone={statusTone(w.status).tone}>{statusWord(w.status)}</Chip>
+                            </span>
+                          }
+                          hint={<Mono className="text-[0.6875rem]">{w.source}</Mono>}
+                        />
+                      );
+                    })}
+                    {/* UX-5: the workspace-first screen asks the operator to
+                        pick an onboarded workspace but, until now, offered no
+                        way to onboard one from here — opens the SAME
+                        already-mounted origin="run" wizard ComposeForm's own
+                        Add-workspace affordance does. Not gated on the
+                        backends probe — it never reads composerEnabled. */}
+                    <OptionCard
+                      selected={false}
+                      onClick={() => setAddWorkspaceOpen(true)}
+                      className="h-full"
+                      title={
+                        <span className="flex items-center gap-2">
+                          <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          Add a workspace
+                        </span>
+                      }
+                      hint="Onboard a new directory or repo, then attach it to this run."
+                    />
+                    <OptionCard
+                      selected={false}
+                      disabled={backends === null}
+                      onClick={() => chooseWorkspace(null)}
+                      className="h-full"
+                      title="No workspace — ad-hoc run"
+                      hint="An empty scratch directory inside the sandbox. Nothing on your machine is reachable."
+                    />
+                  </div>
+                </>
               )}
             </div>
           )}

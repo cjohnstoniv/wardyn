@@ -392,11 +392,13 @@ describe("ComposeReview — setup checklist", () => {
     expect(screen.getByTestId(`setup-item-${workspaceItem.id}`).className).not.toMatch(/border-danger/);
   });
 
-  it("a missing secret item's fix calls onAddSecret with Fix.SecretName", async () => {
+  it("a missing secret item's fix calls onAddSecret with Fix.SecretName and the item's own kind", async () => {
     const { onAddSecret } = renderReview(baseResult(), { setupItems: [secretItem] });
     const row = screen.getByTestId(`setup-item-${secretItem.id}`);
     await userEvent.setup().click(within(row).getByRole("button", { name: /add secret/i }));
-    expect(onAddSecret).toHaveBeenCalledWith("acme-pg-credentials");
+    // kind is forwarded (UI-RUN-1) so a caller can branch on it — this row's
+    // own kind is "secret", never assumed to be llm_access.
+    expect(onAddSecret).toHaveBeenCalledWith("acme-pg-credentials", "secret");
   });
 
   it("a missing workspace item's fix calls onFixWorkspace with Fix.WorkspaceID", async () => {
@@ -452,7 +454,7 @@ describe("ComposeReview — setup checklist", () => {
     expect(row.className).not.toMatch(/border-danger/);
     expect(within(row).getByText("Needs setup")).toBeInTheDocument();
     await userEvent.setup().click(within(row).getByRole("button", { name: /add secret/i }));
-    expect(onAddSecret).toHaveBeenCalledWith("stripe-key");
+    expect(onAddSecret).toHaveBeenCalledWith("stripe-key", "workspace_secret");
   });
 
   it("shows the residency sub-line for each residency value, and none when absent", () => {

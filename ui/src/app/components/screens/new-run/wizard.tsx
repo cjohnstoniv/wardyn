@@ -402,13 +402,17 @@ export function PermissionWizard({
     }
   };
 
-  // Shared add-secret recovery (run-warnings.ts): a manual "Add secret" applies the
-  // saved name to llmSecretName; the launch-error fix re-launches once the named
-  // secret exists (H3, mirrors the composer review panel). Both reload the list.
+  // Shared add-secret recovery (run-warnings.ts): a manual "Add secret" just
+  // reloads the list + refreshes the checklist — it must NEVER assume WHICH
+  // WizardState field the saved name belongs to (UI-RUN-1: this used to
+  // always apply it to llmSecretName, so the Git-PAT card's own "Add secret"
+  // silently composed an unrelated api_key grant naming the PAT to
+  // api.anthropic.com). Each call site below supplies its OWN per-call setter
+  // via openManual's second argument. The launch-error fix re-launches once
+  // the named secret exists (H3, mirrors the composer review panel).
   const secretFix = useAddSecretFix({
-    onManual: (name) => {
+    onManual: () => {
       loadSecrets();
-      patch({ llmSecretName: name });
       // Refresh the Review checklist so a just-stored secret flips to Configured.
       void runPreflightRef.current();
     },
@@ -454,9 +458,15 @@ export function PermissionWizard({
               <StepAccess
                 state={state}
                 patch={patch}
+                workspaces={workspaces}
                 secrets={secrets}
                 secretsLoading={secretsLoading}
-                onAddSecret={() => secretFix.openManual()}
+                // UI-RUN-1: this card's OWN "Add secret" is about the Git PAT
+                // grant's secret — the per-call setter names gitPatSecretName,
+                // never the shared handler's old (removed) llmSecretName guess.
+                onAddSecret={() =>
+                  secretFix.openManual(undefined, (name) => patch({ gitPatSecretName: name }))
+                }
               />
             )}
             {step.id === "egress" && (
@@ -485,7 +495,19 @@ export function PermissionWizard({
                 preflightStatus={preflightStatus}
                 acknowledged={acknowledged}
                 onAcknowledge={setAcknowledged}
-                onAddSecret={(name) => secretFix.openManual(name)}
+                // UI-RUN-1: branch on the checklist row's OWN kind — only a
+                // genuine llm_access row (the agent has no model access at
+                // all) may set llmSecretName. Every other kind (e.g. a "secret"
+                // row for a git_pat's own PAT) already has its reference living
+                // in the right WizardState field (gitPatSecretName); the save
+                // just needs to make that name exist, never re-point
+                // llmSecretName at it.
+                onAddSecret={(name, kind) =>
+                  secretFix.openManual(
+                    name,
+                    kind === "llm_access" ? (n) => patch({ llmSecretName: n }) : undefined,
+                  )
+                }
                 onFixWorkspace={(id) => {
                   // Re-run preflight once the scan settles so the checklist
                   // reflects the new scan status.

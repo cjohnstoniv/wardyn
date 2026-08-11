@@ -31,8 +31,19 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
   });
 
   it("pins RD entries verbatim", () => {
-    expect(RD.NONE_LINE).toBe("No integration can drive Claude Code. This run launches; its first model call fails.");
+    expect(RD.NONE_LINE("Claude Code")).toBe(
+      "No integration can drive Claude Code. This run launches; its first model call fails.",
+    );
     expect(RD.EXEC_LINE).toBe("Governed command — no model access is wired, and nothing suggests otherwise.");
+  });
+
+  // UI-RUN-5: NONE_LINE is parameterized on the agent's display label — the
+  // wizard also supports Codex CLI, and a run whose agent isn't Claude Code
+  // must never be told nothing can drive "Claude Code" specifically.
+  it("parameterizes NONE_LINE on the agent label", () => {
+    expect(RD.NONE_LINE("Codex CLI")).toBe(
+      "No integration can drive Codex CLI. This run launches; its first model call fails.",
+    );
   });
 });
 
@@ -43,10 +54,16 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
 // back to the internal term.
 describe("workspace-copy — no exported string leaks the word 'harness'", () => {
   it("checks every C, V2C, and RD value", () => {
-    const allStrings = [...Object.values(C), ...Object.values(V2C), ...Object.values(RD)];
+    // RD.NONE_LINE is a function now (parameterized on the agent label,
+    // UI-RUN-5) — filter to the plain strings and check its rendered OUTPUT
+    // separately, so the harness-leak guard still covers it.
+    const allStrings = [...Object.values(C), ...Object.values(V2C), ...Object.values(RD)].filter(
+      (v): v is string => typeof v === "string",
+    );
     expect(allStrings.length).toBeGreaterThan(30); // sanity: didn't accidentally test an empty set
     for (const s of allStrings) {
       expect(s.toLowerCase()).not.toContain("harness");
     }
+    expect(RD.NONE_LINE("Claude Code").toLowerCase()).not.toContain("harness");
   });
 });

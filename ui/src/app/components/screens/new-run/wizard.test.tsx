@@ -197,6 +197,61 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  // UI-RUN-1 (CRITICAL): the wizard's shared add-secret handler used to write
+  // EVERY manually-saved secret name into llmSecretName, regardless of which
+  // "Add secret" button opened the dialog — so the Git-PAT card's OWN button
+  // (the LLM secret picker it originally served was deleted) silently
+  // composed an api_key grant naming the PAT for api.anthropic.com, alongside
+  // the intended git_pat grant. A stored Azure DevOps PAT must never be sent
+  // to Anthropic as a model key.
+  it("a Git PAT saved via the card's own Add-secret button never composes an api_key grant to api.anthropic.com (UI-RUN-1)", async () => {
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        initialState={{ ...initialWizardState("CC2"), workspaces: [{ workspaceId: workspace.id }] }}
+      />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Basics -> Access
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+
+    // Enable Git PAT and set its host.
+    await user.click(await screen.findByRole("switch", { name: /git pat/i }));
+    await user.type(screen.getByLabelText("Host"), "dev.azure.com");
+
+    // The card's OWN "Add secret" — the only such button on this step now
+    // that the LLM secret picker is gone. Named lookup: the wizard's OWN
+    // dialog ("New run") is ALSO role="dialog" and stays open underneath.
+    await user.click(screen.getByRole("button", { name: /add secret/i }));
+    const dialog = await screen.findByRole("dialog", { name: /^add secret$/i });
+    // Secret names are lowercase-only (SECRET_NAME_RE) — "ado-pat", not the
+    // finding's illustrative "ADO_PAT".
+    await user.type(within(dialog).getByLabelText("Name"), "ado-pat");
+    await user.type(within(dialog).getByLabelText(/value/i), "ado-pat-secret-value");
+    await user.click(within(dialog).getByRole("button", { name: /^save secret$/i }));
+
+    // Saving applies the name to the Git PAT's OWN field (gitPatSecretName) —
+    // no separate manual combobox pick needed, and Access is already valid.
+    await waitFor(() => expect(screen.getByText("ado-pat")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^next$/i })).toBeEnabled());
+
+    // Access -> Egress -> Confinement -> Review
+    for (let i = 0; i < 3; i++) {
+      await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    }
+    await screen.findByRole("button", { name: /launch run/i });
+
+    // The composed policy carries ONLY the git_pat grant — never an api_key
+    // grant that would misroute the PAT to api.anthropic.com. "git_pat"
+    // legitimately appears twice (the Grants chip + the raw policy JSON
+    // below it) — getAllByText tolerates that; "api_key" must appear NOWHERE.
+    expect(screen.getAllByText("git_pat").length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("api_key")).toHaveLength(0);
+  });
+
   it("loads the selected workspace's recorded egress (approved_egress) into the run", async () => {
     // The recording promoted these into the workspace; a new run should inherit them.
     const wsWithEgress: Workspace = { ...workspace, approved_egress: ["registry.npmjs.org", "api.anthropic.com"] };

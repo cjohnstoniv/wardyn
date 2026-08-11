@@ -5,11 +5,13 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  applyProfileSpecToState,
   buildSpec,
   comesWithLine,
   impliedEgressHosts,
   initialWizardState,
   isValidDomain,
+  primaryWorkspaceId,
   secretAutoGrants,
   validateStep,
   wizardStateFromProposal,
@@ -651,5 +653,216 @@ describe("isValidDomain — never stricter than the server's ValidDomainEntry", 
     expect(isValidDomain("   ")).toBe(false);
     expect(isValidDomain("https://example.com/api")).toBe(false);
     expect(isValidDomain("example.com /etc")).toBe(false);
+  });
+});
+
+// PARITY-2: a multi-source workspace has no single kind/source to flatten to
+// — internal/store/store.go's deriveWorkspaceMirrors bails (leaves Kind/
+// Source empty) whenever len(Sources) != 1. The old buildSpec read w.kind/
+// w.source directly, so a multi-source or migrated-ephemeral (0029) workspace
+// silently attached NOTHING — a 400 "mount source is empty" at launch with no
+// operator fix available. Iterating w.sources closes it.
+describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
+  const multiWs = {
+    id: "ws-multi",
+    name: "monorepo-plus-scratch",
+    // The single-mirror fields a real multi-source record leaves EMPTY —
+    // asserting the fix does NOT read these.
+    kind: "" as unknown as Workspace["kind"],
+    source: "",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+    sources: [
+      { type: "local_dir", path: "/home/me/api" },
+      { type: "repo", source: "acme/widgets" },
+      { type: "ephemeral", target: "/home/agent/scratch" },
+    ],
+    requirements: { "write:/home/me/api": { level: "required", provenance: "operator_set" } },
+  } as Workspace;
+
+  it("emits one workspace_mounts entry per local_dir source and one workspace_repos entry per repo source", () => {
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-multi" }] },
+      [multiWs],
+    );
+    expect(inline_policy.workspace_mounts).toEqual([
+      { source: "/home/me/api", target: "/home/agent/work", read_only: false },
+    ]);
+    expect(inline_policy.workspace_repos).toEqual([{ repo: "acme/widgets" }]);
+  });
+
+  it("never emits an empty-source mount or repo (the exact PARITY-2 bug)", () => {
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-multi" }] },
+      [multiWs],
+    );
+    expect(inline_policy.workspace_mounts?.some((m) => m.source === "")).toBe(false);
+    expect(inline_policy.workspace_repos?.some((r) => r.repo === "")).toBe(false);
+  });
+
+  it("names the run.repo label off the resolved repo, never the empty single-mirror source", () => {
+    const { run } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-multi" }] },
+      [multiWs],
+    );
+    expect(run.repo).toBe("acme/widgets");
+  });
+
+  // Migration 0029's exact rewrite of a legacy 'container' workspace:
+  // sources=[{type:ephemeral,...}] + a custom base_image — mirrors as
+  // Kind="ephemeral", Source="".
+  it("a purely ephemeral (migrated legacy container) workspace attaches no mount/repo but conveys its identity via workspace_id", () => {
+    const ephemeralWs = {
+      id: "ws-eph",
+      name: "old-container",
+      kind: "ephemeral" as unknown as Workspace["kind"],
+      source: "",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+      sources: [{ type: "ephemeral", target: "/home/agent/work" }],
+    } as Workspace;
+    const { run, inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-eph" }] },
+      [ephemeralWs],
+    );
+    expect(inline_policy.workspace_mounts).toBeUndefined();
+    expect(inline_policy.workspace_repos).toBeUndefined();
+    expect(run.repo).toBe("");
+    // Residual PARITY-2: with no mount/repo, referencedWorkspaces can't match
+    // the workspace, so its migration-0029 base_image would be dropped unless
+    // its identity rides along for seedRequestWorkspace to resolve.
+    expect(run.workspace_id).toBe("ws-eph");
+  });
+
+  it("does NOT send workspace_id when the selection already resolves to a mount (no double-seed)", () => {
+    const ws = localDirWorkspace("ws-local");
+    const { run } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-local" }] },
+      [ws],
+    );
+    expect(run.workspace_id).toBeUndefined();
+  });
+
+  it("a workspace with no .sources at all still resolves via the legacy single-mirror fallback (fixture/back-compat)", () => {
+    const ws = localDirWorkspace("ws-legacy");
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-legacy" }] },
+      [ws],
+    );
+    expect(inline_policy.workspace_mounts).toEqual([
+      { source: "/home/me/ws-legacy", target: "/home/agent/work", read_only: true },
+    ]);
+  });
+});
+
+// PARITY-3: the server picks the PRIMARY workspace mounts-then-repos
+// (referencedWorkspaces, workspace_run.go) — it walks the resolved spec's
+// workspace_mounts in FULL before workspace_repos, so wsRefs[0] is whichever
+// SELECTED workspace contributes the FIRST local_dir mount, never simply
+// selections[0]. primaryWorkspaceId is the client-side twin.
+describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own pick (PARITY-3)", () => {
+  const repoWs = {
+    id: "ws-repo",
+    name: "api-service",
+    kind: "repo",
+    source: "acme/api-service",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+  } as Workspace;
+  const localWs = {
+    id: "ws-local",
+    name: "payments-local",
+    kind: "local_dir",
+    source: "/home/me/payments",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+  } as Workspace;
+
+  it("picks the FIRST local_dir-sourced selection even when a repo was attached first", () => {
+    const selections = [{ workspaceId: "ws-repo" }, { workspaceId: "ws-local" }];
+    expect(primaryWorkspaceId(selections, [repoWs, localWs])).toBe("ws-local");
+  });
+
+  it("matches raw selection order when the first selection IS local_dir (the common case)", () => {
+    const selections = [{ workspaceId: "ws-local" }, { workspaceId: "ws-repo" }];
+    expect(primaryWorkspaceId(selections, [repoWs, localWs])).toBe("ws-local");
+  });
+
+  it("falls back to the first repo-sourced selection when nothing local_dir is attached", () => {
+    const repoWs2 = { ...repoWs, id: "ws-repo-2", source: "acme/other" };
+    const selections = [{ workspaceId: "ws-repo" }, { workspaceId: "ws-repo-2" }];
+    expect(primaryWorkspaceId(selections, [repoWs, repoWs2])).toBe("ws-repo");
+  });
+
+  // A multi-source workspace's OWN composition decides eligibility
+  // (resolvableSources), not the flattened single-mirror kind (PARITY-2) — a
+  // local_dir source anywhere in it still makes it primary-eligible.
+  it("a multi-source workspace with a local_dir source anywhere in it still counts", () => {
+    const mixedWs = {
+      id: "ws-mixed",
+      name: "mixed",
+      kind: "" as unknown as Workspace["kind"],
+      source: "",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+      sources: [
+        { type: "repo", source: "acme/widgets" },
+        { type: "local_dir", path: "/home/me/widgets" },
+      ],
+    } as Workspace;
+    const selections = [{ workspaceId: "ws-repo" }, { workspaceId: "ws-mixed" }];
+    expect(primaryWorkspaceId(selections, [repoWs, mixedWs])).toBe("ws-mixed");
+  });
+
+  it("returns undefined when no selection resolves against the fetched list", () => {
+    expect(primaryWorkspaceId([{ workspaceId: "ws-gone" }], [])).toBeUndefined();
+  });
+
+  it("returns undefined for an empty selection list", () => {
+    expect(primaryWorkspaceId([], [repoWs, localWs])).toBeUndefined();
+  });
+});
+
+// UI-RUN-3: applyProfileSpecToState's own docstring promises to KEEP the
+// operator's Basics choices when a saved policy/recorded profile populates
+// steps 2-4 — but it rebuilds from initialWizardState and only re-applied
+// agent/mode/task/workspaces, silently dropping runType and image. Picking a
+// profile after setting up a governed command + BYOI image converted it to
+// an agent run on the default image.
+describe("applyProfileSpecToState — keeps every Basics choice, incl. runType and image (UI-RUN-3)", () => {
+  const spec = {
+    allowed_domains: ["api.anthropic.com"],
+    first_use_approval: "deny_with_review" as const,
+    min_confinement_class: "CC2" as const,
+  };
+
+  it("carries runType forward — a governed command must not silently become an agent run", () => {
+    const state = { ...initialWizardState(), runType: "command" as const, task: "npm test" };
+    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
+    expect(applied.runType).toBe("command");
+  });
+
+  it("carries the BYOI image forward — it must not be discarded", () => {
+    const state = { ...initialWizardState(), image: "ghcr.io/acme/dev@sha256:deadbeef" };
+    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
+    expect(applied.image).toBe("ghcr.io/acme/dev@sha256:deadbeef");
+  });
+
+  it("buildSpec re-emits task_mode: exec and run.image after applying a profile", () => {
+    const state = {
+      ...initialWizardState(),
+      runType: "command" as const,
+      image: "ghcr.io/acme/dev@sha256:deadbeef",
+      task: "npm test",
+    };
+    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
+    const { run } = buildSpec(applied);
+    expect(run.task_mode).toBe("exec");
+    expect(run.image).toBe("ghcr.io/acme/dev@sha256:deadbeef");
   });
 });

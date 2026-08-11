@@ -129,7 +129,7 @@ export function StepBasics({
 
       <Field
         label="Workspaces"
-        hint="Confirming the workspace you chose when starting this run — change it, add another, or remove it here. Only onboarded directories, repos, and container images can be attached; a raw host path is never accepted. A container attaches as the run's base image (and its bound model access); directories/repos mount alongside. The first selected is the primary; none attached runs an ephemeral scratch directory."
+        hint="Confirming the workspace you chose when starting this run — change it, add another, or remove it here. Only onboarded directories and repos can be attached; a raw host path is never accepted. The first selected is the primary; none attached runs an ephemeral scratch directory."
       >
         <WorkspacePicker
           selections={state.workspaces}

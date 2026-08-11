@@ -46,7 +46,7 @@ import { cn } from "../../ui/utils";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Field } from "./step-shell";
-import type { GitHubPermission, WizardState } from "./wizard-types";
+import { agentLabel, primaryWorkspaceId, type GitHubPermission, type WizardState } from "./wizard-types";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import {
   integrationsApi,
@@ -63,12 +63,19 @@ export function StepAccess({
   secrets,
   secretsLoading,
   onAddSecret,
+  workspaces = [],
 }: {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
   secrets: string[];
   secretsLoading: boolean;
   onAddSecret: () => void;
+  // The onboarded-workspace list state.workspaces[].workspaceId resolves
+  // against — needed so the PRIMARY pick (PARITY-3) can see each selection's
+  // real composition (local_dir vs repo), not just raw selection order.
+  // Optional/defaulted so an existing caller that hasn't threaded it through
+  // yet still renders (degrades to "no primary resolvable").
+  workspaces?: Workspace[];
 }) {
   const isGovernedCommand = state.runType === "command";
 
@@ -85,7 +92,7 @@ export function StepAccess({
         <ModelAccessCard
           agent={state.agent}
           integrationId={state.integrationId}
-          primaryWorkspaceId={state.workspaces[0]?.workspaceId}
+          primaryWorkspaceId={primaryWorkspaceId(state.workspaces, workspaces)}
           onPatch={patch}
         />
       )}
@@ -486,7 +493,7 @@ export function ModelAccessCard({
         ) : (
           <div className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5">
             <TriangleAlert className="mt-0.5 size-3 shrink-0 text-warning" aria-hidden="true" />
-            <p className="text-[0.75rem] leading-snug text-warning">{RD.NONE_LINE}</p>
+            <p className="text-[0.75rem] leading-snug text-warning">{RD.NONE_LINE(agentLabel(agent))}</p>
           </div>
         )}
         <div className="flex justify-end">
@@ -556,7 +563,7 @@ function OverridePeek({
         <SheetHeader>
           <SheetTitle>Model access for this run</SheetTitle>
           <SheetDescription>
-            Integrations that can power {agent === "codex-cli" ? "Codex CLI" : "Claude Code"}. This is a
+            Integrations that can power {agentLabel(agent)}. This is a
             one-off choice for this run only — it changes nothing on the workspace or the server
             default.
           </SheetDescription>

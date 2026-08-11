@@ -343,11 +343,16 @@ describe("composer.compose() + composer.listComposerBackends()", () => {
 });
 
 // resolveComposeWorkspace resolves a compose-form WorkspaceSelection (from the
-// onboarded multi-select) into the compose wire shape — mirrors buildSpec's
-// per-selection resolution in wizard-types.ts, and (Item 1 fix) now shares
-// its resolvedMountReadOnly reader instead of a separate `!sel.readOnly`
+// onboarded multi-select) into the compose wire shape(s) — mirrors buildSpec's
+// per-selection resolution in wizard-types.ts, and (Item 1 fix) shares its
+// resolvedMountReadOnly reader instead of a separate `!sel.readOnly`
 // derivation, so the two paths can't resolve write access differently for
-// the identical picker state. Pure so it's unit-testable without mocking fetch.
+// the identical picker state. Returns an ARRAY (PARITY-2): a multi-source
+// workspace has no single {kind,path/repo} descriptor to flatten to, so one
+// selection can resolve to several wire entries — a single-source workspace
+// (every fixture below except the dedicated multi-source block) still
+// resolves to exactly one, so `[0]` is that one entry. Pure so it's
+// unit-testable without mocking fetch.
 describe("resolveComposeWorkspace", () => {
   const repoWs: Workspace = {
     id: "ws-repo",
@@ -371,7 +376,7 @@ describe("resolveComposeWorkspace", () => {
 
   it("resolves a repo selection to kind git + repo source", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-repo" };
-    expect(resolveComposeWorkspace(sel, available)).toEqual({ kind: "git", repo: "acme/payments" });
+    expect(resolveComposeWorkspace(sel, available)).toEqual([{ kind: "git", repo: "acme/payments" }]);
   });
 
   // Item 1 (HIGH): this used to read `read_write: !sel.readOnly`, which is
@@ -384,16 +389,14 @@ describe("resolveComposeWorkspace", () => {
   // manual wizard) is read-only.
   it("resolves a local_dir selection with no write contract to a READ-ONLY mount (safe baseline)", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-local" };
-    expect(resolveComposeWorkspace(sel, available)).toEqual({
-      kind: "local",
-      path: "/home/me/app",
-      read_write: false,
-    });
+    expect(resolveComposeWorkspace(sel, available)).toEqual([
+      { kind: "local", path: "/home/me/app", read_write: false },
+    ]);
   });
 
   it("honors readOnly: true on a local selection (read_write: false)", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-local", readOnly: true };
-    expect(resolveComposeWorkspace(sel, available)?.read_write).toBe(false);
+    expect(resolveComposeWorkspace(sel, available)[0]?.read_write).toBe(false);
   });
 
   // Item 1's exact reported mechanism: source_scan.go seeds an OPTIONAL
@@ -408,7 +411,7 @@ describe("resolveComposeWorkspace", () => {
 
     it("toggle OFF (no enabledOptional entry) resolves read-only on the wire", () => {
       const sel: WorkspaceSelection = { workspaceId: "ws-local" };
-      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(false);
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])[0]?.read_write).toBe(false);
     });
 
     it("toggle ON (enabledOptional carries the write key) resolves read-write on the wire", () => {
@@ -420,12 +423,12 @@ describe("resolveComposeWorkspace", () => {
         enabledOptional: ["write:/home/me/app"],
         readOnly: false,
       };
-      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(true);
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])[0]?.read_write).toBe(true);
     });
 
     it("a stray readOnly:false with the key NOT enabled still can't widen an un-granted default", () => {
       const sel = { workspaceId: "ws-local", readOnly: false };
-      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(false);
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])[0]?.read_write).toBe(false);
     });
   });
 
@@ -435,12 +438,74 @@ describe("resolveComposeWorkspace", () => {
       requirements: { "write:/home/me/app": { level: "required", provenance: "operator_set" } },
     } as Workspace;
     const sel: WorkspaceSelection = { workspaceId: "ws-local" };
-    expect(resolveComposeWorkspace(sel, [wsWithRequiredWrite])?.read_write).toBe(true);
+    expect(resolveComposeWorkspace(sel, [wsWithRequiredWrite])[0]?.read_write).toBe(true);
   });
 
-  it("returns undefined for a stale selection (workspace no longer onboarded)", () => {
+  it("returns an empty array for a stale selection (workspace no longer onboarded)", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-deleted" };
-    expect(resolveComposeWorkspace(sel, available)).toBeUndefined();
+    expect(resolveComposeWorkspace(sel, available)).toEqual([]);
+  });
+
+  // PARITY-2: a multi-source workspace has no single kind/source to flatten
+  // to (the server's own deriveWorkspaceMirrors leaves Kind/Source empty for
+  // exactly this case) — the old flatten produced a garbage
+  // {kind:"local",path:""} entry (or, for a mirror that read "repo", an empty
+  // repo string). Iterating .sources fixes it: one entry per repo/local_dir
+  // source, nothing for ephemeral.
+  describe("a multi-source workspace (PARITY-2)", () => {
+    const multiWs = {
+      id: "ws-multi",
+      name: "monorepo-plus-scratch",
+      // The single-mirror fields a real multi-source record leaves EMPTY
+      // (internal/store/store.go's deriveWorkspaceMirrors bails on
+      // len(Sources) != 1) — asserting the fix does NOT read these.
+      kind: "" as unknown as Workspace["kind"],
+      source: "",
+      status: "scanned",
+      created_at: "now",
+      updated_at: "now",
+      sources: [
+        { type: "local_dir", path: "/home/me/api" },
+        { type: "repo", source: "acme/widgets" },
+        { type: "ephemeral", target: "/home/agent/scratch" },
+      ],
+      // Drives read_write below via resolvedMountReadOnly (keyed on THIS
+      // source's own path, not the whole workspace — PARITY-2) — the
+      // source's own (server-only) `writable` field plays no part client-side.
+      requirements: { "write:/home/me/api": { level: "required", provenance: "operator_set" } },
+    } as Workspace;
+
+    it("emits one entry per repo/local_dir source and nothing for the ephemeral one", () => {
+      const sel: WorkspaceSelection = { workspaceId: "ws-multi" };
+      expect(resolveComposeWorkspace(sel, [multiWs])).toEqual([
+        { kind: "local", path: "/home/me/api", read_write: true },
+        { kind: "git", repo: "acme/widgets" },
+      ]);
+    });
+
+    it("never falls back to an empty single-mirror descriptor", () => {
+      const sel: WorkspaceSelection = { workspaceId: "ws-multi" };
+      const out = resolveComposeWorkspace(sel, [multiWs]);
+      expect(out.some((w) => w.kind === "local" && w.path === "")).toBe(false);
+      expect(out.some((w) => w.kind === "git" && w.repo === "")).toBe(false);
+    });
+  });
+
+  it("a purely ephemeral (migrated legacy container) workspace resolves to an empty array", () => {
+    // Migration 0029's exact rewrite: sources=[{type:ephemeral,...}] +
+    // base_image={kind:custom,...} — mirrors as Kind="ephemeral", Source="".
+    const ephemeralWs = {
+      id: "ws-eph",
+      name: "old-container",
+      kind: "ephemeral" as unknown as Workspace["kind"],
+      source: "",
+      status: "scanned",
+      created_at: "now",
+      updated_at: "now",
+      sources: [{ type: "ephemeral", target: "/home/agent/work" }],
+    } as Workspace;
+    const sel: WorkspaceSelection = { workspaceId: "ws-eph" };
+    expect(resolveComposeWorkspace(sel, [ephemeralWs])).toEqual([]);
   });
 });
 

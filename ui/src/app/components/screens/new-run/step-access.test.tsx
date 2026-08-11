@@ -128,7 +128,7 @@ describe("StepAccess — model access resolution card", () => {
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([])); // nothing configured
     renderStep();
-    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
   });
 
   it("is absent entirely for a governed command, showing RD.EXEC_LINE instead", async () => {
@@ -159,7 +159,7 @@ describe("StepAccess — model access resolution card", () => {
       baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" }] }),
     );
     renderStep();
-    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
     expect(screen.queryByText("Team API key")).not.toBeInTheDocument();
   });
 
@@ -194,7 +194,7 @@ describe("StepAccess — model access resolution card", () => {
     renderStep();
     expect(await screen.findByText("Claude subscription (managed)")).toBeInTheDocument();
     expect(screen.getByText(/Applies because: the server's global provider config applies\./)).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).not.toBeInTheDocument();
   });
 
   // The derived "bedrock" row exists whenever the operator has touched ANY
@@ -229,7 +229,7 @@ describe("StepAccess — model access resolution card", () => {
       }),
     );
     renderStep();
-    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
     expect(screen.queryByText("AWS Bedrock")).not.toBeInTheDocument();
   });
 
@@ -262,7 +262,7 @@ describe("StepAccess — model access resolution card", () => {
     );
     renderStep();
     expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).not.toBeInTheDocument();
   });
 
   // Readiness is the SERVER's verdict, and it counts every credential lane
@@ -306,7 +306,7 @@ describe("StepAccess — model access resolution card", () => {
     );
     renderStep();
     expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).not.toBeInTheDocument();
   });
 
   // Dispatch injects the managed subscription only when Bedrock is NOT ready
@@ -448,7 +448,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     getSetupStatusMock.mockReturnValue(new Promise(() => {}));
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(screen.getByText(RD.RESOLVING_LINE)).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).toBeNull();
   });
 
   it("renders the neutral agent-mismatch line (not amber) when integrations exist, onPatch is absent, and none resolve", async () => {
@@ -460,7 +460,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).toBeNull();
   });
 
   it("keeps the amber zero-providers line when onPatch is absent and there are genuinely no ai_provider integrations", async () => {
@@ -468,7 +468,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listIntegrationsMock.mockResolvedValue(integrations([]));
     getSetupStatusMock.mockResolvedValue(baseStatus());
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
-    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
   });
 
   // MEDIUM fix: a row that can't drive ANY agent (Wardyn-features-only, e.g.
@@ -482,7 +482,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
       baseStatus({ integrations: [{ id: "azure_openai", category: "ai_provider", type: "azure_openai" }] }),
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
-    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
     expect(screen.queryByText(RD.AGENT_AT_REVIEW_LINE)).toBeNull();
   });
 
@@ -497,7 +497,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();
-    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).toBeNull();
   });
 
   // LOW test blind spot: onPatch absent renders the workspace link (never the
@@ -508,7 +508,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listIntegrationsMock.mockResolvedValue(integrations([]));
     getSetupStatusMock.mockResolvedValue(baseStatus());
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
-    await screen.findByText(RD.NONE_LINE);
+    await screen.findByText(RD.NONE_LINE("Claude Code"));
     const link = screen.getByRole("link", { name: /change on the workspace/i });
     expect(link).toHaveAttribute("href", "/workspaces");
     expect(link).toHaveAttribute("target", "_blank");
@@ -521,7 +521,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listIntegrationsMock.mockResolvedValue(integrations([]));
     getSetupStatusMock.mockResolvedValue(baseStatus());
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId="ws-1" />);
-    await screen.findByText(RD.NONE_LINE);
+    await screen.findByText(RD.NONE_LINE("Claude Code"));
     expect(screen.getByRole("link", { name: /change on the workspace/i })).toHaveAttribute("href", "/workspaces/ws-1");
   });
 });

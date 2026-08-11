@@ -471,7 +471,13 @@ export function SetupChecklist({
   onFixWorkspace,
 }: {
   items: SetupItem[];
-  onAddSecret?: (name: string) => void;
+  // `kind` is the row's own SetupItem.kind, forwarded verbatim (UI-RUN-1) —
+  // the manual wizard's StepReview branches on it so a Git-PAT/workspace
+  // secret row can never be misrouted into the LLM api_key grant the way a
+  // bare secret name alone can't disambiguate. The composer path (ComposeReview)
+  // ignores the extra argument — its own onAddSecret stays a plain 1-arg
+  // reflip, ComposeWorkspace has no gitPatSecretName-shaped state to misroute.
+  onAddSecret?: (name: string, kind: string) => void;
   onFixWorkspace?: (workspaceId: string) => void;
 }) {
   return (
@@ -508,7 +514,7 @@ function SetupChecklistRow({
   onFixWorkspace,
 }: {
   item: SetupItem;
-  onAddSecret?: (name: string) => void;
+  onAddSecret?: (name: string, kind: string) => void;
   onFixWorkspace?: (workspaceId: string) => void;
 }) {
   const fix = item.fix;
@@ -554,7 +560,7 @@ function SetupChecklistRow({
           size="sm"
           variant="outline"
           className="shrink-0 gap-1.5"
-          onClick={() => onAddSecret(fix.secret_name!)}
+          onClick={() => onAddSecret(fix.secret_name!, item.kind)}
         >
           <KeyRound className="size-3.5" /> Add secret
         </Button>

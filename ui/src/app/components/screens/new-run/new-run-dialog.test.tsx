@@ -1014,10 +1014,74 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     const adHoc = screen.getByRole("button", { name: /no workspace.*ad-hoc run/i });
     expect(card).toBeDisabled();
     expect(adHoc).toBeDisabled();
+    // UI-RUN-7: disabled cards with no feedback read as broken, not loading —
+    // a visible "checking" affordance explains the wait.
+    expect(screen.getByText(/checking which run modes are available/i)).toBeInTheDocument();
 
     resolveBackends(backends);
     await waitFor(() => expect(card).toBeEnabled());
     expect(adHoc).toBeEnabled();
+    expect(screen.queryByText(/checking which run modes are available/i)).not.toBeInTheDocument();
+  });
+
+  // UX-5: the workspace-first screen is the FIRST decision of the run
+  // journey — with zero onboarded workspaces it must say so and offer a way
+  // to fix it, not just fall through to a bare ad-hoc card with no
+  // explanation for why the grid above it is empty.
+  it("shows an empty-state note and an Add-workspace card when there are no onboarded workspaces yet (UX-5)", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    expect(
+      await screen.findByText(/no workspaces added yet — runs can only attach what exists here/i),
+    ).toBeInTheDocument();
+    const addCard = screen.getByRole("button", { name: /add a workspace/i });
+    expect(addCard).toBeEnabled();
+
+    // Opens the already-mounted origin="run" WorkspaceWizard.
+    await user.click(addCard);
+    expect(await screen.findByText("Add workspace")).toBeInTheDocument();
+  });
+
+  it("shows neither the empty-state note nor loses the Add-workspace card once workspaces exist", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([usableWorkspace]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+
+    await screen.findByRole("button", { name: /payments/i });
+    expect(screen.queryByText(/no workspaces added yet/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add a workspace/i })).toBeInTheDocument();
+  });
+
+  // UI-RUN-4: the dialog stays permanently mounted at every real call site, so
+  // mode/wizardInitial survive a close — a stale mode==="wizard" used to take
+  // the early return and mount the ABANDONED wizard for one commit (firing
+  // its own health()/listSecrets()/listPolicies() calls for real) before a
+  // passive effect corrected it back to "workspace".
+  it("does not transiently remount the abandoned wizard when re-opening after 'Configure manually' (UI-RUN-4)", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    const { rerender } = renderDialog(
+      <NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    await user.click(screen.getByRole("button", { name: /configure manually/i }));
+    await screen.findByText(/compose the agent's permission envelope/i);
+
+    // Close, then re-open — exactly what happens at a real call site
+    // (runs.tsx/app-shell.tsx/setup-screen.tsx keep this dialog mounted).
+    healthMock.mockClear();
+    rerender(<MemoryRouter><NewRunDialog open={false} onOpenChange={() => {}} onCreated={() => {}} /></MemoryRouter>);
+    rerender(<MemoryRouter><NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} /></MemoryRouter>);
+
+    // Lands back on the workspace-first chooser, not a flash of the
+    // abandoned wizard — and the wizard's own health probe never fired at
+    // all (it would have, at least once, had the wizard transiently mounted).
+    expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
+    expect(healthMock).not.toHaveBeenCalled();
   });
 
   // Item 6 (low — honesty): a workspace carries a requirements CONTRACT, never

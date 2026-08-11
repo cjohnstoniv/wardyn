@@ -15,7 +15,14 @@ import { Mono, YamlBlock } from "../../wardyn/code-block";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
 import { Field } from "./step-shell";
-import { buildSpec, comesWithLine, impliedEgressHosts, type WizardState } from "./wizard-types";
+import {
+  agentLabel,
+  buildSpec,
+  comesWithLine,
+  impliedEgressHosts,
+  primaryWorkspaceId,
+  type WizardState,
+} from "./wizard-types";
 // Reused rather than re-derived: the SAME resolution preview step-access.tsx's
 // card computes, so Review can't disagree with Access about what this run's
 // model access resolves to.
@@ -76,7 +83,12 @@ export function StepReview({
   // (older preflight fixture, or a test) never has to thread it through.
   acknowledged?: boolean;
   onAcknowledge?: (v: boolean) => void;
-  onAddSecret?: (name: string) => void;
+  // `kind` is the checklist item's own SetupItem.kind (compose-review.tsx's
+  // SetupChecklistRow forwards it) — UI-RUN-1: the wizard's onAddSecret
+  // handler branches on it so only a genuine llm_access row can ever route a
+  // saved secret name into llmSecretName; every other kind (a git_pat's own
+  // "secret" row included) must not.
+  onAddSecret?: (name: string, kind: string) => void;
   onFixWorkspace?: (workspaceId: string) => void;
 }) {
   const { run, inline_policy: composed } = React.useMemo(
@@ -90,13 +102,22 @@ export function StepReview({
   // read the stored spec, or Review would show a policy the server won't enforce.
   const inline_policy = attachedPolicy?.spec ?? composed;
   const byId = new Map(workspaces.map((w) => [w.id, w]));
-  const primaryWorkspace = state.workspaces[0] ? byId.get(state.workspaces[0].workspaceId) : undefined;
+  // The server's own primary pick (mounts-then-repos), not raw selection order
+  // (PARITY-3) — so this cell can't name a different workspace's credential
+  // binding than the run actually inherits.
+  const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
+  const primaryWorkspace = primaryWsId ? byId.get(primaryWsId) : undefined;
   const isGovernedCommand = state.runType === "command";
 
   // Self-fetched (Review doesn't otherwise receive the ai_provider integrations
   // list) — the SAME resolution preview step-access.tsx's card renders, reused
   // here rather than re-derived so the two steps can't disagree.
   const [ai, setAi] = React.useState<IntegrationRow[]>([]);
+  // UI-RUN-2: gates the first paint the same way ModelAccessCard's own `loaded`
+  // does (step-access.tsx, M5) — before this settles, `resolved`/`noLlmCred`
+  // are computed off default/empty state, so the amber "No model access" box
+  // must not render as a false positive before there's anything to conclude.
+  const [aiLoaded, setAiLoaded] = React.useState(false);
   React.useEffect(() => {
     let alive = true;
     integrationsApi
@@ -104,7 +125,10 @@ export function StepReview({
       .then((data) => {
         if (alive) setAi(data.ai);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setAiLoaded(true);
+      });
     return () => {
       alive = false;
     };
@@ -115,6 +139,7 @@ export function StepReview({
   // same status.bedrock?.ready its bedrock carve-out also needs.
   const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
   const [bedrockReady, setBedrockReady] = React.useState<boolean | undefined>(undefined);
+  const [statusLoaded, setStatusLoaded] = React.useState(false);
   React.useEffect(() => {
     let alive = true;
     setupApi
@@ -125,11 +150,20 @@ export function StepReview({
           setBedrockReady(status.bedrock?.ready);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setStatusLoaded(true);
+      });
     return () => {
       alive = false;
     };
   }, []);
+  // The THIRD loaded-gate input: preflight is a separate, per-entry fetch
+  // (POST /runs/preflight, kicked off by the wizard on stepping into Review)
+  // whose OWN verdict (llm_access satisfied?) can override the local
+  // resolution below — a "loading" preflight is exactly as unresolved as the
+  // two self-fetches above.
+  const loaded = aiLoaded && statusLoaded && preflightStatus !== "loading";
   const resolved = isGovernedCommand
     ? null
     : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai, integrations, bedrockReady);
@@ -198,7 +232,10 @@ export function StepReview({
           Reduced isolation: credential resident in sandbox
         </Chip>
       )}
-      {noLlmCred && (
+      {/* UI-RUN-2: gated on `loaded` — before the self-fetches settle, noLlmCred
+          is computed off default/empty state and would otherwise assert "No
+          model access" on every entry, even for a working pinned integration. */}
+      {loaded && noLlmCred && (
         <div
           className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-subtle p-3 text-xs leading-relaxed text-warning"
           data-testid="review-no-model-access"
@@ -289,6 +326,11 @@ export function StepReview({
           value={
             isGovernedCommand ? (
               <span className="text-muted-foreground">{RD.EXEC_LINE}</span>
+            ) : !loaded ? (
+              // UI-RUN-2: `resolved` is meaningless before the self-fetches
+              // settle — the sibling ModelAccessCard's own first-paint gate,
+              // ported here so Review can't assert either verdict early.
+              <span className="text-muted-foreground">{RD.RESOLVING_LINE}</span>
             ) : resolved ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-foreground">{resolved.row.name}</span>
@@ -303,7 +345,7 @@ export function StepReview({
               // repeat.
               <span className="text-muted-foreground">Provisioned — see the checklist above.</span>
             ) : (
-              <span className="text-warning">{RD.NONE_LINE}</span>
+              <span className="text-warning">{RD.NONE_LINE(agentLabel(state.agent))}</span>
             )
           }
         />

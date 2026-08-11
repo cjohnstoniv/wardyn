@@ -34,6 +34,7 @@ import { KIND_META } from "../workspaces";
 import type { ComposeAttachment, ComposeMode, ComposerBackend, Workspace } from "../../../lib/types";
 import {
   compositionSummary,
+  primaryWorkspaceId,
   unstoredRequiredSecrets,
   type RunWorkspaceSelection,
 } from "./wizard-types";
@@ -221,10 +222,10 @@ export function ComposeForm({
 
   // The context line's summary facts (§5) — computed here (not inside
   // WorkspacePicker) so the collapsed <summary> can show them without opening
-  // the picker.
-  const primaryWorkspace = workspaceSelections[0]
-    ? workspaces.find((w) => w.id === workspaceSelections[0].workspaceId)
-    : undefined;
+  // the picker. The server's own primary pick (mounts-then-repos), not raw
+  // selection order (PARITY-3).
+  const primaryWsId = primaryWorkspaceId(workspaceSelections, workspaces);
+  const primaryWorkspace = primaryWsId ? workspaces.find((w) => w.id === primaryWsId) : undefined;
   // Aggregated across EVERY resolved selection, not just the primary — an
   // attached secondary's unstored secrets are exactly as launch-relevant, and
   // the collapsed summary is the only place they'd otherwise vanish.
@@ -328,7 +329,7 @@ export function ComposeForm({
       {/* The agent isn't known until the proposal returns — "claude-code" here
           only narrows the tier-3 compatibility display; Review shows the
           server's authoritative llm_access once the proposal resolves it. */}
-      <ModelAccessCard agent="claude-code" primaryWorkspaceId={workspaceSelections[0]?.workspaceId} />
+      <ModelAccessCard agent="claude-code" primaryWorkspaceId={primaryWsId} />
 
       {/* Halved (H8): composerReady is the only fact left here — the card above
           states the llmReady fact more precisely. Lives here, not above the

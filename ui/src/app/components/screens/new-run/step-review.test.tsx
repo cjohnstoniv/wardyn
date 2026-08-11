@@ -120,7 +120,7 @@ describe("StepReview — preflight surfacing", () => {
     expect(screen.queryByTestId("preflight-cc-raise")).toBeNull();
   });
 
-  it("adds the autonomous-run wording to the no-model warning in batch mode", () => {
+  it("adds the autonomous-run wording to the no-model warning in batch mode", async () => {
     // Default state: claude-code + apikey + no stored secret => noLlmCred.
     render(
       <StepReview
@@ -130,13 +130,16 @@ describe("StepReview — preflight surfacing", () => {
         preflightStatus="idle"
       />,
     );
-    expect(screen.getByTestId("review-no-model-access")).toBeInTheDocument();
+    // UI-RUN-2: the box is gated on `loaded` (the self-fetches settling) —
+    // await it rather than asserting the (necessarily correct, but PREMATURE)
+    // first paint.
+    expect(await screen.findByTestId("review-no-model-access")).toBeInTheDocument();
     expect(screen.getByTestId("review-batch-no-model")).toHaveTextContent(
       /autonomous run can't perform its task without model access/i,
     );
   });
 
-  it("omits the autonomous wording for an interactive run", () => {
+  it("omits the autonomous wording for an interactive run", async () => {
     render(
       <StepReview
         state={{ ...initialWizardState("CC2"), mode: "interactive" }}
@@ -146,14 +149,14 @@ describe("StepReview — preflight surfacing", () => {
       />,
     );
     // The no-model warning still shows (no LLM cred), but without the batch clause.
-    expect(screen.getByTestId("review-no-model-access")).toBeInTheDocument();
+    expect(await screen.findByTestId("review-no-model-access")).toBeInTheDocument();
     expect(screen.queryByTestId("review-batch-no-model")).toBeNull();
   });
 
   // D3/claim2: the old remedy ("Go back to Access and pick a stored key") named
   // a control step-access.tsx no longer has — model access resolves from
   // integrations, and there is no manual picker on Access to "go back" to.
-  it("the no-model-access remedy names Integrations, not the deleted Access picker", () => {
+  it("the no-model-access remedy names Integrations, not the deleted Access picker", async () => {
     render(
       <StepReview
         state={initialWizardState("CC2")}
@@ -162,10 +165,43 @@ describe("StepReview — preflight surfacing", () => {
         preflightStatus="idle"
       />,
     );
-    const banner = screen.getByTestId("review-no-model-access");
+    const banner = await screen.findByTestId("review-no-model-access");
     expect(banner).toHaveTextContent(/Connect a provider under Integrations/);
     expect(banner).not.toHaveTextContent(/pick a stored key/i);
     expect(banner).not.toHaveTextContent(/go back to access/i);
+  });
+});
+
+// UI-RUN-2: StepReview had no loaded-gate on its OWN self-fetches (unlike its
+// sibling ModelAccessCard, M5) — before they settle, `resolved` is computed
+// off default/empty state, so the final gate screen asserted "No model
+// access" on every entry, even for a working pinned integration, before
+// silently retracting it once the fetch landed.
+describe("StepReview — Model access loaded-gate (UI-RUN-2)", () => {
+  it("shows the resolving line and suppresses the no-model-access box before the self-fetches settle", () => {
+    // Never-resolving (Once, so it doesn't leak into later tests in this
+    // file): assert the very FIRST paint, before any effect's .then/.finally
+    // has had a chance to run.
+    listIntegrationsMock.mockReturnValueOnce(new Promise(() => {}));
+    render(<StepReview state={initialWizardState("CC2")} patch={() => {}} />);
+    expect(screen.getByText(RD.RESOLVING_LINE)).toBeInTheDocument();
+    expect(screen.queryByTestId("review-no-model-access")).toBeNull();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).toBeNull();
+  });
+
+  it("treats a still-loading preflight as unresolved too, not just the two self-fetches", () => {
+    render(
+      <StepReview state={initialWizardState("CC2")} patch={() => {}} preflightStatus="loading" />,
+    );
+    expect(screen.getByText(RD.RESOLVING_LINE)).toBeInTheDocument();
+    expect(screen.queryByTestId("review-no-model-access")).toBeNull();
+  });
+
+  it("resolves to the honest amber line once every input has settled with nothing to resolve", async () => {
+    render(<StepReview state={initialWizardState("CC2")} patch={() => {}} preflightStatus="idle" />);
+    expect(await screen.findByTestId("review-no-model-access")).toBeInTheDocument();
+    expect(screen.getByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByText(RD.RESOLVING_LINE)).toBeNull();
   });
 });
 
@@ -550,9 +586,10 @@ describe("StepReview — Model access (resolved from integrations)", () => {
         preflightStatus="idle"
       />,
     );
-    await screen.findByText("Model access");
-    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+    // Waits out the self-fetches (UI-RUN-2's loaded gate) — the terminal
+    // "Provisioned" text only ever renders once `loaded` is true.
+    expect(await screen.findByText("Provisioned — see the checklist above.")).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE("Claude Code"))).not.toBeInTheDocument();
     expect(screen.queryByTestId("review-no-model-access")).not.toBeInTheDocument();
-    expect(screen.getByText("Provisioned — see the checklist above.")).toBeInTheDocument();
   });
 });

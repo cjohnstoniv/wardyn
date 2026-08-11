@@ -79,7 +79,10 @@ export const V2C = {
 // → honest none; it is never configured on these surfaces).
 export const RD = {
   ADVISORY: "This is advisory only — it never gets the run's credentials.",
-  NONE_LINE: "No integration can drive Claude Code. This run launches; its first model call fails.",
+  // Parameterized on the agent's display label (agentLabel(), wizard-types.ts)
+  // — the wizard also supports Codex CLI, and a run whose agent isn't Claude
+  // Code must never be told nothing can drive "Claude Code" specifically.
+  NONE_LINE: (agent: string) => `No integration can drive ${agent}. This run launches; its first model call fails.`,
   EXEC_LINE: "Governed command — no model access is wired, and nothing suggests otherwise.",
   // First-paint gate (ModelAccessCard, step-access.tsx): shown until its three
   // self-fetches (workspaces, integrations, setup status) all settle, so the

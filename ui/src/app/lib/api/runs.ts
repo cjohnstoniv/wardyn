@@ -94,6 +94,10 @@ export const runs = {
       // Per-run half of the requirements contract: which optional requirements
       // this run enables, plus any read-only narrowing, per attached workspace.
       workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+      // Primary-workspace id for a selection that resolves to no mount/repo (a
+      // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
+      // the server's seedRequestWorkspace, which the mount-less spec can't.
+      workspace_id?: string;
       // Explicit model-access override — tier 1 of the server's resolution chain.
       integration_id?: string;
     },
@@ -127,6 +131,7 @@ export const runs = {
     // explicit model-access override, so dropping them would launch a run the
     // Review screen did not describe.
     if (input.workspaces?.length) body.workspaces = input.workspaces;
+    if (input.workspace_id) body.workspace_id = input.workspace_id;
     if (input.integration_id) body.integration_id = input.integration_id;
     const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
@@ -144,6 +149,7 @@ export const runs = {
       interactive?: boolean;
       inline_policy?: RunPolicySpec;
       workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+      workspace_id?: string;
       integration_id?: string;
     },
   ): Promise<PreflightResult> {
@@ -164,6 +170,7 @@ export const runs = {
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
     // Same rationale as createRun's identical whitelist above — see its comment.
     if (input.workspaces?.length) body.workspaces = input.workspaces;
+    if (input.workspace_id) body.workspace_id = input.workspace_id;
     if (input.integration_id) body.integration_id = input.integration_id;
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });
     return asJson<PreflightResult>(res);
