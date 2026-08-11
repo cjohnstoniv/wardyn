@@ -32,11 +32,67 @@ func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspac
 	var added []string
 	for _, ws := range workspaces {
 		if p, ok := workspaceProfile(ws); ok {
-			added = append(added, unionAllowedDomains(spec, p.EgressDomains)...)
+			// Filter the merged SCAN PROFILE through this workspace's egress "off"
+			// overrides (GAP-EGRESS-5): the folded contract already drops an off'd
+			// egress requirement row, but the same host also rides in via the profile
+			// union here — which the fold never touches — so an operator who set
+			// egress:<host> off would still reach it. The scan seeds the host into
+			// BOTH lanes, so refusing the requirement row alone removes only the
+			// redundant copy; subtracting it here closes the profile path too.
+			added = append(added, unionAllowedDomains(spec, filterOffEgress(p.EgressDomains, egressOverriddenOff(ws)))...)
 		}
 		added = append(added, unionAllowedDomains(spec, ws.ApprovedEgress)...)
 	}
 	return added
+}
+
+// egressOverriddenOff returns the lowercased egress hosts this workspace REFUSED
+// via an attachment "off" override AND that no other contributor re-added (a host
+// re-laned required/optional by another attachment, or restated by the overlay,
+// survives in the folded contract, so it is NOT off). This is the set to subtract
+// from the merged scan-profile union so an "off" egress override actually closes
+// egress rather than being defeated by the profile path (GAP-EGRESS-5).
+//
+// ponytail: latent until an Overrides writer lands (WSPIPE-7) — WorkspaceAttachment.
+// Overrides is a real field FoldWorkspaceContract already honors, so this reads it
+// correctly today (usually empty); it just has no producer yet.
+func egressOverriddenOff(ws types.Workspace) map[string]bool {
+	off := map[string]bool{}
+	for _, att := range ws.Attachments {
+		for key, stance := range att.Overrides {
+			if stance != types.OverrideOff {
+				continue
+			}
+			if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
+				off[strings.ToLower(strings.TrimSpace(host))] = true
+			}
+		}
+	}
+	if len(off) == 0 {
+		return off
+	}
+	for key := range effectiveRequirements(ws) {
+		if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
+			delete(off, strings.ToLower(strings.TrimSpace(host)))
+		}
+	}
+	return off
+}
+
+// filterOffEgress drops every host in the off-set from domains (order-preserving,
+// case-insensitive). Returns domains unchanged when the off-set is empty.
+func filterOffEgress(domains []string, off map[string]bool) []string {
+	if len(off) == 0 {
+		return domains
+	}
+	out := domains[:0:0]
+	for _, d := range domains {
+		if off[strings.ToLower(strings.TrimSpace(d))] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // unionSiteConfigScmHosts adds the operator's site-config default SCM hosts
@@ -63,27 +119,39 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 
 // substituteArtifactEgress applies the operator's egress redirects to a run's
 // AllowedDomains. Two tiers (types.SiteConfig.EgressRedirects):
-//   - Ecosystem set: UNCHANGED from the old ArtifactOverride behavior — DROPS
-//     that language's entire public-registry host set (markers.go's egress*
-//     literals, via workspacescan.PublicRegistryHosts), not just the one
-//     redirect's own From host, since a mirror commonly fronts more than one
-//     public host for the same ecosystem (e.g. pip's index host AND its file-
-//     download CDN) and byte-identical fold-compat depends on dropping both.
+//   - Ecosystem set: DROPS that language's entire public-registry host set
+//     (markers.go's egress* literals, via workspacescan.PublicRegistryHosts), not
+//     just the one redirect's own From host, since a mirror commonly fronts more
+//     than one public host for the same ecosystem (e.g. pip's index host AND its
+//     file-download CDN) and byte-identical fold-compat depends on dropping both.
 //   - Ecosystem "" (network-only): DROPS exactly the one declared From host —
 //     there is no per-ecosystem table to consult for an arbitrary redirect.
 //
-// Either tier ADDS the redirect's To host. Corp REPLACES public for configured
-// redirects; everything else is untouched, and markers.go stays universally
-// correct — the substitution lives here, at the composition layer that reads
-// site-config, never in the marker literals. Returns a FRESH slice (never
-// mutates the input's backing array); a no-op (returns the input) when nothing
-// is configured. A malformed From/To leaves that redirect's public host(s) in
-// place (fail safe: never silently drop egress a build still needs).
+// SCOPE — matching run only (GAP-EGRESS-2). A redirect is applied ONLY when the
+// run's OWN egress actually reaches one of the public hosts it fronts (its From
+// host, or an ecosystem public host — the same hosts a scan of that ecosystem
+// seeds into the run's egress). types.EgressRedirect promises substitution "for
+// every MATCHING run"; without this, an unrelated sealed run gained the corp To
+// host (and, via planArtifactRedirect, the operator's injected registry token) it
+// never asked for. A run that names none of a redirect's public hosts is left
+// entirely untouched by it.
+//
+// The dropped hosts are matched port- and wildcard-aware (GAP-EGRESS-6): a
+// "*.pythonhosted.org" or "pypi.org:443" allowlist entry — both legal in
+// AllowedDomains — is subtracted exactly like a bare "pypi.org" is, so public
+// reach never survives beside the corp mirror.
+//
+// The applied tier ADDS the redirect's To host. Corp REPLACES public for
+// configured, in-scope redirects; everything else is untouched. Returns a FRESH
+// slice (never mutates the input's backing array); a no-op (returns the input)
+// when nothing is configured. A malformed From/To leaves that redirect's public
+// host(s) in place (fail safe: never silently drop egress a build still needs).
 func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	if len(sc.EgressRedirects) == 0 {
 		return domains
 	}
-	drop := map[string]bool{}
+	have := artifactRunHostSet(domains)
+	dropHost := map[string]bool{} // bare hosts to remove
 	var add []string
 	added := map[string]bool{}
 	for _, r := range sc.EgressRedirects {
@@ -91,16 +159,15 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		if to == "" {
 			continue // malformed To: this redirect contributes nothing
 		}
-		if r.Ecosystem != "" {
-			for _, h := range workspacescan.PublicRegistryHosts(r.Ecosystem) {
-				drop[strings.ToLower(h)] = true
-			}
-		} else {
-			from := strings.ToLower(workspacescan.HostOf(r.From))
-			if from == "" {
-				continue // malformed From: fail safe, drop nothing for this row
-			}
-			drop[from] = true
+		pub := redirectPublicHosts(r)
+		if len(pub) == 0 {
+			continue // malformed From on a network-only row: fail safe, drop nothing
+		}
+		if !runReachesAny(have, pub) {
+			continue // out of scope for this run: leave it entirely untouched
+		}
+		for _, h := range pub {
+			dropHost[strings.ToLower(h)] = true
 		}
 		if !added[to] {
 			added[to] = true
@@ -108,22 +175,56 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		}
 	}
 	out := make([]string, 0, len(domains)+len(add))
-	have := map[string]bool{}
+	seen := map[string]bool{}
 	for _, d := range domains {
-		key := strings.ToLower(d)
-		if drop[key] || have[key] {
+		if entryCoversAny(d, dropHost) {
 			continue
 		}
-		have[key] = true
+		key := strings.ToLower(d)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, d)
 	}
 	for _, a := range add {
-		if !have[a] {
-			have[a] = true
+		if !seen[a] {
+			seen[a] = true
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// appendNetworkRedirectDenials denies each NETWORK-ONLY redirect's From host so
+// deny-beats-allow-all closes the public route the operator redirected away
+// (GAP-EGRESS-4): a subtraction-only substitution does nothing under any
+// allow_all_egress policy (every learning Record session, plus any allow-all
+// operator policy), leaving From fully reachable while only the credentialed corp
+// To host was added. Ecosystem rows stay subtraction-only (a public CDN may still
+// be a legitimate fallback). Deduped against the existing deny-list; a no-op when
+// nothing network-only is configured.
+func appendNetworkRedirectDenials(denied []string, sc types.SiteConfig) []string {
+	have := map[string]bool{}
+	for _, d := range denied {
+		have[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	var add []string
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem != "" {
+			continue
+		}
+		from := strings.ToLower(workspacescan.HostOf(r.From))
+		if from == "" || have[from] {
+			continue
+		}
+		have[from] = true
+		add = append(add, from)
+	}
+	if len(add) == 0 {
+		return denied
+	}
+	return append(append([]string(nil), denied...), add...)
 }
 
 // workspaceSuggestedEgress collects the referenced workspaces' content-derived

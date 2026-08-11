@@ -168,6 +168,15 @@ func TestSeedRequestWorkspace(t *testing.T) {
 	})
 }
 
+// wrapEchoImageBuilder echoes FinalizeBase's output tag (baseRef -> the wrapped
+// wardyn-byoi/<runid> tag), so a test can assert the base image was WRAPPED, not
+// dispatched verbatim.
+type wrapEchoImageBuilder struct{ fakeImageBuilder }
+
+func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer) (string, error) {
+	return outputTag, nil
+}
+
 // TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage covers the
 // OTHER image-resolution path a migrated container-kind workspace exercises:
 // resolveWorkspaceImage (workspace_run.go), used by the import-pipeline's
@@ -175,14 +184,16 @@ func TestSeedRequestWorkspace(t *testing.T) {
 // pins the ordinary create-run --image/workspace_id seed. An explicit BaseImage
 // choice ("custom"/"registry"/"byo") takes precedence over the detected-
 // toolchain devcontainer path unconditionally, before any profile is even
-// consulted — the one thing the pre-composition-model "container" kind ever
-// did, so a migrated row (ephemeral source + BaseImage) must still resolve to
-// that same fixed image.
+// consulted. PARITY-4: that base image is now FinalizeBase-WRAPPED into a
+// wardyn-byoi/<runid> tag (the same wrap the workspace_id create-run door does),
+// which arms the fail-closed harness selftest — it is NOT dispatched verbatim
+// (that shipped a raw image with no agent-run to a UI-door run).
 func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, nil)
-	cfg.ImageBuilder = fakeImageBuilder{}
+	cfg.ImageBuilder = wrapEchoImageBuilder{}
 	srv := New(cfg)
+	runID := uuid.New()
 	ws := types.Workspace{
 		ID:        uuid.New(),
 		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
@@ -190,9 +201,30 @@ func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.
 		// No Profile: an unscanned ephemeral-only workspace has none, and the
 		// BaseImage branch must return before ever needing one.
 	}
-	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
-	if !ok || image != "ghcr.io/acme/base:1" {
-		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the workspace's BaseImage verbatim, unconditionally", image, ok)
+	image, ok := srv.resolveWorkspaceImage(context.Background(), runID, ws, nil)
+	want := "wardyn-byoi/" + runID.String() + ":latest"
+	if !ok || image != want {
+		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the FinalizeBase-wrapped tag %q (PARITY-4)", image, ok, want)
+	}
+}
+
+// TestResolveWorkspaceImage_BaseImageNoBuilderDrops pins PARITY-4's no-builder
+// arm: with a base image chosen but no ImageBuilder wired, the UI-door lane must
+// NOT silently swap in the convention image — it returns ("", false) (falling
+// back to the convention image) and audits the drop, rather than dispatching the
+// raw base image or claiming success.
+func TestResolveWorkspaceImage_BaseImageNoBuilderDrops(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, nil)
+	cfg.ImageBuilder = nil
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID:        uuid.New(),
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
+	}
+	if image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); ok || image != "" {
+		t.Fatalf("resolveWorkspaceImage = (%q, %v), want (\"\", false) with no builder wired", image, ok)
 	}
 }
 

@@ -925,10 +925,18 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // exec-based ref (agentExecID != "") it inspects that exec: Running => alive
 // (RUNNING); exited => terminal with the real exit code, EVEN while the idle
 // sandbox container is still up — the case container Status cannot detect after a
-// restart dropped the in-memory exec map. A vanished exec (its
-// container already gone) reads as stopped => the reconciler finalizes + tears
-// down. When agentExecID is "" (exec-less/main-process, or Exec never ran) the
-// container IS the agent, so fall back to Status.
+// restart dropped the in-memory exec map. When agentExecID is "" (exec-less/
+// main-process, or Exec never ran) the container IS the agent, so fall back to
+// Status.
+//
+// AMBIGUOUS exec-404 (GAP-RECONCILE-1): docker keeps exec records in daemon
+// MEMORY only, so a daemon restart under live-restore erases them while the
+// container and its exec'd process keep running. An exec-404 is therefore only
+// DEFINITIVE when the container is ITSELF gone/stopped; while the container is
+// still RUNNING it is ambiguous (the agent may be alive), so return an ERROR to
+// route the caller into its bounded-retry/backoff path rather than finalizing a
+// healthy live-restore run — the reconciler's own comment (:928) used to assume
+// the opposite, mass-failing every in-flight exec run on a routine daemon restart.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
 	if agentExecID == "" {
 		return d.Status(ctx, ref)
@@ -936,7 +944,11 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 	insp, err := d.cli.ExecInspect(ctx, agentExecID, client.ExecInspectOptions{})
 	if err != nil {
 		if isNotFound(err) {
-			return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
+			// Only definitive when the container is also gone/stopped.
+			if cst, cerr := d.Status(ctx, ref); cerr == nil && cst.State == types.RunStopped {
+				return runner.Status{State: types.RunStopped, Message: "agent exec and container both gone"}, nil
+			}
+			return runner.Status{}, fmt.Errorf("docker: agent exec %q not found but container still running (ambiguous; daemon restart under live-restore?)", agentExecID)
 		}
 		return runner.Status{}, fmt.Errorf("docker: agent exec inspect: %w", err)
 	}

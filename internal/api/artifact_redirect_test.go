@@ -115,6 +115,79 @@ func TestSubstituteArtifactEgress_NoOpAndFreshSlice(t *testing.T) {
 	}
 }
 
+// TestSubstituteArtifactEgress_ScopedToMatchingRun pins GAP-EGRESS-2: a redirect
+// is applied ONLY when the run's own egress reaches one of the public hosts it
+// fronts. An unrelated sealed run (naming neither the From host nor the ecosystem)
+// is left entirely untouched — it does NOT gain the corp To host.
+func TestSubstituteArtifactEgress_ScopedToMatchingRun(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/", Ecosystem: "npm"},
+		{From: "ghcr.io", To: "registry.corp.internal"},
+	}}
+	// A run that names NONE of the fronted hosts: untouched, corp host NOT added.
+	in := []string{"api.anthropic.com"}
+	got := substituteArtifactEgress(in, sc)
+	if !reflect.DeepEqual(got, in) {
+		t.Errorf("a run naming none of a redirect's hosts must be untouched; got %v", got)
+	}
+	// A run that DOES name the ecosystem public host: redirect applies.
+	got = substituteArtifactEgress([]string{"registry.npmjs.org"}, sc)
+	set := map[string]bool{}
+	for _, d := range got {
+		set[d] = true
+	}
+	if set["registry.npmjs.org"] || !set["artifactory.corp"] {
+		t.Errorf("a matching run should drop the public host and gain the corp host; got %v", got)
+	}
+}
+
+// TestSubstituteArtifactEgress_WildcardAndPortDrop pins GAP-EGRESS-6: a wildcard
+// or :port-qualified allowlist entry covering an ecosystem public host is dropped
+// like a bare host, so public reach never survives beside the corp mirror.
+func TestSubstituteArtifactEgress_WildcardAndPortDrop(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://pypi.org/simple/", To: "https://pypi.corp.example/pypi/", Ecosystem: "pip"},
+	}}
+	in := []string{"*.pythonhosted.org", "pypi.org:443", "github.com"}
+	got := substituteArtifactEgress(in, sc)
+	for _, d := range got {
+		if d == "*.pythonhosted.org" || d == "pypi.org:443" {
+			t.Errorf("wildcard/port entry %q should have been dropped; got %v", d, got)
+		}
+	}
+	set := map[string]bool{}
+	for _, d := range got {
+		set[d] = true
+	}
+	if !set["github.com"] || !set["pypi.corp.example"] {
+		t.Errorf("unrelated host kept + corp added expected; got %v", got)
+	}
+}
+
+// TestAppendNetworkRedirectDenials pins GAP-EGRESS-4: a network-only redirect's
+// From host is added to DeniedDomains (deny beats allow-all), while an ecosystem
+// row contributes no deny.
+func TestAppendNetworkRedirectDenials(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "ghcr.io", To: "registry.corp.internal"},                                  // network-only -> deny ghcr.io
+		{From: "https://registry.npmjs.org/", To: "https://corp/npm/", Ecosystem: "npm"}, // ecosystem -> no deny
+	}}
+	got := appendNetworkRedirectDenials([]string{"existing.example"}, sc)
+	set := map[string]bool{}
+	for _, d := range got {
+		set[d] = true
+	}
+	if !set["ghcr.io"] {
+		t.Errorf("network-only From host ghcr.io must be denied; got %v", got)
+	}
+	if set["registry.npmjs.org"] {
+		t.Errorf("an ecosystem row must not add a deny; got %v", got)
+	}
+	if !set["existing.example"] {
+		t.Errorf("existing deny entries must be preserved; got %v", got)
+	}
+}
+
 // TestArtifactBaseURLs extracts ecosystem->base (URL-only) from the
 // Ecosystem-tier subset of EgressRedirects, drops tokens, and SKIPS any
 // network-only row (Ecosystem "").

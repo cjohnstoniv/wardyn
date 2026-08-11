@@ -127,12 +127,6 @@ const buildSweepInterval = imageBuildTimeout
 // configured (ReconcileOnBoot), and panic-safe: a panic here must not crash the
 // control plane, it just returns the sweep to boot-only.
 func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.ErrorContext(ctx, "wardynd: PANIC in orphaned build sweeper (contained; sweep now boot-only)",
-				slog.Any("panic", r))
-		}
-	}()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
@@ -140,9 +134,19 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if err := s.sweepOrphanedBuilds(ctx); err != nil {
-				slog.WarnContext(ctx, "wardynd: orphaned build sweep", slog.Any("err", err))
-			}
+			// Recover PER TICK (GAP-RECONCILE-6): one panicking tick must not degrade
+			// the sweep to boot-only for the whole process lifetime.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.ErrorContext(ctx, "wardynd: PANIC in orphaned build sweep tick (contained; sweep continues next tick)",
+							slog.Any("panic", r))
+					}
+				}()
+				if err := s.sweepOrphanedBuilds(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: orphaned build sweep", slog.Any("err", err))
+				}
+			}()
 		}
 	}
 }
@@ -183,6 +187,7 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 		return err
 	}
 	now := s.cfg.Now()
+	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
 		if isTerminalRunState(run.State) || run.SandboxRef != "" {
@@ -191,7 +196,19 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 		if now.Sub(run.CreatedAt) < undispatchedGrace {
 			continue // still inside its own dispatch window; not abandoned
 		}
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, "", "no sandbox after restart")
+		// A FRESH watcher lease means a LIVE process is responsible for this run
+		// (GAP-RECONCILE-4): a run whose SetSandboxRef write was merely lost to a
+		// transient store error reaches RUNNING with SandboxRef=="" but a live
+		// completion watcher heartbeating its lease. Finalizing it would false-fail a
+		// working agent mid-task and leak its sandbox forever (reconcileFinalize has
+		// ref=="" so tears nothing down). Only reap when no live watcher owns it (or
+		// the store cannot report lease freshness — then today's behavior stands).
+		if hasLease {
+			if fresh, ferr := leaser.RunWatcherFresh(ctx, run.ID, watcherLeaseStaleAfter); ferr == nil && fresh {
+				continue
+			}
+		}
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, "", "never dispatched: no sandbox and no live watcher past the dispatch-grace ceiling")
 		finalized++
 	}
 	if finalized > 0 {
@@ -220,6 +237,28 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	base := s.watcherBaseCtx()
 	var reattached, finalized int
 	for _, run := range runs {
+		// STRAND GUARD (GAP-RECONCILE-2): a crash between SetSandboxRef and Exec
+		// leaves a non-interactive task run with a sandbox_ref but no persisted
+		// agent_exec_id — no agent was ever exec'd and none ever will be. Probing the
+		// container with an empty exec id falls back to container Status, which reads
+		// the sleep-infinity holder as RUNNING forever, so this run would be babysat
+		// eternally (the exact C3 strand the sweep exists to close). Finalize it
+		// instead. An interactive run legitimately has no exec id, so it is exempt.
+		//
+		// No age gate: dispatch HOLDS this run's watcher lease continuously from just
+		// before SetSandboxRef until the completion watcher takes over its own hold
+		// (runs_dispatch.go), so a run that reached ClaimStaleRunWatchers with a STALE
+		// lease has PROVABLY lost its dispatcher — there is no live process still
+		// racing to exec the agent. The earlier age>undispatchedGrace gate was there
+		// only because a one-shot lease stamp could go stale mid-dispatch; it left the
+		// common fast-crash/multi-replica case (first stale claim well inside the
+		// grace) stranded forever, which is the case the continuous hold now closes.
+		if !run.Interactive && run.Task != "" && run.AgentExecID == "" {
+			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
+				"reconciled: dispatched a sandbox but the agent was never exec'd (dispatcher lost mid-dispatch)")
+			finalized++
+			continue
+		}
 		st, serr := s.probeAgent(ctx, run.SandboxRef, run.AgentExecID)
 		// A genuinely-gone sandbox/agent reports a terminal STATE (RunStopped), not
 		// an error — an error means the probe couldn't determine liveness (a docker
@@ -267,12 +306,6 @@ func (s *Server) probeAgent(ctx context.Context, ref, agentExecID string) (runne
 // sweeper, so it is logged at ERROR — adoption is degraded to boot-only until the
 // process restarts. The interval is a parameter only so tests can drive it fast.
 func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.ErrorContext(ctx, "wardynd: PANIC in run watcher sweeper (contained; adoption now boot-only)",
-				slog.Any("panic", r))
-		}
-	}()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	// Zero, so the FIRST tick runs the undispatched pass: it costs one extra
@@ -287,15 +320,27 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if now := s.cfg.Now(); now.Sub(lastUndispatched) >= undispatchedGrace {
-				lastUndispatched = now
-				if err := s.finalizeUndispatchedRuns(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: undispatched run reconcile", slog.Any("err", err))
+			// Recover PER TICK (GAP-RECONCILE-6), not once around the whole loop: a
+			// store-driver edge that panics on ONE claimed row must not permanently
+			// degrade adoption to boot-only for the process lifetime on the strength
+			// of a single log line — the next tick simply tries again.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.ErrorContext(ctx, "wardynd: PANIC in run watcher sweep tick (contained; adoption continues next tick)",
+							slog.Any("panic", r))
+					}
+				}()
+				if now := s.cfg.Now(); now.Sub(lastUndispatched) >= undispatchedGrace {
+					lastUndispatched = now
+					if err := s.finalizeUndispatchedRuns(ctx); err != nil {
+						slog.WarnContext(ctx, "wardynd: undispatched run reconcile", slog.Any("err", err))
+					}
 				}
-			}
-			if err := s.sweepRunWatchers(ctx); err != nil {
-				slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
-			}
+				if err := s.sweepRunWatchers(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
+				}
+			}()
 		}
 	}
 }
@@ -367,14 +412,21 @@ func (s *Server) stampRunWatcherLease(ctx context.Context, runID uuid.UUID) {
 // api.New sets BaseCtx unconditionally, so this is never nil.
 func (s *Server) watcherBaseCtx() context.Context { return s.cfg.BaseCtx }
 
-// reconcileMaxProbeErrors bounds how many CONSECUTIVE AgentStatus probe errors a
-// reconcile watcher tolerates before giving up on a persistently-unreachable
-// sandbox. A transient error (a docker daemon blip) must NOT finalize a healthy
-// RUNNING run — but a permanently-broken ref must not poll forever either. ~1 min
-// when probes fail fast at the 5s tick, and up to ~2 min when each one burns the
-// full watcherProbeTimeout — that is the number to tune against, since a wedged
-// daemon is exactly the case this constant exists for.
-const reconcileMaxProbeErrors = 12
+// reconcileProbeErrorCeiling bounds how LONG (wall-clock) a reconcile watcher
+// tolerates PERSISTENT AgentStatus probe errors before giving up on a
+// genuinely-wedged ref. It replaced a 12-error (~60s) count (GAP-RECONCILE-5):
+// AgentStatus returns an error only for daemon-level unreachability (a gone
+// sandbox arrives as a terminal STATE, not an error) or an ambiguous exec-404
+// under a still-running container (GAP-RECONCILE-1) — and a routine loaded-dockerd
+// restart, or a live-restore exec-map loss, errors for a minute or two. Finalizing
+// on that mass-failed every in-flight run adopted onto reconcileWatch after any
+// wardynd restart. So the watcher now BACKS OFF while errors persist and only
+// finalizes after this generous ceiling, and prefers a definitive "gone"
+// observation (a successful probe returning a terminal state) to ever finalizing.
+const reconcileProbeErrorCeiling = 30 * time.Minute
+
+// reconcileProbeMaxBackoff caps the error backoff interval.
+const reconcileProbeMaxBackoff = 60 * time.Second
 
 // reconcileWatch polls a re-adopted sandbox's agent liveness until it exits, then
 // finalizes the run and runs the revoke cascade. Panic-safe (a panic here must
@@ -391,9 +443,11 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	// here or on another replica, adopts the run).
 	stopLease := s.holdRunWatcherLease(ctx, runID)
 	defer stopLease()
-	tick := time.NewTicker(5 * time.Second)
+	const baseInterval = 5 * time.Second
+	tick := time.NewTicker(baseInterval)
 	defer tick.Stop()
-	errs := 0
+	backoff := baseInterval
+	var firstErr time.Time // when the current run of consecutive errors began
 	for {
 		select {
 		case <-ctx.Done():
@@ -401,17 +455,27 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 		case <-tick.C:
 			st, err := s.probeAgent(ctx, ref, agentExecID)
 			if err != nil {
-				// A transient probe error is NOT "the run finished" — finalizing here
-				// would false-kill a healthy RUNNING run on a docker daemon blip.
-				// Tolerate a bounded run of consecutive errors, then give up.
-				errs++
-				if errs < reconcileMaxProbeErrors {
-					continue
+				// A probe error is NOT "the run finished" (a gone sandbox arrives as a
+				// terminal STATE, not an error) — finalizing here would false-kill a
+				// healthy RUNNING run on a daemon blip or a >60s loaded-dockerd restart
+				// (GAP-RECONCILE-5). BACK OFF and keep the sandbox alive; only give up
+				// after a generous wall-clock ceiling for a genuinely-wedged ref.
+				if firstErr.IsZero() {
+					firstErr = s.cfg.Now()
 				}
-				s.reconcileFinalize(ctx, runID, types.RunFailed, ref, "reconciled: sandbox persistently unreachable")
-				return
+				if s.cfg.Now().Sub(firstErr) >= reconcileProbeErrorCeiling {
+					s.reconcileFinalize(ctx, runID, types.RunFailed, ref, "reconciled: sandbox persistently unreachable")
+					return
+				}
+				backoff = min(backoff*2, reconcileProbeMaxBackoff)
+				tick.Reset(backoff)
+				continue
 			}
-			errs = 0
+			if !firstErr.IsZero() { // recovered — reset the run + interval
+				firstErr = time.Time{}
+				backoff = baseInterval
+				tick.Reset(baseInterval)
+			}
 			if isTerminalRunState(st.State) {
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {
@@ -424,10 +488,24 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	}
 }
 
+// reconcileFinalizeTimeout bounds the WHOLE finalize tail (GetRun, CAS, audit
+// writes, the revoke cascade, and StopSandbox) so one wedged ContainerStop cannot
+// hang the single-threaded sweeper — or the boot pass that gates serveAndShutdown,
+// where an unbounded StopSandbox would keep the control plane from ever serving
+// /healthz and crashloop the pod (GAP-RECONCILE-3). Generous: it must cover a
+// graceful SIGTERM→SIGKILL stop (the driver's own stopTimeout is 10s) plus the
+// revoke cascade, so 2× that with headroom.
+const reconcileFinalizeTimeout = 60 * time.Second
+
 // reconcileFinalize transitions a stranded run to a terminal state — conditional
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
 func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason string) {
+	// Bound the whole tail (GAP-RECONCILE-3): the sweep loop and the boot pass call
+	// this SYNCHRONOUSLY, so an unbounded wedged StopSandbox would stall adoption
+	// for the process lifetime (or block boot from serving).
+	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	defer cancel()
 	cur, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",

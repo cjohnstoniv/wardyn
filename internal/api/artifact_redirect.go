@@ -31,6 +31,76 @@ type artifactRedirectPlan struct {
 	mitmHosts  []string                // corp hosts to TLS-MITM for token injection
 }
 
+// redirectPublicHosts is the set of public hosts one redirect fronts: an
+// ecosystem row's whole public-registry table, or a network-only row's single
+// From host. Empty for a malformed From on a network-only row (the caller then
+// treats the row as contributing nothing — fail safe).
+func redirectPublicHosts(r types.EgressRedirect) []string {
+	if r.Ecosystem != "" {
+		return workspacescan.PublicRegistryHosts(r.Ecosystem)
+	}
+	if from := strings.ToLower(workspacescan.HostOf(r.From)); from != "" {
+		return []string{from}
+	}
+	return nil
+}
+
+// artifactRunHostSet is the lowercased bare-host set of a run's egress entries,
+// for deciding which redirects are in scope for it (artifactRedirectApplies /
+// runReachesAny).
+func artifactRunHostSet(domains []string) map[string]bool {
+	have := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		have[egressEntryHost(d)] = true
+	}
+	return have
+}
+
+// runReachesAny reports whether a run whose egress host set is `have` reaches any
+// bare host in pub — exactly (the host is listed) or via a "*." wildcard entry the
+// run declared. Mirrors gitBrokerManaged's wildcard normalization.
+func runReachesAny(have map[string]bool, pub []string) bool {
+	for _, h := range pub {
+		hl := strings.ToLower(h)
+		if have[hl] {
+			return true
+		}
+		for entry := range have {
+			if suffix, wild := strings.CutPrefix(entry, "*"); wild && strings.HasSuffix(hl, suffix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// artifactRedirectApplies reports whether redirect r is in scope for a run whose
+// pre-substitution egress host set is `have` — the run named the From host or (for
+// an ecosystem row) any of that ecosystem's public registry hosts. The same
+// predicate scopes both the To-host add (substituteArtifactEgress) and the corp
+// token injection (planArtifactRedirect), so the two can never disagree about
+// which runs a redirect touches.
+func artifactRedirectApplies(r types.EgressRedirect, have map[string]bool) bool {
+	return runReachesAny(have, redirectPublicHosts(r))
+}
+
+// entryCoversAny reports whether ONE egress-allowlist entry names (or, via a "*."
+// wildcard, covers) any bare host in drop — the port/wildcard-aware match the
+// ecosystem substitution drop needs so a "*.pythonhosted.org" or "pypi.org:443"
+// entry is subtracted like a bare "pypi.org" is (GAP-EGRESS-6).
+func entryCoversAny(entry string, drop map[string]bool) bool {
+	h := egressEntryHost(entry)
+	if suffix, wild := strings.CutPrefix(h, "*"); wild {
+		for dh := range drop {
+			if strings.HasSuffix(dh, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+	return drop[h]
+}
+
 // artifactBaseURLs extracts ecosystem -> base URL (URL-only, no token) from a
 // SiteConfig's EgressRedirects, skipping every NETWORK-ONLY row (Ecosystem ==
 // ""), or nil when nothing is configured. This is the sole ecosystem-scoped
@@ -70,11 +140,18 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 // dangling token ref degrades to redirect-only rather than failing the run
 // (non-blocking posture). Grant creation touches the store; a create failure is
 // audited and that one redirect is skipped, never aborting the run.
-func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig) artifactRedirectPlan {
+//
+// preDomains is the run's PRE-substitution egress allowlist. A token injection +
+// TLS-MITM is authored for a redirect ONLY when the run actually reaches one of
+// the public hosts it fronts (artifactRedirectApplies, GAP-EGRESS-2) — the SAME
+// scope substituteArtifactEgress uses for the To-host add — so an unrelated sealed
+// run never has the operator's registry token injected onto a host it never named.
+func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains []string) artifactRedirectPlan {
 	var plan artifactRedirectPlan
 	if len(sc.EgressRedirects) == 0 {
 		return plan
 	}
+	have := artifactRunHostSet(preDomains)
 	files, env := workspacescan.EmitArtifactConfig(artifactBaseURLs(sc))
 	if len(env) > 0 {
 		plan.env = env
@@ -103,6 +180,12 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	for _, r := range sc.EgressRedirects {
 		if r.TokenSecretRef == "" && r.TokenIntegrationRef == "" {
 			continue // no token configured for this redirect
+		}
+		// SCOPE (GAP-EGRESS-2): inject the corp token only for a run that actually
+		// reaches the public host this redirect fronts — never a run whose reviewed
+		// egress named neither the From host nor the ecosystem.
+		if !artifactRedirectApplies(r, have) {
+			continue
 		}
 		host := strings.ToLower(workspacescan.HostOf(r.To))
 		if host == "" || seenHost[host] {

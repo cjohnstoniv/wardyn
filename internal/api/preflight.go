@@ -112,8 +112,24 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Which secrets actually exist (names only) — the SAME map compose builds.
 	presentSecrets := s.presentSecretNames(ctx)
 
-	// Enforced confinement class — the SAME math launch runs, shared rather than
-	// hand-copied (enforcedConfinement, called by resolveEnforcedConfinement in
+	// Fold the run's model-access binding AND each referenced workspace's
+	// requirements contract into the spec BEFORE computing the enforced confinement
+	// class and grading — the SAME order launch now uses (SPINE-2/SPINE-6), so a
+	// workspace's integration:<id> requirement floors the run to CC3 here exactly
+	// as it will at launch, and the risk grade below sees the fold's write
+	// narrowing + grants rather than a pre-fold snapshot. foldRunIntegration folds
+	// the WHOLE precedence chain (explicit integration_id, workspace binding,
+	// operator default), not just the workspace tier. bedrockRef is KEPT (SPINE-5):
+	// a bedrock integration that supplies the region/model must reach
+	// resolveBedrockAuth below, or the checklist previews "no model access" for a
+	// run launch credentials fine. No audit event — preflight persists nothing
+	// (the run.workspace.creds audit is the create path's launch-only half).
+	wsRefs := s.referencedWorkspaces(ctx, spec)
+	_, _, bedrockRef := s.foldRunIntegration(ctx, &spec, req, wsRefs)
+	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+
+	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
+	// spec (enforcedConfinement, called by resolveEnforcedConfinement in
 	// runs_create.go), so preflight cannot drift from the launch gate. The tail
 	// gates resolveEnforcedConfinement adds — the runner-capability check and the
 	// cloud_sts grantChecker — are deliberately NOT repeated (see the doc comment);
@@ -128,22 +144,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-
-	// Fold the run's model-access binding into the spec exactly as launch does
-	// AFTER enforcement (runs.go) — the SAME foldRunIntegration, so the
-	// model-access and egress checklist rows below see the creds the run will
-	// really hold across the WHOLE precedence chain (explicit integration_id,
-	// workspace binding, operator default), not just the workspace tier. No
-	// audit event — preflight persists nothing (that is
-	// applyPrimaryWorkspaceCreds's launch-only half).
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	_, _, _ = s.foldRunIntegration(ctx, &spec, req, wsRefs)
-	// Fold each referenced workspace's requirements contract exactly as launch
-	// does (runs.go) — the SAME applyWorkspaceRequirements call, so Review can
-	// never predict a rosier (or stricter) outcome than launch actually applies.
-	// Discarded, not audited: preflight persists nothing, mirroring the
-	// foldRunIntegration call just above.
-	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
@@ -201,11 +201,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Operator-configured Bedrock credentials the run automatically: dispatch's
 	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch, so a
 	// run that picked no api_key still authenticates. Ask the same resolver here
-	// (ws=nil — the global config; a workspace can only narrow region/model, not
-	// supply credentials) so the checklist and the wizard's no-model-access banner
-	// stop telling an operator with working Bedrock access that they have none.
+	// with the bedrockRef the fold resolved (SPINE-5) — a bedrock integration that
+	// supplies the region/model must be honored here too, or Review previews "no
+	// model access" for a run launch credentials fine; the workspace can only
+	// narrow region/model, never supply credentials — so the checklist and the
+	// wizard's no-model-access banner stop telling an operator with working Bedrock
+	// access that they have none.
 	if llmAccess == nil || !llmAccess.Provisioned {
-		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, nil); ba.ready {
+		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, bedrockRef); ba.ready {
 			llmAccess = &composeLLMAccess{
 				Provisioned: true,
 				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",

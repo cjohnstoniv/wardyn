@@ -102,13 +102,23 @@ type clarifyResponse struct {
 type composeProposed struct {
 	Run          composer.RunInput   `json:"run"`
 	InlinePolicy types.RunPolicySpec `json:"inline_policy"`
+	// IntegrationID echoes composeRequest.IntegrationID (PARITY-6) so approveLaunch
+	// can forward it to POST /runs unchanged. Tier 1 of resolveRunIntegration steers
+	// the WHOLE model-access fold on the compose path; without carrying it, a
+	// compose→launch round-trip silently re-resolved model access from a DIFFERENT
+	// precedence tier (the workspace binding or the operator default), so a run
+	// previewed against `int-bedrock-eu` could launch against the shared Anthropic
+	// key in another account/region. NOTE (UI): new-run-dialog.tsx's approveLaunch
+	// must send this alongside `workspaces` (later UI batch).
+	IntegrationID string `json:"integration_id,omitempty"`
 	// BedrockRef is the pinned integration's region/model override, when this
 	// proposal resolved a bedrock ai_provider integration with one (nil
 	// otherwise). Advisory only, like the rest of this payload: the real run
 	// created from this proposal re-resolves its own bedrockRef from
-	// integration_id at launch (applyPrimaryWorkspaceCreds, runs.go) — this
-	// field lets the review surface show which region/model that will be
-	// instead of only the AllowedDomains side effect.
+	// integration_id at launch (foldRunIntegration, runs.go) — a link that
+	// now actually holds, because IntegrationID above rides the proposal. This field
+	// lets the review surface show which region/model that will be instead of only
+	// the AllowedDomains side effect.
 	BedrockRef *types.WorkspaceBedrockRef `json:"bedrock_ref,omitempty"`
 	// WorkspaceSelections is composeRequest.WorkspaceSelections echoed back
 	// verbatim (see its doc comment) — the vehicle that lets approveLaunch

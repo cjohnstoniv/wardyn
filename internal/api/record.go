@@ -353,7 +353,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 // exactly what proxy.ValidDomainEntry refuses to do at the other write point
 // ("reject the dead entry at write time rather than ship a policy the operator
 // believes is guarding them").
-func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
+func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[string]struct{} {
 	skip := map[string]struct{}{}
 	add := func(hosts []string) {
 		for _, h := range hosts {
@@ -361,10 +361,46 @@ func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
 		}
 	}
 	add(modelProviderEgress(s.cfg.DefaultPolicy))
+	// The WORKSPACE's own model-provider transport (SPINE-7): a bound bedrock
+	// integration's regional host is HARNESS plumbing a record session logs, not a
+	// workspace-specific egress need — modelProviderEgress only matches the
+	// anthropic/openai convention hosts, so without this a bedrock-bound workspace's
+	// bedrock-runtime.<region> host was offered for promotion into permanent
+	// ApprovedEgress, writing harness plumbing for the wrong lane.
+	add(s.workspaceModelProviderHosts(ctx, ws))
 	add(workspaceCloneEgress(ws)) // every repo source, not just the derived mirror
 	add(gitBrokerManagedHosts)
 	add(gitBrokerSSHHosts()) // bare hosts: this map keys on the raw lowercased host
 	return skip
+}
+
+// workspaceModelProviderHosts returns the model-provider egress hosts a
+// workspace's OWN bound integration implies — today just a bedrock integration's
+// regional bedrock-runtime/control hosts (region from the integration config, else
+// the global default). Empty for an unbound workspace or a non-bedrock binding
+// (the anthropic/openai convention hosts are already covered by
+// modelProviderEgress). Used by promoteSkipHosts so a record session's real
+// transport is never offered for promotion.
+func (s *Server) workspaceModelProviderHosts(ctx context.Context, ws types.Workspace) []string {
+	if ws.LLMCred == nil || ws.LLMCred.IntegrationRef == "" {
+		return nil
+	}
+	integ, ok := s.resolveIntegrationRef(ctx, ws.LLMCred.IntegrationRef)
+	if !ok || integ.Type != "bedrock" {
+		return nil
+	}
+	var cfg struct {
+		Region string `json:"region"`
+	}
+	_ = json.Unmarshal(integ.Config, &cfg)
+	region := cfg.Region
+	if region == "" {
+		region = s.cfg.BedrockRegion
+	}
+	if region == "" {
+		return nil
+	}
+	return []string{bedrockRuntimeHost(region), bedrockControlHost(region)}
 }
 
 // promotableHosts is every host a recording could ever offer up: observed
@@ -425,7 +461,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// a direct allowlist entry would let future confined sandboxes reach the
 	// API surface beyond the proxy's brokered routes.
 	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
-	skipHost := s.promoteSkipHosts(ws)
+	skipHost := s.promoteSkipHosts(r.Context(), ws)
 
 	promotable := promotableHosts(res.Observations, selfHost, skipHost)
 

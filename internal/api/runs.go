@@ -94,14 +94,31 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}
+
+	// Fold the run's model-access binding AND each referenced workspace's
+	// requirements contract into the spec BEFORE the confinement floor + risk
+	// grade read it (SPINE-2/SPINE-6). The deterministic CC3 blast-radius floor is
+	// computed from spec.EligibleGrants, so a workspace's integration:<id>
+	// requirement — a third-party/production api_key grant — must be present when
+	// the floor is computed, or invariant 5's "powerful credentials run in the
+	// strongest sandbox" is silently bypassed (the grant used to land AFTER the
+	// class was already fixed at CC1/CC2). wsRefs is derived from the seeded spec's
+	// mounts/repos, which nothing below mutates, so it is equally valid here and is
+	// reused for the egress union + image resolution. Both folds are the AUDIT-FREE
+	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
+	// the audit is recorded once the run id is minted, below.
+	wsRefs := s.referencedWorkspaces(ctx, spec)
+	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, &spec, req, wsRefs)
+	reqEvents := s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
 	// active run.
 	workspacePath := primaryWorkspacePath(spec)
 
 	// Resolve + gate the confinement class (request vs policy floor, the CC3
-	// blast-radius floor, runner capability membership, cloud_sts grant gating) —
-	// invariant 5, fail closed; see resolveEnforcedConfinement.
+	// blast-radius floor now computed on the FOLDED spec, runner capability
+	// membership, cloud_sts grant gating) — invariant 5, fail closed.
 	enforced, ok := s.resolveEnforcedConfinement(ctx, w, spec, reqCC)
 	if !ok {
 		return
@@ -162,27 +179,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fold the PRIMARY workspace/container's operator-owned model/harness cred
-	// binding into the spec — a run inherits the model access of the workspace/
-	// container it picks. This MUST run BEFORE persistRunGrants: that call
-	// SNAPSHOTS spec.EligibleGrants into the persisted grants + proxy injections,
-	// so a binding applied after it never reaches the run (an api_key binding was
-	// silently dropped — billing the operator's managed subscription instead of
-	// the workspace's key — and a managed/bedrock binding could not displace a
-	// competing api-key grant). wsRefs (the referenced onboarded workspaces) is
-	// derived from the spec's mounts/repos, which nothing below mutates, so it is
-	// equally valid here and is reused by the egress union + image resolution.
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	bedrockRef := s.applyPrimaryWorkspaceCreds(ctx, runID, &spec, req, wsRefs)
-
-	// Fold each referenced workspace's requirements contract
-	// (types.Workspace.Requirements) into the spec — required secrets/egress/
-	// write-access come with the workspace automatically; optional ones only
-	// when this request's per-workspace selection enables them. MUST run before
-	// persistRunGrants below, which snapshots spec.EligibleGrants into the
-	// persisted grants + proxy injections a secret requirement's auto-mint
-	// grant needs to reach. See runs_create.go's applyWorkspaceRequirements.
-	for _, ev := range s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req)) {
+	// Record the model-access + requirements folds that ran ABOVE the confinement
+	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw
+	// the full picture — and those same grants still reach persistRunGrants below
+	// (it snapshots this same spec.EligibleGrants into the persisted grants + proxy
+	// injections). foldRunIntegration is the audit-free fold; the audit is emitted
+	// here now that runID exists (kept split so preflight can call the same fold).
+	if foldKind != "" {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
+			runID.String(), "success", mustJSON(map[string]any{"integration_ref": foldInteg.ID, "type": foldKind})))
+	}
+	for _, ev := range reqEvents {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
 	}
 

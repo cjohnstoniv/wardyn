@@ -90,6 +90,13 @@ func (s *bootReconcileStore) HeartbeatRunWatcher(_ context.Context, id uuid.UUID
 	}
 	return nil
 }
+
+// RunWatcherFresh: this double models a CRASH scenario (the prior process's
+// watcher is gone), so the lease is always STALE — the undispatched reaper must
+// still reap a sandbox-less run past grace.
+func (s *bootReconcileStore) RunWatcherFresh(context.Context, uuid.UUID, time.Duration) (bool, error) {
+	return false, nil
+}
 func (s *bootReconcileStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
 	if id == s.run.ID {
 		return s.run, nil
@@ -373,6 +380,36 @@ func TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the sweeper never reaped a sandbox-less run past undispatchedGrace; boot-only leaves it stranded non-terminal with un-revoked credentials for the life of the pod")
+	}
+}
+
+// TestSweepRunWatchers_NeverExecdRunFinalizesWithoutAgeGate pins GAP-RECONCILE-2's
+// close: a claimed non-interactive TASK run with a sandbox_ref but NO agent_exec_id
+// (a crash between SetSandboxRef and Exec) must be finalized FAILED — NOT re-watched
+// — even when it is YOUNG (well inside undispatchedGrace). Its dispatcher held the
+// watcher lease continuously, so a stale-lease claim proves the dispatcher is gone
+// and no agent will ever be exec'd; probing the idle sleep-infinity container would
+// read RUNNING forever and strand it. Counterfactual: with the old age>grace gate a
+// run this young fell through to reconcileWatch and stranded (transitioned stays
+// false).
+func TestSweepRunWatchers_NeverExecdRunFinalizesWithoutAgeGate(t *testing.T) {
+	h := newHarness(t)
+	run := execRun(t, "") // sandbox_ref set, agent_exec_id ""
+	run.Task = "do the thing"
+	run.CreatedAt = time.Now().UTC() // YOUNG — well inside undispatchedGrace
+	fake := &bootReconcileStore{run: run}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{} // AgentStatus would report RUNNING — must not be consulted
+	cfg.Broker = h.broker
+	cfg.BaseCtx = bootTestCtx(t)
+	srv := New(cfg)
+
+	if err := srv.sweepRunWatchers(context.Background()); err != nil {
+		t.Fatalf("sweepRunWatchers: %v", err)
+	}
+	to, got := fake.finalTransition()
+	if !got || to != types.RunFailed {
+		t.Fatalf("a never-exec'd task run must finalize FAILED regardless of age; transitioned=%v to=%q", got, to)
 	}
 }
 

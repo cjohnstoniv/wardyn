@@ -10,10 +10,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -29,6 +31,12 @@ import (
 type RunWatcherLeaser interface {
 	ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration) ([]types.AgentRun, error)
 	HeartbeatRunWatcher(ctx context.Context, id uuid.UUID, owner string) error
+	// RunWatcherFresh reports whether run id's watcher lease is still fresh (its
+	// heartbeat is younger than staleAfter) — a live process is responsible for it.
+	// The undispatched-run reaper consults it so it never false-fails a RUNNING run
+	// whose sandbox_ref write was merely lost but whose live watcher is holding the
+	// lease (GAP-RECONCILE-4). A missing row reads as NOT fresh (reap it).
+	RunWatcherFresh(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error)
 }
 
 // Compile-time assertion: PG satisfies RunWatcherLeaser.
@@ -112,4 +120,24 @@ func (s PG) HeartbeatRunWatcher(ctx context.Context, id uuid.UUID, owner string)
 		return fmt.Errorf("store: heartbeat run watcher: %w", err)
 	}
 	return nil
+}
+
+// RunWatcherFresh reports whether id's watcher lease is younger than staleAfter —
+// mirrors ClaimStaleRunWatchers' own staleness predicate (a live watcher owns it).
+// A missing row → (false, nil): nothing is watching it, so the reaper may proceed.
+func (s PG) RunWatcherFresh(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error) {
+	if staleAfter < 0 {
+		staleAfter = 0
+	}
+	var fresh bool
+	err := s.Pool.QueryRow(ctx,
+		`SELECT watcher_heartbeat > now() - $2::interval FROM agent_runs WHERE id=$1`,
+		id, staleAfter.String()).Scan(&fresh)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("store: run watcher fresh: %w", err)
+	}
+	return fresh, nil
 }

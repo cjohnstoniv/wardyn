@@ -50,6 +50,20 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// Inline path: validate structurally (same validator as a stored policy) then
 	// validate any inline secret references. On success attach with a nil id.
 	if req.InlinePolicy != nil {
+		// OPERATOR GATE (SECMODEL-1): authoring an inline_policy is authoring
+		// egress, a confinement floor, host mounts and credential grants — a full
+		// RunPolicySpec — so it is an OPERATOR act, not a viewer's. POST /runs stays
+		// viewer-open for stored policy_id / workspace_id / default-policy runs (the
+		// "viewer = read + launch runs" tier), but a signed-in viewer must not be
+		// able to hand-author a policy that makes the proxy inject any non-reserved
+		// stored secret onto a request to a host they name. No-op until
+		// WARDYN_OIDC_OPERATOR_EMAILS is set (isOperator returns true), so
+		// single-operator / local / admin-token deployments are unaffected.
+		if !s.isOperator(ctx) {
+			writeError(w, http.StatusForbidden,
+				"authoring an inline_policy requires operator role (WARDYN_OIDC_OPERATOR_EMAILS is configured and this signed-in user is not in it); launch via policy_id, workspace_id, or the default policy instead")
+			return types.RunPolicySpec{}, nil, false
+		}
 		spec := *req.InlinePolicy
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())

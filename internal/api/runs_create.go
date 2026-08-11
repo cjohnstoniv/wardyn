@@ -88,7 +88,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// (ai_provider) integration — checked eagerly, before any run is created,
 	// so a typo or an scm_host/artifact_mirror/host_proxy id (operator-wide,
 	// never run-selectable) fails loud here rather than silently resolving to
-	// nothing at applyPrimaryWorkspaceCreds time (llmcred.go).
+	// nothing at foldRunIntegration time (llmcred.go).
 	if req.IntegrationID != "" {
 		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
@@ -246,9 +246,10 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 
 // requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
 // produced (an auto-attached secret grant, or a non-empty egress addition).
-// applyWorkspaceRequirements itself never audits — like applyWorkspaceCreds vs.
-// applyPrimaryWorkspaceCreds, "fold" and "fold + audit" are split so preflight
-// (which persists nothing) can call the SAME fold and simply discard these.
+// applyWorkspaceRequirements itself never audits — like foldRunIntegration, the
+// "fold" is separated from "audit" (the create path emits the events once the
+// run id is minted) so preflight, which persists nothing, can call the SAME
+// fold and simply discard these.
 type requirementAuditEntry struct {
 	action string
 	target string
@@ -456,7 +457,12 @@ func (s *Server) applyRequiredSecretGrant(ctx context.Context, spec *types.RunPo
 	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
 		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
 	})
-	if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+	// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
+	// (SPINE-4): AllowedExactHost does not honor allow-all, so a grant whose host
+	// is missing from AllowedDomains fails the proxy injector closed at startup
+	// (zero egress) — e.g. a required operator_set secret on an allow_all_egress
+	// ceiling would otherwise brick every run granted it.
+	if !domainAllowedExact(spec.AllowedDomains, p.host) {
 		spec.AllowedDomains = append(spec.AllowedDomains, p.host)
 	}
 	return requirementAuditEntry{
@@ -761,9 +767,36 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
-	if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
+	// Repo clone host(s) each referenced workspace needs (GAP-EGRESS-1): a
+	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an
+	// ordinary egress host, and nothing else in this union adds it — so a real run
+	// of a workspace whose only access is anonymous read got NO clone host and the
+	// clone was proxy-denied, even though the confined Verify (which unions
+	// workspaceCloneEgress via confinedEgressDomains) proved it. GitHub sources add
+	// nothing here by design (they route through the on-segment broker). This makes
+	// promoteSkipHosts' "wired into every scan/verify for free" comment true for a
+	// real run too.
+	var cloneAdded []string
+	for _, ws := range wsRefs {
+		cloneAdded = append(cloneAdded, unionAllowedDomains(spec, workspaceCloneEgress(ws))...)
+	}
+	if len(cloneAdded) > 0 {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.clone_egress",
+			runID.String(), "success", mustJSON(map[string]any{"added_domains": cloneAdded})))
+	}
+	// Site-config SCM hosts (GHES / ADO Server) are a CLONE lane, so union them
+	// only when this run actually declares a repo (GAP-EGRESS-3): a sealed
+	// local-dir-only analysis run must not inherit an unauthenticated HTTPS lane to
+	// every internal SCM host the operator declared for GHES clone runs. A repo is
+	// declared via spec.WorkspaceRepos or any git-clone grant lane (the legacy
+	// run.Repo already folded into gw.gitGrants by augmentGitBrokerGrants).
+	declaresRepo := len(spec.WorkspaceRepos) > 0 || gw.firstGitHubGrantID != nil ||
+		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
+	if declaresRepo {
+		if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
+				runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
+		}
 	}
 	if added := unionAllowedDomains(spec, gw.sshEgress); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.egress",
@@ -833,6 +866,24 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWrite
 				"devcontainer_repo": req.DevcontainerRepo, "image": built,
 			})))
 	case len(wsRefs) > 0:
+		// PARITY-4: a base_image workspace reached here via mounts/repos — a composed
+		// or UI run that did NOT send workspace_id (the workspace_id door sets req.Image
+		// and takes the case above). If it declares an explicit base_image CHOICE but no
+		// builder is wired, FAIL the run the same way the workspace_id door 400s
+		// (validateImageBuildRequest), rather than silently launching on the convention
+		// image and dropping the operator's chosen base image (the door divergence
+		// PARITY-4 flags). resolveWorkspaceImage is fail-open by design (shared with the
+		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
+		// lives here, on the create door, not in it.
+		if b := wsRefs[0].BaseImage; b != nil && b.Kind != "recommended" &&
+			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
+			buildFailed(map[string]any{
+				"base_image": b.Image,
+				"error": "no image builder is wired, so the workspace's chosen base image cannot be wrapped with the " +
+					"agent runtime; refusing to silently substitute the convention image (wire an image builder or drop the base image)",
+			})
+			return "", true
+		}
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
 		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil); ok {
 			image = built

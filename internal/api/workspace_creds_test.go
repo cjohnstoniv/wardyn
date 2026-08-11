@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -151,10 +149,9 @@ func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *test
 // TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel
 // restores TestCreateRun_WorkspaceBedrockCred_DisplacesAPIKeyGrantAndAllowsRegion's
 // core claim (the workspace's region/model beats the server's global Bedrock
-// config) at the fold level: applyPrimaryWorkspaceCreds is exactly what
-// runs.go calls at create, unchanged in position, so this proves the same
-// thing without re-standing-up the full dispatch harness that commit deleted
-// alongside it.
+// config) at the fold level: foldRunIntegration is exactly what runs.go calls
+// at create, unchanged in position, so this proves the same thing without
+// re-standing-up the full dispatch harness that commit deleted alongside it.
 func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel(t *testing.T) {
 	const wsRegion, wsModel = "eu-central-1", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	s := integrationTestServer(t, []types.Integration{{
@@ -166,7 +163,7 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-bedrock"}}
 	req := createRunRequest{Agent: "claude-code"}
 
-	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
 	if bedrockRef == nil || bedrockRef.Region != wsRegion || bedrockRef.Model != wsModel {
 		t.Fatalf("bedrockRef = %+v, want region=%s model=%s", bedrockRef, wsRegion, wsModel)
 	}
@@ -181,6 +178,37 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 	}
 }
 
+// TestApplyIntegrationCreds_IncompatibleAgentProvider_FoldsNothing pins SPINE-1:
+// applyIntegrationCreds consults the harness catalog (harnessProviderReason) and
+// folds NOTHING — no grant, no removal — for an agent×provider combination the
+// catalog forbids. Without it, an openai_api_key integration on a claude-code run
+// injected the OpenAI key as x-api-key onto api.anthropic.com (credential leaked
+// to the wrong vendor).
+func TestApplyIntegrationCreds_IncompatibleAgentProvider_FoldsNothing(t *testing.T) {
+	openaiInteg := types.Integration{
+		ID: "acme-openai", Category: types.IntegrationAIProvider, Type: "openai_api_key",
+		Credentials: map[string]string{"api_key": "acme-openai-key"},
+	}
+	s := integrationTestServer(t, []types.Integration{openaiInteg}, "acme-openai-key")
+	// A pre-existing working Anthropic api_key grant the fold must NOT remove.
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	scope := mustJSON(map[string]string{"host": "api.anthropic.com", "header": "x-api-key", "format": "%s", "secret_name": "anthropic-api-key"})
+	spec.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}}
+
+	kind, bedrockRef := s.applyIntegrationCreds(context.Background(), spec, openaiInteg, "claude-code")
+	if kind != "" || bedrockRef != nil {
+		t.Fatalf("applyIntegrationCreds(openai_api_key, claude-code) = (%q, %v), want (\"\", nil) — no fold", kind, bedrockRef)
+	}
+	// The OpenAI secret must NOT have been grafted onto api.anthropic.com.
+	g, ok := apiKeyGrantForHost(spec, "api.anthropic.com")
+	if !ok {
+		t.Fatal("the pre-existing anthropic grant was removed — the incompatible fold must be a no-op")
+	}
+	if got := apiKeyGrantScopeSecret(g.Scope); got != "anthropic-api-key" {
+		t.Errorf("api.anthropic.com grant secret = %q, want the untouched anthropic-api-key (the OpenAI key must never reach Anthropic)", got)
+	}
+}
+
 // TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace
 // proves resolution tier 3 (the operator's site-wide default) fires even for
 // a run with NO workspace at all — new behavior an Integration-less world
@@ -192,7 +220,7 @@ func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t
 	spec := &types.RunPolicySpec{}
 	req := createRunRequest{Agent: "claude-code"}
 
-	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, nil)
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
 	if bedrockRef != nil {
 		t.Errorf("bedrockRef = %+v, want nil for an api_key integration", bedrockRef)
 	}
@@ -217,7 +245,7 @@ func TestApplyPrimaryWorkspaceCreds_DanglingWorkspaceRef_DoesNotCascadeToDefault
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "does-not-exist"}}
 	req := createRunRequest{Agent: "claude-code"}
 
-	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
 	if bedrockRef != nil {
 		t.Errorf("bedrockRef = %+v, want nil (nothing should have folded)", bedrockRef)
 	}
@@ -239,7 +267,7 @@ func TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef(t
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "workspace-pick"}}
 	req := createRunRequest{Agent: "claude-code", IntegrationID: "explicit-pick"}
 
-	s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
 	g, ok := apiKeyGrantForHost(spec, "api.anthropic.com")
 	if !ok {
 		t.Fatal("expected an api_key grant")
@@ -287,23 +315,23 @@ func TestApplyWorkspaceCreds_NoBindingIsNoOp(t *testing.T) {
 
 // TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp is the create-path twin
 // of TestApplyWorkspaceCreds_NoBindingIsNoOp: zero workspaces, zero
-// integrations, no explicit integration_id — must resolve to nothing and
-// never audit a run.workspace.creds event.
+// integrations, no explicit integration_id — must resolve to nothing. kind==""
+// is exactly the gate runs.go keys the run.workspace.creds audit off (it emits
+// only when kind != ""), so an empty kind is what proves the no-op never
+// audits.
 func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
-	audit := &recRecorder{}
-	s := New(Config{Audit: audit})
+	s := New(Config{})
 	spec := &types.RunPolicySpec{}
 	req := createRunRequest{Agent: "claude-code"}
 
-	if got := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, nil); got != nil {
-		t.Fatalf("bedrockRef = %+v, want nil", got)
+	_, kind, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
+	if bedrockRef != nil {
+		t.Fatalf("bedrockRef = %+v, want nil", bedrockRef)
+	}
+	if kind != "" {
+		t.Fatalf("kind = %q, want empty (a no-op must not audit run.workspace.creds)", kind)
 	}
 	if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
 		t.Fatal("no-op case must not mutate the spec")
-	}
-	for _, ev := range audit.events {
-		if ev.Action == "run.workspace.creds" {
-			t.Fatalf("unexpected run.workspace.creds audit event for a no-op resolution: %+v", ev)
-		}
 	}
 }

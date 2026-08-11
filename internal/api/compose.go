@@ -366,37 +366,27 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// only, no api-key grant); dispatch injects it proxy-side.
 	managedSub := managedByChoice && prop.Run.Agent == "claude-code" &&
 		!subscribed && s.managedInjectReady(prop.Run.Agent)
-	// MOUNT GATING and the MODEL-ACCESS VERDICT are different questions, and
-	// conflating them produced a false blocker. managedSub stays gated above
-	// because it also gates applyLLMCredMount (the MOUNT path). But a managed
-	// subscription needs NO mount at all: dispatch's resolveLLMTransport
-	// injects it proxy-side for ANY eligible claude-code run (precedence: host
-	// mount > managed > bedrock > api-key). Gating the verdict on managedSub
-	// alone made the Review checklist announce "no model access — this run will
-	// do nothing" for a run dispatch would happily credential (observed with a
-	// connected setup-token and no ceiling-blessed mount).
-	managedForVerdict := managedSub ||
-		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
 	var bedrockRef *types.WorkspaceBedrockRef
 	var integCredKind string
-	if hasInteg && integ.Type != "anthropic_subscription" {
-		// Any pinned NON-subscription integration (api_key/openai_api_key/
-		// bedrock/azure_openai) overrides ensureLLMGrant's provider-DEFAULT
-		// secret with the INTEGRATION's own — applyIntegrationCreds is the
-		// same grant + exact-host-egress coupling ensureLLMGrant uses for
-		// api_key, unions the region-scoped Bedrock hosts for bedrock (instead
-		// of falling through to a default Anthropic api-key grant that
-		// discards the region/model override), and no-ops for azure_openai
-		// (its own switch case: no sandbox lane exists). bedrockRef is threaded
-		// into the proposal below instead of discarded — the same ref launch
-		// carries to dispatch (dispatchParams.BedrockRef, runs.go) once the
-		// operator approves and creates the real run from this preview.
-		// integCredKind (also no longer discarded) is what the llm_access verdict
-		// below uses to recognize a bedrock pin as provisioned — reconcileLLMAccess
-		// only understands the anthropic/openai api_key shape, and the bedrock
-		// fold deliberately REMOVES rather than adds one (llmcred.go's bedrock case).
+	if hasInteg {
+		// EVERY pinned integration folds through the SAME applyIntegrationCreds
+		// launch and preflight use (PARITY-1) — anthropic_subscription is no longer
+		// special-cased here. applyIntegrationCreds removes any competing api-key
+		// grant and unions the provider egress for a subscription/bedrock pin,
+		// overrides ensureLLMGrant's provider-DEFAULT secret with the INTEGRATION's
+		// own for an api_key pin, threads a bedrock region/model override out as
+		// bedrockRef (the same ref launch carries to dispatchParams.BedrockRef), and
+		// no-ops for an agent×provider combination the harness catalog forbids
+		// (SPINE-1). The resident_host subscription MOUNT is applied separately,
+		// post-clamp, by applyLLMCredMount below (gated on subscriptionRequested),
+		// exactly as foldRunIntegration does at launch. An UNDELIVERABLE subscription
+		// pin therefore leaves the run with NO api-key grant and NO mount — the
+		// honest, blocking "no model access" verdict, instead of the old silent
+		// api-key fallback launch and preflight both then deleted.
 		integCredKind, bedrockRef = s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
 	} else {
+		// No pinned integration at all: the brokered api-key path (subscribed and
+		// managedSub are both false without a resolved integration).
 		ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
 	}
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "clamp"})
@@ -449,8 +439,13 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// setupSubscriptionMountItem rendered no row at all while ensureLLMGrant
 	// quietly fell back to api-key underneath. Name it instead of hiding it.
 	if managedByChoice && !managedSub && !subscribed {
+		// NOTE (wire/UI): an undeliverable subscription pin no longer falls back to
+		// api-key (PARITY-1) — applyIntegrationCreds removed the grant — so this run
+		// has NO model access until a setup-token is connected. Reworded to match
+		// what launch/dispatch actually do; the setup checklist row (compose_setup.go
+		// setupSubscriptionMountItem) carries the same corrected wording.
 		credWarns = append(credWarns, "this run's resolved integration is a managed Claude subscription, but no "+
-			"setup-token is connected — falling back to a brokered API key; connect it in Getting Started.")
+			"setup-token is connected — this run has NO model access until you connect it in Getting Started.")
 	}
 	// The subscription-request <-> credential-mount PAIR's reconciled verdict,
 	// threaded into the setup checklist (setupSubscriptionMountItem) verbatim —
@@ -460,6 +455,22 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	subState := composeSubscriptionState{
 		Requested: subscriptionRequested || managedByChoice, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns,
 	}
+	// MANAGED-subscription VERDICT — computed on the CLAMPED spec with dispatch's
+	// FULL predicate (SPINE-3). MOUNT gating (managedSub, above) and the VERDICT are
+	// different questions — a managed subscription needs no mount, so the verdict is
+	// deliberately NOT gated on managedSub alone — but the verdict must still copy
+	// dispatch's gate verbatim (runs_dispatch_llm.go), which preflight.go already
+	// does: no pre-existing anthropic api-key injection, AND a non-empty egress (a
+	// sealed zero-egress policy suppresses the managed fallback, so claiming
+	// provisioned would be a lie the run 404s on). Omitting these two terms made
+	// Review report provisioned=true for a run dispatch would not credential that
+	// way — and then reconcileLLMAccess DELETED a pinned api-key grant from the very
+	// spec the operator reviews and approves.
+	_, clampedHasAnthropicKey := apiKeyGrantForHost(&clamped, "api.anthropic.com")
+	managedForVerdict := managedSub ||
+		(prop.Run.Agent == "claude-code" && !subscribed && !clampedHasAnthropicKey &&
+			s.managedInjectReady(prop.Run.Agent) &&
+			(clamped.AllowAllEgress || len(clamped.AllowedDomains) > 0))
 	// Structured model-access verdict (not folded into Warnings): a no-access result
 	// is a "this run will do nothing" blocker the review must gate on, not one bullet
 	// among benign clamp notices. reconcileLLMAccess still mutates the spec (drops
@@ -485,8 +496,13 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// effective-region/model rule bedrockCaps applies (integration config wins,
 	// global config is the fallback), so this verdict can never contradict the
 	// capability matrix for the same integration.
+	// anthropic_subscription is EXCLUDED (PARITY-1): its deliverability is already
+	// decided by subscribed/managedForVerdict → reconcileLLMAccess above; treating a
+	// subscription pin as "the integration IS the credential" here would falsely
+	// preview an UNDELIVERABLE managed subscription (no setup-token) as provisioned.
 	if (llmAccess == nil || !llmAccess.Provisioned) &&
 		integCredKind != "" && integCredKind != "anthropic_api_key" && integCredKind != "openai_api_key" &&
+		integCredKind != "anthropic_subscription" &&
 		(integCredKind != "bedrock" || s.bedrockResolves(bedrockRef)) {
 		note := fmt.Sprintf("model access provisioned for agent %q: the pinned %s integration is applied", prop.Run.Agent, integCredKind)
 		if bedrockRef != nil {
@@ -504,6 +520,20 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	if wc, wserr := s.validateWorkspaceSources(ctx, clamped); wserr != nil {
 		return nil, &composeError{wc, "workspace: " + wserr.Error()}
 	}
+
+	// Fold each referenced workspace's requirements contract into clamped BEFORE
+	// the blast-radius floor + the risk grade below (SPINE-6/PARITY-5), the SAME
+	// order launch (runs.go) and preflight now use. Folding AFTER them shipped an
+	// inline_policy whose grants launch's floor then re-read to raise to CC3 —
+	// 422ing a proposal whose Review showed CC1 — and a risk_assessment that graded
+	// a read-only mount the fold then flipped writable. All three pipelines now
+	// fold, then floor, then grade. Discarded, not audited: like preflight's
+	// identical call, this is a preview — it persists nothing. Reusing the launch
+	// fold verbatim (not a second, egress-only reimplementation) is what makes them
+	// agree.
+	wsRefs := s.referencedWorkspaces(ctx, clamped)
+	_ = s.applyWorkspaceRequirements(ctx, &clamped, run.Agent, wsRefs, selectionsByWorkspaceID(req.WorkspaceSelections))
+
 	// Deterministic BLAST-RADIUS floor: a run holding POWERFUL credentials (write-
 	// capable, or a third-party/production api_key) is a high-value compromise target
 	// and MUST run in the strongest sandbox so an escape is contained — independent
@@ -535,36 +565,27 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 		return nil, &composeError{http.StatusUnprocessableEntity, "composer produced an invalid policy after clamping: " + err.Error()}
 	}
 
-	// Deterministic risk grade of the FINAL run + spec (incl. the operator
-	// workspace — e.g. a read-write local mount grades HIGH). Computed BEFORE
-	// the requirements fold just below: a workspace's contract additions were
-	// already outside Grade's scope before this fix (composer.Grade only ever
-	// graded the operator's own choices, never a workspace's fine print), and
-	// folding first would risk shifting graded risk levels for reasons unrelated
-	// to this batch.
+	// Deterministic risk grade of the FINAL run + spec — computed AFTER the
+	// requirements fold above (SPINE-6), so a workspace's write:<path> narrowing
+	// (HIGH read-write mount), integration grant (MEDIUM) and required egress are
+	// all graded exactly as launch will enforce them, matching preflight. Graded on
+	// a copy whose MinConfinementClass is the ENFORCED run class (PARITY-7): Grade
+	// reads spec.MinConfinementClass, and ClampRunConfinement above raised
+	// run.ConfinementClass up to the floor without writing it back to clamped, so a
+	// proposal whose run.confinement_class exceeds its own min would otherwise be
+	// graded on the weaker floor ("HIGH: Fence, the weakest tier") for a run that
+	// launches at the stronger class — exactly the inversion the grade step in
+	// handlePreflightRun already avoids.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "grade"})
-	items := composer.Grade(run, clamped)
+	gspec := clamped
+	gspec.MinConfinementClass = types.ConfinementClass(run.ConfinementClass)
+	items := composer.Grade(run, gspec)
 	overall := composer.OverallLevel(items)
-
-	// Fold each referenced workspace's requirements contract into clamped — the
-	// SAME applyWorkspaceRequirements call the manual wizard's preflight
-	// (preflight.go) and the real launch (runs.go) both make before THEIR
-	// setup-checklist/response is built. Without this, a required egress/secret/
-	// write term a workspace's contract declares was invisible on Review (both
-	// in the "N allowed" envelope below, since clamped becomes
-	// proposed.InlinePolicy, and in the egress checklist row's "no additional
-	// egress needed" verdict) yet applied anyway once the operator clicked
-	// Launch — two derivations of "what egress does this run get" that could
-	// disagree. Reusing the launch fold verbatim (not a second, egress-only
-	// reimplementation) is what makes them agree. Discarded, not audited: like
-	// preflight's identical call, this is a preview — it persists nothing.
-	wsRefs := s.referencedWorkspaces(ctx, clamped)
-	_ = s.applyWorkspaceRequirements(ctx, &clamped, run.Agent, wsRefs, selectionsByWorkspaceID(req.WorkspaceSelections))
 
 	// Setup checklist: what this proposal needs configured (secrets, onboarded
 	// workspaces, repo credentials, egress) vs. what actually is, derived from
-	// this SAME final clamped spec (now INCLUDING the fold just above) — never
-	// gates the proposal (Decision 4).
+	// this SAME final clamped spec (which already INCLUDES the requirements fold —
+	// hoisted above the floor/grade) — never gates the proposal (Decision 4).
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "setup"})
 	setupItems := s.deriveSetupItems(ctx, run, clamped, presentSecrets, llmAccess, droppedDomains, subState)
 
@@ -575,7 +596,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// Built ONCE and reused below for both the audit blob and the response, so
 	// the two can never drift apart (echoes req.WorkspaceSelections verbatim —
 	// see composeRequest.WorkspaceSelections' doc comment).
-	proposed := composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef, WorkspaceSelections: req.WorkspaceSelections}
+	proposed := composeProposed{Run: run, InlinePolicy: clamped, IntegrationID: req.IntegrationID, BedrockRef: bedrockRef, WorkspaceSelections: req.WorkspaceSelections}
 	// The proposal is serialized+capped as ONE text blob (not embedded as nested
 	// JSON): CapAuditText can cut mid-object, so storing the possibly-truncated
 	// result as a plain string is what keeps the OUTER audit Data valid JSON.

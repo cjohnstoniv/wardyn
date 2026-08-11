@@ -10,8 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -239,6 +237,19 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 	if !ok {
 		return "", nil // non-LLM agent — nothing to bind
 	}
+	// AGENT×PROVIDER COMPATIBILITY (SPINE-1, security): the harness catalog
+	// (harness.go) is the single source of truth for which ai_provider TYPE can
+	// drive which agent, and it is consulted here so a run can never fold an
+	// incompatible integration onto the agent's OWN provider host. Without this an
+	// openai_api_key integration on a claude-code run injected the operator's
+	// OpenAI key as x-api-key on api.anthropic.com (credential disclosed to the
+	// wrong vendor), and a subscription/bedrock pin on a codex-cli run silently
+	// removeAPIKeyGrantForHost'd its working OpenAI grant. Bail with no grant and
+	// no removal; the reason is surfaced to the operator via capabilitiesFor and
+	// (for a composed/preflight run) the honest "no model access" verdict.
+	if harnessProviderReason(agent, integ.Type) != "" {
+		return "", nil
+	}
 	switch integ.Type {
 	case "anthropic_api_key", "openai_api_key":
 		secret := integ.Credentials["api_key"]
@@ -254,7 +265,13 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
 			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
 		})
-		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+		// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
+		// (SPINE-4): the proxy's credential injector consults the exact allowlist
+		// only and deliberately does NOT honor allow-all (Policy.AllowedExactHost),
+		// so a grant whose host is missing from AllowedDomains fails buildInjector
+		// CLOSED at startup and the sandbox gets zero egress. Same rule the four
+		// dispatch/integration-side authors already follow (integrations_run.go).
+		if !domainAllowedExact(spec.AllowedDomains, p.host) {
 			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
 		}
 		return integ.Type, nil
@@ -337,34 +354,15 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 	return s.defaultAgentRunsIntegration(ctx, "")
 }
 
-// applyPrimaryWorkspaceCreds resolves the run's FULL integration precedence
-// (resolveRunIntegration: run-explicit integration_id → workspace binding →
-// operator default → none) and folds the winner into the spec, auditing the
-// integration applied. Unlike the pre-Integration code, this no longer
-// requires a primary workspace at all — an operator's site-wide
-// DefaultFor:agent_runs default (or an explicit integration_id) applies to
-// every run, workspace or not.
-//
-// Returns the winning integration's Bedrock selection when a bedrock
-// integration was applied, for dispatch to resolve region/model against
-// (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
-func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
-	integ, kind, bedrockRef := s.foldRunIntegration(ctx, spec, req, wsRefs)
-	if kind == "" {
-		return nil
-	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
-		runID.String(), "success", mustJSON(map[string]any{"integration_ref": integ.ID, "type": kind})))
-	return bedrockRef
-}
-
-// foldRunIntegration is the AUDIT-FREE half of applyPrimaryWorkspaceCreds: it
-// resolves the full precedence chain (run-explicit integration_id → workspace
-// binding → operator default → none) and folds the winner into spec — the
-// credential/egress fold (applyIntegrationCreds) plus, for a resident_host
-// subscription, the ceiling mount via applyLLMCredMount (THE single
-// subscription gate) — returning what was applied so the caller can decide
-// whether to audit.
+// foldRunIntegration resolves the run's FULL integration precedence and folds
+// the winner into spec — the AUDIT-FREE fold (run-explicit integration_id →
+// workspace binding → operator default → none): the credential/egress fold
+// (applyIntegrationCreds) plus, for a resident_host subscription, the ceiling
+// mount via applyLLMCredMount (THE single subscription gate) — returning what
+// was applied so the caller can decide whether to audit. The create path
+// (runs.go) emits the run.workspace.creds audit itself, once the run id is
+// minted, so the fold can run ABOVE the confinement floor (SPINE-2) and
+// preflight can call the SAME fold and discard the result.
 //
 // Both launch and preflight call THIS, so Review cannot predict a different
 // model access than launch grants. Preflight used to fold only the workspace
@@ -469,8 +467,11 @@ func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[s
 	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
 		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
 	})
-	// Couple the exact-host egress entry (required by the injector); dedup.
-	if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+	// Couple the exact-host egress entry (required by the injector) UNCONDITIONALLY,
+	// even under allow-all (SPINE-4): AllowedExactHost does not honor allow-all, so
+	// a grant without its exact allowlist entry fails buildInjector closed at
+	// startup and the sandbox gets zero egress; dedup.
+	if !domainAllowedExact(spec.AllowedDomains, p.host) {
 		spec.AllowedDomains = append(spec.AllowedDomains, p.host)
 	}
 }
@@ -564,7 +565,13 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 			agent), true
 	}
 	g, has := apiKeyGrantForHost(spec, p.host)
-	hostAllowed := spec.AllowAllEgress || domainAllowedExact(spec.AllowedDomains, p.host)
+	// EXACT-ONLY (SPINE-4): the injector consults the exact allowlist and does not
+	// honor allow-all, so a grant is genuinely reachable only when its host is an
+	// EXACT allowlist entry. An allow-all policy with an api_key grant whose host
+	// is NOT exactly listed still fails the proxy closed — so this must not read
+	// allow-all as "host allowed", or the orphan-grant drop below never fires in
+	// the one case that hard-fails the run.
+	hostAllowed := domainAllowedExact(spec.AllowedDomains, p.host)
 
 	// The verdict keys on the GRANT's own secret when one exists — a workspace
 	// credential binding folds in a grant naming the workspace's secret, which

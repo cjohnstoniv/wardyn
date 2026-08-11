@@ -107,10 +107,6 @@ func workspaceProfile(ws types.Workspace) (workspacescan.WorkspaceProfile, bool)
 //
 // It audits its own build success/failure against runID.
 func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer) (string, bool) {
-	if s.cfg.ImageBuilder == nil {
-		return "", false
-	}
-
 	buildAudit := func(outcome string, extra map[string]any) {
 		extra["workspace_id"] = primary.ID.String()
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
@@ -122,13 +118,38 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
-		// "custom" additionally layers b.Steps on the base via a Dockerfile
-		// build. ponytail: no builder method layers Dockerfile lines on a base
-		// image yet, so this falls back to Image verbatim (Steps ignored) —
-		// same as "registry"/"byo" ("used verbatim, no layering") — until one
-		// exists.
-		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "image": b.Image})
-		return b.Image, true
+		if s.cfg.ImageBuilder == nil {
+			// PARITY-4: the workspace_id door hard-400s a base_image with no builder
+			// wired (validateImageBuildRequest, re-run after the seed); the UI door has
+			// no such gate, so at minimum AUDIT that the operator's chosen base image
+			// was DROPPED for the convention image rather than swapping it silently.
+			// (Fully closing the door = the UI sending workspace_id — later UI batch.)
+			buildAudit("skipped", map[string]any{
+				"source": "base_image:" + b.Kind, "base": b.Image,
+				"reason": "no image builder wired; base image dropped for the convention image",
+			})
+			return "", false
+		}
+		// Wrap the operator's base image the SAME way the workspace_id door does
+		// (PARITY-4): FinalizeBase copies the runner tools + agent-run in and tags it
+		// wardyn-byoi/<runid>, which ALSO arms dispatch's fail-closed harness selftest
+		// (runs_dispatch.go keys it off the wardyn-byoi/ prefix). Before this a UI-door
+		// run launched the raw image with no agent-run and failed with an opaque exec
+		// error, while the CLI wrapped + selftest-gated the identical workspace.
+		// "custom" Steps are not layered here (no builder method layers Dockerfile
+		// lines on a base yet) — same as the req.Image path's own verbatim wrap.
+		outTag := "wardyn-byoi/" + runID.String() + ":latest"
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink)
+		if berr != nil {
+			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
+			return "", false
+		}
+		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built})
+		return built, true
+	}
+
+	if s.cfg.ImageBuilder == nil {
+		return "", false
 	}
 
 	p, ok := workspaceProfile(primary)
@@ -477,24 +498,49 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// egress in first so subscription/api-key wiring below attaches in both modes.
 	unionAllowedDomains(&policy, modelProviderEgress(s.cfg.DefaultPolicy))
 
-	// Model access for the session: a recording session can drive the agent, so wire
-	// the operator's CONFIGURED provider into the run. Reuse the composer's helpers —
-	// dispatch then auto-provisions the rest from the resulting policy (no runs.go
-	// change): subscription is detected from the /home/agent/.claude mount, and
-	// Bedrock is wired by dispatch's resolveBedrockAuth when modelRun is true (an
-	// interactive run is never a scan run, so modelRun is true).
+	// Model access for the session comes from the WORKSPACE's OWN binding (SPINE-7)
+	// — the same resolveRunIntegration precedence (explicit → workspace pin →
+	// operator default) a real run of this workspace uses — not just the operator
+	// ceiling's convention secret. A confined replay whose job is to PROVE least
+	// privilege must authenticate on the SAME credential path a real run will, or
+	// its capture (and the promotion candidates derived from it) reflect a different
+	// transport. A synthetic claude-code request with this one workspace as wsRefs
+	// drives the identical fold launch/preflight run; bedrockRef is threaded into
+	// dispatch below so a bedrock-bound workspace records its OWN region, not the
+	// global default.
 	var injections []runner.InjectionGrant
-	subMounted, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true)
+	var integKind string
+	var bedrockRef *types.WorkspaceBedrockRef
+	// Only when the workspace carries its OWN binding: the record session honors the
+	// workspace's pinned integration, but does NOT reach for the operator's
+	// site-wide default here (that tier stays a real run's concern) — which also
+	// keeps foldRunIntegration off defaultAgentRunsIntegration's site-config read on
+	// the record path.
+	if ws.LLMCred != nil && ws.LLMCred.IntegrationRef != "" {
+		_, integKind, bedrockRef = s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
+	}
+	subMounted := specHasMountTarget(&policy, claudeCredTarget)
+	if integKind == "" && !subMounted {
+		// No workspace/operator integration bound: fall back to the operator
+		// ceiling's convention subscription mount, else a brokered api-key grant
+		// (today's behavior for an unbound workspace).
+		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true); m {
+			subMounted = true
+		} else {
+			ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
+		}
+	}
 	llmMode := "none"
-	if subMounted {
-		llmMode = "subscription"
+	switch {
+	case subMounted, integKind == "anthropic_subscription":
+		llmMode = "subscription" // managed subscription is injected proxy-side by dispatch
+	case integKind == "bedrock" || bedrockRef != nil:
+		llmMode = "bedrock" // dispatch's resolveBedrockAuth wires it from bedrockRef below
 	}
 	if !subMounted {
-		// No subscription ceiling: fall back to a brokered api-key grant when the
-		// provider secret exists (ensureLLMGrant is a no-op otherwise). Then build
-		// the injection from that grant — mirrors handleCreateRun's api_key branch —
-		// and hand it to dispatch (record otherwise passes no injections).
-		ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
+		// Build the injection from whatever api_key grant the fold or the fallback
+		// added — mirrors handleCreateRun's api_key branch (a subscription/bedrock
+		// fold adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
 		for _, g := range policy.EligibleGrants {
 			if g.Kind != types.GrantAPIKey || g.RequiresApproval {
 				continue
@@ -509,7 +555,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 				injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 			}
 		}
-		if len(injections) > 0 {
+		if len(injections) > 0 && llmMode == "none" {
 			llmMode = "api-key"
 		}
 	}
@@ -534,7 +580,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		GitGrants:          gitBrokerGrant(primaryCloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
-		Interactive:        true,
+		// The workspace's own Bedrock region/model (SPINE-7) — nil for a non-bedrock
+		// binding, so dispatch keeps the global config exactly as before.
+		BedrockRef:  bedrockRef,
+		Interactive: true,
 		// A record/verify session runs ONE workspace — its scans decide the
 		// toolchain env, same rule as an ordinary workspace run.
 		Toolchains: runToolchainNeeds([]types.Workspace{ws}),

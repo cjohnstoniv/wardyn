@@ -190,7 +190,9 @@ func setupSubscriptionMountItem(sub composeSubscriptionState) (SetupItem, bool) 
 	default:
 		it.Status = "missing"
 		if detail == "" {
-			detail = "subscription mode was requested but not applied; the run falls back to the api-key path."
+			// NOTE (wire/UI): an undeliverable subscription pin no longer falls back
+			// to api-key (PARITY-1) — it leaves the run with NO model access.
+			detail = "subscription mode was requested but not applied; this run has NO model access until it is connected."
 		}
 	}
 	it.Detail = detail

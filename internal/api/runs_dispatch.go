@@ -187,8 +187,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
+		// Capture the run's PRE-substitution egress: it decides which redirects are
+		// in scope for THIS run (GAP-EGRESS-2), used by both the egress substitution
+		// and the token-injection plan so they can never disagree.
+		preDomains := append([]string(nil), policy.AllowedDomains...)
 		policy.AllowedDomains = substituteArtifactEgress(policy.AllowedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg)
+		// Deny each network-only redirect's From host so an allow_all_egress run
+		// cannot keep reaching the public host the operator redirected away
+		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
+		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
+		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains)
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -346,6 +354,23 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
+	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
+	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
+	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its
+	// dispatcher lives. A single stamp (the old behavior) went stale after
+	// watcherLeaseStaleAfter if the SetSandboxRef→completion-watcher window ran long
+	// (a slow BYOI selftest before Exec), and a stale lease on a still-dispatching
+	// run is what let another replica's sweep adopt — and, with the strand guard's
+	// age gate now removed, FINALIZE — a run this dispatch was still setting up.
+	// Holding it continuously makes a stale lease UNAMBIGUOUS: the dispatcher is
+	// gone. That is exactly what lets sweepRunWatchers' strand guard finalize a
+	// never-exec'd run with NO age gate — closing the fast-crash/multi-replica C3
+	// strand the age gate left open (GAP-RECONCILE-2). The completion watcher starts
+	// its OWN hold before this one stops (startCompletionWatcher), so lease coverage
+	// is continuous across the handoff; this hold is released when dispatch returns.
+	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
+	defer stopDispatchLease()
+
 	if err := s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
 		// A lost sandbox ref is not fatal to THIS dispatch (the run proceeds), but on a
 		// daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while
@@ -356,13 +381,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
 	}
-
-	// The run now HAS something to watch, so its watcher-lease grace starts HERE,
-	// not at row creation: the row still carries the heartbeat it was born with,
-	// which any image build longer than the stale window has already let expire —
-	// so without this one stamp the next sweep on any replica adopts a run this
-	// dispatch is still setting up (reconcile.go).
-	s.stampRunWatcherLease(ctx, run.ID)
 
 	// KILL-RACE GUARD: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
