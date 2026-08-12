@@ -48,6 +48,35 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 	return cc, true
 }
 
+// warnWorkspaceCollision returns an advisory (never-blocking) warning when
+// another non-terminal run already operates on workspacePath — two independent
+// agents sharing a host directory could interfere — and records a collision
+// audit event. Best-effort: an empty path, a store list error, or no collision
+// yields no warning and the run still launches.
+func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, workspacePath string) []string {
+	if workspacePath == "" {
+		return nil
+	}
+	existing, lerr := s.cfg.Store.ListRuns(ctx)
+	if lerr != nil {
+		return nil
+	}
+	var others []string
+	for _, e := range existing {
+		if e.ID != runID && e.WorkspacePath == workspacePath && !isTerminalRunState(e.State) {
+			others = append(others, e.ID.String())
+		}
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
+		workspacePath, "success", mustJSON(map[string]any{"other_runs": others})))
+	return []string{fmt.Sprintf(
+		"host workspace %q is already in use by %d active run(s) (%s); independent agents sharing a directory can interfere — proceeding anyway",
+		workspacePath, len(others), strings.Join(others, ", "))}
+}
+
 // handleCreateRun validates policy, gates on confinement class against what the
 // runner can actually enforce (fail closed), persists the run + its grants,
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
@@ -159,28 +188,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Workspace-collision warning (DISCOURAGE, never block): if another non-terminal
-	// run already operates on this host directory, two independent agents could
-	// interfere. Surface it as an advisory warning on the response + an audit event;
-	// the run still launches. Best-effort — a list error never blocks create.
-	var warnings []string
-	if workspacePath != "" {
-		if existing, lerr := s.cfg.Store.ListRuns(ctx); lerr == nil {
-			var others []string
-			for _, e := range existing {
-				if e.ID != runID && e.WorkspacePath == workspacePath && !isTerminalRunState(e.State) {
-					others = append(others, e.ID.String())
-				}
-			}
-			if len(others) > 0 {
-				warnings = append(warnings, fmt.Sprintf(
-					"host workspace %q is already in use by %d active run(s) (%s); independent agents sharing a directory can interfere — proceeding anyway",
-					workspacePath, len(others), strings.Join(others, ", ")))
-				s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
-					workspacePath, "success", mustJSON(map[string]any{"other_runs": others})))
-			}
-		}
-	}
+	warnings := s.warnWorkspaceCollision(ctx, runID, workspacePath)
 
 	// Record the model-access + requirements folds that ran ABOVE the confinement
 	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw

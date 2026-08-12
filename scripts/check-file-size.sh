@@ -37,6 +37,14 @@ declare -A ALLOWLIST=(
   # compose.go and store.go were decomposed below 1000 in R4 (llmcred.go /
   # pagination.go splits) and came OFF this list — they are gated at the plain
   # 1000-line threshold like any other file now.
+  # The v0.5.0 k8s/cloud merge grew four pre-existing, cohesive files past 1000
+  # (the k8s runner substrate + envbuild wiring, and the new-run wizard's k8s
+  # runner flavor + its tests). Caps frozen at +~8% so they stop growing; split
+  # by seam when next substantially touched.
+  ["./internal/api/workspaces.go"]=1150 # 1069 at v0.5 merge
+  ["./internal/envbuild/builder.go"]=1100 # 1020 at v0.5 merge
+  ["./ui/src/app/components/screens/new-run/wizard-types.ts"]=1180 # 1092 at v0.5 merge
+  ["./ui/src/app/components/screens/new-run/new-run-dialog.test.tsx"]=1240 # 1149 at v0.5 merge
 )
 
 fail=0

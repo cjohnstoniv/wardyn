@@ -384,6 +384,30 @@ func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, 
 // loses the CAS and never launches a sandbox. (2) Upsert the task's
 // `recording` entry — BEFORE dispatch, so even a run that dies instantly has
 // the entry its terminal capture keys on. (3) Create + dispatch.
+// mintRecordAPIKeyInjections persists each auto-mint api_key grant in grants
+// (skipping approval-gated and non-api_key kinds) and returns its proxy
+// injection. The record path wires injections this way from two grant sources —
+// the workspace's required-integration folds and the LLM fallback — so both go
+// through here. A store error is returned for the caller's abort().
+func (s *Server) mintRecordAPIKeyInjections(ctx context.Context, runID uuid.UUID, now time.Time, grants []types.GrantSpec) ([]runner.InjectionGrant, error) {
+	var injections []runner.InjectionGrant
+	for _, g := range grants {
+		if g.Kind != types.GrantAPIKey || g.RequiresApproval {
+			continue
+		}
+		grantID := uuid.New()
+		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+			ID: grantID, RunID: runID, CreatedAt: now, Spec: g,
+		}); gerr != nil {
+			return nil, gerr
+		}
+		if rule, rerr := injectionRuleFromScope(g.Scope); rerr == nil {
+			injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
+		}
+	}
+	return injections, nil
+}
+
 func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Workspace, sessionKey, sessionLabel string, confined bool) (types.AgentRun, bool, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
@@ -529,20 +553,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 			if _, applied := s.applyIntegrationRequirement(ctx, rows, &policy, id); !applied {
 				continue
 			}
-			for _, g := range policy.EligibleGrants[before:] {
-				if g.Kind != types.GrantAPIKey || g.RequiresApproval {
-					continue
-				}
-				grantID := uuid.New()
-				if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
-					ID: grantID, RunID: runID, CreatedAt: now, Spec: g,
-				}); gerr != nil {
-					return types.AgentRun{}, false, abort(fmt.Errorf("create integration grant: %w", gerr))
-				}
-				if rule, rerr := injectionRuleFromScope(g.Scope); rerr == nil {
-					injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
-				}
+			minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
+			if ierr != nil {
+				return types.AgentRun{}, false, abort(fmt.Errorf("create integration grant: %w", ierr))
 			}
+			injections = append(injections, minted...)
 		}
 	}
 
@@ -578,20 +593,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// Build the injection from whatever api_key grant the fold or the fallback
 		// added — mirrors handleCreateRun's api_key branch (a subscription/bedrock
 		// fold adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
-		for _, g := range policy.EligibleGrants {
-			if g.Kind != types.GrantAPIKey || g.RequiresApproval {
-				continue
-			}
-			grantID := uuid.New()
-			if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
-				ID: grantID, RunID: runID, CreatedAt: now, Spec: g,
-			}); gerr != nil {
-				return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", gerr))
-			}
-			if rule, rerr := injectionRuleFromScope(g.Scope); rerr == nil {
-				injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
-			}
+		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants)
+		if ierr != nil {
+			return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", ierr))
 		}
+		injections = append(injections, minted...)
 		if len(injections) > 0 && llmMode == "none" {
 			llmMode = "api-key"
 		}
