@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -154,6 +155,68 @@ func TestBuildMaskingBody_CopyErrorReachesReader(t *testing.T) {
 	if !errors.Is(err, srcErr) {
 		t.Fatalf("reader observed err = %v, want %v (a swallowed copy error reads as a clean EOF)", err, srcErr)
 	}
+}
+
+// TestBuildMaskingBody_MasksMultiLineSecretInAsciicast pins the upload-path fix:
+// the persisted body is asciicast JSON (each terminal-output chunk json.Marshal'd
+// into an "o" event), so a MULTI-LINE secret — an SSH private key, which
+// broker.mint() mask-registers precisely so the recording masks it — appears only
+// in its JSON-escaped form (newlines → \n) where the raw-value Masker misses it.
+// appendJSONEscapedVariants closes that: the escaped rendering is masked too, so
+// no line of the key survives in the persisted cast. (A secret SPLIT across two
+// asciicast events by PTY read boundaries stays a disclosed residual — see
+// THREAT-MODEL.md — and is not exercised here.)
+func TestBuildMaskingBody_MasksMultiLineSecretInAsciicast(t *testing.T) {
+	runID := uuid.New()
+	// A multi-line PEM/base64 key (how broker.mint registers an ssh key) and a
+	// secret that also carries JSON/HTML-special bytes (<, >, &) — the case where
+	// Go's default HTML-escaping would diverge from asciinema's rendering.
+	sshKey := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+		"b3BlbnNzaGtleXYxAAAdistinctivEBODYlineAAAA\n" +
+		"-----END OPENSSH PRIVATE KEY-----")
+	htmlSecret := []byte("tok<distinctivEHTMLmarker>&more\nsecondline")
+	reg := secretmask.NewRegistry()
+	reg.Add(runID, sshKey)
+	reg.Add(runID, htmlSecret)
+
+	// Encode each secret into an asciicast "o" event the way the REAL recorder
+	// (asciinema, Python/serde_json) does — HTML-escaping OFF, so <, >, & stay
+	// literal. Go's default json.Marshal would \u-escape them; the masker must
+	// match asciinema's bytes, which is why appendJSONEscapedVariants also uses
+	// SetEscapeHTML(false).
+	body := `{"version":2,"width":80,"height":24}` + "\n" +
+		`[0.5,"o",` + asciinemaEncode(t, sshKey) + "]\n" +
+		`[0.6,"o",` + asciinemaEncode(t, htmlSecret) + "]\n"
+
+	r, cleanup := buildMaskingBody(strings.NewReader(body), reg, runID)
+	defer cleanup()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read masked body: %v", err)
+	}
+	if strings.Contains(string(out), "distinctivEBODYline") {
+		t.Fatalf("multi-line secret survived masking on the upload path:\n%s", out)
+	}
+	if strings.Contains(string(out), "distinctivEHTMLmarker") {
+		t.Fatalf("HTML-char-bearing secret survived masking (SetEscapeHTML divergence):\n%s", out)
+	}
+	if !strings.Contains(string(out), "<secret-hidden>") {
+		t.Fatalf("expected <secret-hidden> placeholder in masked body:\n%s", out)
+	}
+}
+
+// asciinemaEncode renders raw output as a JSON string the way asciinema writes
+// an asciicast "o" event payload — HTML-escaping OFF (literal <, >, &), matching
+// serde_json/Python json.dumps rather than Go's HTML-escaping default.
+func asciinemaEncode(t *testing.T, raw []byte) string {
+	t.Helper()
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(string(raw)); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 // errReader always fails, standing in for a body that errors mid-stream (what

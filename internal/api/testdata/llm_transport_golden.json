@@ -90,6 +90,20 @@
       "git.example.com"
     ]
   },
+  "claude-code/managed-subscription-blob-present-exec-suppressed": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
   "claude-code/managed-yields-to-explicit-api-key": {
     "subscription": false,
     "inject_sub": false,

@@ -78,6 +78,31 @@ describe("StepReview — preflight surfacing", () => {
     expect(screen.getByTestId("setup-item-backend:CC2")).toBeInTheDocument();
   });
 
+  it("surfaces preflight clamp warnings (a member's tightened inline_policy) and omits the block when there are none", () => {
+    const { rerender } = render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight({ warnings: ["Dropped grant for attacker.example (not operator-eligible)"] })}
+        preflightStatus="idle"
+      />,
+    );
+    const block = screen.getByTestId("preflight-clamp-warnings");
+    expect(block).toHaveTextContent(/Tightened by policy/i);
+    expect(block).toHaveTextContent(/not operator-eligible/i);
+
+    // No warnings (the common case, and an older server that omits the field) ⇒ no block.
+    rerender(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight()}
+        preflightStatus="idle"
+      />,
+    );
+    expect(screen.queryByTestId("preflight-clamp-warnings")).toBeNull();
+  });
+
   it("shows a quiet 'preflight unavailable' line on error, never blocking Review", () => {
     render(
       <StepReview

@@ -35,6 +35,12 @@ type preflightResponse struct {
 	// finding N1).
 	RiskAssessment []composer.RiskItem `json:"risk_assessment"`
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
+	// Warnings is resolveRunPolicy's clamp-warning list — non-empty only when a
+	// MEMBER authored an inline_policy that composer.Clamp bounded or
+	// filterMemberGrants dropped a grant from. Surfaced here (never at launch, per
+	// resolveRunPolicy's doc comment) so Review tells the member WHY their
+	// inline_policy differs from what they typed, before they launch.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -87,7 +93,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// writes its own 4xx (XOR violation, invalid inline spec, missing/reserved
 	// secret 422) and returns ok=false when it has already responded, so Review
 	// sees the real launch error, never a rosier one.
-	spec, _, _, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
+	spec, _, clampWarnings, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
 	if !ok {
 		return
 	}
@@ -196,5 +202,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		EnforcedConfinementClass: enforced,
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
+		Warnings:                 clampWarnings,
 	})
 }

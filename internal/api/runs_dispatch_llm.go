@@ -49,8 +49,24 @@ type llmTransport struct {
 // the managed fallback); the grant-authoring phases mutate it later. See the
 // inline comments for the full precedence rationale: host-staged mount >
 // managed > Bedrock > api-key.
-func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
+func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
 	var t llmTransport
+
+	// modelRun gates EVERY proxy-side credential-injection mode below
+	// (subscription, managed, Bedrock) on a run that actually invokes the model.
+	// Two run kinds make NO model call and so must receive NO LLM credential
+	// (least privilege): a scan run (execs wardyn-scan — WorkspaceID/SourceID
+	// set, non-interactive), and a task-mode=exec run — the BYOA/CI plain-command
+	// lane whose `wardyn run --task-mode exec` contract is literally "no agent,
+	// no LLM credentials". Without the exec term, a CI exec job with a connected
+	// managed/resident subscription plus any egress (which docs/CI.md itself tells
+	// operators to add) silently gets a live Anthropic OAuth token injected
+	// proxy-side + api.anthropic.com appended to its allow-list, for a plain shell
+	// command that never asked for a model. An INTERACTIVE workspace-linked run
+	// (Record Mode) is human-driven, not a scan, so it stays a model run. Mirrors
+	// the WARDYN_SCAN_ONLY discriminator.
+	modelRun := taskMode != "exec" &&
+		!((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
 	// INTERACTIVE run never invokes agent-run (the human runs `claude` in the
@@ -71,20 +87,14 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// REQUIRES TLS-MITM of api.anthropic.com so the proxy can swap the credential;
 	// it is the safe default whenever a token provider is wired. Escape hatch:
 	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
-	t.injectSub = t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
+	t.injectSub = modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
 	// Bedrock: a third Anthropic transport, mutually exclusive with subscription
 	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
 	// the readiness rule and the resident-AWS-cred rationale.
 	//
-	// modelRun gates Bedrock on a run that actually invokes the model: a scan run
-	// (execs wardyn-scan — WorkspaceID set, non-interactive) makes no model call,
-	// so it must NOT receive the resident AWS SigV4 creds (least privilege — the
-	// creds are masked + confined regardless, but there's no reason to place them
-	// in a sandbox that never signs a Bedrock request). An INTERACTIVE
-	// workspace-linked run (Record Mode) is a human-driven sandbox, not a scan, so
-	// it stays a model run. Mirrors the WARDYN_SCAN_ONLY discriminator.
-	modelRun := !((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
+	// Bedrock honors the same modelRun gate computed at the top: a scan or
+	// exec run signs no Bedrock request, so it gets no resident AWS SigV4 creds.
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
 	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
@@ -120,7 +130,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// api.anthropic.com to the allow-list below, and a fallback must not silently
 	// widen a policy the operator authored as sealed. Operator-staged subscription
 	// mounts are policy-blessed and unaffected.
-	managed := !t.harnessLogin && !t.subscription && !t.bedrockReady &&
+	managed := modelRun && !t.harnessLogin && !t.subscription && !t.bedrockReady &&
 		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent) &&
 		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
 	t.injectManaged = managed

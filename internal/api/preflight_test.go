@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -47,6 +48,55 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 	if it, ok := findItem(resp.SetupItems, "secret:anthropic-api-key"); !ok || it.Status != "satisfied" {
 		t.Errorf("secret row = %+v (ok=%v), want satisfied", it, ok)
+	}
+}
+
+// TestPreflight_MemberInlineClampWarningsSurfaced pins resolveRunPolicy's
+// contract (its own doc comment): a MEMBER whose inline_policy is clamped or has
+// a grant dropped must see WHY on Review, since launch itself stays silent. The
+// dry run therefore surfaces the clamp-warning list in preflightResponse.Warnings
+// — a regression here (the k8s merge briefly discarded it) leaves a member
+// launching a silently-narrowed policy with no explanation. The exfil pairing
+// (a real operator secret pinned to an allowlisted attacker host) is dropped by
+// filterMemberGrants for the member and kept for the admin, so warnings are
+// present for one and absent for the other.
+func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
+	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"attacker.example"},
+		EligibleGrants:      []types.GrantSpec{{Kind: types.GrantAPIKey}},
+	}
+	h.srv.router = h.srv.routes()
+	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
+
+	// Member: the exfil pairing is dropped, and Review is told about it.
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight",
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("member preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var memberResp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &memberResp); err != nil {
+		t.Fatalf("decode member response: %v; body=%s", err, w.Body.String())
+	}
+	if len(memberResp.Warnings) == 0 {
+		t.Fatalf("member preflight: Warnings empty, want the dropped-grant clamp notice surfaced")
+	}
+
+	// Admin (ceiling authority) is unclamped, so there is nothing to warn about.
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight",
+		ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var adminResp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &adminResp); err != nil {
+		t.Fatalf("decode admin response: %v; body=%s", err, w.Body.String())
+	}
+	if len(adminResp.Warnings) != 0 {
+		t.Fatalf("admin preflight: Warnings=%v, want none (unclamped)", adminResp.Warnings)
 	}
 }
 

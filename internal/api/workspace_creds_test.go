@@ -229,6 +229,33 @@ func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t
 	}
 }
 
+// TestApplyPrimaryWorkspaceCreds_ExecRunBindsNoIntegration pins the exec
+// contract at the grant-folding layer: a task-mode=exec run ("no agent, no LLM
+// credentials") must NOT fold the operator's site-wide default ai_provider
+// integration, or persistRunGrants would inject the operator's api key + widen
+// egress to api.anthropic.com for a plain shell command that never asked for a
+// model (the api-key sibling of the subscription/managed injection resolveLLM-
+// Transport already suppresses for exec). Same server/default as the test above,
+// which DOES fold it for a normal run — the only difference is TaskMode.
+func TestApplyPrimaryWorkspaceCreds_ExecRunBindsNoIntegration(t *testing.T) {
+	in := apiKeyIntegration("acme-anthropic", "acme-anthropic-key")
+	in.DefaultFor = []string{"agent_runs"}
+	s := integrationTestServer(t, []types.Integration{in}, "acme-anthropic-key")
+	spec := &types.RunPolicySpec{}
+	req := createRunRequest{Agent: "claude-code", TaskMode: "exec"}
+
+	integ, kind, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
+	if integ.ID != "" || kind != "" || bedrockRef != nil {
+		t.Errorf("exec run folded an integration: integ=%q kind=%q bedrockRef=%v, want all empty", integ.ID, kind, bedrockRef)
+	}
+	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); ok {
+		t.Fatal("exec run got an api-key grant folded — the operator's default must not inject a credential into a plain-command run")
+	}
+	if len(spec.AllowedDomains) != 0 {
+		t.Fatalf("exec run had egress widened to %v — the integration host must not be appended", spec.AllowedDomains)
+	}
+}
+
 // TestApplyPrimaryWorkspaceCreds_DanglingWorkspaceRef_DoesNotCascadeToDefault
 // pins resolveRunIntegration's documented non-cascade (llmcred.go): a
 // workspace bound to a SPECIFIC integration ref that no longer resolves

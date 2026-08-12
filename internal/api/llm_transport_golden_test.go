@@ -139,6 +139,11 @@ type llmGoldenCase struct {
 	// cell was an ordinary run and `modelRun := true` passed the whole suite.
 	workspaceID *uuid.UUID
 	interactive bool
+	// taskMode drives the same modelRun discriminator: "exec" is the BYOA/CI
+	// plain-command lane ("no agent, no LLM credentials"), so it makes no model
+	// call and must receive NO injected credential even with a managed/resident
+	// subscription wired. "" is the ordinary agent-harness run.
+	taskMode string
 }
 
 func llmGoldenCases() []llmGoldenCase {
@@ -177,6 +182,18 @@ func llmGoldenCases() []llmGoldenCase {
 			name:  "claude-code/managed-subscription-blob-present",
 			agent: "claude-code",
 			cfg:   Config{ManagedToken: fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}},
+		},
+
+		// (d') the SAME managed-subscription blob, but this is a task-mode=exec
+		// run (BYOA/CI plain command). Its contract is "no LLM credentials", so
+		// managed injection must NOT fire — inject_managed stays false and
+		// api.anthropic.com is NOT appended to egress. Pins the exec no-model-call
+		// gate against the (d) cell just above, which DOES inject.
+		{
+			name:     "claude-code/managed-subscription-blob-present-exec-suppressed",
+			agent:    "claude-code",
+			cfg:      Config{ManagedToken: fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}},
+			taskMode: "exec",
 		},
 
 		// (e) a resident subscription token is wired AND the policy's ceiling
@@ -324,7 +341,7 @@ func TestLLMTransportGolden(t *testing.T) {
 		}
 		sandboxEnv := map[string]string{}
 		llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, c.injections,
-			c.interactive, "http://wardyn-proxy:3128", nil)
+			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
 		if _, dup := got[c.name]; dup {
 			t.Fatalf("duplicate cell name %q", c.name)
 		}

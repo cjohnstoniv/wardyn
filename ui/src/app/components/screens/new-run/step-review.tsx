@@ -7,7 +7,7 @@
 // enforced (the composed inline_policy, or the STORED spec when the run is
 // attached to a saved policy), and the optional save-as-profile control.
 import * as React from "react";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert, WandSparkles } from "lucide-react";
 import { Switch } from "../../ui/switch";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -289,6 +289,27 @@ export function StepReview({
             onAddSecret={onAddSecret}
             onFixWorkspace={onFixWorkspace}
           />
+        </div>
+      )}
+
+      {/* Clamp notices — the SAME "Tightened by policy" block ComposeReview shows.
+          Non-empty only when a member's inline_policy was bounded or a grant was
+          dropped; tells them WHY the enforced policy differs from what they typed,
+          since launch itself stays silent (resolveRunPolicy's contract). */}
+      {preflight?.warnings && preflight.warnings.length > 0 && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle p-3 text-xs leading-relaxed text-warning"
+          data-testid="preflight-clamp-warnings"
+        >
+          <WandSparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <div>
+            <span className="font-medium">Tightened by policy:</span>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {preflight.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 

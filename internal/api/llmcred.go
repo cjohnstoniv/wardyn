@@ -389,6 +389,19 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	// The run's PRIMARY workspace is wsRefs[0] when the spec references any —
 	// shared with preflight (which calls this same function) so the two
 	// cannot disagree about whose credential binding a run inherits.
+	// An exec run (task-mode=exec — a plain governed shell command, "no agent, no
+	// LLM credentials" per its `wardyn run --task-mode exec` contract) makes no
+	// model call, so it binds NO model integration. Without this, an operator's
+	// site-wide default (or a workspace-bound) ai_provider integration would fold
+	// an api-key grant AND append the provider host to egress, and persistRunGrants
+	// would inject the operator's key proxy-side — the same implicit credential the
+	// exec contract forbids, on the api-key transport. resolveLLMTransport already
+	// gates the subscription/managed/Bedrock transports on the same no-model-call
+	// rule; this closes the grant-folding path. Shared with preflight (calls this),
+	// so the checklist's model-access verdict for an exec run matches launch.
+	if req.TaskMode == "exec" {
+		return types.Integration{}, "", nil
+	}
 	var workspaceRef string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
 		workspaceRef = wsRefs[0].LLMCred.IntegrationRef
