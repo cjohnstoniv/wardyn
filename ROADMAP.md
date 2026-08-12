@@ -213,6 +213,33 @@ shipped behavior; none is scheduled.
   covers GHSA-qwww-vcr4-c8h2 until then — needs a UI owner.
 - **Kata/TPROXY/io_uring composer quick-hits.** Parked since the
   composer-readiness work.
+- **A member's inline model-access grant needs an operator integration.** A
+  member may author an `inline_policy`, but its api_key/git_pat/ssh_key grant is
+  clamped to grant KINDS the operator allows and then its {host, secret} pairing
+  is dropped unless the operator eligible-listed that exact pairing
+  (`filterMemberGrants`, `internal/api/inline_policy.go` — the secret-exfil
+  guard: a member must not pair an arbitrary stored secret with an allowlisted
+  host). A run's real model-access grant is re-added at launch by
+  `foldRunIntegration` (an operator integration) or `applyWorkspaceRequirements`
+  (a workspace requirement), so the supported multi-user flow is unaffected. The
+  ceiling: a member whose model access relies ONLY on a raw operator secret + a
+  wildcard `api_key` ceiling with NO integration and NO workspace requirement
+  gets nothing re-added — the run launches without model access (fail-closed, no
+  exfil). Two smaller edges ride along: the drop emits a clamp *warning*
+  (surfaced in preflight/Review) but no `authz.denied` audit event, so a
+  deliberate member exfil *attempt* is not operator-visible; and `handleComposeRun`
+  does not run the drop, so for that same config its proposal previews
+  `Provisioned: true` while launch delivers none (preflight/Review filters and
+  agrees with launch, so the Review step shows the truth). The fix, if
+  pure-BYOK-for-members is a wanted flow: re-run the provider-convention
+  model-grant at launch, not only at compose time.
+- **Scan-seeded egress has no provenance gate.** A scanned repo's derived hosts
+  are unioned into a run's egress allowlist as *required* with no provenance
+  check (`applyWorkspaceRequirements`/`source_scan.go`), so a hostile onboarded
+  repo can widen egress (`egress:attacker.com`). This is no longer a
+  secret-exfil vector — the member grant-scope drop above means no operator
+  secret can be injected on the widened host — but gating scan-seeded egress by
+  provenance is a residual follow-up (`threatmodel/THREAT-MODEL.md`).
 
 ## What is not on the roadmap
 
