@@ -845,8 +845,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// confinement_classes are the enforceable isolation LEVELS; the
 		// confinement_substrates map names WHICH runtime backs each (e.g.
 		// "CC3":"oci/kata-qemu") — honest visibility into the pluggable substrate.
+		// confinement_names is the static CC-code -> friendly-tier-name dictionary
+		// (types.ConfinementClassNames, mirroring the UI's cc-meta.ts) so a
+		// scriptable consumer can learn "CC1" means "Fence" without hardcoding it.
 		"confinement_classes":    caps,
 		"confinement_substrates": substrates,
+		"confinement_names":      types.ConfinementClassNames,
 		// components reports the SELECTED pluggable-component impl per seam, plus
 		// what this build's registries actually hold. Runtime facts only.
 		"components": s.cfg.Components,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -52,6 +53,20 @@ func setOptionalID(flag, s string, dst **uuid.UUID) error {
 	return nil
 }
 
+// normalizeConfinement maps a friendly tier alias (fence/wall/vault, case-
+// insensitive — see types.ConfinementClassNames) onto its CC wire code, so
+// CLI/CI callers can script the names the UI shows instead of memorizing CC
+// codes. Anything else (including "", "CC1"...) passes through unchanged,
+// leaving the server as the single validator of unknown values.
+func normalizeConfinement(s string) string {
+	for cc, name := range types.ConfinementClassNames {
+		if strings.EqualFold(s, name) {
+			return string(cc)
+		}
+	}
+	return s
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
@@ -76,7 +91,9 @@ func runCmd(client clientFn) *cobra.Command {
 			}
 			body := sdk.CreateRunRequest{
 				Agent: agent, Repo: repo, Task: task,
-				ConfinementClass: confinement, Interactive: interactive,
+				// normalizeConfinement resolves a fence/wall/vault alias to its CC
+				// code; anything else (including already-CC1/2/3 or "") is unchanged.
+				ConfinementClass: normalizeConfinement(confinement), Interactive: interactive,
 				Image: image, TaskMode: taskMode,
 				DevcontainerRepo: devcontainerRepo, DevcontainerRef: devcontainerRef,
 			}
@@ -155,10 +172,10 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
-	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
+	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for 'wardyn attach'; use a never-reap policy (auto_stop_after_sec < 0)")
-	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side)")
-	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check the printed image; mutually exclusive with --image)")
+	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
+	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check the printed image; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, no LLM credentials)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")

@@ -48,6 +48,16 @@ func (c ConfinementClass) Rank() int {
 	}
 }
 
+// ConfinementClassNames maps each wire code to the friendly display label the
+// UI shows instead (ui/src/app/components/wardyn/cc-meta.ts's CC_META
+// labels) — the Go-side source of truth for that mapping, so the CLI's
+// --confinement alias parsing and the /healthz payload can't drift apart.
+var ConfinementClassNames = map[ConfinementClass]string{
+	CC1: "Fence",
+	CC2: "Wall",
+	CC3: "Vault",
+}
+
 // RunState is the AgentRun lifecycle state machine.
 type RunState string
 

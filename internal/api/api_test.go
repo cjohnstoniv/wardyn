@@ -223,6 +223,12 @@ func TestHealthz(t *testing.T) {
 	if body["version"] != version.Version {
 		t.Errorf("version = %v, want %s", body["version"], version.Version)
 	}
+	// confinement_names lets a scriptable consumer learn the CC-code -> friendly
+	// tier name mapping (IFC2) instead of hardcoding the UI's cc-meta.ts labels.
+	names, _ := body["confinement_names"].(map[string]any)
+	if names["CC1"] != "Fence" || names["CC2"] != "Wall" || names["CC3"] != "Vault" {
+		t.Errorf("confinement_names = %v, want CC1/CC2/CC3 -> Fence/Wall/Vault", names)
+	}
 }
 
 func TestAdminAuthRequired(t *testing.T) {

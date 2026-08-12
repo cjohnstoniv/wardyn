@@ -142,6 +142,28 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	}
 }
 
+// --confinement also accepts the friendly UI names (fence/wall/vault, case-
+// insensitive) as aliases for CC1/CC2/CC3, so a CLI/CI caller can script what
+// the console shows instead of memorizing wire codes (IFC1).
+func TestRunCmd_ConfinementAlias(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
+		ID: uuid.New(), State: types.RunPending, ConfinementClass: types.CC1,
+	})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--confinement", "Fence")
+	if err != nil {
+		t.Fatalf("run command returned error: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(srv.last().body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["confinement_class"] != "CC1" {
+		t.Errorf("confinement_class = %v, want CC1 (normalized from the fence alias)", body["confinement_class"])
+	}
+}
+
 // --dry-run posts the SAME body to the preflight endpoint and launches nothing.
 // The devcontainer flags ride along here because they are part of that body: a
 // dry run that checked a different body than launch would post is worthless.
