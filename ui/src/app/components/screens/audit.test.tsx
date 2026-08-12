@@ -67,6 +67,12 @@ function renderScreen() {
 describe("AuditScreen", { timeout: 15_000 }, () => {
   beforeEach(() => {
     listAuditMock.mockReset();
+    // Persistent fallback so a background usePoll tick that fires AFTER a test's
+    // mockResolvedValueOnce sequence is exhausted still resolves a Promise —
+    // otherwise listAudit() returns undefined and audit.tsx's `.then` throws an
+    // uncaught error (surfaces only under the slower coverage run). Matches the
+    // getRun/health persistent defaults below. Per-test Once mocks take priority.
+    listAuditMock.mockResolvedValue([]);
     getRunMock.mockReset();
     getRunMock.mockResolvedValue(undefined);
     healthMock.mockReset();
@@ -145,7 +151,10 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const many = Array.from({ length: 1000 }, (_, i) =>
       ev({ id: `r${i}`, run_id: "run_111", action: `act.${i}` }),
     );
-    listAuditMock.mockResolvedValueOnce(many);
+    // Persistent (not Once): the run-filtered view re-fetches on every poll tick,
+    // and each must return the same capped page or a poll would empty the list
+    // and drop the truncation indicator mid-test.
+    listAuditMock.mockResolvedValue(many);
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
@@ -158,7 +167,8 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
 
   it("does not show the truncation indicator for a run-filtered view below 1000", async () => {
     listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
-    listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
+    // Persistent for the run-filtered load + its poll ticks (see the capped test).
+    listAuditMock.mockResolvedValue([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
