@@ -35,9 +35,7 @@ test.describe("Demo sandboxes", () => {
     // real AI secret (composer.spec.ts), so a negative "it's absent"
     // assertion here would race it. That gating is deterministic unit
     // coverage instead — demo-screen.test.tsx's "hides the harness demo
-    // without a model". It also has its own Getting-Started step now
-    // (steps.ts's agent-in-the-box, 12 -> 13), covered by
-    // getting-started.spec.ts's walk and harness-demo-step.test.tsx.
+    // without a model".
   });
 
   test("Start is gated on `-runner none`: disabled + honest hint", async ({ page }) => {
