@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { SetupStatus } from "../../../lib/types";
-import { hasLlmPath, deriveReadiness, HowItWorksStrip } from "./intro";
+import { hasLlmPath, deriveReadiness, defaultAgentRow, HowItWorksStrip } from "./intro";
 import { baseStatus } from "../setup/test-fixtures";
 
 // A minimal-but-valid SetupStatus. The default `make setup` config is a single
@@ -173,6 +173,57 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
     );
     expect(r.llmReady).toBe(false);
     expect(r.composerReady).toBe(true);
+  });
+});
+
+// HIGH-4 review fix: a member's redacted SetupStatus (Go redactSetupStatusForMember)
+// zeroes runner.confinement_classes and drops the providers/secrets detail
+// deriveAiRows reads — without these two fallbacks, deriveReadiness would read a
+// member as permanently un-ready no matter the server's real state.
+describe("deriveReadiness — member-redaction survivors (HIGH-4)", () => {
+  it("prefers status.llm_ready over the locally-derived agent-row check when the server sent one", () => {
+    // No secrets/providers/harness at all (a redacted member response) would
+    // locally derive llmReady=false — but the server's own pre-redaction
+    // verdict says otherwise, and it must win.
+    const r = deriveReadiness(status({ llm_ready: true }));
+    expect(r.llmReady).toBe(true);
+  });
+
+  it("still honors a locally-derived false when the server explicitly says llm_ready: false", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false }, llm_ready: false }));
+    expect(r.llmReady).toBe(false);
+  });
+
+  it("falls back to the locally-derived value when llm_ready is absent (older daemon / READY_FALLBACK)", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    expect(r.llmReady).toBe(true);
+  });
+
+  it("falls back barrierReady to status.ready when confinement_classes is empty (redacted member, real backend)", () => {
+    const r = deriveReadiness(status({ ready: true, runner: { driver: "docker", confinement_classes: [] } }));
+    expect(r.barrierReady).toBe(true);
+    expect(r.barrierCount).toBe(0);
+  });
+
+  it("an empty confinement_classes with ready:false stays not-ready (genuinely unconfigured, not just redacted)", () => {
+    const r = deriveReadiness(status({ ready: false, runner: { driver: "docker", confinement_classes: [] } }));
+    expect(r.barrierReady).toBe(false);
+  });
+});
+
+// defaultAgentRow — the ROW deriveReadiness's llmLabel is built from, exported
+// so a caller that needs the row itself (not just its name) can reuse the same
+// pick instead of re-deriving it (demos/harness-demo.ts's binding picker).
+describe("defaultAgentRow — the same pick llmLabel is built from", () => {
+  it("is undefined with nothing agent-capable connected", () => {
+    expect(defaultAgentRow(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }))).toBeUndefined();
+  });
+
+  it("names the row whose .name matches llmLabel for a connected Anthropic key", () => {
+    const s = status({ secrets: { present: ["anthropic-api-key"], github_app: false } });
+    const row = defaultAgentRow(s);
+    expect(row?.id).toBe("ai:anthropic_api_key");
+    expect(row?.name).toBe(deriveReadiness(s).llmLabel);
   });
 });
 

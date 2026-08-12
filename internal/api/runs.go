@@ -64,7 +64,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// the configured default. resolveRunPolicy writes its own HTTP error and
 	// returns ok=false when it has already responded (XOR violation, invalid
 	// inline spec, missing/reserved inline secret ref, …) so we just stop.
-	spec, policyID, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
+	// Clamp warnings (L6) are discarded here — launch stays silent about a
+	// clamp exactly as it always has; handlePreflightRun is what surfaces them.
+	spec, policyID, _, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
 	if !ok {
 		return
 	}

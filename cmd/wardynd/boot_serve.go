@@ -109,6 +109,22 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	}
 }
 
+// startSSHGateway launches the SSH gateway's accept loop in its own goroutine
+// (like the periodic workers above), extracted verbatim from run() to hold
+// run() under the lint gate's funlen limit. A no-op inside ServeSSHGateway
+// when -ssh-listen is empty, so this is safe to call unconditionally; goSafe
+// contains a panic the same as every other background goroutine here.
+func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
+	if *f.sshListen == "" {
+		return
+	}
+	go goSafe("ssh.gateway", func() {
+		if serr := srv.ServeSSHGateway(rootCtx); serr != nil {
+			slog.Error("wardynd: ssh gateway stopped", slog.Any("err", serr))
+		}
+	})
+}
+
 // serveAndShutdown runs the HTTP(S) server until a shutdown signal or a serve
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are

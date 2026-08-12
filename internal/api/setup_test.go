@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,10 +12,89 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// decodeSetupSSO is decodeSetup's SSO-session twin, for the member-redaction
+// tests (redaction is a role check — a bearer-token caller is always admin,
+// so it needs a real SSO session to exercise the member branch at all).
+func decodeSetupSSO(t *testing.T, srv *Server, cookie *http.Cookie) (int, SetupStatus) {
+	t.Helper()
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
+	var st SetupStatus
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode setup status: %v; body=%s", err, w.Body.String())
+		}
+	}
+	return w.Code, st
+}
+
+// TestSetupStatus_MemberRedactionPreservesLLMReady is the HIGH-4 review fix:
+// a member's response drops checks/providers/secret-names/runner-detail (item
+// 2's redaction) but LLMReady survives it — computed BEFORE redaction from
+// the SAME signal llmProvenance already folds (here, a resolved composer
+// backend key), matching exactly what an admin sees for the identical server
+// state. Without this a member's console has no way to answer "is there any
+// LLM access at all" once the detail that used to imply it is gone.
+func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
+	reg, err := composer.NewRegistry("primary", []composer.RegistryEntry{
+		{Info: composer.BackendInfo{Name: "primary", Provider: "anthropic", Model: "m"}, Composer: &composer.FakeComposer{}},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	backends := []ComposerBackendReadiness{
+		{Name: "primary", Provider: "anthropic", Model: "m", Wire: "anthropic", Enabled: true, NeedsKey: true, KeySecret: "anthropic-api-key", KeyResolved: true},
+	}
+	srv := New(Config{
+		Runner:           &fakeRunner{},
+		Composer:         reg,
+		AdminToken:       adminToken,
+		OIDC:             &oidc.Authenticator{},
+		ComposerBackends: backends,
+	})
+
+	adminCode, adminSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
+	if adminCode != http.StatusOK {
+		t.Fatalf("admin: code = %d, want 200", adminCode)
+	}
+	if !adminSt.LLMReady {
+		t.Fatalf("admin: llm_ready = false, want true (a resolved composer backend key is configured)")
+	}
+	if len(adminSt.Checks) == 0 {
+		t.Fatalf("admin: checks unexpectedly empty — the fixture is not exercising the signal this test needs")
+	}
+
+	memberCode, memberSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember))
+	if memberCode != http.StatusOK {
+		t.Fatalf("member: code = %d, want 200 (redaction is never a 403/401)", memberCode)
+	}
+	// Redacted: item 2's drop list.
+	if len(memberSt.Checks) != 0 {
+		t.Errorf("member: checks = %v, want empty (redacted)", memberSt.Checks)
+	}
+	if len(memberSt.Providers) != 0 {
+		t.Errorf("member: providers = %v, want empty (redacted)", memberSt.Providers)
+	}
+	if len(memberSt.Secrets.Present) != 0 {
+		t.Errorf("member: secrets.present = %v, want empty (redacted)", memberSt.Secrets.Present)
+	}
+	if len(memberSt.Runner.ConfinementClasses) != 0 {
+		t.Errorf("member: runner.confinement_classes = %v, want empty (redacted)", memberSt.Runner.ConfinementClasses)
+	}
+	// NOT redacted: the answer a member's console needs to function.
+	if !memberSt.LLMReady {
+		t.Errorf("member: llm_ready = false, want true (must survive redaction, matching the admin's view)")
+	}
+	if !memberSt.Ready {
+		t.Errorf("member: ready = false, want true (App.tsx's reachability gate — never redacted)")
+	}
+}
 
 // decodeSetup runs GET /api/v1/setup/status and decodes the body on 200.
 func decodeSetup(t *testing.T, srv *Server, bearer string) (int, SetupStatus) {
@@ -190,6 +270,83 @@ func TestSetupStatus_ReadyFalseWhenRunnerNil(t *testing.T) {
 	}
 	if st.Runner.Driver != "none" {
 		t.Errorf("runner.driver = %q, want none", st.Runner.Driver)
+	}
+}
+
+// k8sRunner is a minimal runner.Runner fake reporting a k8s-shaped
+// Capabilities() (Driver "k8s", CC1 only, a settable NetworkPolicy verdict) —
+// embeds a nil runner.Runner so only the two methods setupRunnerInfo actually
+// calls (Name/Capabilities) need implementing, same seam
+// setupCheckIdsStore uses for store.Store.
+type k8sRunner struct {
+	runner.Runner
+	networkPolicy bool
+}
+
+func (k8sRunner) Name() string { return "k8s" }
+func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{
+		Driver:             "k8s",
+		ConfinementClasses: []types.ConfinementClass{types.CC1},
+		NetworkPolicy:      r.networkPolicy,
+	}, nil
+}
+
+// TestSetupStatus_K8sEgressContainmentCheck: handleSetupStatus's checks list
+// carries a k8s_egress_containment row matching the k8s substrate's
+// aggregated Capabilities.NetworkPolicy verdict — proving setupRunnerInfo's
+// local netpol computation (a local return value, not a wire field — see L2
+// review: SetupRunner.NetworkPolicyProven was dropped as unconsumed; the
+// graded check IS the wire surface) reaches handleSetupStatus correctly, not
+// just at the pure-function level (see TestK8sEgressContainmentCheck in
+// setup_checks_test.go for that).
+func TestSetupStatus_K8sEgressContainmentCheck(t *testing.T) {
+	cases := []struct {
+		name       string
+		netpol     bool
+		wantStatus string
+	}{
+		{"canary proved enforced", true, "ok"},
+		{"canary proved unenforced (opted out — the only live non-enforced verdict)", false, "fail"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: tc.netpol}})
+			code, st := decodeSetup(t, srv, adminToken)
+			if code != http.StatusOK {
+				t.Fatalf("code = %d, want 200", code)
+			}
+			if st.Runner.Driver != "k8s" {
+				t.Fatalf("runner.driver = %q, want k8s", st.Runner.Driver)
+			}
+			var found *SetupCheck
+			for i := range st.Checks {
+				if st.Checks[i].ID == "k8s_egress_containment" {
+					found = &st.Checks[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("checks missing k8s_egress_containment; got %+v", st.Checks)
+			}
+			if found.Status != tc.wantStatus {
+				t.Errorf("k8s_egress_containment status = %q, want %q", found.Status, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// A docker-shaped (non-k8s) runner must never carry the row — it is L0
+// structural, not L1 packet-filter, and has nothing to prove here.
+func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
+	srv := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	for _, c := range st.Checks {
+		if c.ID == "k8s_egress_containment" {
+			t.Errorf("non-k8s driver must not carry a k8s_egress_containment row: %+v", c)
+		}
 	}
 }
 
@@ -419,6 +576,39 @@ func TestClaudeSubscriptionStagingCheck(t *testing.T) {
 	// Blessed ceiling (staging ran, run-host.sh picked the subscription ceiling) => ok.
 	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); !ok || chk.Status != "ok" {
 		t.Fatalf("staged: ok=%v status=%q, want ok", ok, chk.Status)
+	}
+}
+
+// TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome is the B4 k8s
+// verify-don't-implement item: claude_subscription_staging is gated on
+// claudeLoginSignal, which is gated on setupProviders -> DetectCLIProviders
+// reading $HOME/.claude/.credentials.json — a k8s pod's home directory is a
+// fresh container filesystem with no such file (nothing resident survives a
+// pod restart), so the row must never appear. End to end through
+// handleSetupStatus (not just the pure claudeSubscriptionStagingCheck unit
+// above), on a k8s-shaped Runner, so a future change to the detection wiring
+// itself would be caught here too.
+//
+// Investigated edge case per the brief (host-mounted ~/.claude into a k8s
+// pod): no Helm value or documented deployment pattern mounts a Claude
+// credential into the wardynd pod (grepped deploy/helm — nothing). If an
+// operator did so anyway, DetectCLIProviders would honestly detect it and
+// this check WOULD fire — its underlying claim ("detected but not staged for
+// the per-run mount") stays true regardless of platform; only its Fix
+// string's host-oriented remedy (`make stage-claude`) would read oddly. That
+// is a copy nit on a deliberately non-standard setup, not a false-positive
+// worth suppression code for — so none was added.
+func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no .claude, no .codex — a fresh pod's $HOME
+	srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: true}})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	for _, c := range st.Checks {
+		if c.ID == "claude_subscription_staging" {
+			t.Fatalf("claude_subscription_staging must never fire with no resident ~/.claude; got %+v", c)
+		}
 	}
 }
 

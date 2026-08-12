@@ -35,19 +35,23 @@ jobs:
       # Makefile — the tool version pin lives there (GOLANGCI_LINT_VERSION).
       - name: Lint (vet + size/complexity gates)
         run: make lint
-      # Runs the suite under BOTH tag sets and enforces the floor on the union of
-      # the two coverage profiles. The tagless build alone cannot compile the
-      # container-hardening driver or internal/envbuild, so a tagless-only floor
-      # scored code that is not what ships.
+      # Runs the suite under ALL THREE tag sets and enforces the floor on the
+      # union of the three coverage profiles. The tagless build alone cannot
+      # compile the container-hardening driver, internal/envbuild, or the k8s
+      # confinement substrate, so a tagless-only floor scored code that is not
+      # what ships.
       #
-      # cover-check == test-report + test-report-docker, so this IS the PR-time
-      # docker-tagged suite (fakeDocker; WARDYN_TEST_DOCKER deliberately unset, so
-      # the real-daemon cases skip cleanly). A separate test-docker-tagged job used
-      # to run `make test-report-docker` a second time on its own runner — same
-      # command, same env, reports already inside the upload below. Removed as a
-      # true duplicate; nightly.yml's docker-tagged-live is the one that is NOT a
-      # duplicate (it sets WARDYN_TEST_DOCKER=1 against a live daemon).
-      - name: Test both tag sets (detailed reports + coverage) and enforce the union coverage floor
+      # cover-check == test-report + test-report-docker + test-report-k8s, so
+      # this IS the PR-time docker-tagged AND k8s-tagged suites (fakeDocker /
+      # fake clientset; WARDYN_TEST_DOCKER and WARDYN_TEST_K8S deliberately
+      # unset, so the real-daemon/real-cluster cases skip cleanly). A separate
+      # test-docker-tagged job used to run `make test-report-docker` a second
+      # time on its own runner — same command, same env, reports already
+      # inside the upload below. Removed as a true duplicate; nightly.yml's
+      # docker-tagged-live is the one that is NOT a duplicate (it sets
+      # WARDYN_TEST_DOCKER=1 against a live daemon); conformance-k8s below is
+      # the k8s equivalent (WARDYN_TEST_K8S=1 against a live kind cluster).
+      - name: Test all three tag sets (detailed reports + coverage) and enforce the union coverage floor
         run: make cover-check
       # The concurrent kill/dispatch FSM tests (kill_dispatch_race_test.go) are
       # only meaningful under the race detector; the rest of the tree rides along.
@@ -265,6 +269,102 @@ jobs:
       - name: helm install + boot proof (make target — postgres, install, rollout wait, /healthz)
         run: make helm-install-test
 
+  # ── deploy: kind Kubernetes conformance (k8s runner substrate) ────────────
+  # EXTENDS helm-install-test's pattern just above (same pinned helm/kind-action
+  # SHA, same "build the image locally, kind load it, no registry" shape) but
+  # proves a DIFFERENT thing: not that the Helm chart installs, but that the
+  # k8s runner substrate (internal/runner/k8s, `-tags k8s`) actually confines a
+  # sandbox on a real cluster — driven DIRECTLY against the kubeconfig context
+  # (test/conformance/conformance_k8s_test.go), no helm, no Postgres.
+  #
+  # disableDefaultCNI (deploy/kind/conformance-kind-config.yaml) + a pinned
+  # Calico manifest: the substrate's boot-time egress canary
+  # (internal/runner/k8s/canary.go) REFUSES to construct unless this cluster's
+  # CNI actually enforces NetworkPolicy — kind's default kindnet CNI does not,
+  # so this job would vacuously fail construction (not a real conformance
+  # result) without Calico. The negative direction — a kindnet-only cluster
+  # correctly REFUSING — is proven by internal/runner/k8s/canary_test.go's
+  # fake-clientset unit tests plus a one-off live-cluster check (see the A3
+  # lane's report); standing up a SECOND kind cluster per CI run just to
+  # re-prove it isn't worth doubling this job's runtime.
+  #
+  # KUBECONFIG points at the node's INTERNAL IP, not kind's default
+  # 127.0.0.1:<host-port> — this is NOT a Docker-Desktop-only quirk, it is
+  # true on every platform including this runner: the canary pod dials
+  # apiserverHostPort (computed ONCE from THIS process's own rest.Config.Host)
+  # from INSIDE the cluster, and a pod's loopback is its own network
+  # namespace, never the host's — 127.0.0.1 from a pod can never reach back to
+  # a host-side port-forward no matter what dockerd is doing. The node's real
+  # container IP (reachable directly from this native-dockerd runner, and
+  # trivially from a pod on its own node) is the one address both sides can
+  # dial identically; kind's own apiserver cert already SANs it.
+  #
+  # A PSS-restricted namespace: the substrate's agent/proxy/canary pods already
+  # carry the full restricted securityContext (internal/runner/k8s's
+  # baseSecurityContext/agentSecurityContext/restrictedSecurityContext) —
+  # labeling the namespace enforced-restricted is a live admission-time proof
+  # of that, not a relaxation to make the job pass.
+  #
+  # RBAC (templates/rbac.yaml) is asserted by RENDER ONLY, in the `helm` job
+  # above — this job's kind-action ServiceAccount is cluster-admin, so the
+  # chart's actual RBAC verbs are never runtime-constrained here (review
+  # round 2, M8: the step name below used to imply otherwise).
+  conformance-k8s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:kind-test .
+      # H1 (review round 2): the conformance agent image MUST carry
+      # wardyn-rec (k8s's SessionRecording is unconditionally true, no
+      # docker-style opt-out) — a bare busybox took the never-records path
+      # and the gate never proved recording works. See the Makefile target's
+      # own doc and deploy/kind/Dockerfile.conformance-agent.
+      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+        run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          cluster_name: wardyn-conformance-k8s
+          config: deploy/kind/conformance-kind-config.yaml
+          wait: 90s
+      - name: Load images into kind (no registry pull)
+        run: |
+          kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
+          kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
+      - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+      - name: Label a PSS-restricted namespace for runs
+        run: |
+          kubectl create namespace wardyn-conformance
+          kubectl label namespace wardyn-conformance \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=v1.30
+          # v1.30: pinned to match the kindest/node image this cluster boots
+          # (kind-action's default at the time this job was written) — bump
+          # together if that ever changes (review round 2, L5).
+      - name: Repoint KUBECONFIG at the node's internal IP (see the job comment above)
+        run: |
+          NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-conformance-k8s --internal \
+            | sed "s/wardyn-conformance-k8s-control-plane:6443/${NODE_IP}:6443/" \
+            > "$RUNNER_TEMP/kubeconfig-internal.yaml"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
+      - name: Run k8s conformance (make target — WARDYN_TEST_K8S=1; canary + exec + recording live, RBAC render-asserted elsewhere)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_K8S_NAMESPACE: wardyn-conformance
+          WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
+          WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
+        run: make test-conformance-k8s
+        # No continue-on-error: a real conformance failure must block the build.
+
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
     runs-on: ubuntu-latest
@@ -361,9 +461,10 @@ jobs:
   # (staticcheck)` …) and its own runner, and the tool + version + flags stay
   # single-sourced in the Makefile.
   #
-  #   govulncheck / staticcheck / licenses — run BOTH tag sets, so the ACTUAL
-  #     shipped build (-tags docker: runner/docker + envbuild) is covered, not
-  #     just the tagless subset that a default build sees.
+  #   govulncheck / staticcheck / licenses — run ALL THREE tag sets, so the
+  #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
+  #     k8s: the k8s confinement substrate) are covered, not just the tagless
+  #     subset that a default build sees.
   #   gitleaks — scans the FULL git history (hence fetch-depth: 0, which the
   #     other gates simply ignore). `make gitleaks` runs the gitleaks CLI, NOT
   #     gitleaks-action: the action's default scan range is only the triggering
@@ -414,11 +515,15 @@ jobs:
             make dco DCO_RANGE="$BASE..HEAD"
           fi
 
-  # ── supply-chain: SBOM + cosign (release stub) ────────────────────────────
-  # This job is a clearly-marked stub. It produces a CycloneDX SBOM via syft
-  # and shows where cosign signing would go in a real release pipeline.
-  # It only runs on push to main (not on PRs) and does NOT upload to a registry.
-  # Wire a real release workflow here when release automation is ready (v0.5).
+  # ── supply-chain: SBOM freshness (continuous, unsigned) ────────────────────
+  # Produces a CycloneDX SBOM via syft on every push to main (not on PRs) and
+  # uploads it as a plain, UNSIGNED workflow artifact — a continuous freshness
+  # check, never a registry upload. The real, cosign-SIGNED release SBOM (plus
+  # the four cosign-signed release images) is a SEPARATE job, on a SEPARATE
+  # trigger: .github/workflows/release.yml, on a vX.Y.Z tag push. Kept "-stub"
+  # in the job id on purpose: relative to that real release artifact, this one
+  # still is one — a cheap main-tip check, not something anyone should pull
+  # and trust as a release manifest.
   sbom-stub:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -431,8 +536,3 @@ jobs:
         with:
           name: wardyn-sbom
           path: wardyn-sbom.cdx.json
-      # STUB: cosign signing goes here once a release key / keyless OIDC
-      # identity is configured. Example:
-      #   cosign sign-blob --yes wardyn-sbom.cdx.json
-      - name: STUB — cosign signing not yet wired
-        run: echo "SBOM generated. cosign signing is a v0.5 release-pipeline task."

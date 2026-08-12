@@ -6,9 +6,13 @@
 package docker
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -159,4 +163,103 @@ func (s *dockerSession) Resize(ctx context.Context, cols, rows uint16) error {
 func (s *dockerSession) Close() error {
 	s.resp.Close()
 	return nil
+}
+
+// execStdin adapts a docker exec's hijacked write side to io.WriteCloser:
+// Write sends bytes to the exec's stdin; Close HALF-closes the write side
+// (HijackedResponse.CloseWrite) so the exec observes EOF on stdin while
+// Stdout/Stderr keep flowing. A full resp.Close() would tear down the whole
+// hijacked connection out from under the still-live output streams, so Close
+// here MUST NOT call it.
+type execStdin struct {
+	resp *client.HijackedResponse
+}
+
+func (s execStdin) Write(p []byte) (int, error) { return s.resp.Conn.Write(p) }
+func (s execStdin) Close() error                { return s.resp.CloseWrite() }
+
+// ExecStream launches spec.Argv inside ref as a fresh, streamable exec —
+// distinct from the agent process Exec starts (tracked in d.agentExecs,
+// observed by Wait) and from Attach's interactive shell (attachShell wraps a
+// login-style shell in tmux/bash; ExecStream runs spec.Argv directly, no
+// wrapping).
+//
+// When spec.TTY is false, stdout and stderr are demultiplexed (stdcopy) into
+// SEPARATE streams so a binary protocol riding stdout (SFTP, socat) is never
+// corrupted by interleaved stderr bytes. When spec.TTY is true the PTY merges
+// both onto Stdout (PTY semantics), so Stderr is a reader that yields io.EOF
+// immediately — present (never nil) so callers can read it uniformly without
+// a TTY check, but empty.
+func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if len(spec.Argv) == 0 {
+		return nil, errors.New("docker: exec stream: empty argv")
+	}
+
+	execCfg := client.ExecCreateOptions{
+		TTY:          spec.TTY,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Env:          spec.Env,
+		Cmd:          spec.Argv,
+	}
+	// ConsoleSize is only valid alongside TTY (getConsoleSize rejects it
+	// otherwise), mirroring Attach's guard above.
+	if spec.TTY && spec.Cols > 0 && spec.Rows > 0 {
+		execCfg.ConsoleSize = client.ConsoleSize{Height: uint(spec.Rows), Width: uint(spec.Cols)}
+	}
+
+	created, err := d.cli.ExecCreate(ctx, ref, execCfg)
+	if err != nil {
+		return nil, fmt.Errorf("docker: exec stream create: %w", err)
+	}
+
+	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{TTY: spec.TTY})
+	if err != nil {
+		return nil, fmt.Errorf("docker: exec stream attach: %w", err)
+	}
+	resp := attachRes.HijackedResponse
+
+	var stdout, stderr io.Reader
+	if spec.TTY {
+		stdout = resp.Reader
+		stderr = bytes.NewReader(nil)
+	} else {
+		// Non-TTY: the hijacked stream multiplexes stdout/stderr behind an
+		// 8-byte frame header per chunk (see stdcopy). Demux it live into a
+		// pipe pair so Stdout/Stderr stream progressively rather than
+		// buffering the whole exec's output before either is readable.
+		outR, outW := io.Pipe()
+		errR, errW := io.Pipe()
+		go func() {
+			_, cerr := stdcopy.StdCopy(outW, errW, resp.Reader)
+			_ = outW.CloseWithError(cerr)
+			_ = errW.CloseWithError(cerr)
+		}()
+		stdout, stderr = outR, errR
+	}
+
+	execID := created.ID
+	return &runner.ExecSession{
+		Stdin:  execStdin{resp: &resp},
+		Stdout: stdout,
+		Stderr: stderr,
+		Resize: func(cols, rows uint16) error {
+			if cols == 0 || rows == 0 {
+				return nil // ignore degenerate sizes rather than erroring the stream
+			}
+			if _, err := d.cli.ExecResize(ctx, execID, client.ExecResizeOptions{
+				Height: uint(rows),
+				Width:  uint(cols),
+			}); err != nil {
+				return fmt.Errorf("docker: exec stream resize: %w", err)
+			}
+			return nil
+		},
+		Wait: func() (int, error) { return d.pollExecExit(ctx, execID) },
+		Close: func() error {
+			resp.Close()
+			return nil
+		},
+	}, nil
 }

@@ -5,7 +5,7 @@
 //
 // Providers:
 //   - pg: age-encrypted Postgres column (default).
-//   - openbao: OpenBao KV + leases (v0.5).
+//   - openbao: OpenBao KV + leases (v1.0).
 //
 // Secrets are late-bound: they are resolved at use time by the broker or
 // injected proxy-side. They never enter a sandbox's environment or disk.

@@ -12,6 +12,7 @@ import {
   ChevronsUpDown,
   Fingerprint,
   FolderOpen,
+  KeyRound,
   Lock,
   LogOut,
   Menu,
@@ -41,7 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ErrorBoundary } from "../wardyn/error-boundary";
-import { OperatorProvider } from "../wardyn/operator-context";
+import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
 import { health as api } from "../../lib/api/health";
 import { setup as setupApi } from "../../lib/api/setup";
 import type { StatusKind } from "../wardyn/copy";
@@ -62,6 +63,11 @@ export interface ShellMeta {
   // /me resolves and explicitly says otherwise — an unresolved or failed
   // fetch must never read as "viewer".
   operator: boolean;
+  // The same B1-derived tier as `operator`, named directly (B3) — fail-open
+  // "admin" for the identical three cases (unresolved /me, a failed fetch, an
+  // unwrapped test). Kept alongside `operator` rather than replacing it: every
+  // existing operator-only gate stays exactly as it was.
+  role: Role;
 }
 
 function useMeta(): ShellMeta {
@@ -71,6 +77,7 @@ function useMeta(): ShellMeta {
     principal: "…",
     method: "",
     operator: true,
+    role: "admin",
   });
   React.useEffect(() => {
     let alive = true;
@@ -82,6 +89,7 @@ function useMeta(): ShellMeta {
         principal: me?.principal || "unknown",
         method: me?.method || "",
         operator: me?.operator ?? true,
+        role: me?.role ?? "admin",
       });
     });
     return () => {
@@ -135,6 +143,25 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   },
 ];
 
+// Member console (B3): a member launches/governs only THEIR OWN runs — nav is
+// Runs · Approvals · Recordings, nothing else (no Policies/Secrets/
+// Integrations/Workspaces/Audit/site-config), and no Getting Started entry
+// (setup is the operator's funnel — see the pinned block below). Filtered by
+// route path, never by re-deriving from a second copy of NAV_GROUPS.
+//
+// Hiding here is COSMETIC ONLY — every route a member can't reach still
+// enforces that itself server-side (internal/api/routes.go's operatorOnly
+// group and the owner-or-admin routes); this just keeps a member from
+// discovering an admin-only screen as a raw 403 or an empty list instead of
+// simply not offering it.
+const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/recordings"]);
+function navGroupsForRole(role: Role): typeof NAV_GROUPS {
+  if (role !== "member") return NAV_GROUPS;
+  return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => MEMBER_NAV_PATHS.has(i.to)) })).filter(
+    (g) => g.items.length > 0,
+  );
+}
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -166,11 +193,12 @@ function SidebarNav({
   gated?: boolean;
   onNavigate?: () => void;
 }) {
+  const navGroups = navGroupsForRole(meta.role);
   return (
     <>
       <nav className="space-y-4">
         {!gated &&
-          NAV_GROUPS.map((group) => (
+          navGroups.map((group) => (
           <div key={group.label} className="space-y-0.5">
             <SectionLabel className="px-2.5 pb-1">{group.label}</SectionLabel>
             {group.items.map((item) => {
@@ -210,18 +238,22 @@ function SidebarNav({
       </nav>
 
       <div className="mt-auto space-y-3">
-        <NavLink to="/setup" onClick={onNavigate} className={({ isActive }) => navLinkClass(isActive)}>
-          {({ isActive }) => (
-            <>
-              {isActive && (
-                <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-              )}
-              <Rocket className={cn("size-4", isActive && "text-foreground")} />
-              <span className="flex-1 text-left">Getting started</span>
-              <StatusChip status={readiness} />
-            </>
-          )}
-        </NavLink>
+        {/* No Getting Started entry for a member — setup is the operator's
+            funnel (same cosmetic-hiding note as MEMBER_NAV_PATHS above). */}
+        {meta.role !== "member" && (
+          <NavLink to="/setup" onClick={onNavigate} className={({ isActive }) => navLinkClass(isActive)}>
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
+                )}
+                <Rocket className={cn("size-4", isActive && "text-foreground")} />
+                <span className="flex-1 text-left">Getting started</span>
+                <StatusChip status={readiness} />
+              </>
+            )}
+          </NavLink>
+        )}
 
         <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -321,7 +353,8 @@ export function AppShell({
   // Add workspace) sees the real role instead of silently falling back to the
   // context default.
   return (
-    <OperatorProvider operator={meta.operator}>
+    <OperatorProvider operator={meta.operator} principal={meta.principal}>
+    <RoleProvider role={meta.role}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -389,6 +422,7 @@ export function AppShell({
         </React.Suspense>
       )}
     </div>
+    </RoleProvider>
     </OperatorProvider>
   );
 }
@@ -455,11 +489,30 @@ function TopBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
-              <div className="font-mono text-xs text-muted-foreground">{meta.principal}</div>
+              <div className="flex items-center gap-1.5">
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{meta.principal}</span>
+                {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
+                    banner, no callout — admin is unchanged, member just says so.
+                    Gated on meta.method like its sibling line below: /me hasn't
+                    resolved (or failed) while method is still "" — the fail-open
+                    role default is "admin" (operator-context.tsx), which would
+                    otherwise flash ADMIN next to a still-"unknown" principal. */}
+                {meta.method && (
+                  <Chip tone="neutral" className="shrink-0 uppercase tracking-wide">
+                    {meta.role}
+                  </Chip>
+                )}
+              </div>
               <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}
               </div>
             </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/ssh-keys">
+                <KeyRound className="size-4" /> SSH keys
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onSignOut} className="text-danger focus:text-danger">
               <LogOut className="size-4" /> Sign out

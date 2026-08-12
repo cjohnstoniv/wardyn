@@ -255,23 +255,32 @@ no network path, no resident credentials, enforcement outside the agent process.
 
 ## Status
 
-**v0.4 (pre-alpha)** is the current release: containerized setup by default, a
-first-class credential CLI (`wardyn subscription`, `wardyn setup status`), YAML
-policies, container workspaces with their own model credentials, Bedrock via AWS
-SSO, and the corporate-network build/egress lanes. v0.1–v0.3.1 shipped per-run
-identity, the approval FSM and credential broker, the L2 egress proxy and
-append-only audit, CC1/CC2 confinement, CI mode (BYOA), and the repo-scoped
-git-broker.
+**v0.4 (pre-alpha)** is the last tagged release: containerized setup by
+default, a first-class credential CLI (`wardyn subscription`, `wardyn setup
+status`), YAML policies, container workspaces with their own model
+credentials, Bedrock via AWS SSO, and the corporate-network build/egress
+lanes. v0.1–v0.3.1 shipped per-run identity, the approval FSM and credential
+broker, the L2 egress proxy and append-only audit, CC1/CC2 confinement, CI
+mode (BYOA), and the repo-scoped git-broker. **v0.5 is code-complete and
+CI-green on this branch — not yet merged to main or tagged** — see
+[ROADMAP.md](ROADMAP.md) for what it adds.
 
-Exactly two deployment paths, and only one runs sandboxes today: `deploy/compose`
-**[shipped]** and one blessed Helm chart `deploy/helm/wardyn` **[v0.5+ —
-planned]** — CI now proves it both renders (`helm-lint`) and boots to a healthy
-control plane on a real cluster (a kind-based install test, though it overrides
-the image and the age key rather than trying an unmodified default install) —
-but still with no Kubernetes runner driver behind it, so it deploys the control
-plane and cannot create a sandbox yet. Also still unbuilt: SPIRE, OpenBao, L1
-default-deny, an MCP/tool gateway, arbitrary-domain TLS interception, OTLP/OCSF
-sinks, and multi-user team mode.
+Exactly two deployment paths, and **both now run sandboxes**: `deploy/compose`
+**[shipped]** and one blessed Helm chart `deploy/helm/wardyn` — CI proves it
+renders (`helm-lint`), boots to a healthy control plane on a real cluster, AND
+(the k8s runner substrate, `internal/runner/k8s`) actually creates a confined
+sandbox there, conformance-tested on a NetworkPolicy-enforcing cluster
+(kind+Calico). It is not yet at parity with Compose — no BYOI/devcontainer
+builds, no `local_dir` mounts, no ground-truth correlator (see
+`deploy/helm/wardyn/README.md`'s "Known gaps"). Real admin/member RBAC with
+owner scoping also shipped in v0.5 (`docs/OPERATIONS.md`'s "Multi-user: who
+can change what"), alongside native SSH access into a running sandbox
+(`docs/SSH.md`) and signed, published release images (cosign keyless
+signing + a CycloneDX SBOM on every `vX.Y.Z` tag) — a first-class, packaged
+**team** deployment (SAML/SCIM, per-user API tokens) is still not built.
+Also still unbuilt: SPIRE, OpenBao, an MCP/tool gateway, arbitrary-domain TLS
+interception, OTLP/OCSF sinks, and Docker/Compose's own L1 default-deny
+(nftables — the Kubernetes target's L1, NetworkPolicy, already ships).
 
 ---
 

@@ -113,6 +113,12 @@ export const health = {
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;
+    // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
+    // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
+    // unset) or an older daemon — both must read as "no pane", never a
+    // false-enabled guess. advertise_addr / host_key_fingerprint are both
+    // non-secret (see docs/SSH.md) — the fingerprint is public by design.
+    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
   }> {
     try {
       const res = await fetch("/healthz", { credentials: "include" });
@@ -154,12 +160,26 @@ export const health = {
   // driftable copy of the rule. A viewer (operator:false) reads everything but
   // is refused on writes; see wardyn/operator-context.tsx for how the console
   // uses this to disable those controls instead of letting a viewer discover
-  // the tier as a raw 403.
-  async whoami(): Promise<{ principal: string; method: string; operator: boolean } | null> {
+  // the tier as a raw 403. `role` (B3) is the same B1-derived tier named
+  // directly ("admin"/"member" — admin === operator); `email` is the OIDC
+  // claim (empty outside SSO).
+  async whoami(): Promise<{
+    principal: string;
+    method: string;
+    operator: boolean;
+    role: "admin" | "member";
+    email: string;
+  } | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
       if (!res.ok) return null;
-      return (await res.json()) as { principal: string; method: string; operator: boolean };
+      return (await res.json()) as {
+        principal: string;
+        method: string;
+        operator: boolean;
+        role: "admin" | "member";
+        email: string;
+      };
     } catch {
       return null;
     }

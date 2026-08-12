@@ -42,7 +42,8 @@ import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { TIER_GUIDES } from "./setup-guide";
 import { CopyButton } from "../../wardyn/copy-button";
-import { CC_ORDER, type ConfinementClass, type SetupStatus } from "../../../lib/types";
+import { CC_ORDER, type ConfinementClass, type SetupCheck, type SetupStatus } from "../../../lib/types";
+import { CheckRow } from "./step-bodies";
 
 type TierState = "ready" | "todo" | "incompatible";
 
@@ -83,6 +84,74 @@ const NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
   CC3: "Still not detected — no kata runtime in `docker info` yet.",
 };
 
+// ---------------------------------------------------------------------------
+// k8s environment rows (prompt-v4) — Runner / Egress containment / Confinement
+// classes / Agent images. Reuses CheckRow (step-bodies.tsx), the same
+// checklist-row look Review already renders, rather than inventing new markup.
+// ---------------------------------------------------------------------------
+
+// Egress containment is backed by a REAL server check (k8sEgressContainmentCheck,
+// setup_checks.go) — found by id, never re-derived, so its exact Detail/Fix
+// strings (the dual-form fix, the honest "unenforced"/indeterminate framing)
+// can never drift from the backend's own reasoning. The local fallback below
+// covers only a checks list somehow missing the row despite a k8s driver (a
+// stale/partial fixture, or a version-skewed daemon) — an honest Indeterminate
+// reads better than silently omitting the row.
+function k8sEgressRow(status: SetupStatus): SetupCheck {
+  return (
+    status.checks.find((c) => c.id === "k8s_egress_containment") ?? {
+      id: "k8s_egress_containment",
+      label: "Egress containment",
+      status: "fail",
+      detail:
+        "Indeterminate — this control plane reports a Kubernetes runner but not its NetworkPolicy canary verdict, so egress containment can't be confirmed.",
+      fix: "Upgrade wardynd to a build that reports the canary verdict, and check its boot logs for the egress-canary result.",
+    }
+  );
+}
+
+// Confinement classes ceiling — not a server check (nothing to detect, nothing
+// to fix beyond installing the RuntimeClass): a pure summary of
+// runner.confinement_classes/confinement_substrates, already piped for every
+// driver (setupRunnerInfo). "info", not "warn": a CC1-only k8s cluster still
+// runs — same grade runnerCheck already gives a CC1-only docker host.
+function k8sClassesRow(status: SetupStatus): SetupCheck {
+  const classes = status.runner.confinement_classes ?? [];
+  const substrates = status.runner.confinement_substrates ?? {};
+  const have = CC_ORDER.filter((cc) => classes.includes(cc)).map((cc) => `${cc} (${substrates[cc] ?? "?"})`);
+  const missing: string[] = [];
+  if (!classes.includes("CC2")) missing.push("CC2 needs a gVisor RuntimeClass");
+  if (!classes.includes("CC3")) missing.push("CC3 needs Kata");
+  return {
+    id: "k8s_confinement_classes",
+    label: "Confinement classes",
+    status: missing.length > 0 ? "info" : "ok",
+    detail: have.length > 0 ? have.join(", ") : "None reported.",
+    fix: missing.length > 0 ? missing.join("; ") + "." : undefined,
+  };
+}
+
+function K8sEnvironmentRows({ status }: { status: SetupStatus }) {
+  // Agent images: the SAME generic agent_image check every driver already
+  // gets (agentImageCheck, setup.go) — reused verbatim rather than a second,
+  // k8s-only "pullable" claim nothing actually verifies (wardynd has no
+  // docker CLI / image-inspect capability on this driver either).
+  const agentImage = status.checks.find((c) => c.id === "agent_image");
+  const rows: SetupCheck[] = [
+    { id: "k8s_runner_fact", label: "Runner", status: "info", detail: "Kubernetes" },
+    k8sEgressRow(status),
+    k8sClassesRow(status),
+    ...(agentImage ? [agentImage] : []),
+  ];
+  return (
+    <ul className="space-y-2" aria-label="Kubernetes environment">
+      {rows.map((c) => (
+        <CheckRow key={c.id} check={c} />
+      ))}
+    </ul>
+  );
+}
+
 export function EnvironmentStep({
   status,
   selected,
@@ -100,10 +169,16 @@ export function EnvironmentStep({
 }) {
   const classes = status.runner.confinement_classes ?? [];
   // No barrier can be built -> runs can't launch. Matrix stays visible read-only.
-  const noDriver = status.runner.driver === "none";
+  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForMember
+  // zeroes the struct, whose Go zero value is "", not the sentinel "none") —
+  // treat both as no-driver, or a member landing here (e.g. a stale direct
+  // /setup visit before B4's honest-landing redirect) sees the wrong "start
+  // wardynd with -runner docker" fix for a runner that's merely hidden from them.
+  const noDriver = status.runner.driver === "none" || status.runner.driver === "";
   const noRunner = noDriver || classes.length === 0;
   const available = new Set(classes);
   const rec = recommendedTier(status);
+  const k8s = status.runner.driver === "k8s";
 
   // Incompatible vs needs-setup is a HARDWARE fact (the backend probes /dev/kvm).
   // Only a genuinely KVM-less host marks Vault incompatible; an old daemon without
@@ -188,6 +263,13 @@ export function EnvironmentStep({
           </div>
         </div>
       )}
+
+      {/* k8s variant rows (prompt-v4) — Runner/Egress containment/Confinement
+          classes/Agent images. The tier matrix below is UNCHANGED: it's still
+          the CC1/CC2/CC3 picker on any driver (the backend already resolves
+          k8s's classes correctly) — these rows add the containment claim the
+          matrix alone doesn't carry. */}
+      {k8s && <K8sEnvironmentRows status={status} />}
 
       <p className="text-sm text-muted-foreground">
         {noRunner

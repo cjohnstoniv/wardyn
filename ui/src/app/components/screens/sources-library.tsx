@@ -43,6 +43,7 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 import { DeleteInUseDialog } from "../wardyn/delete-in-use-dialog";
+import { useK8sRunner } from "../../lib/use-k8s-runner";
 
 // How many workspaces attach each source — counted from the workspaces the
 // caller already fetched (attachments carry source ids), so the library needs
@@ -79,7 +80,21 @@ export function AddSourceDialog({
   onSaved: (src: Source) => void;
 }) {
   const operator = useOperator();
-  const [kind, setKind] = React.useState<"local_dir" | "repo">("local_dir");
+  // B4 source honesty: mounts are structurally impossible on k8s (see
+  // internal/runner/substrate's package doc) — don't offer the option. Gated
+  // on `open`: this dialog stays mounted (closed) for as long as the library
+  // screen is up, so an unconditional fetch here would fire on every visit.
+  const k8s = useK8sRunner(open);
+  // kindPick is the operator's own local_dir/repo radio choice; `kind` is
+  // DERIVED from it (never a second piece of state the k8s flip has to keep
+  // in sync). M1 fix: this used to be one `kind` state reset inside an
+  // effect keyed on [open, k8s] — open flips synchronously on click, but the
+  // k8s fetch resolves async, so k8s flipping true a moment later re-ran the
+  // SAME effect and wiped locator/ref/name out from under whatever the
+  // operator had already typed. Deriving at render time means the k8s flip
+  // can never re-trigger a reset.
+  const [kindPick, setKindPick] = React.useState<"local_dir" | "repo">("local_dir");
+  const kind = k8s ? "repo" : kindPick;
   const [locator, setLocator] = React.useState("");
   const [ref, setRef] = React.useState("");
   const [name, setName] = React.useState("");
@@ -88,7 +103,7 @@ export function AddSourceDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    setKind("local_dir");
+    setKindPick("local_dir");
     setLocator("");
     setRef("");
     setName("");
@@ -127,24 +142,31 @@ export function AddSourceDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <RadioGroup
-            value={kind}
-            onValueChange={(v) => setKind(v as "local_dir" | "repo")}
-            className="flex gap-4"
-          >
-            <label className="flex items-center gap-1.5 text-xs">
-              <RadioGroupItem value="local_dir" id="src-kind-dir" />
-              <Label htmlFor="src-kind-dir" className="cursor-pointer font-normal">
-                Local directory
-              </Label>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs">
-              <RadioGroupItem value="repo" id="src-kind-repo" />
-              <Label htmlFor="src-kind-repo" className="cursor-pointer font-normal">
-                Repository
-              </Label>
-            </label>
-          </RadioGroup>
+          {k8s ? (
+            <p className="text-xs leading-snug text-muted-foreground">
+              Local directories aren&apos;t available on a Kubernetes control plane — onboard a repository
+              instead.
+            </p>
+          ) : (
+            <RadioGroup
+              value={kindPick}
+              onValueChange={(v) => setKindPick(v as "local_dir" | "repo")}
+              className="flex gap-4"
+            >
+              <label className="flex items-center gap-1.5 text-xs">
+                <RadioGroupItem value="local_dir" id="src-kind-dir" />
+                <Label htmlFor="src-kind-dir" className="cursor-pointer font-normal">
+                  Local directory
+                </Label>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs">
+                <RadioGroupItem value="repo" id="src-kind-repo" />
+                <Label htmlFor="src-kind-repo" className="cursor-pointer font-normal">
+                  Repository
+                </Label>
+              </label>
+            </RadioGroup>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="src-locator">{kind === "local_dir" ? "Host path" : "Repo slug or clone URL"}</Label>
             <Input

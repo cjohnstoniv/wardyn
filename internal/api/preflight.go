@@ -64,6 +64,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	// Same member custom-image denial launch runs (runs_create.go's
+	// decodeAndValidateCreateRun): a preflight dry-run must refuse a member's
+	// BYOI/devcontainer_repo request with the SAME 403 create would, not preview
+	// a rosier checklist for a request that would be denied at launch.
+	if s.denyMemberCustomImage(w, r, req) {
+		return
+	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
 	// runs_create.go): a typo or a non-ai_provider id 400s here exactly as it
 	// would at launch, instead of silently resolving to nothing at
@@ -80,7 +87,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// writes its own 4xx (XOR violation, invalid inline spec, missing/reserved
 	// secret 422) and returns ok=false when it has already responded, so Review
 	// sees the real launch error, never a rosier one.
-	spec, _, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
+	spec, _, _, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
 	if !ok {
 		return
 	}

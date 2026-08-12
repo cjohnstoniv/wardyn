@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -14,7 +14,7 @@ import { ThemeProvider } from "../wardyn/theme-provider";
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
 // items, or loses its aria-expanded/Escape wiring.
-function renderMobileNav() {
+function renderMobileNav(role: "admin" | "member" = "admin") {
   return render(
     <MemoryRouter>
       <MobileNav
@@ -26,7 +26,8 @@ function renderMobileNav() {
           identityProvider: "spiffe",
           principal: "u@example.test",
           method: "sso",
-          operator: true,
+          operator: role === "admin",
+          role,
         }}
       />
     </MemoryRouter>,
@@ -76,6 +77,38 @@ describe("AppShell (control plane unreachable)", () => {
   });
 });
 
+// L1 review fix: the role chip used to render unconditionally (fail-open
+// "admin"), so it flashed ADMIN in the account menu next to a still-"unknown"
+// principal before /me resolves — or forever, if /me never resolves at all.
+// Gated on meta.method now, same as its sibling line just below it.
+describe("AppShell — account-menu role chip gating (L1)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("never shows the role chip while /me hasn't resolved (a permanently failing fetch)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    // The account-menu trigger is the last button in the header (after "New
+    // run" and "Toggle theme" — see TopBar).
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("member", { exact: true })).toBeNull();
+  });
+});
+
 describe("MobileNav (below-md nav fallback)", () => {
   it("starts collapsed: trigger present, aria-expanded=false, no nav links rendered", () => {
     renderMobileNav();
@@ -106,5 +139,33 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
     expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
+  });
+});
+
+// B3: member nav is Runs · Approvals · Recordings, nothing else — no
+// Policies/Secrets/Workspaces/Audit/Getting started. Hiding is cosmetic (the
+// server is the real boundary); this pins the UI half of that contract.
+describe("SidebarNav (member role — B3)", () => {
+  it("shows only Runs, Approvals, Recordings — admin-only items and Getting started are absent", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("member");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+
+    for (const label of ["Runs", "Approvals", "Recordings"]) {
+      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
+    for (const label of ["Policies", "Secrets", "Integrations", "Workspaces", "Audit", "Getting started"]) {
+      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
+    }
+  });
+
+  it("admin nav is unchanged: every item including Getting started is present", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+
+    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
   });
 });

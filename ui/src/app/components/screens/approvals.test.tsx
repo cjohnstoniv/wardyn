@@ -20,23 +20,33 @@ vi.mock("sonner", () => ({
   toast: { error: (...a: unknown[]) => toastError(...a), success: (...a: unknown[]) => toastSuccess(...a) },
 }));
 
-// Hand-rolled api fake. listApprovals returns one pending credential request;
-// deny() rejects to simulate a 409 / network failure.
+// Hand-rolled api fake. listApprovals returns one pending request of
+// mockPendingKind (default "credential"; tests override it to prove the B3
+// kind-aware decide gating), or none when mockPendingEmpty is set (the
+// empty-state copy test); deny() rejects to simulate a 409 / network
+// failure. `mock`-prefixed so vi.mock's hoisting can reference them.
+let mockPendingKind: ApprovalRequest["kind"] = "credential";
+let mockPendingEmpty = false;
 const denyMock = vi.fn();
 const approveMock = vi.fn();
 vi.mock("../../lib/api/approvals", () => {
-  const pending: ApprovalRequest = {
-    id: "apr_1",
-    run_id: "run_1",
-    kind: "credential",
-    requested_scope: { host: "api.example.com" },
-    state: "PENDING",
-    requested_at: new Date().toISOString(),
-  };
   return {
     approvals: {
       listApprovals: (state: string) =>
-        Promise.resolve(state === "PENDING" ? [pending] : []),
+        Promise.resolve(
+          state === "PENDING" && !mockPendingEmpty
+            ? [
+                {
+                  id: "apr_1",
+                  run_id: "run_1",
+                  kind: mockPendingKind,
+                  requested_scope: { host: "api.example.com" },
+                  state: "PENDING",
+                  requested_at: new Date().toISOString(),
+                } satisfies ApprovalRequest,
+              ]
+            : [],
+        ),
       deny: (...a: unknown[]) => denyMock(...a),
       approve: (...a: unknown[]) => approveMock(...a),
     },
@@ -58,10 +68,11 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ApprovalsScreen } from "./approvals";
-import { OperatorProvider } from "../wardyn/operator-context";
+import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 
 describe("ApprovalsScreen — deny error handling", () => {
   beforeEach(() => {
+    mockPendingKind = "credential";
     toastError.mockClear();
     toastSuccess.mockClear();
     denyMock.mockReset();
@@ -100,6 +111,8 @@ describe("ApprovalsScreen — deny error handling", () => {
 // deciding is out of reach (see http.go's requireOperator comment).
 describe("ApprovalsScreen — role-aware decide buttons", () => {
   beforeEach(() => {
+    mockPendingKind = "credential";
+    mockPendingEmpty = false;
     denyMock.mockReset();
     approveMock.mockReset();
   });
@@ -133,5 +146,70 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     // Clicking a disabled button must never reach the API.
     expect(approveMock).not.toHaveBeenCalled();
     expect(denyMock).not.toHaveBeenCalled();
+  });
+
+  // B3: decide() (approvals.go) makes egress_domain owner-or-admin — a member
+  // (operator:false) may decide one raised by a run they own; this list is
+  // already scoped to the caller's own runs (handleListApprovals), so every
+  // row rendered here is, by construction, one the member owns.
+  it("member, egress_domain kind: Approve and Deny are LIVE (decide buttons live — prompt-v2)", async () => {
+    mockPendingKind = "egress_domain";
+    render(
+      <OperatorProvider operator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+  });
+
+  // Same member, but the row is credential/tool_call: stays admin-only
+  // REGARDLESS of ownership (a self-approved credential mint / a re-opened
+  // tool_call would self-authorize under the operator's own ceiling).
+  it("member, tool_call kind: still disabled — kind, not just ownership, gates the decision", async () => {
+    mockPendingKind = "tool_call";
+    render(
+      <OperatorProvider operator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    expect(await screen.findByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+  });
+});
+
+// prompt-v2 point 5's exact empty-state string, member-only (admin keeps
+// "You're all caught up" — the two roles see a genuinely different list, so
+// the copy should say so rather than share admin's self-congratulatory tone).
+describe("ApprovalsScreen — empty-state copy by role", () => {
+  beforeEach(() => {
+    mockPendingEmpty = true;
+  });
+
+  it("member: \"Approvals raised by your runs appear here.\"", async () => {
+    render(
+      <RoleProvider role="member">
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </RoleProvider>,
+    );
+    expect(await screen.findByText("Approvals raised by your runs appear here.")).toBeInTheDocument();
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
+  });
+
+  it("admin (and the fail-open default): unchanged", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
   });
 });

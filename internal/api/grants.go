@@ -20,9 +20,10 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Confirm the run exists first so an unknown run behaves like GET /runs/{id}
-	// (404) rather than silently returning an empty array.
-	if _, ok := s.getRunOr404(w, r, id); !ok {
+	// Confirm the run exists AND is owned (or the caller is an admin) first, so
+	// an unknown OR foreign run behaves like GET /runs/{id} (404) rather than
+	// silently returning an empty array — see getRunAuthorized.
+	if _, ok := s.getRunAuthorized(w, r, id); !ok {
 		return
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, id)

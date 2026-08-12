@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,9 +25,34 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
+// egressCanaryTimeout bounds the TCP dial the -egress-canary flag performs.
+// Short: the target is always an in-cluster apiserver host:port (no DNS, no
+// external egress), so a real connect either succeeds fast or the k8s
+// NetworkPolicy canary wants to see the refusal/timeout promptly.
+const egressCanaryTimeout = 5 * time.Second
+
 func main() {
 	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides WARDYN_PROXY_CONFIG_JSON)")
+	// egressCanary is the k8s substrate's boot-time NetworkPolicy-enforcement
+	// probe (see internal/runner/k8s): launched as a throwaway pod with this
+	// flag instead of the normal proxy entrypoint, it TCP-dials host:port (the
+	// apiserver, taken from the substrate's own rest.Config — never DNS, never
+	// external egress) and exits 0 on connect, 1 on refuse/timeout. A Running
+	// pod's exit code is what lets the substrate tell "NetworkPolicy enforced"
+	// (deny-all blocks the dial) apart from "not enforced" (dial succeeds
+	// anyway) — see substrate.ClassSupport.NetworkPolicy's doc. Not a normal
+	// proxy invocation: no config is loaded, nothing else in main runs.
+	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate canary only)")
 	flag.Parse()
+
+	if *egressCanary != "" {
+		conn, err := net.DialTimeout("tcp", *egressCanary, egressCanaryTimeout)
+		if err != nil {
+			os.Exit(1)
+		}
+		_ = conn.Close()
+		os.Exit(0)
+	}
 
 	var (
 		cfg *proxy.Config

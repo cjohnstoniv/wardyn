@@ -834,3 +834,25 @@ type AuditEvent struct {
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
+
+// SSHPublicKey is a human's registered public key for the SSH gateway
+// (`GET`/`POST`/`DELETE /api/v1/me/ssh-keys`), distinct from GrantSpec's
+// "ssh_key" grant kind (a RESIDENT private key materialized for git-over-SSH
+// cloning — see GrantSSHKey). This type is the gateway's own trust root: a
+// human self-registers a public key against their principal, and the gateway
+// authenticates an incoming SSH connection ONLY against rows here, then
+// authorizes it owner-only (AgentRun.CreatedBy == Principal — see
+// internal/api/sshgateway.go).
+//
+// Fingerprint is the SHA256 form (ssh.FingerprintSHA256: "SHA256:<base64>"),
+// computed SERVER-SIDE from the parsed key — never client-supplied — so it is
+// both the natural primary key (a key's fingerprint is intrinsic to its bytes;
+// two rows can never disagree about which key they name) and the value shown
+// to a human for "verify on first connect".
+type SSHPublicKey struct {
+	Fingerprint string    `json:"fingerprint"`
+	Principal   string    `json:"principal"`
+	Name        string    `json:"name"`
+	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
+	CreatedAt   time.Time `json:"created_at"`
+}

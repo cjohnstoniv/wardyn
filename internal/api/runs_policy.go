@@ -107,10 +107,26 @@ func servePage[T any](w http.ResponseWriter, page store.Page, pageFn func(store.
 }
 
 // handleListRuns returns runs in reverse creation order, paginated by
-// ?limit=&offset= (see parseListPage).
+// ?limit=&offset= (see parseListPage). A member sees only runs they created
+// (store.RunsByCreatorPager); an admin sees every run, unchanged.
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
+		return
+	}
+	if !s.isOperator(r.Context()) {
+		creatorPager, capable := s.cfg.Store.(store.RunsByCreatorPager)
+		if !capable {
+			// Fail CLOSED (never fall back to the unscoped admin listing below —
+			// that would serve every run to a member): a store that cannot scope
+			// by creator cannot safely answer this request at all.
+			writeError(w, http.StatusInternalServerError, "run listing is not scoped for members on this store backend")
+			return
+		}
+		principal := principalFromRequest(r)
+		servePage(w, page, func(p store.Page) ([]types.AgentRun, error) {
+			return creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
+		}, nil)
 		return
 	}
 	var pageFn func(store.Page) ([]types.AgentRun, error)
@@ -120,13 +136,15 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	servePage(w, page, pageFn, func() ([]types.AgentRun, error) { return s.cfg.Store.ListRuns(r.Context()) })
 }
 
-// handleGetRun returns one run by id.
+// handleGetRun returns one run by id. Owner-or-admin (getRunAuthorized): a
+// member reading a run they did not create gets the same 404 a missing run
+// would.
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
 	}
-	run, ok := s.getRunOr404(w, r, id)
+	run, ok := s.getRunAuthorized(w, r, id)
 	if !ok {
 		return
 	}

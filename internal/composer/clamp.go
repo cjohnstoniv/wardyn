@@ -56,7 +56,8 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // It returns the clamped spec and a human-readable warning for every tightening
 // it performed. This is defense-in-depth on top of the deterministic risk grade:
 // the grade informs the human, the clamp enforces the operator's hard limits
-// regardless of what the (untrusted-input-driven) analyzer proposed.
+// regardless of what the (untrusted-input-driven) analyzer OR a member's own
+// hand-authored inline_policy proposed.
 //
 // Clamps applied:
 //   - confinement raised to the operator's minimum class if the proposal is weaker;
@@ -64,6 +65,23 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //   - allowed_domains intersected down to the ceiling's allowlist (unless the
 //     ceiling itself allows all egress);
 //   - the ceiling's denied_domains unioned in (deny always wins);
+//   - first_use_approval raised to the STRICTER of the two (always_deny >
+//     deny_with_review > wait_for_review) — an unset ceiling ranks as
+//     always_deny, its own documented fail-closed default (FirstUseMode.Normalize);
+//   - llm_inspection: when the ceiling sets one, the proposal unconditionally
+//     inherits it — nil means OFF, so an omitted/weaker proposal is exactly the
+//     "disable the operator's prompt-inspection guardrail" escalation, not "no
+//     opinion";
+//   - allowed_methods: empty means "all" (unlike allowed_domains' default-deny),
+//     so an empty proposal ADOPTS the ceiling's list when the ceiling sets one,
+//     and a non-empty proposal is intersected down to it;
+//   - resources: each of cpu/memory/pids/disk capped at the ceiling's when the
+//     ceiling sets one — an unset (zero) proposed field is the PERMISSIVE state
+//     here (filled in by the driver's own default later), so it is capped down
+//     exactly like an explicit value that exceeds the ceiling;
+//   - auto_stop_after_sec capped at the ceiling's maximum when the ceiling sets
+//     one — 0 (platform default) and negative (never reap) both rank as MORE
+//     permissive than a real cap and are capped down too;
 //   - grants of a kind the ceiling does not list are dropped; github permissions
 //     intersected down to the ceiling's github permissions; TTL capped; and
 //     requires_approval forced on when the ceiling requires it;
@@ -104,8 +122,86 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 		out.DeniedDomains = union(out.DeniedDomains, ceiling.DeniedDomains)
 	}
 
+	// First-use approval: never let the proposal be WEAKER than the ceiling — a
+	// proposal asking wait_for_review under an operator ceiling of always_deny
+	// (the field's own fail-closed default when unset — Normalize()) must not
+	// silently reopen the exact escalation the ceiling exists to close. The
+	// output is ALWAYS normalized (never a bare "" that only ranks correctly by
+	// accident), even when no raise happens, so the clamped spec's own JSON is
+	// never ambiguous about which of the three modes is actually in effect.
+	effectiveFUA, ceilingFUA := out.FirstUseApproval.Normalize(), ceiling.FirstUseApproval.Normalize()
+	if firstUseApprovalRank(ceilingFUA) > firstUseApprovalRank(effectiveFUA) {
+		warns = append(warns, fmt.Sprintf("first_use_approval raised from %q to operator minimum %q", effectiveFUA, ceilingFUA))
+		effectiveFUA = ceilingFUA
+	}
+	out.FirstUseApproval = effectiveFUA
+
+	// LLM inspection: nil means OFF (RunPolicySpec's own doc: "the safe
+	// default"), so an omitted/weaker proposal is not "no opinion" the way an
+	// unset AllowedDomains ceiling is — it is an explicit "turn off the
+	// operator's guardrail" whenever the ceiling turns one on. Unconditional
+	// inherit, not a merge: this is a visibility/detection control, not
+	// something a member's own choice should ever weaken.
+	if ceiling.LLMInspection != nil {
+		warns = append(warns, "llm_inspection set to the operator's configured mode: "+ceiling.LLMInspection.Mode)
+		cp := *ceiling.LLMInspection
+		out.LLMInspection = &cp
+	}
+
+	// Allowed methods: empty means "all" for THIS field (unlike AllowedDomains'
+	// default-deny empty), so an empty proposal must ADOPT the ceiling's
+	// restriction rather than silently keeping "any method" under a ceiling that
+	// sets one; a non-empty proposal is intersected down, same as domains.
+	if len(ceiling.AllowedMethods) > 0 {
+		if len(out.AllowedMethods) == 0 {
+			warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
+			out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
+		} else {
+			allowed := toSet(ceiling.AllowedMethods)
+			kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
+			if len(dropped) > 0 {
+				warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+				out.AllowedMethods = kept
+			}
+		}
+	}
+
 	// Grants: drop unknown kinds, intersect github perms, cap TTL, force approval.
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
+
+	// Resources: cap each set field at the ceiling's, when the ceiling sets one.
+	// An unset ceiling opines nothing — skip entirely (matches the majority of
+	// existing policies, which never touch this field).
+	if ceiling.Resources != nil {
+		before := out.Resources
+		cr := types.ResourceLimits{}
+		if before != nil {
+			cr = *before
+		}
+		capField := func(proposed *int, ceil int) {
+			if ceil > 0 && (*proposed <= 0 || *proposed > ceil) {
+				*proposed = ceil
+			}
+		}
+		capField(&cr.CPUMillis, ceiling.Resources.CPUMillis)
+		capField(&cr.MemoryMiB, ceiling.Resources.MemoryMiB)
+		capField(&cr.PidsLimit, ceiling.Resources.PidsLimit)
+		capField(&cr.DiskMiB, ceiling.Resources.DiskMiB)
+		if before == nil || cr != *before {
+			warns = append(warns, "resources capped to operator maximum")
+			out.Resources = &cr
+		}
+	}
+
+	// Auto-stop: cap at the ceiling's maximum when the ceiling sets a real
+	// (positive) one. 0 (platform default, filled in later, unrelated to any
+	// ceiling) and a negative value (never reap — the MOST permissive: a
+	// compromised/runaway agent lives forever) both rank as more permissive than
+	// an explicit cap and are capped down exactly like an excessive positive one.
+	if ceiling.AutoStopAfterSec > 0 && (out.AutoStopAfterSec <= 0 || out.AutoStopAfterSec > ceiling.AutoStopAfterSec) {
+		warns = append(warns, fmt.Sprintf("auto_stop_after_sec capped to operator maximum %ds", ceiling.AutoStopAfterSec))
+		out.AutoStopAfterSec = ceiling.AutoStopAfterSec
+	}
 
 	// Workspace mounts: NEVER composer-introduced. Operators author mounts on a
 	// stored policy; an analyzer fed untrusted input must not be able to mount a
@@ -116,6 +212,22 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	}
 
 	return out, warns
+}
+
+// firstUseApprovalRank ranks FirstUseMode strictness — always_deny (never lets
+// an unknown domain through without a human) is STRICTEST, wait_for_review
+// (transparently completes once approved) is loosest. Normalize() first so an
+// empty/garbage value ranks as always_deny (its own fail-closed default), never
+// as an unranked value a real mode could accidentally beat.
+func firstUseApprovalRank(m types.FirstUseMode) int {
+	switch m.Normalize() {
+	case types.FirstUseAlwaysDeny:
+		return 3
+	case types.FirstUseDenyWithReview:
+		return 2
+	default: // types.FirstUseWaitForReview
+		return 1
+	}
 }
 
 // ClampRunConfinement raises a proposed run's confinement class up to the clamped

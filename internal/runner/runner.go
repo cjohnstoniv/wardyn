@@ -9,6 +9,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"io"
 
 	"github.com/google/uuid"
 
@@ -195,6 +197,80 @@ type Session interface {
 	Close() error
 }
 
+// ErrExecStreamUnsupported is the sentinel a Runner/Substrate returns from
+// ExecStream when it has no implementation for the primitive (a stub, a fake,
+// or a driver that has not wired it up yet). Callers — notably the
+// conformance suite's testExecStream — use errors.Is against this exact
+// sentinel to skip cleanly on "not implemented" while still FAILING on any
+// other error, so an implemented-but-broken ExecStream cannot skip green by
+// returning some other error.
+var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
+
+// ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
+// exec-scoped environment, and whether it runs under a PTY.
+type ExecSpec struct {
+	Argv []string
+	// Env is additional exec-scoped environment (on top of the sandbox's own).
+	Env []string
+	// TTY requests a pseudo-terminal. PTY semantics MERGE stdout and stderr
+	// onto ExecSession.Stdout (ExecSession.Stderr then reads io.EOF
+	// immediately — there is no separate channel to read). Without a TTY,
+	// stdout and stderr are delivered as SEPARATE streams: a binary protocol
+	// riding stdout (SFTP, socat) would be corrupted by interleaved stderr
+	// bytes, so a merged stream is only acceptable under PTY semantics.
+	TTY bool
+	// Cols, Rows seed the initial PTY window size (TTY only); zero lets the
+	// implementation pick a default.
+	Cols, Rows uint16
+}
+
+// ExecSession is a live, bidirectional stream into ONE exec started by
+// Runner.ExecStream — the streaming-primitive analogue of Session (which is
+// shaped for an interactive attach shell). It is a PLAIN STRUCT of
+// streams/closures, deliberately NEVER an interface: ExecStream has exactly
+// one production implementation per substrate plus test fakes, and a struct
+// lets a fake construct a partial ExecSession (a canned Wait, a
+// strings.Reader for Stdout, a nil Stdin) by filling in fields directly —
+// there is no method set to satisfy, so no fake can ever "implement this
+// wrong."
+//
+// Resize, Wait, and Close take NO context parameter: an implementation binds
+// them to whatever context it created the exec with. Callers that need a
+// fresh deadline per operation should scope the ctx passed to ExecStream
+// itself accordingly.
+type ExecSession struct {
+	// Stdin writes to the exec's standard input. Close HALF-closes the write
+	// side only (the exec observes EOF on stdin) — implementations MUST NOT
+	// tear down Stdout/Stderr when Stdin.Close is called; those streams may
+	// still be flowing.
+	Stdin io.WriteCloser
+	// Stdout carries standard output. With ExecSpec.TTY=true it ALSO carries
+	// stderr (PTY semantics merge the two onto one stream); with TTY=false it
+	// carries ONLY stdout — see Stderr.
+	Stdout io.Reader
+	// Stderr carries standard error as a SEPARATE stream when ExecSpec.TTY is
+	// false. When TTY is true there is no separate stderr channel to read
+	// (PTY semantics already merged it onto Stdout), so Stderr reads io.EOF
+	// immediately.
+	//
+	// STREAMING CONTRACT (TTY=false): Stdout and Stderr are UNBUFFERED
+	// io.Pipes fed by a single background demux goroutine off ONE underlying
+	// connection: a single undrained stderr byte blocks the demux goroutine,
+	// Stdout, AND Wait (which observes the same exec). Callers MUST start
+	// draining Stderr BEFORE (or concurrently with) the first Stdout read.
+	// This mirrors how every demultiplexed docker/moby attach stream must be
+	// consumed; it is not implementation-specific.
+	Stderr io.Reader
+	// Resize changes the PTY window size. A no-op returning nil when the exec
+	// has no TTY.
+	Resize func(cols, rows uint16) error
+	// Wait blocks until the exec exits and returns its exit code.
+	Wait func() (int, error)
+	// Close tears down ONLY this exec stream — never the sandbox, the agent
+	// process, or any sidecar.
+	Close func() error
+}
+
 // Sandbox is a handle to a created sandbox.
 type Sandbox struct {
 	Ref    string // container ID / pod name
@@ -246,6 +322,28 @@ type Runner interface {
 	// (invariant 3). Callers MUST record the human principal for attribution
 	// (invariant 4) at the call site (the runner is identity-agnostic).
 	Attach(ctx context.Context, ref string, opts AttachOptions) (Session, error)
+	// ExecStream launches spec.Argv inside the already-RUNNING sandbox ref as a
+	// fresh, streamable exec, distinct from both the agent process Exec starts
+	// (Wait/AgentStatus observe THAT one, not this) and from Attach's
+	// interactive shell (no PTY tmux session, no shell wrapping — argv runs
+	// directly). See ExecSpec/ExecSession for the streaming and TTY-merge
+	// contract.
+	//
+	// UNLIKE Exec, ExecStream MUST be repeatable against the SAME ref: a
+	// long-lived consumer (an SSH/SFTP bridge, a multiplexed shell) opens ONE
+	// ExecStream per channel against ONE long-lived sandbox ref for the life
+	// of the connection, so a substrate that errored or no-op'd on a second
+	// call would break that consumer outright. A k8s substrate implements
+	// ExecStream on the streaming exec subresource (pods/<name>/exec —
+	// repeatable, leaves no pod-spec residue), NOT an ephemeral container
+	// (add-only; that add-only limit is what makes Exec one-shot, not
+	// ExecStream — see Substrate.Exec's doc).
+	//
+	// SECURITY: ExecStream opens no new network path (invariant 3). Callers
+	// MUST record the human principal for attribution (invariant 4) at the
+	// call site (the runner is identity-agnostic) — a raw argv makes this the
+	// MORE dangerous of the two streaming primitives, not less.
+	ExecStream(ctx context.Context, ref string, spec ExecSpec) (*ExecSession, error)
 	Status(ctx context.Context, ref string) (Status, error)
 	// AgentStatus reports the AGENT's observed state in a restart-safe way, given
 	// the agentExecID Exec returned (persisted on the run row). For exec-based

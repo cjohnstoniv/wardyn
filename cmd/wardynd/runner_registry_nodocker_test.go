@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !docker
+//go:build !docker && !k8s
 
 package main
 
@@ -12,12 +12,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
-// A tagless build never imports internal/runner/docker, so its register.go
-// init() never runs and "docker" is NOT in the substrate registry: -runner
-// docker fails closed at resolve — the not-compiled-in error class, now
-// produced by the registry miss instead of a hardcoded switch. (This is the
-// live counterfactual for removing docker/register.go: this build IS the build
-// without that init().)
+// A truly tagless build (neither docker nor k8s) never imports
+// internal/runner/docker or internal/runner/k8s, so neither substrate's
+// register.go init() runs and the registry is EMPTY: -runner docker fails
+// closed at resolve — the not-compiled-in error class, now produced by the
+// registry miss instead of a hardcoded switch. (This is the live
+// counterfactual for removing docker/register.go: this build IS the build
+// without that init().) Scoped to !docker && !k8s (not merely !docker) since
+// a -tags k8s build also satisfies !docker but registers "k8s", which would
+// make the len(names)==0 assertion below false — see runner_registry_k8s_test.go
+// for the k8s-tag counterpart of this same counterfactual.
 func TestBuildRunnerFromFlags_DockerNotCompiledInFailsClosed(t *testing.T) {
 	if names := substrate.Names(); len(names) != 0 {
 		t.Fatalf("tagless build must register no substrates, have %v", names)

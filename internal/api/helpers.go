@@ -179,6 +179,42 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 	return run, true
 }
 
+// ownsRunOrAdmin reports whether the caller of r may act on run as its owner
+// (created_by matches) or as an admin. The shared owner-or-admin PREDICATE
+// behind getRunAuthorized (which shapes an HTTP response) and any other call
+// site that needs the same decision without getRunAuthorized's specific
+// "run not found" wording (e.g. the approval decide path, which owns "approval
+// not found" instead).
+func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
+	return s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
+}
+
+// getRunAuthorized loads a run and authorizes the caller as its owner or an
+// admin (ownsRunOrAdmin) — the owner-scoped twin of getRunOr404, for every
+// /runs/{id} route a member may reach for their OWN runs (get/kill/profile/
+// grants/attach-ticket). A non-owner, non-admin caller gets the BYTE-IDENTICAL
+// 404 a truly-missing run would (getRunOr404's own status/message) — never a
+// 403 — so probing another user's run id learns nothing: there is no existence
+// oracle distinguishing "not yours" from "does not exist". Callers must return
+// immediately when ok is false.
+func (s *Server) getRunAuthorized(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.AgentRun, bool) {
+	run, ok := s.getRunOr404(w, r, id)
+	if !ok {
+		return types.AgentRun{}, false
+	}
+	if s.ownsRunOrAdmin(r, run) {
+		return run, true
+	}
+	writeError(w, http.StatusNotFound, "run not found")
+	// M1: audited AFTER confirming the run genuinely exists — a truly-missing
+	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
+	// identified foreign run reaches this audit (reason not_owner). The response
+	// written above is unaffected (byte-identical either way).
+	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", run.ID.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	return types.AgentRun{}, false
+}
+
 // scopedWorkspaceWrite is the shared body of the operator-owned single-column
 // workspace writes (PUT semantics, full replacement): parse the id, strict-decode
 // the body into T, normalize+validate it into the stored value V (a non-empty

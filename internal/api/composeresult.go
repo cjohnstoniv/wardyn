@@ -120,7 +120,7 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 	// the caller's ctx (client disconnect stops waiting) via waitCtx.
 	launchCtx := context.WithoutCancel(ctx)
 	runID := uuid.New()
-	actor := s.composeActor()
+	actor := s.composeRunActor(ctx)
 	id, err := s.cfg.Identity.MintRunIdentity(launchCtx, runID, actor, actor, internalAudience)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox composer: mint run identity: %w", err)
@@ -189,9 +189,42 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 	return raw, nil
 }
 
-// composeActor is the recorded principal for a compose run: the configured local
-// operator when set, else a system marker. A compose run is server-initiated (it
-// backs an operator's compose request), so it has no per-request human here.
+// composeRequestActorCtxKey carries the principal of the HTTP request that
+// asked for a compose (item 6), threaded through the composer pipeline's ctx
+// (Registry.Propose -> the sandbox backend's Propose -> the bound
+// RunClaudeFunc) so RunClaudeCompose can stamp the launched run's created_by
+// to the REAL requesting human instead of composeActor()'s fixed marker. A
+// member's compose-launched run must be visible/killable to its own creator
+// under ownership scoping (item 2) — composeActor()'s "wardyn-composer" would
+// make it neither.
+type composeRequestActorCtxKey struct{}
+
+func withComposeRequestActor(ctx context.Context, principal string) context.Context {
+	return context.WithValue(ctx, composeRequestActorCtxKey{}, principal)
+}
+
+func composeRequestActorFromContext(ctx context.Context) string {
+	p, _ := ctx.Value(composeRequestActorCtxKey{}).(string)
+	return p
+}
+
+// composeRunActor resolves the principal a compose-launched run's created_by
+// should be: the HTTP caller who requested the compose (composeRequestActorCtxKey,
+// stashed by handleComposeRun), falling back to composeActor()'s system marker
+// when the pipeline ran with no tracked request actor. That fallback should be
+// unreachable in production — SetRunClaude's only caller (the sandbox composer
+// backend) always runs inside a request-scoped Propose call — but defends
+// RunClaudeCompose against ever attributing to "" rather than a documented
+// marker (e.g. a future non-HTTP caller, or a test that exercises it directly).
+func (s *Server) composeRunActor(ctx context.Context) string {
+	if p := composeRequestActorFromContext(ctx); p != "" {
+		return p
+	}
+	return s.composeActor()
+}
+
+// composeActor is composeRunActor's fallback marker: the configured local
+// operator when set, else a system marker.
 func (s *Server) composeActor() string {
 	if s.cfg.LocalOperator != "" {
 		return s.cfg.LocalOperator

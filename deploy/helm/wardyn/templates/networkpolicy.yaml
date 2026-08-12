@@ -6,8 +6,17 @@ re-open only what wardynd needs:
 
   - DNS (UDP+TCP/53) so it can resolve Postgres and the OIDC issuer
   - egress to Postgres on .Values.networkPolicy.postgres.port
-  - ingress to the HTTP port from the configured sources (default: same
-    namespace, e.g. an ingress controller / the UI)
+  - egress to the Kubernetes API server (k8s.enabled only) on
+    .Values.k8s.apiServer.ports, scoped to .Values.k8s.apiServer.to when set
+    (empty by default — see the BOLD warning on that value) — wardynd itself
+    drives the k8s runner substrate via client-go
+  - ingress to the HTTP (+ SSH when ssh.enabled) ports from the configured
+    sources (default: same namespace, e.g. an ingress controller / the UI)
+  - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
+    k8s.runsNamespace differs from this release's namespace: that namespace's
+    proxy sidecars call back to wardynd for credential mints, approval
+    checks, and recording uploads — never SSH, which is an operator/human
+    surface, not something a run's sidecar has any business reaching
 */}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
@@ -36,6 +45,29 @@ spec:
       ports:
         - protocol: TCP
           port: http
+        {{- if .Values.ssh.enabled }}
+        - protocol: TCP
+          port: ssh
+        {{- end }}
+    {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
+    # A different runs namespace carries no chart labels (the chart never
+    # creates/labels it — see values.yaml's k8s.runsNamespace doc) — match
+    # the built-in, Kubernetes-applied kubernetes.io/metadata.name label
+    # instead of inventing a custom one a bare operator namespace would
+    # never carry. A custom-label selector here would silently match NOTHING
+    # and strand every run's proxy sidecar with no route back to wardynd
+    # (credential mints, approval checks, recording uploads all go dark,
+    # with no render-time or even boot-time signal). A SEPARATE rule (not
+    # folded into the one above): this peer gets http only, never ssh — a
+    # run's proxy sidecar has no business on the SSH port.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
+      ports:
+        - protocol: TCP
+          port: http
+    {{- end }}
   egress:
     # DNS resolution (kube-dns / CoreDNS). The ONLY rule in this chart that may
     # be cluster-wide: an empty namespaceSelector means all namespaces, which is
@@ -52,6 +84,20 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.postgres.port }}
+    {{- if .Values.k8s.enabled }}
+    # Kubernetes API server (client-go, internal/runner/k8s). See
+    # values.yaml's k8s.apiServer.ports/.to doc for why the ports default
+    # includes 6443 and why `to` is empty (any-destination) by default.
+    {{- range .Values.k8s.apiServer.ports }}
+    - ports:
+        - protocol: TCP
+          port: {{ . }}
+      {{- with $.Values.k8s.apiServer.to }}
+      to:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
     {{- with .Values.networkPolicy.egress.extra }}
     # Operator-supplied additional egress rules (OIDC issuer, SIEM sinks, etc.).
     {{- toYaml . | nindent 4 }}

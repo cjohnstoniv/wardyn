@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -92,6 +93,14 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 	got := map[string][]string{
 		"bare": setupCheckIds(t, New(Config{AdminToken: adminToken})),
 
+		// B4: a k8s-shaped Runner (see k8sRunner in setup_test.go) surfaces the
+		// new k8s_egress_containment row — absent on every other fixture here,
+		// which all leave Runner unset (Driver "none").
+		"with_k8s_runner": setupCheckIds(t, New(Config{
+			AdminToken: adminToken,
+			Runner:     k8sRunner{networkPolicy: true},
+		})),
+
 		"with_store": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
 			Store: setupCheckIdsStore{sc: types.SiteConfig{
@@ -116,6 +125,17 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 				secretGitHubAppID:  []byte("123456"),
 				secretGitHubAppKey: []byte("-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n"),
 			}},
+		})),
+
+		// OIDC configured (a zero-value Authenticator — the rbac_test.go idiom;
+		// Middleware/decodeSession never touch its unset provider/verifier), the
+		// role map left unset, and an https redirect with WARDYN_TLS_TERMINATED
+		// not reflected in OIDCSecureCookies: surfaces BOTH new B1 checks,
+		// sso_rbac and tls_cookie_posture, each as a WARN.
+		"with_oidc": setupCheckIds(t, New(Config{
+			AdminToken:      adminToken,
+			OIDC:            &oidc.Authenticator{},
+			OIDCRedirectURL: "https://wardyn.example.com/auth/callback",
 		})),
 	}
 	compareOrUpdateGolden(t, "testdata/setup_check_ids_golden.json", got)

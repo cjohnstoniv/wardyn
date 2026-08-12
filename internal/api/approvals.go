@@ -38,6 +38,13 @@ type decisionRequest struct {
 // list is requested_at DESC and capped at maxListLimit, so filtering after the
 // window would drop a run older than the newest 1000 approvals from its own
 // detail page — silently, with a PENDING badge of 0.
+//
+// Ownership scoping (item 2): a member's ?run_id= must name an owned run —
+// checked via the SAME getRunAuthorized gate GET/kill/profile/grants use, so a
+// foreign or unknown run_id answers with the byte-identical 404 (no existence
+// oracle). A member's UNSCOPED list (no run_id) is narrowed to approvals on
+// runs they created (store.ApprovalsByRunCreatorPager) — fail CLOSED, never an
+// unscoped fallback, when the backend does not implement it.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
@@ -58,6 +65,28 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	if !s.isOperator(r.Context()) {
+		if runID == uuid.Nil {
+			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
+			if !capable {
+				writeError(w, http.StatusInternalServerError, "approval listing is not scoped for members on this backend")
+				return
+			}
+			principal := principalFromRequest(r)
+			servePage(w, page, func(p store.Page) ([]types.ApprovalRequest, error) {
+				return pager.ListApprovalsPageByRunCreator(r.Context(), principal, state, p)
+			}, nil)
+			return
+		}
+		// ?run_id= given: prove ownership up front. Once proven, the fetch-all +
+		// filter-by-runID path below is exactly as scoped as the admin path — it
+		// can only ever surface THIS one, now-owned run's approvals.
+		if _, ok := s.getRunAuthorized(w, r, runID); !ok {
+			return
+		}
+	}
+
 	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
 	if pl, ok := s.cfg.Approvals.(approvalPageLister); ok && runID == uuid.Nil {
 		pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
@@ -90,12 +119,14 @@ type approvalPageLister interface {
 // handleApproveApproval transitions an approval to APPROVED. For credential
 // approvals the broker mints inside the same transaction that observes the
 // APPROVED state (handled by the broker on the next mint call); here we only
-// record the human decision via the approval FSM.
+// record the human decision via the approval FSM. Owner-or-admin FOR
+// egress_domain approvals ONLY (item 3 + HIGH-1 review fix): see decide().
 func (s *Server) handleApproveApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, true)
 }
 
 // handleDenyApproval transitions an approval to DENIED (fail closed).
+// Owner-or-admin for egress_domain approvals only (item 3 + HIGH-1): see decide().
 func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, false)
 }
@@ -104,6 +135,37 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
 		return
+	}
+	if !s.isOperator(r.Context()) {
+		// Member: may decide only an egress_domain approval raised by a run THEY
+		// own (item 3, narrowed by the HIGH-1 review fix). credential and
+		// tool_call approvals stay admin-only REGARDLESS of ownership: the
+		// shipped default policy requires approval on github_token, so letting a
+		// member self-approve their OWN run's credential request would self-mint
+		// a real token, and self-approving a tool_call re-opens exactly the
+		// allowance the clamp (item 5 / HIGH-2) is supposed to bound — both under
+		// the SAME authority the operator's ceiling exists to constrain. Checked
+		// before ownership so a foreign non-egress approval and an OWNED
+		// non-egress approval read identically (both 404, no existence oracle
+		// either way) — not audited: this is a foreign-shaped 404, not a distinct
+		// reachable-surface denial (see THREAT-MODEL.md).
+		ap, err := s.cfg.Approvals.Get(r.Context(), id)
+		if err != nil || ap.Kind != types.ApprovalEgressDomain {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return
+		}
+		run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		if rerr != nil || !s.ownsRunOrAdmin(r, run) {
+			writeError(w, http.StatusNotFound, "approval not found")
+			if rerr == nil {
+				// M1: audited only once the approval is confirmed to genuinely
+				// exist and be decidable in kind — a run lookup failure here would
+				// be a data-integrity oddity, not a clean "not owned".
+				s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+					"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+			}
+			return
+		}
 	}
 	var body decisionRequest
 	if r.Body != nil {

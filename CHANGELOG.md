@@ -8,6 +8,170 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **OIDC sessions now carry a derived admin/member role** (`WARDYN_OIDC_ROLE_MAP`,
+  `internal/auth/oidc`'s `deriveRole`). Upgrading forces one SSO re-login: a pre-0.5
+  session cookie carries no role and now decodes as no session (`decodeSession`), never
+  as an authenticated session with an undefined role.
+- **Authorization enforcement: the admin/member role is now enforced, plus
+  owner-or-admin scoping.** `requireOperator`/`isOperator` gate on the session's
+  role instead of re-checking `WARDYN_OIDC_OPERATOR_EMAILS` directly (the
+  allowlist still works — it feeds role derivation via `LegacyAdminEmails`, one
+  source of truth instead of two). `GET /metrics` now carries the admin gate
+  explicitly. A member is scoped to their OWN runs/approvals on `GET /runs`,
+  `GET /approvals` (unscoped), and `GET /audit` (`?run_id=` of an owned run,
+  else an empty result — never a cross-user leak); `GET/kill/profile/grants` on
+  a run, the recording replay, an approval decide, and the attach-ticket mint
+  all use an owner-or-admin gate that answers a foreign resource with the
+  byte-identical 404 a missing one gets (no existence oracle). Attach tickets
+  now carry the minting principal's role (migration 0034), since the
+  interactive-attach WebSocket's `?ticket=` lane authenticates entirely off the
+  ticket and never runs the normal session check. `GET /setup/status` redacts
+  operator-diagnostic detail (environment checks, resident CLI detection,
+  secret names, runner detail) for a member. A member's `inline_policy` on
+  `POST /runs` (and its preflight dry-run) is now clamped to the operator's
+  default policy ceiling before resolution, and bringing a custom sandbox
+  image (`image`) is admin-only. Two routes move from admin-only to
+  owner-or-admin: minting an attach ticket and deciding an approval, both
+  restricted to the run's own creator (or an admin) either way. A new
+  `authz.denied` audit action records a member's admin-surface or BYOI
+  denials (not a foreign-resource 404 — that stays silent by design, matching
+  the no-existence-oracle rule above).
+
+### Added
+
+- **Kubernetes runner substrate** (`internal/runner/k8s`, `-tags k8s`,
+  `WARDYN_RUNNER=k8s`): a second, independent confinement substrate behind the
+  existing `substrate.Substrate` seam — wardynd creates/manages sandboxes as
+  pods instead of Docker containers. L1 (NetworkPolicy-enforced), not L0
+  (structural) like Docker: a boot-time two-phase egress canary proves the
+  cluster's CNI actually enforces `NetworkPolicy` before the substrate will
+  start at all, refusing to boot otherwise
+  (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the loud, logged opt-out). CC1
+  out of the box; `WARDYN_CONFINEMENT_MAP`/the chart's `k8s.runtimeClasses`
+  pin CC2/CC3 to a registered RuntimeClass. Not at parity with Docker yet —
+  no BYOI/devcontainer builds, no `local_dir` mounts, no per-pod PIDs/disk
+  enforcement, no k8s ground-truth correlator (see
+  `deploy/helm/wardyn/README.md`/`docs/OPERATIONS.md`'s "Known gaps").
+- **The Helm chart (`deploy/helm/wardyn`) can now create sandboxes, not just
+  the control plane.** `k8s.enabled=true` wires the substrate above into a
+  real install: least-privilege `Role`/`RoleBinding` + `ClusterRole` scoped to
+  exactly the verbs the substrate issues, a default-deny `NetworkPolicy`
+  extended with apiserver egress and a runs-namespace ingress peer, and a new
+  `k8s_egress_containment` setup check the console surfaces (Enforcing / Not
+  enforcing / Indeterminate). `test/conformance`'s `conformance-k8s` CI job
+  now proves the substrate on a real cluster (kind, `disableDefaultCNI` + a
+  pinned Calico manifest — kind's default CNI does not enforce
+  `NetworkPolicy`); the suite's one L0-specific case self-skips there by
+  design (the substrate claims L1, not L0) and a dedicated L1 case proves
+  what it actually claims instead. New `.claude/skills/wardyn-k8s-setup`
+  skill: cluster prereqs, values authoring, wiring Entra ID App Roles for
+  admin/member RBAC, install/verify, and a symptom→cause→fix table.
+- **Native SSH into a running sandbox.** `wardynd` serves `ssh
+  <run-id>@host` (registered public keys only, owner-only authorization)
+  directly into the same tmux session the web terminal attaches to: exec
+  (exit-code propagation), the sandbox's own `sftp-server` subsystem, and
+  `-L` port forwarding restricted to the sandbox's own loopback. Each
+  primitive gets its own audit action (`ssh.exec`/`ssh.sftp`/`ssh.forward`);
+  the shell path is recorded exactly like the browser terminal (`ssh-`
+  prefixed session key). Off by default (`WARDYN_SSH_LISTEN` unset — no
+  listener, no host key even generated). See `docs/SSH.md`.
+- **Member console.** The web console is now role- and kind-aware: a
+  member's nav hides operator-only surfaces (policy/workspace/secret CRUD,
+  BYOI), and the approvals view renders per-kind — `egress_domain` approvals
+  a member can decide, `credential`/`tool_call` ones they can only view.
+  Getting Started gained a Kubernetes-runner flavor (source-honest copy for
+  what the k8s substrate does and doesn't support yet).
+- **Signed, published release images.** `.github/workflows/release.yml`
+  builds and pushes the four images a release ships (`wardynd`,
+  `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
+  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag, cosign-signs each keylessly
+  (Fulcio/Rekor via the Actions OIDC token), and attaches a CycloneDX SBOM
+  release asset via the existing `make sbom` target. linux/amd64 only today.
+- **CLI confinement-tier aliases + `/healthz` friendly names.** The run
+  commands accept `--confinement fence|wall|vault` as aliases for CC1/CC2/CC3
+  (with trust-model flag help), and `/healthz` now exposes a
+  `confinement_names` CC-code→friendly-name map (mirroring the console's
+  `cc-meta.ts`) so a scriptable consumer learns "CC1" means "Fence" without
+  hardcoding it (`internal/api/server.go`, `commands.go`, `types.go`).
+- **Sandbox image builder setup check (`env_builder`).** `/setup/status` now
+  reports whether the per-run image builder is wired — the path a
+  devcontainer build or a `--image` (BYOI) run needs. INFO (never a warning)
+  when off, the bare-binary default, so a `--image`/devcontainer run that
+  would otherwise silently no-op reads as a real, fixable checklist row.
+- **Non-blocking model-resolution warning.** A codex or managed-subscription
+  run whose model access resolves ambiguously now surfaces an advisory
+  warning (`resolveRunLLMAccess`/`runNeedsModelWarning`, `runs.go`) instead of
+  failing opaquely at dispatch.
+
+### Fixed
+
+- **`ssh.forward` audit rows survived a killed session.** A client that
+  killed its whole SSH session mid-`-L`-forward could race
+  `handleSSHConn`'s connection-teardown context cancellation against
+  `handleSSHDirectTCPIP`'s own trailing `ssh.forward` audit write — caught
+  live by the SSH e2e's `-L` forward step. The write now runs on the
+  daemon-lifetime `BaseCtx` instead of the connection's own (soon-cancelled)
+  context, the same fix already applied to the shell path's `session.detach`
+  write; the identical latent bug in the `ssh.exec`/`ssh.sftp` trailing
+  writes was fixed alongside it. Pinned by
+  `TestSSHGateway_ForwardAuditSurvivesKill`.
+- **The wizard's Build step showed only a bare spinner — the real image-build
+  output went solely to wardynd's own log, invisible to whoever triggered
+  the build.** `handleBuildWorkspace`'s goroutine now threads a bounded
+  per-workspace log ring (`buildTracker.Log`, 500 lines, oldest dropped)
+  through `resolveWorkspaceImage` into the `api.ImageBuilder` call as an
+  explicit `logSink io.Writer`; the wardynd docker adapter tees it with the
+  existing slog sink so operator logs keep receiving every line unchanged.
+  `GET`/`POST /workspaces/{id}/build` now carry `log` in the response, and
+  `step-build.tsx` renders it in a scrollable pane that stays up through the
+  done/failed states too — the failure line plus the log is the debugging
+  story.
+- **Editing an onboarded workspace through the "Edit source…" dialog could
+  silently destroy it.** The legacy single-form edit dialog rendered blank
+  for any multi-source workspace, and its save path submitted the
+  deprecated scalar shape — which `decodeWorkspaceRequest` folds into
+  exactly ONE source, collapsing `sources[]` and wiping
+  Requirements/Profile/ApprovedEgress on save. `AddWorkspaceDialog` is
+  retired; the "Edit workspace…" kebab item (workspaces.tsx and
+  workspace-detail.tsx) now opens the same wizard used for onboarding,
+  hydrated from the row (sources, base image, requirements) and landed on
+  whatever step the workspace hasn't cleared yet, saving through the
+  composition-shape `sources[]`/`base_image` PUT the wizard's own Base
+  image step already used.
+- **An outside click or Esc could strand a half-onboarded workspace
+  mid-wizard with no way back.** Most steps (including Build) have no
+  explicit Close button, and dismissing the dialog never deleted anything
+  server-side, so a stray outside-click or Esc left the operator locked out
+  of a workspace they'd started onboarding. `WorkspaceWizard`'s
+  `DialogContent` now blocks outside-click and Esc dismissal once a
+  workspace exists and the step isn't Done — the same condition its own
+  footer note already warns about. The X button stays a deliberate
+  one-click close either way, and the "Edit workspace…" fix above gives the
+  operator a way back regardless.
+- **Recording-replay CSP (`script-src 'wasm-unsafe-eval'`).** The asciinema
+  WASM replay player calls `WebAssembly.instantiate()`, which a bare
+  `default-src 'self'` CSP refuses — the player renders its chrome but never
+  plays (duration stuck at `--:--`). `script-src` now adds `'wasm-unsafe-eval'`
+  (WASM compilation ONLY — not `unsafe-eval`, no JS `eval`/`Function`), so
+  replay plays while scripts stay locked to same-origin.
+- **FAILED-run reason surfaced.** A run that ends in FAILED now carries a
+  human-readable reason instead of a bare terminal status.
+- **`scripts/ci-run.sh` teardown.** The CI one-shot now tears its compose
+  stack down cleanly on exit.
+- **`WARDYN_LOCAL_MODE` bypass under preserved OIDC.** `scripts/up.sh` now
+  warns when local-mode would silently bypass a still-configured OIDC backend
+  (preserved config), and documents the registry `PORT=0` caveat.
+
+### Documentation
+
+- **Positioning pass (W3).** README/ARCHITECTURE/OPERATIONS/TRY-IT and the
+  threat model now surface the v0.5 moat honestly: the `wait_for_review`
+  in-flight connection hold vs. the Enterprise-only analog in Vault/Teleport,
+  the Apache-2.0 no-paid-tier + audit-completeness framing, and the L1/L2
+  metadata-server defense-in-depth.
+
 ## [0.4.5] — 2026-08-11
 
 ### Added

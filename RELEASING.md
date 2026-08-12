@@ -16,9 +16,11 @@ document is that process, written down.
   `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
   `license-headers`, `gitleaks`), `dco` (plus `sbom-stub`, which runs
-  **only** on push to `main` — see "Repo settings" below, and
-  `publish-image` in the separate `.github/workflows/publish-image.yml`,
-  which runs on push to `main`/a release tag and is not part of this file).
+  **only** on push to `main` — see "Repo settings" below). Two more publish
+  workflows are not part of this job list at all (see "Container images"
+  below): `publish-image` (`.github/workflows/publish-image.yml`, push to
+  `main` only) and `release` (`.github/workflows/release.yml`, triggered by
+  step 3/4's tag push itself, so it cannot be a prerequisite of tagging).
 
 Run the local gate first:
 
@@ -112,12 +114,27 @@ for status to be reported" and cannot be merged.
 
 ## Container images
 
-`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` automatically —
-`.github/workflows/publish-image.yml` builds and pushes on every push to
-`main` (`:latest`, `:sha-<commit>`) and on every `vX.Y.Z` release tag (the
-bare semver, e.g. `0.4.5`, matching `Chart.yaml`'s `appVersion`); step 4's
-pushes are what trigger it. The compose stack still always builds from
-source (see [docs/CI.md](docs/CI.md)). Nothing else (the `wardyn-proxy`
-sidecar, agent images) is published yet, and there is no digest-pinning or
-signing of the published image — that is still the v0.5 release-pipeline
-task (see `sbom-stub` in `.github/workflows/ci.yml`).
+Two workflows publish images, on two different triggers — neither overlaps
+the other:
+
+- **Continuous (every push to `main`).**
+  `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
+  `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). Unsigned. The
+  compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
+- **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
+  pushes all FOUR images a release ships —
+  `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
+  `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
+  `ghcr.io/cjohnstoniv/agent-claude-code`, `ghcr.io/cjohnstoniv/agent-codex-cli`
+  — each tagged with the bare semver (e.g. `0.4.5`, matching `Chart.yaml`'s
+  `appVersion`) and **cosign-signed (keyless)** by digest. Step 4's tag push
+  is what triggers it. It also generates the release CycloneDX SBOM
+  (`make sbom`) as a workflow artifact named `wardyn-sbom-vX.Y.Z` — download
+  it from the run and attach it to the GitHub Release (step 5) by hand if you
+  want it there; nothing here auto-touches the Release object, matching this
+  document's "nothing here is automated to push anything" for that step.
+  `linux/amd64` only (see that workflow's own `ponytail:` note for the
+  cross-arch follow-up). Images are **not** digest-pinned anywhere they're
+  *consumed* (the chart's `image.tag` still floats on the mutable semver
+  tag) — only the cosign signature is by digest; pinning every consumer to a
+  digest is separate, unstarted work.

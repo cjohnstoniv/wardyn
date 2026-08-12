@@ -76,6 +76,37 @@ describe("demos — advisory in the pure fns (per-demo checkmark is applied at t
   });
 });
 
+// agent-in-the-box (12 -> 13) — its OWN badge ladder, not the shared
+// demoBadges the four keyless demos read: "needs a model" is a DIFFERENT fact
+// from their plain "Optional" (they're runnable right now; this one isn't
+// yet). Always advisory/false here regardless of llmReady — the launched
+// checkmark override is the orchestrator's job (setup-screen.tsx), same as
+// the other four.
+describe("agent-in-the-box badge — Optional · needs a model (locked) -> Optional (live); done stays advisory here", () => {
+  it("reads 'Optional · needs a model' while locked (no agent-capable integration)", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    expect(readiness.llmReady).toBe(false);
+    expect(stepBadges(status, readiness, [], 0)["agent-in-the-box"]).toEqual({
+      text: "Optional · needs a model",
+      tone: "neutral",
+    });
+    expect(stepDone(status, readiness, [], 0)["agent-in-the-box"]).toBe(false);
+  });
+
+  it("drops the 'needs a model' qualifier once one is connected — done stays false (advisory)", () => {
+    const status = baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } });
+    const readiness = deriveReadiness(status);
+    expect(readiness.llmReady).toBe(true);
+    expect(stepBadges(status, readiness, [], 0)["agent-in-the-box"]).toEqual({
+      text: "Optional",
+      tone: "neutral",
+    });
+    // Never claims a launch — that's the orchestrator's launched-override.
+    expect(stepDone(status, readiness, [], 0)["agent-in-the-box"]).toBe(false);
+  });
+});
+
 describe("environment badge", () => {
   it("reads amber 'Needs setup' (not ready-toned) when zero barriers are ready", () => {
     const status = baseStatus({ runner: { driver: "docker", confinement_classes: [] } });
@@ -172,6 +203,9 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
+      // The fifth (harness) demo — its OWN explicit entry, not funneled through
+      // DEMO_TITLES/DEMO_STEP_IDS (see steps.ts), but still the catalog's title.
+      ["agent-in-the-box", "The agent in the box"],
       // The three workspace tiers, dependency order: dirs/repos are configured
       // first, base images second, the aggregate composes them.
       ["sources", "Directories & repos"],
@@ -183,10 +217,13 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
     expect(STEP_HEADING.corp_network).toBe("Corporate network");
     expect(STEP_HEADING.integrations).toBe("Connect what's outside Wardyn");
+    expect(STEP_HEADING["agent-in-the-box"]).toBe("The agent in the box");
   });
 
   // 10 -> 12: YOUR WORK carries the three workspace tiers as their own steps,
   // in dependency order — see steps.ts's PHASES for the walk rationale.
+  // 12 -> 13: agent-in-the-box joins as the LAST Demos step — the catalog's
+  // fifth (harness) demo, previously /demos-only, now also on the rail always.
   it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
@@ -196,16 +233,21 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "agent-in-the-box",
       "sources",
       "images",
       "workspaces",
       "review",
       "launch",
     ]);
-    expect(STEP_ORDER).toHaveLength(12);
+    expect(STEP_ORDER).toHaveLength(13);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
-    // The four Demos sub-steps ARE the demos phase, in catalog order.
-    expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
+    // The demos phase is the four DEMO_STEP_IDS PLUS the fifth, LAST.
+    expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS, "agent-in-the-box"]);
+  });
+
+  it("agent-in-the-box is optional, like the other four demo steps", () => {
+    expect(OPTIONAL_STEPS.has("agent-in-the-box")).toBe(true);
   });
 
   it("corp_network is required, not optional — proof of internet access gates Next", () => {
@@ -482,6 +524,51 @@ describe("review/launch gate — the BARRIER is the only hard requirement; a mod
     expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
     expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
     expect(stepDone(status, r, [], 1).review).toBe(true);
+  });
+
+  // B4/prompt-v4 point 2: a k8s deployment with containment un-proved shows
+  // "Needs attention", never "Ready to launch" — even though the barrier
+  // itself is up (CC1 sandboxes still create fine; k8sEgressContainmentCheck
+  // grades FAIL specifically so this existing checks.some(fail) rule catches
+  // it, with zero changes needed to stepBadges/stepDone themselves).
+  it("k8s with unproven egress containment: Needs attention, not Ready to launch", () => {
+    const status = baseStatus({
+      ready: true,
+      runner: { driver: "k8s", confinement_classes: ["CC1"] },
+      checks: [
+        {
+          id: "k8s_egress_containment",
+          label: "Egress containment",
+          status: "fail",
+          detail: "Not enforcing — the boot-time canary proved this cluster's CNI does not enforce NetworkPolicy.",
+          fix: "Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement.",
+        },
+      ],
+    });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], 0);
+    expect(badges.review).toEqual({ text: "Needs attention", tone: "warning" });
+    expect(stepDone(status, r, [], 0).review).toBe(false);
+  });
+
+  // The proven counterpart: an "ok" egress_containment row never blocks it.
+  it("k8s with proven egress containment: Ready to launch, same as docker", () => {
+    const status = baseStatus({
+      ready: true,
+      runner: { driver: "k8s", confinement_classes: ["CC1"] },
+      checks: [
+        {
+          id: "k8s_egress_containment",
+          label: "Egress containment",
+          status: "ok",
+          detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
+        },
+      ],
+    });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], 0);
+    expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
+    expect(stepDone(status, r, [], 0).review).toBe(true);
   });
 
   it("integrations step is Optional (neutral), never a 'Needs setup' warning, with nothing connected", () => {

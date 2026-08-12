@@ -312,6 +312,186 @@ func TestClamp_AttackerMaxedProposalCannotExceedCeilingOrLowerRisk(t *testing.T)
 	}
 }
 
+// TestClamp_FirstUseApprovalTakesStricter is HIGH-2: a proposal must never come
+// out WEAKER than the ceiling on first_use_approval, in either direction — a
+// weaker proposal is raised, a stronger one is left alone, and an unset ceiling
+// (its own fail-closed Normalize() default) still floors to always_deny.
+func TestClamp_FirstUseApprovalTakesStricter(t *testing.T) {
+	cases := []struct {
+		name              string
+		proposed, ceiling types.FirstUseMode
+		want              types.FirstUseMode
+		wantWarn          bool
+	}{
+		{"weaker proposal raised to stricter ceiling", types.FirstUseWaitForReview, types.FirstUseAlwaysDeny, types.FirstUseAlwaysDeny, true},
+		{"stronger proposal is preserved", types.FirstUseAlwaysDeny, types.FirstUseWaitForReview, types.FirstUseAlwaysDeny, false},
+		{"equal is a no-op", types.FirstUseDenyWithReview, types.FirstUseDenyWithReview, types.FirstUseDenyWithReview, false},
+		{"unset ceiling floors to always_deny (Normalize's own default)", types.FirstUseWaitForReview, "", types.FirstUseAlwaysDeny, true},
+		// An unset PROPOSAL already normalizes to always_deny (rank 3) — that
+		// already dominates a lenient ceiling, so the output is spelled out
+		// explicitly (never a bare "") but nothing was actually RAISED: no warning.
+		{"unset proposal normalizes to always_deny outright — no raise, no warning", "", types.FirstUseWaitForReview, types.FirstUseAlwaysDeny, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ceiling := operatorCeiling(t)
+			ceiling.FirstUseApproval = tc.ceiling
+			got, warns := Clamp(types.RunPolicySpec{FirstUseApproval: tc.proposed}, ceiling)
+			if got.FirstUseApproval != tc.want {
+				t.Errorf("first_use_approval = %q, want %q", got.FirstUseApproval, tc.want)
+			}
+			if hasWarn(warns, "first_use_approval raised") != tc.wantWarn {
+				t.Errorf("warning present = %v, want %v (warns=%v)", !tc.wantWarn, tc.wantWarn, warns)
+			}
+		})
+	}
+}
+
+// TestClamp_LLMInspectionInheritsCeiling is HIGH-2: nil means OFF, so an
+// omitted (or merely different) proposal must inherit the ceiling's spec
+// outright whenever the ceiling sets one — never stay nil under a ceiling that
+// turns inspection on.
+func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true}
+
+	// Proposal omits it entirely.
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling)
+	if got.LLMInspection == nil || got.LLMInspection.Mode != "block" {
+		t.Errorf("llm_inspection = %+v, want the ceiling's block mode", got.LLMInspection)
+	}
+	if !hasWarn(warns, "llm_inspection set to the operator's configured mode") {
+		t.Errorf("expected an llm_inspection warning, got %v", warns)
+	}
+
+	// Proposal sets a WEAKER mode — still overridden to the ceiling's.
+	got, _ = Clamp(types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert"}}, ceiling)
+	if got.LLMInspection.Mode != "block" {
+		t.Errorf("weaker proposed mode survived clamp: got %q, want block", got.LLMInspection.Mode)
+	}
+
+	// No ceiling opinion: proposal is left alone (including nil).
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t))
+	if got.LLMInspection != nil {
+		t.Errorf("llm_inspection = %+v, want nil (ceiling sets none)", got.LLMInspection)
+	}
+	if hasWarn(warns, "llm_inspection") {
+		t.Errorf("unexpected llm_inspection warning with no ceiling opinion: %v", warns)
+	}
+}
+
+// TestClamp_AllowedMethods is HIGH-2: empty means "all" for this field (unlike
+// AllowedDomains' default-deny empty), so an empty proposal must ADOPT the
+// ceiling's restriction, and a non-empty one intersects down to it.
+func TestClamp_AllowedMethods(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.AllowedMethods = []string{"GET", "POST"}
+
+	// Empty proposal adopts the ceiling's list outright.
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling)
+	if strings.Join(got.AllowedMethods, ",") != "GET,POST" {
+		t.Errorf("allowed_methods = %v, want the ceiling's [GET POST]", got.AllowedMethods)
+	}
+	if !hasWarn(warns, "allowed_methods restricted") {
+		t.Errorf("expected an allowed_methods warning, got %v", warns)
+	}
+
+	// Non-empty proposal intersects down (DELETE is outside the ceiling).
+	got, warns = Clamp(types.RunPolicySpec{AllowedMethods: []string{"GET", "DELETE"}}, ceiling)
+	if len(got.AllowedMethods) != 1 || got.AllowedMethods[0] != "GET" {
+		t.Errorf("allowed_methods = %v, want [GET]", got.AllowedMethods)
+	}
+	if !hasWarn(warns, "dropped 1 method") {
+		t.Errorf("expected a dropped-method warning, got %v", warns)
+	}
+
+	// No ceiling opinion: an empty proposal stays empty (means "all" — a no-op).
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t))
+	if len(got.AllowedMethods) != 0 {
+		t.Errorf("allowed_methods = %v, want empty (no ceiling opinion)", got.AllowedMethods)
+	}
+	if hasWarn(warns, "allowed_methods") {
+		t.Errorf("unexpected allowed_methods warning with no ceiling opinion: %v", warns)
+	}
+}
+
+// TestClamp_Resources is HIGH-2: each field caps at the ceiling's when the
+// ceiling sets one; an unset (<=0) proposed field is the PERMISSIVE state here
+// (filled in by the driver's own default later) and is capped down exactly like
+// an explicit value that exceeds the ceiling.
+func TestClamp_Resources(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.Resources = &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}
+
+	// Proposal omits Resources entirely: adopts the ceiling's caps.
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling)
+	if got.Resources == nil || got.Resources.CPUMillis != 2000 || got.Resources.MemoryMiB != 4096 {
+		t.Errorf("resources = %+v, want the ceiling's caps", got.Resources)
+	}
+	if !hasWarn(warns, "resources capped") {
+		t.Errorf("expected a resources warning, got %v", warns)
+	}
+
+	// Proposal exceeds the ceiling on one field, stays under on another, and
+	// leaves PidsLimit unset (0) — only CPUMillis should move.
+	got, _ = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 1024}}, ceiling)
+	if got.Resources.CPUMillis != 2000 {
+		t.Errorf("CPUMillis = %d, want capped to 2000", got.Resources.CPUMillis)
+	}
+	if got.Resources.MemoryMiB != 1024 {
+		t.Errorf("MemoryMiB = %d, want the proposal's own 1024 (already under the cap)", got.Resources.MemoryMiB)
+	}
+
+	// No ceiling opinion: proposal (including nil) is left alone.
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t))
+	if got.Resources != nil {
+		t.Errorf("resources = %+v, want nil (no ceiling opinion)", got.Resources)
+	}
+	if hasWarn(warns, "resources") {
+		t.Errorf("unexpected resources warning with no ceiling opinion: %v", warns)
+	}
+}
+
+// TestClamp_AutoStopAfterSec is HIGH-2: capped at the ceiling's maximum when
+// the ceiling sets a real (positive) one; 0 (platform default) and negative
+// (never reap) both rank as MORE permissive than an explicit cap.
+func TestClamp_AutoStopAfterSec(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.AutoStopAfterSec = 3600
+
+	cases := []struct {
+		name     string
+		proposed int
+		want     int
+		wantWarn bool
+	}{
+		{"never-reap is capped", -1, 3600, true},
+		{"platform-default (0) is capped", 0, 3600, true},
+		{"excessive positive is capped", 999999, 3600, true},
+		{"already under the cap is preserved", 1800, 1800, false},
+		{"exactly at the cap is a no-op", 3600, 3600, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: tc.proposed}, ceiling)
+			if got.AutoStopAfterSec != tc.want {
+				t.Errorf("auto_stop_after_sec = %d, want %d", got.AutoStopAfterSec, tc.want)
+			}
+			if hasWarn(warns, "auto_stop_after_sec capped") != tc.wantWarn {
+				t.Errorf("warning present = %v, want %v (warns=%v)", !tc.wantWarn, tc.wantWarn, warns)
+			}
+		})
+	}
+	// No ceiling opinion (0): proposal is left alone, including -1 (never reap).
+	got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: -1}, operatorCeiling(t))
+	if got.AutoStopAfterSec != -1 {
+		t.Errorf("auto_stop_after_sec = %d, want -1 preserved (no ceiling opinion)", got.AutoStopAfterSec)
+	}
+	if hasWarn(warns, "auto_stop_after_sec") {
+		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
+	}
+}
+
 // FakeComposer round-trips the request and returns the preset proposal (used by
 // the endpoint tests). No network.
 func TestFakeComposer_RecordsRequestAndReturnsResult(t *testing.T) {

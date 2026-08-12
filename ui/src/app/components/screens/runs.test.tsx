@@ -35,6 +35,7 @@ vi.mock("./new-run/new-run-dialog", () => ({
 }));
 
 import { RunsScreen } from "./runs";
+import { RoleProvider, type Role } from "../wardyn/operator-context";
 
 const run: AgentRun = {
   id: "run-1",
@@ -50,11 +51,10 @@ const run: AgentRun = {
   runner_target: "docker",
 };
 
-function renderScreen() {
+function renderScreen(role?: Role) {
+  const tree = <RunsScreen />;
   return render(
-    <MemoryRouter>
-      <RunsScreen />
-    </MemoryRouter>,
+    <MemoryRouter>{role ? <RoleProvider role={role}>{tree}</RoleProvider> : tree}</MemoryRouter>,
   );
 }
 
@@ -145,5 +145,21 @@ describe("RunsScreen — opens the New Run dialog from route state (workspace-de
     );
     await screen.findByRole("dialog", { name: "new run dialog stub" });
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("CLOSED"));
+  });
+});
+
+// B3 (prompt-v2 point 2): the list is already server-scoped to the member's
+// own runs (handleListRuns's creator-pager branch) — this only pins the copy
+// says so plainly, and that admin copy is unchanged.
+describe("RunsScreen — member vs admin count line", () => {
+  it("a member sees \"Your runs · N\"", async () => {
+    renderScreen("member");
+    expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
+  });
+
+  it("an admin (and the fail-open default) keeps the unscoped description", async () => {
+    renderScreen("admin");
+    expect(await screen.findByText(/Every run, live/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your runs ·/)).not.toBeInTheDocument();
   });
 });

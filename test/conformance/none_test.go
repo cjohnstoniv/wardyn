@@ -69,6 +69,9 @@ func (noneRunner) Wait(context.Context, string) (int, error) { return 0, errNone
 func (noneRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errNoneNotImplemented
 }
+func (noneRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
+}
 func (noneRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{}, errNoneNotImplemented
 }
@@ -102,6 +105,9 @@ func (downgradingRunner) Exec(context.Context, string, []string) (string, error)
 func (downgradingRunner) Wait(context.Context, string) (int, error)              { return 0, nil }
 func (downgradingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("downgrading: no attach")
+}
+func (downgradingRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
 }
 func (downgradingRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
@@ -153,6 +159,9 @@ func (*recordingRunner) Wait(context.Context, string) (int, error) { return 0, n
 func (*recordingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("recording: no attach")
 }
+func (*recordingRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, errors.New("recording: no exec stream")
+}
 func (*recordingRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }
@@ -185,6 +194,9 @@ func (pretendingRecordingRunner) Exec(context.Context, string, []string) (string
 func (pretendingRecordingRunner) Wait(context.Context, string) (int, error) { return 0, nil }
 func (pretendingRecordingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("pretending: no attach")
+}
+func (pretendingRecordingRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, errors.New("pretending: no exec stream")
 }
 func (pretendingRecordingRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil

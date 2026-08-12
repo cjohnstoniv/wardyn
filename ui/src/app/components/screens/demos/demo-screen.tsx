@@ -59,6 +59,20 @@ function forgetStored(demoId: string): void {
 
 type TrackedRun = { id: string; state: RunState };
 
+// The exact POST /runs body a demo launches with — exported so a caller that
+// has to PREFLIGHT the same body a launch will send (the harness step's
+// preflight checklist) can mirror it byte for byte, so preflight and launch can
+// never disagree (the same discipline the manual wizard's runRequest applies,
+// wizard.tsx). Every demo — including the harness one — launches as
+// claude-code with NO integration_id override: the server's own resolution
+// precedence picks the credential (a client-synthesized row id like
+// "ai:anthropic_api_key" doesn't match a real server integration id and would
+// 400 the launch — a review finding on the harness step, see
+// setup/harness-demo-step.tsx).
+export function demoRunBody(demo: Demo) {
+  return { agent: "claude-code" as const, interactive: true as const, inline_policy: demo.policy };
+}
+
 // useDemoRuns — owns the live-run map, the reload re-attach, the poll, and
 // start/end for the demo sandboxes. Shared by the /demos grid and the
 // Getting-Started per-demo steps. `onStarted(demoId)` fires when a demo is
@@ -141,11 +155,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
-        const run = await api.createRun({
-          agent: "claude-code",
-          interactive: true,
-          inline_policy: demo.policy,
-        });
+        const run = await api.createRun(demoRunBody(demo));
         setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
         const store = loadStore();
         store[demo.id] = run.id;
@@ -339,6 +349,7 @@ export function DemoRunControls({
   loading,
   onStart,
   onEnd,
+  disabled = false,
 }: {
   demo: Demo;
   run?: TrackedRun;
@@ -347,6 +358,10 @@ export function DemoRunControls({
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
+  /** Extra gate beyond barrierReady/loading/starting, ORed into Start's disabled
+   *  condition — the harness step's preflight model-access + operator gate.
+   *  Every other call site omits it (default false), unchanged. */
+  disabled?: boolean;
 }) {
   const running = run?.state === "RUNNING";
   const failed = run?.state === "FAILED";
@@ -397,7 +412,7 @@ export function DemoRunControls({
       )}
       <Button
         onClick={onStart}
-        disabled={!barrierReady || loading || starting}
+        disabled={!barrierReady || loading || starting || disabled}
         data-testid={`demo-start-${demo.id}`}
       >
         {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -37,15 +38,18 @@ const attachTicketTTL = 30 * time.Second
 // not process memory: a ticket minted on one control plane is redeemable on
 // another, and a restart no longer invalidates every outstanding ticket.
 
-// mintAttachTicket issues a fresh single-use ticket bound to runID and to the
-// minting principal.
-func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal string, now time.Time) (string, error) {
+// mintAttachTicket issues a fresh single-use ticket bound to runID, to the
+// minting principal, and to that principal's role (admin/member) AT MINT TIME
+// — the WS attach route's ?ticket= lane bypasses humanOrAdminAuth entirely, so
+// this stamped role is the only signal available to re-check owner-or-admin
+// when the ticket is consumed (see attach.go's handleAttachWS).
+func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, now time.Time) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(raw)
-	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal}
+	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role}
 	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
@@ -67,7 +71,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	if !ok || t.RunID != runID {
 		return ticketActor{}, false, nil
 	}
-	return ticketActor{actorType: t.ActorType, principal: t.Principal}, true, nil
+	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -78,6 +82,12 @@ type ticketActorCtxKey struct{}
 type ticketActor struct {
 	actorType types.ActorType
 	principal string
+	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) AT
+	// MINT TIME, stamped by handleAttachTicket. It is the ONLY role source
+	// available in the ?ticket= WS lane (ticketOrHumanAuth bypasses
+	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
+	// re-check.
+	role string
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -93,15 +103,19 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 //
 //	POST /api/v1/runs/{id}/attach-ticket
 //
-// Mounted INSIDE the humanOrAdminAuth group — minting requires the same
-// credential every other admin-gated action does; the ticket only ever
-// DOWNGRADES that credential to "open this one run's PTY within 30s".
+// Mounted INSIDE the humanOrAdminAuth group, owner-or-admin (getRunAuthorized):
+// a run's OWNER may mint a ticket for their own run, same as an admin — a
+// member who did not create this run gets the byte-identical 404 a missing run
+// would (no existence oracle). The minted ticket carries the minter's OWN role
+// (item 3), which is the ONLY authorization signal the WS handler has left to
+// check at consume time, since the ?ticket= lane bypasses humanOrAdminAuth
+// entirely.
 func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
 	}
-	run, ok := s.getRunOr404(w, r, id)
+	run, ok := s.getRunAuthorized(w, r, id)
 	if !ok {
 		return
 	}
@@ -112,7 +126,11 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	at, principal := actorFromRequest(r)
-	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, s.cfg.Now())
+	role := oidc.RoleMember
+	if s.isOperator(r.Context()) {
+		role = oidc.RoleAdmin
+	}
+	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, s.cfg.Now())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "mint attach ticket failed")
@@ -126,20 +144,23 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 
 // ticketOrHumanAuth guards the attach WS route: a valid ?ticket= (single-use,
 // unexpired, bound to this run id) authenticates on its own and stamps the
-// minting principal for attribution; anything else falls through to the
-// standard humanOrAdminAuth middleware (OIDC session / admin token / local
-// mode). A PRESENT-but-invalid ticket fails closed with 403 rather than
-// falling through — a caller that chose ticket auth gets a crisp answer, never
-// a silent downgrade to cookie auth.
+// minting principal (AND role — item 3) for attribution; anything else falls
+// through to the standard humanOrAdminAuth middleware (OIDC session / admin
+// token / local mode). A PRESENT-but-invalid ticket fails closed with 403
+// rather than falling through — a caller that chose ticket auth gets a crisp
+// answer, never a silent downgrade to cookie auth.
 //
-// BOTH lanes are operator-only, and they get there differently. The ticket lane
-// is already proof of authorization: POST /runs/{id}/attach-ticket is itself
-// operator-gated, so holding a ticket means an operator minted it. The
-// fall-through lane has no such proof — humanOrAdminAuth only AUTHENTICATES —
-// so it must check the role itself. Without that check the operator gate on the
-// mint route bought nothing: a viewer would simply omit ?ticket= and get the
-// same live PTY straight from their session cookie, which browsers attach to a
-// same-origin WebSocket handshake automatically.
+// The two lanes are NOT symmetric since item 3, and get there differently.
+// The FALL-THROUGH lane stays admin-only (s.requireOperator): humanOrAdminAuth
+// only AUTHENTICATES, so a member who never minted a ticket must not simply
+// omit ?ticket= and get the same live PTY straight from their session cookie
+// (which browsers attach to a same-origin WebSocket handshake automatically).
+// The TICKET lane is owner-or-admin: minting is itself owner-or-admin-gated
+// (POST /runs/{id}/attach-ticket, getRunAuthorized), so holding a ticket at
+// all already proves that much — but the handler (handleAttachWS, attach.go)
+// ALSO re-checks the ticket's own stamped role/principal against the run it
+// names, since this lane never runs humanOrAdminAuth/requireOperator at all
+// and the ticket's stamped data is the only signal left to check.
 func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 	human := s.humanOrAdminAuth(s.requireOperator(next))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

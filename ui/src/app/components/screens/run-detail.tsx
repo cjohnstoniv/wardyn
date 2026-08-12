@@ -26,13 +26,14 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  AgentRun,
-  ApprovalRequest,
-  AuditEvent,
-  CredentialGrant,
-  EgressDecision,
-  Recording,
+import {
+  canDecideApproval,
+  type AgentRun,
+  type ApprovalRequest,
+  type AuditEvent,
+  type CredentialGrant,
+  type EgressDecision,
+  type Recording,
 } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -61,6 +62,7 @@ import {
   ConfinementChip,
   EgressDecisionChip,
   RunStateBadge,
+  SectionCard,
 } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
@@ -74,6 +76,7 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator } from "../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
 import { cn } from "../ui/utils";
+import { ConnectSSHCard } from "./run-detail-ssh";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -441,6 +444,14 @@ function OverviewTab({
   const pending = approvals.filter((a) => a.state === "PENDING");
   const attachable = !!run.interactive && run.state === "RUNNING";
   const operator = useOperator();
+  // This page is already owner-scoped (getRunAuthorized — a foreign run
+  // 404s), so a member viewing it owns every approval shown. canDecideSome
+  // asks only the KIND question canDecideApproval answers: at least one
+  // pending row here is an egress_domain approval, decidable by its owner
+  // (decide() in approvals.go) — credential/tool_call stay admin-only
+  // regardless of ownership. Per-row gating on the Approvals tab itself still
+  // applies canDecideApproval exactly; this only picks the banner's headline.
+  const canDecideSome = operator || pending.some((p) => canDecideApproval(false, p.kind));
 
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
@@ -452,10 +463,10 @@ function OverviewTab({
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-foreground">
-                  {operator ? "Waiting for your confirmation" : "Waiting on an operator"}
+                  {canDecideSome ? "Waiting for your confirmation" : "Waiting on an operator"}
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  {operator ? (
+                  {canDecideSome ? (
                     <>
                       This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review
                       the exact requested scope before you decide — nothing is minted until you approve.
@@ -568,6 +579,8 @@ function OverviewTab({
             </KV>
           </dl>
         </SectionCard>
+
+        <ConnectSSHCard run={run} />
 
         <GrantsCard grants={grants} audit={audit} />
 
@@ -742,6 +755,10 @@ function ApprovalsTab({
     <div className="flex max-w-3xl flex-col gap-3">
       {approvals.map((a) => {
         const pending = a.state === "PENDING";
+        // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
+        // the KIND question: egress_domain is a member act on an owned run,
+        // credential/tool_call stay admin-only regardless (see its doc).
+        const canDecide = canDecideApproval(operator, a.kind);
         return (
           <div key={a.id} className="rounded-xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -765,12 +782,12 @@ function ApprovalsTab({
             )}
             {pending && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+                {!canDecide && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => onDecide(a.id, "deny", a.kind)}
-                  disabled={!operator}
+                  disabled={!canDecide}
                 >
                   Deny
                 </Button>
@@ -778,7 +795,7 @@ function ApprovalsTab({
                   size="sm"
                   variant="info"
                   onClick={() => onDecide(a.id, "approve", a.kind)}
-                  disabled={!operator}
+                  disabled={!canDecide}
                 >
                   <Check className="size-4" /> Approve
                 </Button>
@@ -913,29 +930,6 @@ function RecordingTab({
 // ---------------------------------------------------------------------------
 // Small shared bits
 // ---------------------------------------------------------------------------
-function SectionCard({
-  title,
-  Icon,
-  right,
-  children,
-}: {
-  title: string;
-  Icon?: React.ElementType;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        {Icon && <Icon className="size-4 text-muted-foreground" />}
-        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
-        {right && <div className="ml-auto">{right}</div>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function KV({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>

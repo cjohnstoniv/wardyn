@@ -86,11 +86,24 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 
 // ── handler tests ─────────────────────────────────────────────────────────────
 
-func newTestRouter(store recording.Store) http.Handler {
+// allowAllAuthorizer is the test stub for recording.Authorizer: the mechanics
+// under test here are the Handler's own route/store plumbing and its
+// outer-id/inner-prefix enforcement, not any particular authorization
+// DECISION — internal/api's own recordingAuthorizer (and its ownership rules)
+// is exercised at that layer instead.
+func allowAllAuthorizer(*http.Request, string) bool { return true }
+
+// newTestRouter mounts Handler with the given authorizer (allowAllAuthorizer
+// by default via the wrapper below) so tests can also exercise a denying one.
+func newTestRouterWithAuth(store recording.Store, authorize recording.Authorizer) http.Handler {
 	r := chi.NewRouter()
 	// Mirror the mount point the assignment prescribes.
-	r.Mount("/api/v1/runs/{id}/recording", recording.Handler(store))
+	r.Mount("/api/v1/runs/{id}/recording", recording.Handler(store, authorize))
 	return r
+}
+
+func newTestRouter(store recording.Store) http.Handler {
+	return newTestRouterWithAuth(store, allowAllAuthorizer)
 }
 
 func TestHandler_Serve(t *testing.T) {
@@ -133,5 +146,60 @@ func TestHandler_NotFound(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandler_OuterInnerMismatch pins item 4: the recording exists (an
+// allow-all authorizer would happily serve it), but the OUTER mount {id}
+// (naming which run this request claims to be about) does not match the
+// INNER {runID}'s run-id PREFIX (the cast key actually being opened) — e.g. a
+// caller authorized for run A's recordings requesting
+// .../runs/A/recording/B. Handler must refuse this BEFORE ever calling
+// authorize or the store, with the same 404 a missing cast gets.
+func TestHandler_OuterInnerMismatch(t *testing.T) {
+	store, _ := recording.NewFSStore(t.TempDir())
+	ctx := context.Background()
+	const cast = `{"version":2}` + "\n"
+	const runB = "run-b"
+	_ = store.SaveCast(ctx, runB, strings.NewReader(cast))
+
+	var authorizeCalled bool
+	authorize := func(*http.Request, string) bool { authorizeCalled = true; return true }
+	srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/runs/run-a/recording/" + runB)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("outer/inner mismatch: status = %d, want 404 (run-b's cast exists and an allow-all authorizer is wired)", resp.StatusCode)
+	}
+	if authorizeCalled {
+		t.Error("authorize was called despite the outer/inner id mismatch — the cheap string check must short-circuit first")
+	}
+}
+
+// TestHandler_AuthorizerDenies pins that a denying Authorizer produces the
+// SAME 404 an absent recording gets — no distinguishable status/body between
+// "not yours" and "never recorded" (no existence oracle).
+func TestHandler_AuthorizerDenies(t *testing.T) {
+	store, _ := recording.NewFSStore(t.TempDir())
+	ctx := context.Background()
+	const runID = "owned-by-someone-else"
+	_ = store.SaveCast(ctx, runID, strings.NewReader(`{"version":2}`+"\n"))
+
+	deny := func(*http.Request, string) bool { return false }
+	srv := httptest.NewServer(newTestRouterWithAuth(store, deny))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/runs/" + runID + "/recording/" + runID)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("denied authorizer: status = %d, want 404", resp.StatusCode)
 	}
 }

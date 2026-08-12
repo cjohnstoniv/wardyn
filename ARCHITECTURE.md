@@ -20,7 +20,7 @@ everything; no `enterprise/` directory; CNCF Sandbox is the governance target.
 | Binary | Role |
 |---|---|
 | `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
-| `wardyn-runner` *(dev-only)* | Data plane. The driver that ships is the **library** `internal/runner/docker`, compiled into `wardynd` (blank import, `-tags docker`) **[shipped]**; the `k8s/` driver is **[v0.5+ — planned]**. `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it. |
+| `wardyn-runner` *(dev-only)* | Data plane. The driver that ships is the **library** `internal/runner/docker`, compiled into `wardynd` (blank import, `-tags docker`) **[shipped]**; the `k8s/` driver (`internal/runner/k8s`, `-tags k8s`) is **[shipped — alpha/experimental]**, conformance-gated on **both** the Docker and Kubernetes targets (see the "Parity rule" below), but not yet at Docker parity (`local_dir` mounts, BYOI/devcontainer builds, per-pod PIDs/disk enforcement, and a ground-truth correlator are the open gaps — see [ROADMAP.md](ROADMAP.md)). `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it. |
 | `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. Opt-in per-run TLS interception (`intercept_tls`) of operator-listed MITM-eligible hosts (LLM endpoints, artifact registries) with outbound content inspection (`internal/contentscan`; per-proxy kill-switch `WARDYN_LLM_SCAN`) — claims-contract in `threatmodel/THREAT-MODEL.md` §5.1a. Same binary on both targets. |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
@@ -296,17 +296,18 @@ brokered run a second push path the receive-pack parser cannot read — see
 [docs/POLICIES.md](docs/POLICIES.md) "The `ssh_key` and `git_pat` lanes are
 closed too".)
 
-## Layered egress (identical semantics on both targets)
+## Layered egress (per-target status — see each layer's own tag)
 
-L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftables
-/ NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path) **[v0.5+ — planned]**
-→ L2 wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
+L0 structural (netns, no default route) **[shipped]** → L1 default-deny —
+**NetworkPolicy [shipped, k8s target]** / **nftables [planned, docker
+target]** (+ Cilium toFQDNs on the blessed Helm path **[planned]**) → L2
+wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 **[v0.5+ — planned]**.
 
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
+| L1 default-deny **[shipped on k8s; planned on docker]** | **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the logged, opt-in downgrade — see [ROADMAP.md](ROADMAP.md)). **docker [planned]**: nftables — not built (`internal/runner/docker/hardening.go`'s own comment: "be honest, do not claim it"); Cilium `toFQDNs` also planned, either target | Non-HTTP tunnels; metadata-server theft; DNS rebinding — on k8s today, both targets once nftables lands |
 | L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve — the field fail-then-retries, and the nearest analog in Vault/Teleport is Enterprise-only); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
@@ -334,42 +335,54 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 
 > **Deployment status:** containerized (compose) is the default; host mode is an
 > escape hatch (`WARDYN_SETUP_MODE=local`).
-> A first-class **team** deployment — the compose control plane running as a
-> sealed, multi-user shared service with human SSO — **does not exist yet and is
-> not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
+> A first-class **team** deployment — the compose control plane packaged and
+> supported as a sealed, multi-user shared service — **does not exist as a
+> product yet and is not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
-> sign-in lights up when OIDC is configured. Authorization is exactly **two
-> tiers**, not RBAC: `WARDYN_OIDC_OPERATOR_EMAILS` names the operators and every
-> other signed-in human is a viewer, 403 on the mutating routes of nine
-> clusters — the managed harness credential, policy CRUD, workspace CRUD and its
-> scoped widening writes, `PUT /site-config` and its two connectivity probes
-> (each launches a sandbox on the operator's behalf), secret write/delete,
-> deciding an approval, attaching to a running sandbox (**both** the ticket mint
-> and the attach WebSocket itself, which falls back to session-cookie auth when
-> no ticket is presented), the source-library and base-image catalog CRUD, and
-> integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
-> /integrations/{id}/adopt` — the same corp-wide blast radius as site-config's
-> PUT). 34 routes in all; reads are never gated and `POST /runs` /
-> `POST /runs/{id}/kill` stay open, because launching a run is a viewer act by
-> design. All-admin is still reachable but no longer by accident: OIDC configured
-> with that list empty **refuses to boot** unless
-> `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`. The admin token and local mode are
-> always operators — one shared credential carries no human to demote.
+> sign-in lights up when OIDC is configured. Authorization underneath it is
+> real, not aspirational: every OIDC session carries an **admin** or **member**
+> role derived at login (`WARDYN_OIDC_ROLE_MAP` against Entra App Roles/groups/
+> email; unset = everyone admin, upgrade-safe), a member is scoped to their own
+> runs/approvals with owner-or-admin gating (byte-identical 404 on a foreign
+> resource, no existence oracle), a member's own policy is clamped to the
+> operator's ceiling, and BYOI/devcontainer images are admin-only. The admin
+> token and local mode are always admin — one shared credential carries no
+> human to demote. Full semantics, the legacy `WARDYN_OIDC_OPERATOR_EMAILS`
+> allowlist path, and what's still NOT built (custom roles, per-resource
+> permissions, tenant/org columns, separation of duty among admins):
+> [docs/OPERATIONS.md "Multi-user: who can change what"](docs/OPERATIONS.md#multi-user-who-can-change-what).
 > `make setup` asks **containerized vs host** (Enter =
-> containerized; both single-user); team is not a selectable mode
-> (`WARDYN_SETUP_MODE=team` prints a notice and exits).
+> containerized); team is not a selectable mode
+> (`WARDYN_SETUP_MODE=team` prints a notice and exits) — RBAC is a control-plane
+> property today, not a packaged multi-tenant deployment.
 
 ## Parity rule
 
 The control plane contains zero target-specific code: only
-`internal/runner` subpackages may import Docker (and, when the k8s driver
-lands, Kubernetes) client libraries — with one blessed exception:
-`internal/envbuild` (plus its narrow shared helper `internal/dockerutil`)
-legitimately imports the Docker client directly because it drives the
-coder/envbuilder devcontainer build as a Docker container
-(see `docs/ENVBUILD.md`), a distinct concern from launching the agent
-sandbox itself.
-`test/conformance` runs the full suite against the **docker** target in CI.
-There is no Kubernetes runner driver yet (**[v0.5+ — planned]**); a feature is
-not done on Kubernetes until a real driver passes conformance against a live
-cluster.
+`internal/runner` subpackages may import Docker or Kubernetes client
+libraries — `internal/runner/docker` (`-tags docker`) and `internal/runner/k8s`
+(`-tags k8s`) each self-register into the substrate registry
+(`internal/runner/substrate`) from their own `init()`, so a tagless binary
+carries neither and fails closed on either `-runner` name — with one blessed
+exception: `internal/envbuild` (plus its narrow shared helper
+`internal/dockerutil`) legitimately imports the Docker client directly
+because it drives the coder/envbuilder devcontainer build as a Docker
+container (see `docs/ENVBUILD.md`), a distinct concern from launching the
+agent sandbox itself.
+
+`test/conformance` runs the full suite against **both** targets in CI, not
+just docker: the `conformance` job drives the **docker** target against a
+live daemon (`WARDYN_TEST_DOCKER=1`), and the `conformance-k8s` job drives
+the **k8s** target (`internal/runner/k8s`) against a real cluster — kind with
+`disableDefaultCNI: true` plus a pinned Calico manifest, since kind's default
+`kindnet` CNI does not enforce `NetworkPolicy` and the k8s substrate's
+boot-time egress canary refuses to construct without it. Neither job
+tolerates a failure. A shared conformance case that has no k8s equivalent
+self-skips there by design rather than faking a result — the k8s substrate
+claims L1 (NetworkPolicy-enforced), not L0 (structural/gatewayless), so the
+L0-specific case self-skips on that target and a dedicated L1 case
+(`testAgentCannotReachAPIServer`) proves the substrate's actual claim
+instead; see [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) for the full
+per-seam status. The parity bar is ongoing, not a one-time proof: a feature
+is not done on Kubernetes until it also passes conformance there, on every
+change, not just the change that first added a driver.

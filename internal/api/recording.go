@@ -14,6 +14,41 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// recordingAuthorizer is the owner-or-admin authorization callback wired into
+// recording.Handler (item 4, server.go's Mount call): a run's recording is
+// exactly as sensitive as its live PTY attach (it may show whatever the
+// agent's injected credentials left on screen), so it gets the SAME
+// ownership gate as getRunAuthorized — an admin, or the run's own creator,
+// may read it. runIDPrefix is the cast key's run-id portion (Handler has
+// already enforced it equals the outer mount {id} before this ever runs); a
+// prefix that doesn't parse as a run id, or names no real run, is denied
+// (fails closed) rather than erroring — recording.Handler turns any false
+// return into the SAME 404 "recording not found" a truly-missing cast gets,
+// so this never needs to shape its own response.
+func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
+	id, err := uuid.Parse(runIDPrefix)
+	if err != nil {
+		return false
+	}
+	if s.isOperator(r.Context()) {
+		return true
+	}
+	run, err := s.cfg.Store.GetRun(r.Context(), id)
+	if err != nil {
+		return false
+	}
+	if run.CreatedBy == principalFromRequest(r) {
+		return true
+	}
+	// M1: audited only once the run is confirmed to genuinely exist — a
+	// malformed prefix or an unknown run (both branches above) stays silent;
+	// only a POSITIVELY identified foreign run reaches this audit. The 404
+	// recording.Handler writes on a false return is unaffected either way.
+	s.recordAudit(r.Context(), s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	return false
+}
+
 // maxRecordingUploadBytes caps a single recording PUT (Finding 3: DoS / disk
 // exhaustion). An authenticated in-sandbox agent could otherwise stream an
 // unbounded cast and fill the control plane's disk. 64 MiB comfortably holds a

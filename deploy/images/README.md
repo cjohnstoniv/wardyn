@@ -52,7 +52,18 @@ The session recorder binary, built from `cmd/wardyn-rec`.  It wraps the agent
 process and records the PTY session via `asciinema` (GPL subprocess, never
 linked) or falls back to a plain `.log` file when asciinema is absent.  The
 docker driver calls `wardyn-rec` (via `Exec`) instead of calling `agent-run`
-directly when recording is enabled.
+directly when recording is enabled (`Config.Record`, opt-in on that substrate).
+
+**On the Kubernetes runner substrate (`internal/runner/k8s`, `-tags k8s`) this
+binary is NOT optional.** That substrate always advertises
+`SessionRecording:true` with no opt-out, so `Exec` unconditionally wraps every
+launch with `wardyn-rec` (`exec.go`'s `recordCmd`) — an image without it fails
+every `Exec` closed (the ephemeral container can't start: `wardyn-rec` does
+not resolve). This is deliberate fail-closed behavior, not a bug: a driver
+that claims `SessionRecording:true` must actually deliver it, never silently
+downgrade to unrecorded. The k8s conformance suite's own agent image
+(`deploy/kind/Dockerfile.conformance-agent`) exists specifically to carry a
+real `wardyn-rec` so this path is exercised for real.
 
 ### 4. `/usr/local/bin/wardyn-git-helper`
 
@@ -92,6 +103,30 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 `--system` (not `--global`) also means every `git` invocation in the sandbox is
 covered with no per-user configuration.  `agent-run --selftest` reports what it
 finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`).
+
+### SSH relay binaries (`claude-code`, `codex-cli`)
+
+Not (yet) part of the numbered contract above — `oracle`, `full`, and
+`aws-sso` do not carry them — but both user-facing agent images ship two
+binaries the SSH gateway ([docs/SSH.md](../../docs/SSH.md)'s "Image contract
+(BYOI)") execs **inside the sandbox**, by convention, never by
+reimplementing their protocols:
+
+| Feature | Binary | Path | Invocation | apt package |
+|---|---|---|---|---|
+| sftp subsystem | sftp-server | `/usr/lib/openssh/sftp-server` | `sftp-server -e` | `openssh-sftp-server` |
+| `-L` port forwarding | socat | `/usr/bin/socat` | `socat - TCP:127.0.0.1:<port>` | `socat` |
+
+A BYOI run on an image missing either gets a clean channel error naming the
+missing binary the moment that specific feature (sftp/`-L`) is used — never
+a hang — per docs/SSH.md; the interactive shell is unaffected either way.
+
+`claude-code` already ships `tmux` + `openssh-client` (the interactive attach
+shell and the SSH-clone lane, §5/§6 above) — only the two binaries above are
+new there. `codex-cli` had neither `tmux` nor an SSH client before; it now
+gains `tmux` (the same attach-shell fallback chain as every other image) and
+the same two SSH-gateway binaries, but deliberately **not** `openssh-client`/
+`corkscrew`/baked host keys — its SSH-clone story is unchanged.
 
 ---
 

@@ -7,13 +7,11 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +23,6 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -82,13 +79,11 @@ type Config struct {
 const RecordingMountTarget = "/wardyn/recordings"
 
 // defaultCastDir is where wardyn-rec writes session recordings inside the
-// agent container. recorderBinary is wardyn-rec's path inside the agent
-// image (resolved on PATH). stopTimeout is the graceful StopSandbox timeout.
-// Nobody in the repo overrides any of these (P3-RNR-2); re-add a
-// Config knob if that changes.
+// agent container. stopTimeout is the graceful StopSandbox timeout. Nobody in
+// the repo overrides either of these (P3-RNR-2); re-add a Config knob if that
+// changes.
 const (
 	defaultCastDir = "/var/log/wardyn"
-	recorderBinary = "wardyn-rec"
 	stopTimeout    = 10 * time.Second
 )
 
@@ -158,45 +153,6 @@ type pendingAgent struct {
 // ~/.claude) would otherwise resolve under / and fail for a non-writable root.
 const agentImageHome = "/home/agent"
 
-// agentIdleScript is the agent container's main (idle) process for NON-interactive
-// runs: it installs the per-run TLS-MITM CA (when delivered) and then idles while
-// agent-run's task Exec does the real work. (Interactive runs use `agent-run
-// --idle` as their main process instead — see CreateSandbox below — which performs
-// this same CA install plus workspace prep; the human then drives claude in the
-// attach shell.) The CA install is REQUIRED either way: without it,
-// NODE_EXTRA_CA_CERTS points at a CA file that was never written, so claude cannot
-// trust the proxy's TLS termination of api.anthropic.com (breaking subscription
-// proxy-side injection). It writes the EXACT paths
-// internal/api pins (/tmp/wardyn — any-uid-writable, so it works regardless of
-// the image's USER/HOME; this Cmd may run as root while agent-run later re-runs
-// as the image user, hence the sticky-bit dir and the ||true rewrites: within
-// one run the content is identical, so a failed rewrite over a correct file is
-// harmless). It also assembles the COMBINED bundle (system roots + per-run CA)
-// that SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at — those vars
-// REPLACE the client trust store, so the bare CA there would break non-MITM'd
-// CONNECT-tunneled hosts. Keep in lockstep with install_mitm_ca in
-// deploy/images/common/agent-run-lib.sh. No-op when the run did not opt into
-// TLS-MITM (WARDYN_MITM_CA_PEM unset).
-const agentIdleScript = `d=/tmp/wardyn
-if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
-  mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
-  { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
-  sys=""
-  for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
-    [ -f "$c" ] && sys="$c" && break
-  done
-  if [ -n "$sys" ]; then
-    { cat "$sys" "$d/mitm-ca.pem" > "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
-  else
-    { cp "$d/mitm-ca.pem" "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
-    echo "wardyn: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
-  fi
-  if command -v update-ca-certificates >/dev/null 2>&1; then
-    cp "$d/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null && update-ca-certificates >/dev/null 2>&1 || true
-  fi
-fi
-exec sleep infinity`
-
 // ensureEnv appends key=val to env unless key is already present (an explicit
 // policy-set value wins).
 func ensureEnv(env *[]string, key, val string) {
@@ -258,6 +214,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		Classes:          c.ConfinementClasses,
 		Resolved:         c.Resolved,
 		StructuralEgress: c.StructuralEgress,
+		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
 	}, nil
 }
@@ -329,7 +286,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Image:        d.cfg.ProxyImage,
 		Hostname:     "wardyn-proxy",
 		Labels:       wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		Env:          proxyEnv(spec.RunID, spec.ProxyConfig, proxyListenPort),
+		Env:          proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort),
 		ExposedPorts: nil,
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
@@ -433,7 +390,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// then idles, so the attach shell isn't empty. Every other run keeps the minimal
 	// CA-only idle script: agent-run's task exec does the preparation, and cloning on
 	// the shared idle PID would drop the clone out of the task's recording.
-	idleCmd := []string{"sh", "-c", agentIdleScript}
+	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}
@@ -679,8 +636,8 @@ func (d *Driver) waitExec(ctx context.Context, execID string) {
 // injected proxy-side; cross-run uploads 403 at the control plane), which is
 // MASKED control-plane-side before the cast is persisted. HIGH-finding: only
 // fall back to the UNMASKED, cross-run-writable shared mount (-out-dir) when
-// there is NO masked upload path — recorderArgv enforces the same mutual
-// exclusion as defense in depth, so an unmasked cast can never land in the
+// there is NO masked upload path — runner.RecorderArgv enforces the same
+// mutual exclusion as defense in depth, so an unmasked cast can never land in the
 // API-served replay store when uploads work. castDir differs per caller (the
 // root exec path's default cast dir vs the exec-less path's agent-writable
 // tmpfs dir); runID recovery also differs per caller's label source, so it is
@@ -688,13 +645,13 @@ func (d *Driver) waitExec(ctx context.Context, execID string) {
 func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []string {
 	uploadURL := ""
 	if runID != uuid.Nil {
-		uploadURL = fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", proxyListenPort, runID)
+		uploadURL = fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", runner.ProxyListenPort, runID)
 	}
 	outDir := ""
 	if d.cfg.RecordingMount != "" && uploadURL == "" {
 		outDir = RecordingMountTarget
 	}
-	return recorderArgv(castDir, outDir, uploadURL, runID, argv)
+	return runner.RecorderArgv(castDir, outDir, uploadURL, runID, argv)
 }
 
 // Exec launches the agent process inside the sandbox with a TTY attached.
@@ -846,10 +803,18 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("docker: wait: no agent exec tracked for ref %q (Exec not called?)", ref)
 	}
+	return d.pollExecExit(ctx, execID)
+}
 
-	// Poll the exec to completion. ExecInspect.Running flips to false once the
-	// process exits; ExitCode is then authoritative. The poll cadence matches
-	// waitExec; the unbounded loop is what distinguishes Wait from it.
+// pollExecExit polls execID via ExecInspect until it stops running and
+// returns its exit code. ExecInspect.Running flips to false once the process
+// exits; ExitCode is then authoritative. The poll cadence matches waitExec;
+// this loop is unbounded (bound only by ctx), which is what distinguishes it
+// from waitExec's bounded best-effort poll. Factored out of Wait so
+// ExecStream's returned ExecSession.Wait closure can observe a DIFFERENT
+// exec's completion (a streamed exec, not the tracked agent exec) via the
+// exact same, already-proven polling contract.
+func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 	errs := 0
 	for {
 		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
@@ -860,15 +825,15 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				return insp.ExitCode, nil
 			}
 		case isNotFound(err):
-			return 0, fmt.Errorf("docker: wait: exec inspect: %w", err)
+			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w", err)
 		default:
 			if errs++; errs >= waitMaxProbeErrors {
-				return 0, fmt.Errorf("docker: wait: exec inspect (%d consecutive errors): %w", errs, err)
+				return 0, fmt.Errorf("docker: exec wait: exec inspect (%d consecutive errors): %w", errs, err)
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return 0, fmt.Errorf("docker: wait: %w", ctx.Err())
+			return 0, fmt.Errorf("docker: exec wait: %w", ctx.Err())
 		case <-time.After(pollInterval):
 		}
 	}
@@ -1151,27 +1116,12 @@ func envSlice(env map[string]string) []string {
 // fails closed and the sandbox has no egress) as one JSON env var, plus the
 // individual values for operator inspection. The run token is verifiable but
 // not a usable secret outside the platform; env visibility is part of the
-// documented daemon-trust tradeoff.
+// documented daemon-trust tradeoff. A thin wrapper over runner.BuildProxyConfig
+// (the substrate-agnostic field-mapping + marshal core, hoisted so a k8s
+// substrate builds byte-identical sidecar config): this function adds only the
+// docker-Env-slice shape and the operator-knob forwarding below.
 func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
-	inj := make([]proxy.InjectionConfig, 0, len(pc.Injection))
-	for _, g := range pc.Injection {
-		inj = append(inj, proxy.InjectionConfig{InjectionRule: g.Rule, GrantID: g.GrantID})
-	}
-	cfg := proxy.Config{
-		RunID:            runID,
-		ControlPlaneURL:  pc.ControlPlaneURL,
-		RunToken:         pc.RunToken,
-		Policy:           pc.Policy,
-		Injection:        inj,
-		Listen:           ":" + strconv.Itoa(port),
-		MITMCACertPEM:    pc.MITMCACertPEM,
-		MITMCAKeyPEM:     pc.MITMCAKeyPEM,
-		MITMHosts:        pc.MITMHosts,
-		MITMLLM:          pc.MITMLLM,
-		GitGrants:        pc.GitGrants,
-		UpstreamProxyURL: pc.UpstreamProxyURL,
-	}
-	cfgJSON, _ := json.Marshal(cfg)
+	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
 	env := []string{
 		"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON),
 		"WARDYN_RUN_ID=" + runID.String(),

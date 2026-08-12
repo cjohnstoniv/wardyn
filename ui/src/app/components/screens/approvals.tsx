@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ApprovalKind, ApprovalRequest } from "../../lib/types";
+import { canDecideApproval, type ApprovalKind, type ApprovalRequest } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
@@ -30,7 +30,7 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator } from "../wardyn/operator-context";
+import { useOperator, useRole } from "../wardyn/operator-context";
 import {
   APPROVAL_BANNER_LABEL,
   APPROVAL_KIND_LABEL,
@@ -258,6 +258,10 @@ function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
 }
 
 export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
+  // B3/prompt-v2 point 5: the list is already server-scoped to the member's
+  // own runs (handleListApprovals's creator-pager branch) — role only picks
+  // the empty-state copy here.
+  const role = useRole();
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [longestList, setLongestList] = React.useState(0);
@@ -368,8 +372,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
-              title="You're all caught up"
-              description="New credential, egress, and tool-call requests appear here the moment an agent needs you."
+              title={role === "member" ? "Approvals raised by your runs appear here." : "You're all caught up"}
+              description={
+                role === "member"
+                  ? undefined
+                  : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
+              }
               action={
                 <Button variant="outline" size="sm" onClick={() => setFilter("decided")}>
                   See decided
@@ -427,9 +435,13 @@ function PendingCard({
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
   const cap = capabilityLabel(item.kind, scope);
   const banner = deriveBanner(item.kind, scope);
-  // Deciding is operator-only; the queue itself stays visible to a viewer (see
-  // http.go's requireOperator comment — reading is a viewer act, deciding isn't).
+  // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
+  // decide() in approvals.go); credential and tool_call stay admin-only
+  // regardless of ownership — see canDecideApproval's doc for why. This list
+  // is already scoped to rows the caller owns (or every row, for an admin),
+  // so ownership itself needs no re-check here.
   const operator = useOperator();
+  const canDecide = canDecideApproval(operator, item.kind);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
@@ -469,13 +481,13 @@ function PendingCard({
       </details>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
-        <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!operator}>
+        <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
           <Check className="size-4" /> Approve
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!operator}>
+        <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
           <X className="size-4" /> Deny
         </Button>
-        {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+        {!canDecide && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
         </span>

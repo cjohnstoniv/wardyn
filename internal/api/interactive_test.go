@@ -67,6 +67,9 @@ func (f *fakeRunner) Wait(ctx context.Context, _ string) (int, error) {
 func (f *fakeRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, context.Canceled
 }
+func (f *fakeRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
+}
 func (f *fakeRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }

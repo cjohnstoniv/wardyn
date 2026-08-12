@@ -277,8 +277,8 @@ func TestHardenedHostConfig_Invariants(t *testing.T) {
 	if hc.PidsLimit == nil {
 		t.Fatal("PidsLimit must be non-nil (fork-bomb guard set unconditionally)")
 	}
-	if *hc.PidsLimit != defaultPidsLimit {
-		t.Errorf("PidsLimit = %d, want default %d", *hc.PidsLimit, defaultPidsLimit)
+	if *hc.PidsLimit != runner.DefaultPidsLimit {
+		t.Errorf("PidsLimit = %d, want default %d", *hc.PidsLimit, runner.DefaultPidsLimit)
 	}
 }
 
@@ -365,14 +365,14 @@ func TestHardenedHostConfig_ResourceDefaults(t *testing.T) {
 	if hc.PidsLimit == nil {
 		t.Fatal("PidsLimit must be non-nil for a zero-Resources spec (fork-bomb guard)")
 	}
-	if *hc.PidsLimit != defaultPidsLimit {
-		t.Errorf("PidsLimit = %d, want default %d", *hc.PidsLimit, defaultPidsLimit)
+	if *hc.PidsLimit != runner.DefaultPidsLimit {
+		t.Errorf("PidsLimit = %d, want default %d", *hc.PidsLimit, runner.DefaultPidsLimit)
 	}
 	if hc.Memory <= 0 {
 		t.Errorf("Memory = %d, want > 0 (default applied)", hc.Memory)
 	}
-	if hc.Memory != defaultMemoryMiB*1024*1024 {
-		t.Errorf("Memory = %d, want default %d", hc.Memory, defaultMemoryMiB*1024*1024)
+	if hc.Memory != runner.DefaultMemoryMiB*1024*1024 {
+		t.Errorf("Memory = %d, want default %d", hc.Memory, runner.DefaultMemoryMiB*1024*1024)
 	}
 	if hc.MemorySwap != hc.Memory {
 		t.Errorf("MemorySwap = %d, want == Memory %d (no silent 2x via swap)", hc.MemorySwap, hc.Memory)
@@ -380,8 +380,8 @@ func TestHardenedHostConfig_ResourceDefaults(t *testing.T) {
 	if hc.NanoCPUs <= 0 {
 		t.Errorf("NanoCPUs = %d, want > 0 (default applied)", hc.NanoCPUs)
 	}
-	if hc.NanoCPUs != defaultCPUMillis*1_000_000 {
-		t.Errorf("NanoCPUs = %d, want default %d", hc.NanoCPUs, defaultCPUMillis*1_000_000)
+	if hc.NanoCPUs != runner.DefaultCPUMillis*1_000_000 {
+		t.Errorf("NanoCPUs = %d, want default %d", hc.NanoCPUs, runner.DefaultCPUMillis*1_000_000)
 	}
 	// No disk cap requested => no StorageOpt and no fatal behaviour.
 	if hc.StorageOpt != nil {

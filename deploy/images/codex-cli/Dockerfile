@@ -58,11 +58,25 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
 
+# tmux: the interactive attach shell falls back through tmux -> bash -> sh
+# (deploy/images/common/attach-bashrc.sh); codex-cli had none, unlike
+# claude-code. openssh-sftp-server + socat: the SSH-gateway lane (see
+# docs/SSH.md; wired by the SSH gateway itself, not built here) needs an
+# in-sandbox SFTP subsystem (/usr/lib/openssh/sftp-server) and a
+# general-purpose relay (/usr/bin/socat) — see deploy/images/README.md's "SSH
+# relay binaries" note for the exact paths. openssh-sftp-server pulls in
+# openssh-client (the `ssh` binary) transitively — NOT requested, harmless
+# unused — but this image still does NOT wire it: no baked known_hosts, no
+# corkscrew (SSH-over-443 proxy tunnel), no GIT_SSH_COMMAND from agent-run.
+# This image's git-over-SSH clone story is unchanged (git-over-HTTPS only).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
         asciinema \
+        tmux \
+        openssh-sftp-server \
+        socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Corporate build support (no-ops on OSS): install the optional corp CA into the

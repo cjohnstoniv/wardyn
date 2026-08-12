@@ -63,6 +63,12 @@ import {
 // the operator opens a demo step (same reasoning as the /demos route). The pure
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
+// The fifth (harness) demo's own step body — same lazy-load reasoning (it also
+// composes DemoRunControls -> AttachTerminal). Scoped to stepId ===
+// "agent-in-the-box" below, NOT the DEMOS.some(...) branch DemoDetail uses:
+// DEMOS still carries this catalog entry (needsModel), but it is deliberately
+// NOT in DEMO_STEP_IDS (steps.ts), so it needs its own branch.
+const HarnessDemoStep = React.lazy(() => import("./harness-demo-step"));
 
 // ------------------------------------------------------------
 // SetupScreen
@@ -284,8 +290,16 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Otherwise consumers that read the stored default (e.g. the import SecurityChip)
   // fall back to CC1/Fence and disagree with what the barrier step displays — you pick
   // Vault, but the import shows Fence. Clicking a card still overrides + re-persists.
+  //
+  // HIGH-4 guard: a member's redacted SetupStatus always reports
+  // confinement_classes: [] (redactSetupStatusForMember) — resolveDefaultCc
+  // would floor that to CC1, and persisting it here would silently downgrade
+  // the STORED default for anyone sharing this browser profile (this
+  // localStorage key isn't per-role) the moment a member is ever the first to
+  // land on this screen. Only an operator's fully-informed, non-empty class
+  // list may seed the initial persisted default.
   React.useEffect(() => {
-    if (status && !getDefaultCc()) setDefaultCc(selectedCc);
+    if (status && status.runner.confinement_classes.length > 0 && !getDefaultCc()) setDefaultCc(selectedCc);
   }, [status, selectedCc]);
 
   if (!status || !readiness) {
@@ -351,6 +365,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       done[id] = true;
       badges[id] = { text: "Done · demo run", tone: "success" };
     }
+  }
+  // The fifth demo (agent-in-the-box) isn't in DEMO_STEP_IDS (steps.ts) — same
+  // per-browser launched signal (demo-catalog.ts's markDemoLaunched/
+  // loadLaunchedDemos are keyed by any demo id, not just the funnel four),
+  // applied here since it can't ride the loop above.
+  if (launchedDemos.has("agent-in-the-box")) {
+    done["agent-in-the-box"] = true;
+    badges["agent-in-the-box"] = { text: "Done · demo run", tone: "success" };
   }
   // An explicitly-skipped (optional) Integrations step earns its checkmark — a
   // deliberate "nothing connected" decision reads as done, not as an unfinished
@@ -460,13 +482,31 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onTabChange={setCorpTab}
           />
         )}
-        {stepId === "integrations" && <IntegrationsStep onRecheck={recheck} />}
-        {DEMOS.some((d) => d.id === stepId) && (
+        {stepId === "integrations" && (
+          <IntegrationsStep
+            onRecheck={recheck}
+            llmReady={readiness.llmReady}
+            onTryDemo={() => selectStep("agent-in-the-box")}
+          />
+        )}
+        {(DEMO_STEP_IDS as readonly string[]).includes(stepId) && (
           <React.Suspense
             fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
           >
             <DemoDetail
               demo={DEMOS.find((d) => d.id === stepId)!}
+              barrierReady={readiness.barrierReady}
+              onJump={selectStep}
+              onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
+            />
+          </React.Suspense>
+        )}
+        {stepId === "agent-in-the-box" && (
+          <React.Suspense
+            fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
+          >
+            <HarnessDemoStep
+              status={status}
               barrierReady={readiness.barrierReady}
               onJump={selectStep}
               onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}

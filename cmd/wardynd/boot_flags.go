@@ -62,6 +62,14 @@ type bootFlags struct {
 	// validateOperatorPosture).
 	oidcOperatorEmails      *string
 	allowOIDCNoOperatorList *bool
+	// oidcRoleMap / oidcDefaultRole feed oidc.Config.RoleMap / DefaultRole (the
+	// admin/member role gate the derivation layer computes — see
+	// internal/auth/oidc's deriveRole). Both empty means role derivation is
+	// off: every signed-in human keeps role "admin", exactly today's
+	// behavior. Parsed and validated in buildOptionalFeatures (bad role value
+	// in either fails boot closed).
+	oidcRoleMap     *string
+	oidcDefaultRole *string
 
 	autoStopInterval *time.Duration
 
@@ -86,6 +94,12 @@ type bootFlags struct {
 
 	printGroundtruthToken *bool
 	genAgeKey             *bool
+
+	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
+	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
+	// run-detail pane's `ssh` command — never read by the gateway itself.
+	sshListen    *string
+	sshAdvertise *string
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -140,6 +154,8 @@ func parseBootFlags() *bootFlags {
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin" or "member" (e.g. "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin"); any admin match wins when more than one matches. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
 
 		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (0 disables)"),
 
@@ -189,6 +205,9 @@ func parseBootFlags() *bootFlags {
 		// `docker run --rm wardyn/wardynd:local -gen-age-key` can mint a durable
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
+
+		sshListen:    flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
+		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty falls back to -ssh-listen verbatim, which is wrong for most deployments (a container/NAT bind rarely equals the reachable address) — set this whenever the gateway is enabled`),
 	}
 	flag.Parse()
 

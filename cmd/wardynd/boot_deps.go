@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -182,6 +183,11 @@ type optionalFeatures struct {
 	disableSubInject bool
 	managedToken     subscription.Provider
 	scanAdvisor      func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
+	// sshHostKey is the SSH gateway's ed25519 host key, loaded/generated ONLY
+	// when -ssh-listen is set — nil (the zero value) otherwise, matching
+	// "empty = off = no listener, no new surface" all the way down to never
+	// minting the secret in the first place.
+	sshHostKey ed25519.PrivateKey
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -216,6 +222,18 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if kerr != nil {
 			return of, kerr
 		}
+		// Role derivation config (WARDYN_OIDC_ROLE_MAP / WARDYN_OIDC_DEFAULT_ROLE):
+		// parsed and validated here, gated on OIDC being configured like the
+		// operator-allowlist rules below, and fails boot closed on a typo'd role
+		// value rather than letting it silently reach a session cookie later.
+		roleMap, rerr := oidc.ParseRoleMap(*f.oidcRoleMap)
+		if rerr != nil {
+			return of, fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", rerr)
+		}
+		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
+		if defaultRole != "" && !oidc.ValidRole(defaultRole) {
+			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q", defaultRole, oidc.RoleAdmin, oidc.RoleMember)
+		}
 		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
 		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
 		// background ctx per its doc), so an unreachable/stalled IdP must fail
@@ -228,6 +246,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			RedirectURL:         *f.oidcRedirectURL,
 			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
 			SecureCookies:       secureCookies,
+			RoleMap:             roleMap,
+			DefaultRole:         defaultRole,
+			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
+			// keeps working as an admin allowlist with zero re-configuration
+			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
+			LegacyAdminEmails: splitCSV(*f.oidcOperatorEmails),
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
@@ -255,6 +279,27 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			slog.Warn("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; " +
 				"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so every SSO human would have the same power as the admin token — " +
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to demote everyone else to a viewer)")
+		}
+		// Role-map posture (independent knob from the operator-emails split
+		// above; a later lane unifies the two — see internal/auth/oidc's
+		// deriveRole doc). An unset roleMap means deriveRole grants every
+		// signed-in human RoleAdmin, unconditionally — loud so an operator
+		// adding a second human notices before finding out the hard way that
+		// everyone is an admin.
+		if len(roleMap) == 0 {
+			slog.Warn("wardynd: SSO users all receive the admin role; set WARDYN_OIDC_ROLE_MAP to introduce members")
+		} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+			// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
+			// (~:270), fired independently since either var can be set without
+			// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
+			// email-keyed privilege source riding an unverified IdP claim —
+			// email_verified is enforced only when the domains list is set.
+			for k := range roleMap {
+				if strings.Contains(k, "@") {
+					slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
+					break
+				}
+			}
 		}
 	}
 
@@ -351,6 +396,24 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return workspacescan.AdviseProfile(ctx, facts, base, workspacescan.AIOptions{Timeout: 60 * time.Second})
 		}
 		slog.Info("wardynd: advisory AI workspace-scan fallback ENABLED (WARDYN_SCAN_AI_ADVISOR); advisory-only + fail-open, needs a resident read-only claude CLI on PATH")
+	}
+
+	// SSH gateway (C2/C3), optional: the host key is loaded/generated ONLY
+	// when the gateway is actually enabled, so a deployment with SSH off never
+	// mints this secret at all — the same "no new surface" discipline as the
+	// listener itself (api.Server.ServeSSHGateway's own no-op-when-empty
+	// guard). loadOrCreateSSHHostKey follows the identical loadOrCreateSecret
+	// pattern as the signing/session keys above.
+	if *f.sshListen != "" {
+		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, secrets)
+		if herr != nil {
+			return of, herr
+		}
+		of.sshHostKey = hostKey
+		slog.Info("wardynd: ssh gateway enabled", slog.String("listen", *f.sshListen), slog.String("advertise", *f.sshAdvertise))
+		if *f.sshAdvertise == "" {
+			slog.Warn("wardynd: WARDYN_SSH_ADVERTISE is unset — the run-detail SSH pane has no reachable host[:port] to show; set it to this deployment's externally-reachable address")
+		}
 	}
 
 	return of, nil

@@ -30,6 +30,13 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
+	// k8s conformance suite gating (test/conformance/conformance_k8s_test.go):
+	// outside envDocRoots (test/, not cmd/ or internal/) so the forward ratchet
+	// never sees these anyway, but listed here too (and in ENV.md's Test/
+	// internal-only section) so the allowlist itself stays the honest, complete
+	// registry of every test-only WARDYN_* var, not just the ones the mechanical
+	// scan happens to reach.
+	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
@@ -39,7 +46,7 @@ var envDocAllow = map[string]bool{
 // with that section.
 var envDocShellOnly = map[string]bool{
 	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
-	"WARDYN_CI_PROJECT": true, "WARDYN_REGISTRY_PORT": true,
+	"WARDYN_CI_PROJECT": true, "WARDYN_REGISTRY_PORT": true, "WARDYN_SSH_PORT": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,

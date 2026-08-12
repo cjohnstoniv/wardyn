@@ -47,6 +47,33 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw := r.URL.Query().Get("run_id")
+	// Parsed once, up front, and shared by both the member gate below and the
+	// per-run branch further down — a malformed run_id 400s regardless of role
+	// (an input-shape error, never an authz one).
+	var runID uuid.UUID
+	if raw != "" {
+		var err error
+		if runID, err = uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid run_id")
+			return
+		}
+	}
+	if !s.isOperator(r.Context()) {
+		// Members: audit is scoped to ?run_id= of a run THEY created (item 2). No
+		// run_id, or a well-formed but unowned/unknown run_id, all collapse to
+		// the SAME empty result — /audit is a collection endpoint, so the
+		// no-existence-oracle property here is an empty 200 list, never the 404
+		// the single-resource /runs/{id} routes use.
+		owned := raw != ""
+		if owned {
+			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
+		}
+		if !owned {
+			writeJSON(w, http.StatusOK, []types.AuditEvent{})
+			return
+		}
+	}
 	if raw == "" {
 		page, ok := parseListPage(w, r, auditGlobalDefaultLimit)
 		if !ok {
@@ -69,11 +96,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	runID, err := uuid.Parse(raw)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run_id")
-		return
-	}
+	// runID was already parsed (and validated) above.
 	page, ok := parseListPage(w, r, auditPerRunDefaultLimit)
 	if !ok {
 		return

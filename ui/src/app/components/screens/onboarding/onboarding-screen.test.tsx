@@ -16,8 +16,9 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 
-import { OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
+import { GettingStarted, OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
 import { baseStatus } from "../setup/test-fixtures";
+import { RoleProvider } from "../../wardyn/operator-context";
 
 // This suite's own pins: ready, CC1-only runner, a logged-in Claude CLI, and a
 // durable secret store.
@@ -90,5 +91,43 @@ describe("OnboardingScreen (welcome hero)", () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
     await screen.findByText(/Barrier:/);
     expect(screen.queryByText(/Composer/)).not.toBeInTheDocument();
+  });
+});
+
+// B4 HIGH-4: a member has no Getting Started nav entry, but a direct /setup
+// navigation must still land honestly — never the operator funnel (built from
+// a redacted SetupStatus a member can't act on), never a silent bounce.
+describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    getSetupStatusMock.mockReset().mockResolvedValue(status());
+  });
+
+  it("a member sees the honest notice, not the welcome hero or the funnel", () => {
+    render(
+      <RoleProvider role="member">
+        <GettingStarted onDone={() => {}} />
+      </RoleProvider>,
+    );
+    expect(screen.getByText(/Setup is managed by your workspace admin/)).toBeInTheDocument();
+    expect(screen.queryByText("Run anything. Keep your keys.")).not.toBeInTheDocument();
+  });
+
+  it("its action calls onDone (App.tsx's own navigate(\"/runs\"), not a second route)", async () => {
+    const user = userEvent.setup();
+    const onDone = vi.fn();
+    render(
+      <RoleProvider role="member">
+        <GettingStarted onDone={onDone} />
+      </RoleProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: /go to runs/i }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("an admin (or the fail-open default) still sees the welcome hero", async () => {
+    render(<GettingStarted onDone={() => {}} />);
+    expect(screen.getByText("Run anything. Keep your keys.")).toBeInTheDocument();
+    await screen.findByText(/Barrier:/);
   });
 });

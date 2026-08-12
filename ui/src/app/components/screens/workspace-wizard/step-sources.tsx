@@ -20,6 +20,7 @@ import { Mono } from "../../wardyn/code-block";
 import { AddSecretDialog } from "../secrets";
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../../../lib/scm-provider";
 import { C, V2C } from "../../../lib/workspace-copy";
+import { useK8sRunner } from "../../../lib/use-k8s-runner";
 import {
   defaultTargetFor,
   isRemovable,
@@ -318,6 +319,10 @@ export function StepSources({
   onSecretStored: (name: string) => void;
 }) {
   const [credTarget, setCredTarget] = React.useState<CredTarget | null>(null);
+  // B4 source honesty: mounts are structurally impossible on k8s (see
+  // internal/runner/substrate's package doc) — omit the local-directory
+  // option from "Add source" below.
+  const k8s = useK8sRunner();
   // The tier-1 library: attach an already-configured dir/repo in one click.
   // Best-effort fetch — an empty/failed library simply hides the section, the
   // type-a-new-one flow below is never blocked on it.
@@ -403,8 +408,14 @@ export function StepSources({
 
       <div className="space-y-2">
         <p className="text-xs font-medium text-foreground">Add source</p>
+        {k8s && (
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            Local directories aren&apos;t available on a Kubernetes control plane — onboard a repository
+            instead.
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          {ADD_SOURCE_TYPES.map((type) => {
+          {(k8s ? ADD_SOURCE_TYPES.filter((t) => t !== "local_dir") : ADD_SOURCE_TYPES).map((type) => {
             const meta = SOURCE_META[type];
             return (
               <button

@@ -66,6 +66,9 @@ func (f *fakeSubstrate) Wait(context.Context, string) (int, error) { return 0, n
 func (f *fakeSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, nil
 }
+func (f *fakeSubstrate) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
+}
 func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, error) {
 	f.rec(&f.statuses, ref)
 	return runner.Status{State: types.RunRunning}, nil

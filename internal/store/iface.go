@@ -127,6 +127,19 @@ type Store interface {
 	PutComposeResult(ctx context.Context, runID uuid.UUID, payload []byte) error
 	TakeComposeResult(ctx context.Context, runID uuid.UUID) ([]byte, bool, error)
 	DiscardComposeResult(ctx context.Context, runID uuid.UUID) error
+
+	// SSH gateway key registry (migration 0033, self-service via
+	// /api/v1/me/ssh-keys). AddSSHKey returns ErrConflict when the fingerprint
+	// (the PK) is already registered — by this principal or another; a given
+	// key material maps to exactly one owner. DeleteSSHKey is scoped to
+	// principal (an attempted delete of someone else's key is ErrNotFound, not
+	// a distinguishable 403 — no existence leak). GetSSHKeyByFingerprint is the
+	// gateway's auth-time lookup (unscoped: the caller has not authenticated
+	// yet, that IS what this call resolves).
+	AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error)
+	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
+	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
+	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the

@@ -138,6 +138,7 @@ invitation, not an embarrassment.
 | **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5+ — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only the network named by `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the run sandboxes' own bridge, never `host`) plus the layer-cache registry. See residual #13. |
+| **B9 — SSH gateway pre-auth listener vs. everything else** | **[v0.5+]** A NEW anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key even generated). Registered-public-key-only auth (no passwords); the trust root is the `ssh_public_keys` registry a human writes to via self-service `/api/v1/me/ssh-keys`, so the boundary this adds is exactly as strong as that registration step and the DoS bounds around the pre-auth handshake (per-connection deadline, `MaxAuthTries`, a concurrent-connection cap — `ssh.NewServerConn` blocks with no default timeout otherwise). Once authenticated, a session is bounded by owner-only authorization (below) and runs entirely inside B1: the shell/exec/sftp/`-L` primitives are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal and internal tooling already use — this boundary adds a new front door, not a new back door; nothing on the other side of B1 changes. |
 
 On a single-operator machine the trust boundaries compose into a strict
 containment ladder — Wardyn never *adds* power beyond what the operating user
@@ -169,13 +170,30 @@ has a residual or bypass class, that is noted and also listed in section 5.
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); kernel-level block of `169.254.169.254` | Non-HTTP raw-socket tunnels that never reach the proxy process at all; extends "no route but the proxy" to the v0.5 Kubernetes topology. Defense-in-depth ATOP the metadata/link-local guard L2 already enforces below — the metadata block does not wait on L1 to ship |
+| L1 default-deny **[shipped on Kubernetes; Docker planned]** | Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata `169.254.169.254` excluded), enforcement PROVEN by the boot canary — a non-enforcing CNI refuses boot. Docker: nftables default-deny still **[planned]** (L0 stands in structurally). Cilium toFQDNs **[planned]** | Non-HTTP raw-socket tunnels that never reach the proxy process at all; extends "no route but the proxy" to the Kubernetes topology. Defense-in-depth ATOP the metadata/link-local guard L2 already enforces below — the metadata block does not wait on L1 to ship |
 | L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard, checked pre-policy on a literal-IP target and again post-DNS-resolution on every direct-dialed hostname (the opt-in upstream corp-proxy hop defers that re-check to the corp proxy — §5's disclosed residual), that `allow_all_egress` does not reach | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
-Four egress layers stack outward from the sandbox — the shipped L0 structural
-confinement and L2 proxy carry today's enforcement, with L1 default-deny and
-the L3 tool gateway planned at v0.5.
+Four egress layers stack outward from the sandbox — L0 structural confinement
+(Docker) and the L2 proxy carry enforcement on every path, L1 default-deny is
+shipped on the Kubernetes substrate (canary-proven NetworkPolicy; the nftables
+form for Docker remains planned), and the L3 tool gateway stays planned.
+
+**Substrate containment delta: Docker (L0) vs Kubernetes (L1).** Docker's
+guarantee is *absence of route* — the per-run network is gatewayless, so there
+is no packet path off-host to bypass. Kubernetes pods always get a routable
+network, so a k8s substrate can only offer L1: a `NetworkPolicy` default-deny
+*packet filter*, applied and enforced by the cluster's CNI rather than removed
+by topology. A filter is only as trustworthy as its enforcer, and CNIs are
+known to silently no-op `NetworkPolicy` for some rule shapes — so the k8s
+substrate does not take the CNI's word for it: a boot-time, two-phase canary
+runs from inside the sandbox's own network namespace right after the deny
+policy applies (phase 1: the allowed path — the wardyn-proxy sidecar — still
+works; phase 2: an address outside the allowlist is unreachable), and the
+substrate refuses to boot the sandbox — fail closed, advertising no
+Confinement Class — if either phase disagrees with what the policy demands.
+This is the honest `NetworkPolicy` bool on `substrate.ClassSupport`: proven by
+the canary, never merely claimed because a policy object was applied.
 
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
@@ -194,6 +212,11 @@ the L3 tool gateway planned at v0.5.
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
+| Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
+| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B9 |
+| Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B9 |
+| SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B9 |
 
 ---
 
@@ -429,6 +452,65 @@ hiding them would repeat the failure mode we are designed to avoid.
     local mode and admin-token mode the only principal IS the admin, so the gap
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
+
+15. **SSH gateway authorization has no operator override.** Unlike the browser
+    terminal (`GET /runs/{id}/attach`, gated by `requireOperator` when
+    `WARDYN_OIDC_OPERATOR_EMAILS` is set — an operator may attach to *any* run),
+    SSH gateway (`docs/SSH.md`) authorization is exactly one check:
+    `run.created_by == the connecting key's registered principal`. There is no
+    role column an operator's key could satisfy instead, so an operator who
+    needs to reach a run they did not create has exactly one path today — the
+    web terminal, same as a viewer. This is a *narrower*, not a wider, gap than
+    #14 (SSH grants an operator strictly LESS reach than the browser terminal
+    already does) — named here because a reader auditing "who can reach a live
+    shell in MY run" should not have to infer that SSH and the browser terminal
+    answer the question differently. The upgrade path (a role column, so an
+    operator's own registered key could satisfy an "operator OR owner" check)
+    is marked with a `ponytail:` comment at the authorization check
+    (`internal/api/sshgateway.go`'s `sshAuth`) rather than built now — no
+    deployment has asked for it, and the narrower behavior is safe by
+    construction, not merely unfinished.
+
+16. **SSH key fingerprint squatting has no self-service remediation.** The
+    `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given
+    key must authenticate to exactly one principal, so two rows for the same
+    fingerprint would be a genuine ambiguity, not a feature. That correctness
+    property has a griefing residual: whoever `POST`s a given public key
+    FIRST owns that fingerprint forever, so a malicious (or merely
+    first-mover) registrant can squat a key someone else also holds — most
+    plausibly one whose public half is already posted somewhere public, like
+    a GitHub profile — permanently 409-ing the rightful holder's own
+    registration attempt. The 409 message is deliberately generic (does not
+    confirm the key exists under a different account, so probing "does
+    Wardyn have this key" is not free reconnaissance), but that is a
+    disclosure mitigation, not a fix: the squat itself is not detected or
+    prevented, only made harder to CONFIRM from outside. The only
+    remediation is operator-side, out of band (identity-verify the rightful
+    owner, then delete the squatted row directly — `docs/SSH.md`'s
+    "Reclaiming a squatted fingerprint") — there is no automated
+    dispute/ownership-transfer flow, and the freed fingerprint can be
+    re-squatted by anyone, including the original squatter, the instant it's
+    deleted. Low severity (SSH access to a specific run someone already owns
+    is the blast radius, not a broader compromise) but worth stating plainly
+    rather than leaving "why did my key registration 409 forever" unanswered.
+
+17. **Member self-approval of a run's own `egress_domain` requests.** v0.5's
+    role split (admin/member, narrower than the flat viewer/operator gate item
+    14 describes) lets a member `decide()` (`POST /approvals/{id}/approve|deny`)
+    an approval on a run THEY OWN, but only when its `Kind` is `egress_domain`;
+    `credential` and `tool_call` approvals stay admin-only regardless of
+    ownership — self-deciding either would let a member self-mint a real
+    credential (the shipped example policies' `github_token` grant ships
+    `requires_approval: true`) or reopen exactly the allowance
+    `composer.Clamp`'s ceiling exists to bound. That still leaves an
+    intentional residual: a member can self-approve a `wait_for_review`
+    first-use host on their own run with no second human in the loop — the
+    approval's `decided_by` gives ATTRIBUTION, not independent review, for a
+    member-owned run. An operator who needs genuine third-party sign-off on
+    first-use domains for member-launched runs must set the ceiling policy's
+    `first_use_approval` to `always_deny` (`composer.Clamp` takes the
+    stricter of ceiling vs. proposal) rather than `wait_for_review`, which a
+    member can always clear themselves.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
@@ -961,7 +1043,7 @@ gap in that guard.
 
 **A naming note first, because this document already owns two of these
 words.** Every "Vault" and "Boundary" below is the HashiCorp product — never
-Wardyn's own CC3 confinement tier (branded "Vault", §7) or the B1-B8 trust
+Wardyn's own CC3 confinement tier (branded "Vault", §7) or the B1-B9 trust
 boundaries defined in §3. Spelled out in full throughout this section for
 exactly that reason.
 

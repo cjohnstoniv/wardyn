@@ -3,10 +3,16 @@
 Backup, upgrade, rotation, monitoring, and the scaling constraint — the questions
 that arrive after the stack is up.
 
-**Scope: the Compose stack.** Everything here is written against
-[`deploy/compose/`](../deploy/compose/). The Helm chart deploys the control plane
-but [cannot create sandboxes yet](../deploy/helm/wardyn/README.md) (v0.5+), so it
-has no run/recording state to operate.
+**Scope: mostly the Compose stack.** The backup/state-store, monitoring, and
+corporate-network sections below are written against
+[`deploy/compose/`](../deploy/compose/). The Helm chart (`deploy/helm/wardyn`,
+[`k8s.enabled`](../deploy/helm/wardyn/README.md)) now runs its own
+[Kubernetes runner substrate](#kubernetes-known-gaps-v05) with its own
+run/recording state to operate — see that section for what's different there.
+"[Multi-user: who can change what](#multi-user-who-can-change-what)" and
+"[One replica, by construction](#one-replica-by-construction)" apply to both
+substrates identically: authorization and the per-process constraints live in
+`internal/api`, above the runner seam.
 
 ## State stores
 
@@ -86,52 +92,110 @@ liveness/component surface (identity, runner classes, eBPF ground-truth state);
 [ENV.md](ENV.md)) are the event stream for SIEMs — metrics deliberately carry no
 per-run detail.
 
-## Who can change what
+## Multi-user: who can change what
 
 The API authenticates with **either** an OIDC session (human SSO) **or** the
 admin bearer token; local mode skips both on a loopback-only bind. That is
-authentication. Authorization is one optional list:
+authentication. Authorization is a real two-role model: every OIDC session
+carries an **admin** or **member** role, derived once at login
+(`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
+cookie — a cookie signed before this existed (pre-0.5) decodes as no session,
+forcing a re-login that derives one fresh.
 
-| `WARDYN_OIDC_OPERATOR_EMAILS` | Signed-in humans | Admin token / local mode |
+| `WARDYN_OIDC_ROLE_MAP` | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| unset, no OIDC | all admin-equivalent | admin-equivalent |
-| unset, OIDC configured | **refuses to boot** (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` ⇒ all admin-equivalent) | admin-equivalent |
-| set | listed = **operator**; everyone else = **viewer** | always operator |
+| unset | all **admin** (today's pre-0.5 behavior — opt-in, upgrade-safe) | always **admin** |
+| set | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
 
-A viewer reads everything and is refused (403) on the writes with the widest
-blast radius: the managed harness credential (`POST /setup/harness-login`,
-`PUT`/`DELETE /setup/harness-credential/{provider}`), policy create/update/delete,
-every mutating `/workspaces` route (including the `approved-egress`, `llm-cred`
-and `requirements` writes that widen what a run may do), `PUT /site-config`
-and its connectivity probes (`POST /site-config/test-proxy`, `POST
-/site-config/test-redirect` — each launches a sandbox and makes a real
-outbound request on the operator's behalf), secret write/delete (`PUT`/`DELETE /secrets/{name}` — the name-only list stays
-readable), deciding an approval (`POST /approvals/{id}/approve|deny` — the
-queue stays readable), and attaching to a running sandbox — BOTH lanes to a
-live PTY, the ticket mint (`POST /runs/{id}/attach-ticket`) and the WebSocket
-itself (`GET /runs/{id}/attach`). Gating only the mint would buy nothing: the
-socket falls back to session-cookie auth when no ticket is presented, and a
-browser sends that cookie on a same-origin handshake automatically. Worth stating
-plainly: a viewer's own run that trips an approval blocks until an operator
-decides it — that is the tier working as intended, not a bug.
+The admin token and local mode are **always admin** — both are a single
+shared credential with no per-human identity to key a role off (the token
+*is* the admin), which is the documented ceiling of the whole gate
+(`requireOperator`/`isOperator`, `internal/api/http.go`), not an oversight.
 
-Match is on the full address, case-insensitive (ASCII only — a session email
-containing any non-ASCII rune never matches, fail closed); entries are
-comma-separated. The address comes from the IdP's `email` claim, which is only
-forced to be *verified* when `WARDYN_OIDC_EMAIL_DOMAINS` is also set — set both
-(wardynd warns at boot if you don't). A signed-in human whose session carries no
-email is a viewer. The claim is captured at sign-in and rides the session cookie,
-so an IdP-side address change is stale until the session expires (~1h); removing
-an address from the list itself takes effect on restart regardless — the
-direction that matters.
+**Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs,
+e.g. `Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin`): each entry's
+`value` is matched case-insensitively against the ID token's `roles` claim
+(an Entra App Role — the priority path, see `.claude/skills/wardyn-k8s-setup`
+for the app-registration walkthrough), its `groups` claim, or the signed-in
+email. Any match resolving to `admin` wins over one resolving to `member`,
+regardless of which claim produced it. `WARDYN_OIDC_OPERATOR_EMAILS` — the
+pre-0.5 operator allowlist — is **not replaced**: an email on it is still an
+*additional* `admin` match (`LegacyAdminEmails`), so an existing deployment
+adopting the role map keeps its current operators as admins with zero
+re-configuration. `WARDYN_OIDC_DEFAULT_ROLE` (`admin`/`member`, unset = deny)
+covers everyone the map doesn't name.
 
-**This is not RBAC.** Launching and killing a run (`POST /runs`, `POST
-/runs/{id}/kill`) stay open to any signed-in human — using the product is a
-viewer act by design — and the admin token cannot be demoted, because it is
-one shared credential with no human behind it. Real roles and owner scoping
-are v0.5+ ([ROADMAP.md](../ROADMAP.md); `threatmodel/THREAT-MODEL.md`
-residual #14). Wardyn's operator boundary is still "everyone with a login is
-trusted staff".
+Both are validated at **boot**, not at first use: a malformed
+`WARDYN_OIDC_ROLE_MAP` entry (an invalid role value, a non-ASCII key —
+matching is ASCII-only, so it could never match — a duplicate key, or
+non-blank input with no valid entry at all) or an invalid
+`WARDYN_OIDC_DEFAULT_ROLE` value fails wardynd's boot outright, naming the
+var in the error (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`) —
+never a silent fallback that lets a typo reach a session cookie later. A
+signed-in human who matches nothing in a validly-configured map, with no
+default role set, is denied at login instead ("no Wardyn role assigned").
+
+**What admin-only still means** — the writes with the widest blast radius stay
+gated on the role being exactly `admin` (`requireOperator`): the managed
+harness credential, policy create/update/delete, every mutating `/workspaces`
+route (including `approved-egress`/`llm-cred`/`requirements`), `PUT
+/site-config` and its connectivity probes, secret write/delete, `GET
+/metrics`, and bringing a custom sandbox image or devcontainer repo to a run
+(`image`/`devcontainer_repo` — `denyMemberCustomImage`, `internal/api/runs_create.go`:
+a member's own onboarded-workspace base image is unaffected, since that path
+is operator-authored at onboarding time, never the member's own free-text
+choice). Launching and killing a run (`POST /runs`, `POST /runs/{id}/kill`)
+stay open to any signed-in human — using the product is a member act by
+design.
+
+**Ownership scoping — real, not just admin-vs-everyone.** A member reaches
+their OWN resources the same way an admin reaches any of them
+(`ownsRunOrAdmin`/`getRunAuthorized`, `internal/api/helpers.go`): `GET`/kill/
+profile/grants on a run, minting its attach ticket, its recording replay, and
+`GET /runs`/`GET /approvals`/`GET /audit` (each scoped to the caller's own
+`created_by` rows) all answer a foreign resource with the **byte-identical
+404** a truly-missing one gets — never a 403 — so probing another user's run
+id learns nothing (no existence oracle). `GET /setup/status` redacts
+operator-diagnostic detail (checks, secret names, runner detail) for a member.
+
+**Deciding an approval is kind-restricted, not just owner-restricted**
+(`decide()`, `internal/api/approvals.go`): a member may approve or deny an
+`egress_domain` approval on a run they own. `credential` and `tool_call`
+approvals stay **admin-only regardless of ownership** — the shipped default
+policy requires approval on `github_token`, so letting a member self-approve
+their own run's credential request would self-mint a real token, and
+self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
+bound, both under the same authority the operator ceiling is meant to
+constrain.
+
+**A member's own policy is clamped, not trusted.** `POST /runs`'
+`inline_policy` (and its preflight dry-run) is clamped to the operator's
+`DefaultPolicy` ceiling before resolution (`composer.Clamp`,
+`internal/composer/clamp.go` — the same clamp bounds an AI-composed policy and
+a Record Mode-synthesized one against the same ceiling): confinement raised to
+the floor, egress intersected down to the allowlist, `first_use_approval`
+raised to the stricter of the two, `llm_inspection` inherited when the ceiling
+sets one, resources and `auto_stop_after_sec` capped, grants narrowed to what
+the ceiling allows, and `workspace_mounts` dropped entirely — a member's
+policy can only ever get MORE restrictive than the operator's default, never
+less. An admin's own `inline_policy` is not clamped.
+
+Every member denial above that isn't a plain foreign-resource 404 is audited
+under `authz.denied` (reasons include `admin_surface`, `byoi_member`,
+`not_owner`) — a 404 on a resource that genuinely doesn't exist stays silent
+by design, matching the no-existence-oracle rule.
+
+**What's still not built.** No custom roles beyond admin/member, no
+per-resource fine-grained permission model (owner-or-admin only — no
+"read-only share" or "co-owner" concept), no tenant/org columns, no
+separation of duty among admins — every admin (and the admin token, always)
+can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
+residual #14, still open). The SSH gateway has **no admin override** at all
+today — SSH authorization is a single `run.created_by == the key's principal`
+check, deliberately narrower than the web terminal's `requireOperator` gate;
+an admin who needs another human's run uses the web terminal, same as a
+member would (`docs/SSH.md`'s Bounds section; `threatmodel/THREAT-MODEL.md`
+residual #15). See [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The operator/viewer split above, the
 approval broker, and the append-only audit log all ship in the Apache-2.0 build —
@@ -884,3 +948,74 @@ above, and the masking registry is a worse failure than any of the six was —
 those lost work, this one persists secrets. Keep `replicas: 1`. Going beyond it
 has not been built, tested, or released, and the chart will not render it without
 `allowMultiReplica=true`.
+
+## Kubernetes: known gaps (v0.5)
+
+The `k8s` runner substrate (`deploy/helm/wardyn`, `k8s.enabled=true`,
+`internal/runner/k8s`) is a **separate, independent confinement substrate**
+from the Docker Compose path (L1/NetworkPolicy-backed vs. Compose's L0
+structural one) — most of this document applies to both, but the list below
+is what the k8s substrate does NOT do yet, honestly, as of v0.5. Each item is
+a real limitation checked against the driver, not a guess:
+
+- **No BYOI or devcontainer builds.** A `wardyn-byoi/`-prefixed image ref is
+  refused before any pod is created — ephemeral containers cannot honor the
+  selftest-then-task double-exec BYOI needs
+  (`internal/runner/k8s/errors.go`'s `errBYOIUnsupported`,
+  `internal/runner/k8s/exec.go`). `WARDYN_ENVBUILD` devcontainer builds are
+  Docker-only for the same reason and are unaffected by `k8s.enabled` — they
+  simply have no k8s equivalent.
+- **No `local_dir` / host-path workspace mounts.** A policy with any
+  `WorkspaceMounts` entry fails the run closed with a clear error
+  (`internal/runner/k8s/sandbox.go`'s `errMountsUnsupported`) — a k8s pod has
+  no path back to an arbitrary directory on wardynd's own host the way a
+  Docker bind mount does. Git-clone workspaces (`WorkspaceRepos`) are
+  unaffected; only a *local directory* source is refused.
+- **No `~/.aws` / `~/.claude` host staging.** The same `errMountsUnsupported`
+  refusal covers the RESIDENT-COPY credential path (mounting staged
+  `~/.claude` or a captured `~/.aws` into the sandbox) — there is no host
+  filesystem to stage from in the first place. Use proxy-side injection
+  instead: managed-subscription OAuth injection and the Bedrock AWS SSO
+  exchange are both substrate-agnostic (they happen at `wardyn-proxy`, never
+  by mounting a credential directory into the pod), so they work unchanged
+  on k8s.
+- **No in-sandbox DNS.** Every sandbox pod is `DNSPolicy: DNSNone` with a
+  single nameserver, `127.0.0.1` — nothing listens there, so a DNS query
+  fails FAST (connection refused) rather than hanging out a real timeout
+  against a resolver a NetworkPolicy would deny anyway
+  (`internal/runner/k8s/sandbox.go`). Only the pinned `wardyn-proxy` sidecar
+  resolves hostnames, exactly like the Compose substrate's proxy-only egress
+  posture — this is parity, not a new gap, but the *mechanism* (a present-but-
+  unreachable loopback resolver vs. Compose's no-resolver-configured-at-all)
+  is k8s-specific enough to name here.
+- **No per-pod PIDs limit.** Kubernetes has no per-container "pids" resource
+  the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit`
+  is accepted but not enforced, and wardynd logs a warning naming the run id
+  every time it's requested and skipped (`internal/runner/k8s/sandbox.go`).
+  **Recommendation**: set the node-level kubelet `podPidsLimit` (or the
+  equivalent `SystemReserved`/`KubeReserved` PID accounting for your
+  distribution) as a cluster-wide fork-bomb backstop — it is coarser
+  (per-node, not per-run) but real, and it is the only lever this substrate
+  has today.
+- **`DiskMiB` is ignored, with a warning.** Same shape as the PIDs gap: no
+  per-container writable-storage quota is wired up on this substrate yet, so
+  a requested disk cap is accepted, not enforced, and logged
+  (`internal/runner/k8s/sandbox.go`). An `ephemeral-storage` resource request/
+  limit at the cluster level is the closest present mitigation.
+- **No k8s ground-truth correlator.** The Tetragon host-sensor → ground-truth
+  pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the
+  `groundtruth` Compose profile) has no k8s-substrate equivalent — it is not
+  referenced anywhere under `internal/runner/k8s`. A k8s deployment gets the
+  NetworkPolicy-enforced boundary (proven live by the boot-time egress
+  canary) but not the independent kernel-level corroboration Compose +
+  Tetragon provides.
+- **`replicas` stays 1 on k8s exactly as it does everywhere else** — see
+  [One replica, by construction](#one-replica-by-construction) above; nothing
+  about the k8s substrate changes that story (the masking registry is still
+  in-process, per-pod).
+
+None of these are silent: the mount and BYOI gaps fail the run closed with a
+named error, the resource-cap gaps log a warning naming exactly what is
+unenforced, and the DNS/replica behavior matches the rest of this document.
+Closing any of them is unstarted work, not a documented-but-planned
+near-term item — see ROADMAP.md for what is actually queued.

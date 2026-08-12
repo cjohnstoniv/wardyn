@@ -30,6 +30,29 @@
     "runner",
     "scm_provider"
   ],
+  "with_k8s_runner": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "env_builder",
+    "host_proxy",
+    "k8s_egress_containment",
+    "llm_provider",
+    "runner",
+    "scm_provider"
+  ],
+  "with_oidc": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "env_builder",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider",
+    "sso_rbac",
+    "tls_cookie_posture"
+  ],
   "with_store": [
     "age_key",
     "agent_image",

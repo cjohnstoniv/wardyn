@@ -105,6 +105,13 @@ func (s *Server) handleComposeRun(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	principalType, principal := actorFromRequest(r)
+	// Item 6: publish the REQUESTING human on ctx so RunClaudeCompose
+	// (composeresult.go), invoked deep inside the composer pipeline this ctx
+	// flows through unchanged (Registry.Propose -> backend.Propose ->
+	// SetRunClaude's bound func), can stamp the compose-launched run's
+	// created_by to the real caller instead of falling back to the
+	// composeActor() system marker.
+	ctx = withComposeRequestActor(ctx, principal)
 
 	// SSE transport (opt-in via Accept: text/event-stream): one `data: <json>\n\n`
 	// frame per emitted event, flushed as the synchronous pipeline runs. All 4xx

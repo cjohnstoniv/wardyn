@@ -26,3 +26,4 @@ export * from "./types/site";
 export * from "./types/approvals";
 export * from "./types/audit";
 export * from "./types/recording";
+export * from "./types/ssh";

@@ -30,6 +30,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -37,7 +38,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -211,19 +211,16 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
-	// OperatorEmails, when non-empty, is the operator allowlist of the minimal
-	// viewer/operator role gate (requireOperator, http.go): an OIDC human whose
-	// session email is not on it is a VIEWER — read everything, launch runs, but
-	// refused with 403 on configuring the deployment (managed harness credential,
-	// policies, workspaces, site-config), writing/deleting SECRETS, DECIDING an
-	// approval, and minting an attach ticket (a live PTY into a running sandbox).
-	// Matching is case-insensitive on the whole address; read routes are never
-	// gated.
-	//
-	// EMPTY (the default) is exactly today's behavior: every authenticated human
-	// is admin-equivalent. Admin-token and local-mode callers are always
-	// operators (one shared credential, no human to key a role off). Ignored
-	// unless OIDC is configured, since nothing else carries an email.
+	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
+	// internal/api no longer reads this field directly: requireOperator/isOperator
+	// (http.go) gate on the session's B1-derived Role instead. The list still
+	// matters — cmd/wardynd feeds the SAME value into oidc.Config.LegacyAdminEmails,
+	// so an email on it is still an additional RoleAdmin match at OIDC-login role
+	// derivation time (see internal/auth/oidc's deriveRole) — it just flows through
+	// Session.Role now instead of being re-checked a second time here. Kept on
+	// Config (not deleted) so that wiring keeps compiling; read it here only if you
+	// need the raw configured list for display (e.g. an admin-facing settings page),
+	// never to gate a request.
 	OperatorEmails []string
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
@@ -358,6 +355,25 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
+	// the sso_rbac /setup/status check's gate. Only the presence, never the
+	// mapping itself: the API layer has no use for individual entries, only
+	// whether the operator has opted into role derivation at all (see
+	// internal/auth/oidc's deriveRole). Computed at boot in cmd/wardynd.
+	OIDCRoleMapConfigured bool
+	// OIDCRedirectURL echoes WARDYN_OIDC_REDIRECT_URL (a URL, not a credential)
+	// for the tls_cookie_posture /setup/status check, which flags an https
+	// redirect issued while OIDCSecureCookies is still false — the classic
+	// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
+	// set. Computed at boot in cmd/wardynd.
+	OIDCRedirectURL string
+	// OIDCSecureCookies is the boot-computed secureCookies posture
+	// (validateConfig, cmd/wardynd/main.go): true iff wardynd knows the
+	// connection is TLS-protected end to end (built-in TLS or
+	// WARDYN_TLS_TERMINATED) — the same value threaded into
+	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
+	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
+	OIDCSecureCookies bool
 	// ComposerBackends is the BOOT-snapshot readiness of every configured composer
 	// backend (including disabled + needs-key ones the live registry can't show).
 	// Surfaced by /setup/status. Nil when the composer is unconfigured.
@@ -373,6 +389,25 @@ type Config struct {
 	// closure; it doubles as the test seam so tests inject a fake instead of
 	// shelling out to a real coding-agent CLI.
 	ScanAIAdvisor func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
+	// SSHListenAddr is WARDYN_SSH_LISTEN: the address the SSH gateway binds
+	// (e.g. ":2222"). Empty = off = no listener, no new surface — ServeSSHGateway
+	// no-ops when this is empty, so a caller may invoke it unconditionally.
+	SSHListenAddr string
+	// SSHAdvertiseAddr is WARDYN_SSH_ADVERTISE: the externally-reachable
+	// host[:port] surfaced on /healthz and shown in the run-detail "Connect via
+	// SSH" pane's `ssh` command — NOT what wardynd binds to (that's
+	// SSHListenAddr), since a container/NAT deployment's bind and reachable
+	// address routinely differ. Purely advisory copy; the gateway itself never
+	// reads it.
+	SSHAdvertiseAddr string
+	// SSHHostKey is the gateway's persisted ed25519 host key (loadOrCreateSecret
+	// pattern, cmd/wardynd), used to derive the ssh.Signer AddHostKey wants and
+	// the fingerprint /healthz discloses ("verify on first connect" — public by
+	// design, it identifies the server, it authenticates no one). Empty when the
+	// gateway is disabled (cmd/wardynd only loads/generates it when
+	// SSHListenAddr is set, so a deployment with SSH off never even mints this
+	// secret).
+	SSHHostKey ed25519.PrivateKey
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -407,6 +442,13 @@ type Server struct {
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck
 	refRulesetShow bool
+	// sshSessions counts concurrent SSH "session" channels (shell/exec/
+	// subsystem) per run, enforcing maxSSHSessionsPerRun (sshgateway.go). Zero
+	// value is ready to use. Process-local like lastTouch above — the same
+	// single-replica topology every in-memory bound in this codebase already
+	// assumes (see secretmask.Registry's residual in THREAT-MODEL.md).
+	sshSessionsMu sync.Mutex
+	sshSessions   map[uuid.UUID]int
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
@@ -470,299 +512,6 @@ const (
 
 // Handler returns the configured http.Handler (the chi router).
 func (s *Server) Handler() http.Handler { return s.router }
-
-func (s *Server) routes() chi.Router {
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	// SECURITY: do NOT install middleware.RealIP. It overwrites r.RemoteAddr from
-	// the client-supplied X-Forwarded-For / X-Real-IP headers with no
-	// trusted-proxy allowlist, and r.RemoteAddr is persisted as the append-only
-	// audit source_ip (handlePostDecision / handleGroundtruthEvents). Trusting
-	// those headers would let any caller reaching the internal/groundtruth
-	// endpoints FORGE the source_ip in the audit log. We keep r.RemoteAddr as the
-	// real TCP peer instead. If Wardyn is ever fronted by a trusted reverse proxy,
-	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
-	// trusted proxy addresses.
-	r.Use(middleware.Recoverer)
-	r.Use(securityHeaders)
-
-	r.Get("/healthz", s.handleHealthz)
-	// Prometheus scrape surface. Admin-gated (NOT anonymous like /healthz): it
-	// reports operational volumes, and the public API fails closed without a
-	// credential — a scrape_config carries the admin token in an `authorization:`
-	// header.
-	r.With(s.humanOrAdminAuth).Get("/metrics", s.handleMetrics)
-
-	// Human SSO (OIDC): login/callback/logout. Mounted only when configured.
-	// These are unauthenticated by design (they bootstrap the session).
-	if s.cfg.OIDC != nil {
-		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
-		r.Get("/auth/logout", s.cfg.OIDC.LogoutHandler)
-	}
-
-	r.Route("/api/v1", func(r chi.Router) {
-		// Public admin-gated surface.
-		r.Group(func(r chi.Router) {
-			r.Use(s.humanOrAdminAuth)
-			// operatorOnly is this same group with ONE extra middleware nested in
-			// front (chi's With is what Group is built from): the minimal role
-			// gate. Routes registered on it are authenticated exactly as before
-			// and then refused for a signed-in VIEWER — see requireOperator, which
-			// is a no-op until WARDYN_OIDC_OPERATOR_EMAILS is set. The tier is
-			// "viewer = read + launch runs": creating/killing/composing a run,
-			// preflight and profile stay on r deliberately (a viewer may USE the
-			// product), while configuring it, touching credential MATERIAL,
-			// DECIDING an approval and minting a PTY ticket are operator acts.
-			// Every read stays on r, so the gated routes are the ones written out
-			// below and nothing else silently joins them.
-			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
-			// this line must stay immediately after the group's last r.Use, or a
-			// later-added Use applies to r's routes but silently NOT to every
-			// mutating configuration route registered on operatorOnly below.
-			// Those are not the whole operator surface: the attach WebSocket
-			// (GET /runs/{id}/attach) is gated too, via ticketOrHumanAuth in its
-			// own group below, because it also accepts a ?ticket=. gatedRoutes
-			// (rbac_test.go) — plus its router-walk completeness assertion — is
-			// the current authoritative enumeration; ask it, not a hard-coded
-			// count here, "what does a viewer get 403 on".
-			operatorOnly := r.With(s.requireOperator)
-			r.Post("/runs", s.handleCreateRun)
-			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
-			// chokepoint (real 4xx errors), the enforced confinement class, and the
-			// deterministic setup checklist — mints/persists/dispatches nothing. The
-			// manual wizard fires it on the Review step (advisory, non-gating).
-			r.Post("/runs/preflight", s.handlePreflightRun)
-			r.Post("/runs/compose", s.handleComposeRun)
-			// Escalation-only Ask help agent (advisory only; same composer-enabled
-			// gate + hardened backend transport as compose).
-			r.Post("/runs/compose/assist", s.handleComposeAssist)
-			r.Get("/composer/backends", s.handleListComposerBackends)
-			r.Get("/runs", s.handleListRuns)
-			r.Get("/runs/{id}", s.handleGetRun)
-			r.Get("/runs/{id}/grants", s.handleListGrants)
-			r.Post("/runs/{id}/kill", s.handleKillRun)
-			// Recording Mode: synthesize a reusable least-privilege sandbox profile
-			// from what this run actually did (advisory, read-only — mints nothing).
-			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
-
-			// Single-use WS attach tickets: browsers cannot put the admin
-			// bearer on a WebSocket handshake, so the UI first POSTs here
-			// (through THIS authenticated group) and presents the returned
-			// 30s ticket as ?ticket= on the attach WS below.
-			//
-			// OPERATOR-ONLY: the ticket mints a live interactive PTY inside a
-			// RUNNING sandbox — injected keystrokes and whatever the agent's
-			// injected credentials left on screen — which is strictly more than
-			// "launch a run" and is not something a viewer tier can hold.
-			operatorOnly.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
-
-			// Approvals: reading the queue is a viewer act, DECIDING is not — the
-			// decision IS the live authorization over an egress/credential
-			// escalation. The sandbox can only ever REQUEST one (machine audience,
-			// /internal/approvals below), so gating the decision here cannot
-			// starve an agent of anything it could previously do for itself.
-			// Consequence, by design: a viewer's run that trips an approval blocks
-			// until an operator decides it.
-			r.Get("/approvals", s.handleListApprovals)
-			operatorOnly.Post("/approvals/{id}/approve", s.handleApproveApproval)
-			operatorOnly.Post("/approvals/{id}/deny", s.handleDenyApproval)
-
-			r.Get("/audit", s.handleQueryAudit)
-			r.Get("/me", s.handleMe)
-			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
-			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
-			// no route (404), the HttpOnly session cookie survived, and the next
-			// probe silently re-signed the operator in. Mount the POST here so the
-			// client's existing call actually terminates the session. Nil-OIDC
-			// (local/token mode) is a safe no-op — see handleLogout.
-			r.Post("/auth/logout", s.handleLogout)
-			// First-run setup readiness. MUST stay in this humanOrAdminAuth group
-			// (anonymous non-local => 401): it enumerates providers/keys/CLIs
-			// (capability disclosure) and must never sit on the public /healthz.
-			r.Get("/setup/status", s.handleSetupStatus)
-
-			// Managed harness login: launch an interactive login sandbox where
-			// the operator runs `claude setup-token`, then paste the resulting
-			// long-lived subscription token so Wardyn injects it proxy-side into
-			// every run (compose-mode subscription without a host ~/.claude).
-			// Secret store required (the token is stored age-encrypted).
-			//
-			// RBAC (same as policy/workspace/site-config below): humanOrAdminAuth
-			// is AUTHENTICATION only, so these are ALSO on operatorOnly — with
-			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
-			// is a viewer and gets 403 here. UNSET (the default) is the disclosed
-			// status quo: ANY authenticated human in OIDC mode can connect or
-			// disconnect the shared managed subscription every run inherits. Full
-			// per-user RBAC is still future work (see ROADMAP.md). Every
-			// connect/disconnect is audited
-			// (harness.credential.captured/disconnected).
-			if s.cfg.Secrets != nil {
-				operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
-				operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
-				operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
-			}
-
-			// Policy management (gated to authenticated humans — a valid SSO
-			// session or the admin token). WRITES are additionally operator-only:
-			// with WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that
-			// list can read policies but not CRUD them. UNSET (the default) is the
-			// disclosed status quo — ANY authenticated human in OIDC mode can CRUD
-			// policies — and full per-user RBAC remains future work (ROADMAP.md).
-			// Every spec is validated before it is persisted (fail closed);
-			// writes are audited.
-			operatorOnly.Post("/policies", s.handleCreatePolicy)
-			r.Get("/policies", s.handleListPolicies)
-			r.Get("/policies/{id}", s.handleGetPolicy)
-			operatorOnly.Put("/policies/{id}", s.handleUpdatePolicy)
-			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
-
-			// Workspace + library + catalog routes — mounted from workspaces.go
-			// (the same move mountLibraryRoutes made when server.go crossed the
-			// size gate; the posture notes live with the mounts).
-			s.mountWorkspaceRoutes(r, operatorOnly)
-
-			// Secret management: write/delete/list only. Values are NEVER
-			// readable through the API (read paths are the broker and the
-			// internal injection-resolve endpoint, both audited).
-			//
-			// The writes are operator-only: this is credential MATERIAL, a
-			// strictly larger blast radius than site-config (which only names a
-			// secret *ref*). The LIST stays viewer-readable — it returns names
-			// only, never values.
-			if s.cfg.Secrets != nil {
-				operatorOnly.Put("/secrets/{name}", s.handlePutSecret)
-				operatorOnly.Delete("/secrets/{name}", s.handleDeleteSecret)
-				r.Get("/secrets", s.handleListSecrets)
-			}
-
-			// Site config: the operator-wide, admin-authored baseline every run
-			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
-			// overrides, default SCM hosts). GET/PUT only — there is exactly one
-			// config row; every write is validated (SSRF/injection hardening on
-			// the URL/host fields) and audited (site_config.write).
-			//
-			// RBAC (same as policy/workspace above): humanOrAdminAuth is
-			// AUTHENTICATION only, so the PUT is operator-only — with
-			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
-			// can read the config but not rewrite it. This is where that matters
-			// most: the blast radius is corp-wide (the baseline feeds every run's
-			// upstream proxy / artifact mirror / SCM hosts), higher than a single
-			// policy. UNSET (the default) is the disclosed status quo — ANY
-			// authenticated human in OIDC mode can rewrite it — and full per-user
-			// RBAC remains future work (ROADMAP.md).
-			r.Get("/site-config", s.handleGetSiteConfig)
-			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
-			// Live connectivity probes: launch a throwaway one-shot sandbox and
-			// actually traverse the upstream proxy / egress redirect, rather than
-			// a "we wrote it down" test-connection button (site_config_probe.go).
-			// operatorOnly — same posture as the PUT above.
-			operatorOnly.Post("/site-config/test-proxy", s.handleTestSiteConfigProxy)
-			operatorOnly.Post("/site-config/test-redirect", s.handleTestSiteConfigRedirect)
-
-			// Effective integration set (stored ∪ legacy-derived) with live
-			// capabilities — see internal/api/integrations.go /
-			// setup_integrations.go. Read-only, same RBAC posture as
-			// site-config's GET: Credentials only ever holds secret NAMES.
-			r.Get("/integrations", s.handleListIntegrations)
-			// Integration writes: PUT creates-or-replaces a stored row, DELETE
-			// removes one, POST .../adopt persists a derived legacy row
-			// verbatim so it becomes editable. operatorOnly — same corp-wide
-			// blast radius as site-config's PUT (setup_integrations.go).
-			operatorOnly.Put("/integrations/{id}", s.handlePutIntegration)
-			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
-			operatorOnly.Post("/integrations/{id}/adopt", s.handleAdoptIntegration)
-
-			// Recording replay: GET /api/v1/runs/{id}/recording/{id}
-			if s.cfg.RecordingStore != nil {
-				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore))
-			}
-		})
-
-		// Interactive attach (WebSocket). Its own group: browsers cannot put
-		// the admin bearer on a WS handshake, so this route ALSO accepts a
-		// single-use ?ticket= minted via POST /runs/{id}/attach-ticket above
-		// (ticketOrHumanAuth falls through to humanOrAdminAuth when no ticket
-		// is presented — OIDC-cookie and CLI bearer attach are unchanged). The
-		// handler upgrades to a WebSocket and relays a live PTY from a RUNNING
-		// sandbox. The interactive shell is bounded by the same L0 egress +
-		// confinement envelope as the agent (invariant 3) and the principal —
-		// the ticket's MINTER for ticket auth — is recorded for attribution
-		// (invariant 4).
-		r.Group(func(r chi.Router) {
-			r.Use(s.ticketOrHumanAuth)
-			r.Get("/runs/{id}/attach", s.handleAttachWS)
-		})
-
-		// Internal sidecar surface (run-token bearer).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuth)
-			r.Post("/internal/decisions", s.handlePostDecision)
-			r.Post("/internal/approvals", s.handleInternalRequestApproval)
-			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-			r.Post("/internal/credentials/mint", s.handleInternalMint)
-
-			// Token renew: POST /api/v1/internal/token/renew
-			// The per-run proxy re-issues its own (short-TTL) run token before it
-			// lapses, authenticated by the CURRENT token. Without this producer a
-			// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
-			// by any brokered local route — the sandbox cannot reach it.
-			r.Post("/internal/token/renew", s.handleInternalTokenRenew)
-
-			// Injection resolve: returns the FORMATTED SECRET VALUE for an
-			// api_key grant. SECURITY: this path must NEVER be forwarded by a
-			// wardyn-proxy brokered local route — the proxy calls it directly
-			// at startup; the sandbox has no network path to it (the brokered
-			// routes forward only mint/approvals/recordings, by construction).
-			if s.cfg.Secrets != nil {
-				r.Get("/internal/injection/{grantID}", s.handleInternalInjection)
-			}
-
-			// Recording upload: PUT /api/v1/internal/recordings/{runID}
-			// wardyn-rec POSTs the finished cast from inside the agent container.
-			if s.cfg.RecordingStore != nil {
-				r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
-			}
-
-			// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
-			// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan
-			// run (via the proxy's brokered scan-result route, which injects the
-			// run token). Cross-run uploads are rejected (token run id must match
-			// the path run id).
-			r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
-
-			// Compose-result upload: PUT /api/v1/internal/compose-results/{runID}
-			// The in-sandbox claude compose wire PUTs its raw proposal JSON from a
-			// governed compose run (via the proxy's brokered compose-result route,
-			// which injects the run token) for the waiting RunClaudeCompose to read.
-			// Same cross-run guard as scan (token run id must match the path run id).
-			r.Put("/internal/compose-results/{runID}", s.handleUploadComposeResult)
-
-			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
-			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
-			// aws-sso container-login run (via the proxy's brokered sso-token
-			// route, which injects the run token). Same cross-run guard as scan;
-			// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
-			// governed workspace run.
-			if s.cfg.Secrets != nil {
-				r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
-			}
-		})
-
-		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
-		// SEPARATE auth group from the run-token internal surface above: the
-		// host eBPF sensor's token is audit-write-only and is rejected by the
-		// mint/approval endpoints. This is the SECOND of the three audit streams
-		// (Postgres self-report + PTY replay are the others).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuthGroundtruth)
-			r.Post("/internal/groundtruth", s.handleGroundtruthEvents)
-		})
-	})
-
-	s.mountUI(r)
-	return r
-}
 
 // securityHeaders sets the console's defense-in-depth response headers on EVERY
 // response — /healthz, /auth/*, /api/v1/* and the SPA alike. The console is a
@@ -867,6 +616,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// and per-decision coverage is reported on the egress decision/audit
 		// stream (scanned / tunneled-opaque / llm.scan.blind), not here.
 		"llm_egress_inspection": "available",
+		// ssh discloses the gateway's presence + the two facts the run-detail
+		// "Connect via SSH" pane needs to render its command/config block before
+		// a human is authenticated (anonymous, like every other /healthz field):
+		// advertise_addr (WARDYN_SSH_ADVERTISE, purely advisory copy) and the
+		// host key's SHA256 fingerprint ("verify on first connect" — PUBLIC BY
+		// DESIGN, it identifies the server, it authenticates no one; see
+		// docs/SSH.md). nil (renders as JSON null) when the gateway is
+		// disabled — the smallest honest wire change: no new endpoint, one
+		// field a deployment without SSH simply omits populating.
+		"ssh": s.sshGatewayHealthz(),
 	})
 }
 
