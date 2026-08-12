@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -226,6 +227,19 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createAuditData)))
 
+	// Model-resolution fail-fast (AGT4-2): a non-interactive harness run whose agent
+	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
+	// call — classically a codex-cli run whose only model access is a claude-code-only
+	// managed subscription. WARN (never hard-reject: edge cases); the CLI already prints
+	// warnings, so the operator sees it before the run wastes a sandbox. Computed on the
+	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
+	if runNeedsModelWarning(req) {
+		if la := s.resolveRunLLMAccess(ctx, req, spec, s.presentSecretNames(ctx), bedrockRef); la == nil || !la.Provisioned {
+			p, _ := agentLLMProvider(req.Agent)
+			warnings = append(warnings, noModelAccessWarning(req.Agent, p, s.managedInjectReady("claude-code")))
+		}
+	}
+
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
@@ -289,4 +303,74 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+// resolveRunLLMAccess computes the deterministic model-access verdict for a run's
+// RESOLVED spec — the SAME computation preflight's checklist uses, shared so the
+// create-path warning and the preflight row can never disagree. It mirrors dispatch's
+// precedence (managed subscription > api-key, with an operator-Bedrock fallback) and
+// returns nil only for a non-LLM agent (nothing to resolve).
+//
+// It runs on a CLONE: reconcileLLMAccess drops orphaned grants IN PLACE, but the
+// caller's spec is still persisted/dispatched here, so it must never be mutated. The
+// grants slice is cloned because a struct copy shares the backing array and
+// slices.DeleteFunc zeroes the vacated tail in place.
+func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef) *composeLLMAccess {
+	llmSpec := spec
+	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
+	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, "api.anthropic.com")
+	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
+	// managed mirrors dispatch's precedence: a compose-mode managed token credentials a
+	// claude run with no resident subscription mount and no anthropic api-key grant.
+	managed := req.Agent == "claude-code" && !subscriptionActive &&
+		!hasAnthropicKey && s.managedInjectReady(req.Agent) &&
+		(llmSpec.AllowAllEgress || len(llmSpec.AllowedDomains) > 0)
+	var llmAccess *composeLLMAccess
+	if note, provisioned := reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
+		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
+	}
+	// Operator-configured Bedrock credentials the run automatically: dispatch's
+	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch. Thread the
+	// picked workspace/container's bedrockRef (SPINE-5) so a per-run region/model
+	// override is honored here too — a workspace can only narrow region/model, never
+	// supply credentials — matching what launch enforces.
+	if llmAccess == nil || !llmAccess.Provisioned {
+		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, bedrockRef); ba.ready {
+			llmAccess = &composeLLMAccess{
+				Provisioned: true,
+				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",
+			}
+		}
+	}
+	return llmAccess
+}
+
+// runNeedsModelWarning gates the create-time model-access check: a NON-interactive
+// HARNESS run (not task_mode=exec, not interactive, not the server-set harness-login
+// box) whose agent needs a model. An exec run runs a plain command (no harness); an
+// interactive run surfaces a model failure to the operator live; the login box mints
+// nothing — none warrant the boot-then-404 warning.
+func runNeedsModelWarning(req createRunRequest) bool {
+	if req.TaskMode == "exec" || req.Interactive || req.Task == harnessLoginTask {
+		return false
+	}
+	_, needsModel := agentLLMProvider(req.Agent)
+	return needsModel
+}
+
+// noModelAccessWarning is the create-time advisory for a run whose agent needs a
+// model but has no resolvable credential: it will boot and 404 on its first model
+// call. managedClaudePresent on a non-claude agent is the canonical trap (AGT4-2) — a
+// managed Claude subscription credentials claude-code only — so the copy names it and
+// steers to --agent claude-code.
+func noModelAccessWarning(agent string, p llmProvider, managedClaudePresent bool) string {
+	msg := fmt.Sprintf(
+		"no model credential resolves for agent %q — this run will boot and fail on its first model call (it needs %s "+
+			"access via a %q secret, a bound workspace/integration credential, or Bedrock).",
+		agent, p.host, p.secret)
+	if managedClaudePresent && agent != "claude-code" {
+		msg += " A Wardyn-managed Claude subscription is connected, but it credentials claude-code only — " +
+			"use --agent claude-code, or connect a credential for this agent."
+	}
+	return msg
 }

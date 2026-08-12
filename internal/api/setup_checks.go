@@ -54,6 +54,28 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 	}
 }
 
+// envBuilderCheck reports whether the per-run sandbox image builder is wired — the
+// path a devcontainer build or a --image (bring-your-own-image) run needs. It is
+// OFF by default on the bare binary (WARDYN_ENVBUILD unset, or wardynd not built
+// with -tags docker) and ON in the compose stack, with no other setup signal, so a
+// devcontainer/--image run that silently no-ops otherwise reads as a random failure.
+// INFO (never a warning) when off: it is optional — only devcontainer/BYOI runs need
+// it; a convention-image run does not.
+func envBuilderCheck(wired bool) SetupCheck {
+	if wired {
+		return SetupCheck{
+			ID: "env_builder", Label: "Sandbox image builder", Status: "ok",
+			Detail: "The per-run image builder is wired: devcontainer builds and --image (bring-your-own-image) wraps will fire.",
+		}
+	}
+	return SetupCheck{
+		ID: "env_builder", Label: "Sandbox image builder", Status: "info",
+		Detail: "The per-run image builder is off (the default on the bare binary; the compose stack enables it): a --image " +
+			"(bring-your-own-image) run is rejected, and a devcontainer_repo run silently falls back to the convention image instead of building.",
+		Fix: "Set WARDYN_ENVBUILD=true on a wardynd built with -tags docker, or use the compose stack (it enables the builder).",
+	}
+}
+
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
 // detail, "" when there is none). INFO, never a warning, when there is none: a
 // model provider is OPTIONAL — needed only for agent-harness runs or the AI Run
@@ -66,7 +88,7 @@ func llmProviderCheck(llmDetail string) SetupCheck {
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
 		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs or the AI Run Composer. Bring-your-own-container and interactive runs work without one.",
-		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Getting Started → Model), or bind creds to a workspace/container.",
+		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (the Integrations step, \"Connect what's outside Wardyn\"), or bind creds to a workspace/container.",
 	}
 }
 
@@ -150,8 +172,8 @@ func siteConfigCheck(sc types.SiteConfig) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-		Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, egress redirects, and default SCM hosts that every run would inherit.",
-		Fix:    "Set one via PUT /api/v1/site-config (or the Host Proxy / Corporate Network setup steps).",
+		Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
+		Fix:    "Set one via PUT /api/v1/site-config (or the Corporate network step — the Host proxy / Artifact redirect tabs).",
 	}
 }
 

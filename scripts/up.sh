@@ -407,13 +407,22 @@ cmd_up() {
   # invocation, from any shell, drive the same daemon.
   [ -n "${WARDYN_DOCKER_SOCK:-}" ] && env_set "${ENV_FILE}" WARDYN_DOCKER_SOCK "${WARDYN_DOCKER_SOCK}"
 
-  env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
+  # OIDC-clobber guard: env_set is a hard overwrite, so unconditionally forcing
+  # WARDYN_LOCAL_MODE=true + WARDYN_OIDC_ISSUER="" here would silently disable an
+  # operator's OIDC operator/viewer split on EVERY routine `make setup` re-run. Only
+  # force local no-auth on a fresh install (no issuer set); an existing SSO config is
+  # preserved untouched. (A commented example line reads as unset — env_get ignores it.)
+  if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
+    log "Preserving existing OIDC config (WARDYN_OIDC_ISSUER is set) — leaving auth in SSO mode, not forcing local no-auth."
+  else
+    env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
+    env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
+  fi
   # LocalMode no-auth requires a loopback request PEER; in compose the peer is the
   # docker gateway (port is published loopback-only, so LAN peers can't reach it).
   # Trust the forwarder so the host UI/CLI isn't 403'd. Safe only with the 127.0.0.1
-  # publish this stack uses (see docker-compose.yaml).
+  # publish this stack uses (see docker-compose.yaml). Inert under SSO (local-mode-only).
   env_set "${ENV_FILE}" WARDYN_LOCAL_TRUST_FORWARDER true
-  env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
 
   _policy="${WARDYN_DEFAULT_POLICY:-}"
   [ -z "${_policy}" ] && _policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)

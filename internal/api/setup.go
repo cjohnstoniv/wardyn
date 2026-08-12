@@ -499,7 +499,7 @@ func agentImageCheck(images map[string]string) SetupCheck {
 				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
 			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (e.g. build deploy/images/full (the fat toolchain image), or your " +
 				"own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a per-run base image " +
-				"in the New Run wizard's \"Custom sandbox image (advanced)\" field — Wardyn wraps it with the runner tools.",
+				"in the New Run wizard's \"Sandbox image\" field — Wardyn wraps it with the runner tools.",
 		}
 	}
 	return SetupCheck{
@@ -611,6 +611,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	checks := []SetupCheck{
 		runnerCheck(rnr),
 		agentImageCheck(s.cfg.AgentImages),
+		envBuilderCheck(s.cfg.ImageBuilder != nil),
 		llmProviderCheck(llmDetail),
 	}
 	if chk, ok := bedrockProviderCheck(bedrock); ok {

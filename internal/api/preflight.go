@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -177,44 +176,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	riskItems := composer.Grade(runInput, gspec)
 	overallRisk := composer.OverallLevel(riskItems)
 
-	// LLM-access verdict on a COPY: reconcileLLMAccess drops orphaned grants in
-	// place, but the manual-wizard launch (handleCreateRun) persists every grant on
-	// the resolved spec, so the checklist must see the FULL spec — mutating a copy
-	// keeps deriveSetupItems' view faithful to what launch stores. The grants
-	// slice is CLONED because a struct copy shares the backing array, and
-	// slices.DeleteFunc's drop zeroes the vacated tail in place — a shallow copy
-	// would clobber the very spec the copy exists to protect. managed mirrors
-	// dispatch's precedence (runs.go): a compose-mode managed token credentials a
-	// claude run that has no resident subscription mount and no anthropic api-key
-	// grant, so reflect that instead of a false "no model access".
-	llmSpec := spec
-	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
-	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, "api.anthropic.com")
-	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
-	managed := req.Agent == "claude-code" && !subscriptionActive &&
-		!hasAnthropicKey && s.managedInjectReady(req.Agent) &&
-		(llmSpec.AllowAllEgress || len(llmSpec.AllowedDomains) > 0)
-	var llmAccess *composeLLMAccess
-	if note, provisioned := reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
-		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
-	}
-	// Operator-configured Bedrock credentials the run automatically: dispatch's
-	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch, so a
-	// run that picked no api_key still authenticates. Ask the same resolver here
-	// with the bedrockRef the fold resolved (SPINE-5) — a bedrock integration that
-	// supplies the region/model must be honored here too, or Review previews "no
-	// model access" for a run launch credentials fine; the workspace can only
-	// narrow region/model, never supply credentials — so the checklist and the
-	// wizard's no-model-access banner stop telling an operator with working Bedrock
-	// access that they have none.
-	if llmAccess == nil || !llmAccess.Provisioned {
-		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, bedrockRef); ba.ready {
-			llmAccess = &composeLLMAccess{
-				Provisioned: true,
-				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",
-			}
-		}
-	}
+	// LLM-access verdict on the resolved spec — the SAME computation the create path
+	// warns from (resolveRunLLMAccess), so this checklist row and the launch-time
+	// warning can never disagree. The helper clones internally: reconcileLLMAccess
+	// drops orphaned grants in place, but launch persists every grant on the resolved
+	// spec, so the checklist must keep seeing the FULL spec.
+	llmAccess := s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess, nil, composeSubscriptionState{})
 	writeJSON(w, http.StatusOK, preflightResponse{
