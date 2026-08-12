@@ -9,8 +9,9 @@
 controls, and audit are the product; the sandbox is a pluggable commodity.**
 Anything you run under your own credentials — a script, a build, a CI job, a
 coding agent — inherits your full blast radius. Wardyn is the governance layer in
-between: each run gets its own identity, scoped credentials minted on demand, one
-audited path off-host, and no resident secrets. Coding agents (Claude Code, Codex
+between: each run gets its own identity, scoped credentials minted on demand and
+revoked after, one audited path off-host, and no static key or subscription token
+left resident in the box. Coding agents (Claude Code, Codex
 CLI, and successors) are the flagship use, so most of what follows is framed
 around them.
 
@@ -88,25 +89,59 @@ checks it.
   token, commit, and audit event. **[shipped]** (embedded JWT-SVID issuer;
   SPIRE-backed **[v0.5+ — planned]**).
 
-- **Broker-minted scoped credentials.** The run never holds a credential: the
-  broker mints short-lived, repo-scoped ones on demand, injected proxy-side.
-  Approval-required grants mint inside the Postgres transaction that verifies an
-  `APPROVED` request for that exact run+scope — no widening. **[shipped]**
+- **Broker-minted scoped credentials — never resident.** The run never holds a
+  credential. Broker-scoped credentials (git tokens and the like) are minted
+  short-lived on demand and revoked per run; approval-required grants mint inside
+  the Postgres transaction that verifies an `APPROVED` request for that exact
+  run+scope — no widening. Static API keys and OAuth subscription tokens never
+  enter the sandbox at all: `env` inside shows only an inert placeholder
+  (`ANTHROPIC_API_KEY=wardyn-proxy-injected`), the real value injected proxy-side
+  on the wire. Two disclosed opt-in exceptions *are* resident and audited — an
+  `ssh_key` written 0400 and shredded after the clone, and Bedrock's in-process
+  SigV4 signing keys — because neither can be injected on the wire. Even the one
+  competitor that matches this credential hygiene (Cloudflare OS) leans on a
+  long-lived human OAuth grant persisted server-side, not Wardyn's
+  mint-and-revoke on every integration. **[shipped]**
 
-- **Layered egress.** A sandbox is gatewayless — its only path off-host is the
-  `wardyn-proxy` sidecar (L7 allowlist, method rules, first-use approval,
-  proxy-side credential injection), so the env-var-bypass class is defended
-  *structurally*: with no route, an agent that ignores `HTTP_PROXY` reaches
-  nothing. **[shipped]**; L1 default-deny and an MCP gateway are **[v0.5+ —
-  planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Layered egress with a real mid-run hold.** A sandbox is gatewayless — its
+  only path off-host is the `wardyn-proxy` sidecar (L7 allowlist, method rules,
+  first-use approval, proxy-side credential injection), so the env-var-bypass
+  class is defended *structurally*: with no route, an agent that ignores
+  `HTTP_PROXY` reaches nothing. Set first-use approval to `wait_for_review` and
+  a request to an unlisted host is *held at the broker* until a human decides —
+  approve, and the *same* in-flight connection completes (hands-on proven: held
+  ~3s, then the original
+  request returned 200; no retry, no restart, no lost work). The field
+  fail-then-retries; the nearest analog in Vault and Teleport is Enterprise-only
+  and Boundary's is still an open feature request. Timeout degrades *closed* to
+  deny, never to allow. **[shipped]**; L1 default-deny and an MCP gateway are
+  **[v0.5+ — planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-- **Three-stream append-only audit.** The control-plane event log (a Postgres
-  trigger blocks UPDATE/DELETE), PTY replay via `wardyn-rec`, and the opt-in
-  eBPF/Tetragon ground-truth stream correlated on `run_id` — all **[shipped]**.
-  Ground-truth is **detection, not prevention** and honestly degradable
-  (`/healthz` reports `ebpf_groundtruth=unavailable`; blind inside CC3/Kata
-  guests). SIEM export (JSON webhook/syslog/file) is **[shipped]** and free;
-  OTLP/OCSF **[v0.5+ — planned]**.
+- **Code leaves only through a broker that reads the push.** A repo-backed run
+  can push only through the git broker, which parses the receive-pack itself and
+  refuses any ref outside `refs/heads/wardyn/<run-id>/*`, under a distinct per-run
+  identity that one action kills *and* revokes — proven ~2.5ms apart, both
+  containers gone in under a second. No surveyed competitor combines
+  branch-namespace confinement, per-run identity, and a provable kill+revoke; the
+  field either has no branch-namespace confinement, rides the human's own
+  identity, or has no code-egress concept at all. Ceilings stated plainly:
+  enforcement is proxy-side today (token-side self-restriction is
+  **[v0.5+ — planned]**), and the `git_pat`/`ssh_key` lanes
+  sit outside the receive-pack parser. **[shipped]**
+
+- **Three-stream append-only audit that can't quietly rot.** Append-only is
+  enforced by the database, not by convention — a Postgres trigger rejects
+  UPDATE, DELETE, *and* TRUNCATE (the closest competitor's own docs recommend
+  `DELETE FROM audit_logs` for maintenance). If the store is down, every audit
+  write is fsync'd to an append-only local spool and drained back on recovery, so
+  Wardyn keeps both availability *and* completeness where Vault's fail-closed
+  audit trades availability away. The three streams — the control-plane event
+  log, PTY replay via `wardyn-rec`, and the opt-in eBPF/Tetragon ground-truth
+  stream — correlate on `run_id`, all **[shipped]**. Ground-truth is
+  **detection, not prevention** and honestly degradable (`/healthz` reports
+  `ebpf_groundtruth=unavailable`; blind inside CC3/Kata guests; a blind sensor is
+  logged as an event, never a silent zero). SIEM export (JSON webhook/syslog/file)
+  is **[shipped]** and free; OTLP/OCSF **[v0.5+ — planned]**.
 
 - **Confinement Classes.** Friendly UI names — **Fence** = CC1 (hardened
   shared-kernel runc) **[shipped]**, **Wall** = CC2 (gVisor userspace kernel)
@@ -117,8 +152,12 @@ checks it.
   (`scripts/up.sh` `pick_policy`): `default.json` (CC2) on a runsc-registered
   host with no model configured, `demo.json` (CC1) on a runc-only host, and
   `composer-dev.json` (CC1 floor) once a real model path is configured —
-  `wardyn setup status` reports which tier you actually got. Policy can mandate
-  a minimum class; the plane refuses a run a substrate cannot satisfy.
+  `wardyn setup status` reports which tier you actually got. Pick a tier per run,
+  and if the host can't enforce it the run *refuses to start* — it never silently
+  downgrades, and the tier you actually got is a queryable fact of the run record;
+  policy can also mandate a minimum class. (Northflank's own docs document silent
+  substitution to gVisor; Anthropic's flagship path fails open — "runs commands
+  without sandboxing.")
 
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the
   plane wraps it with the runner tools (`WARDYN_ENVBUILD`, on by default on
@@ -133,9 +172,15 @@ checks it.
   subscription** via container login. AWS Bedrock is operator-configured (bearer
   proxy-injected; SigV4 keys resident, documented). **[shipped]**
 
-- **Recorded profiles → governed reruns.** Record a named interactive session in
-  a workspace, then rerun it confined as a fast-track profile with its observed
-  egress preloaded — [TRY-IT Level 2.5](docs/TRY-IT.md). **[shipped]**
+- **Record Mode — the moat.** Run the task once, open. Wardyn watches what it
+  actually touched, writes the minimal policy — exact hosts, never a wildcard,
+  plumbing domains excluded with a plain-English reason — and replays it confined,
+  by reference. It's the rarest capability in the surveyed field: 26 of 30
+  scored competitors have no policy-derivation loop at all, and the single
+  competitor that ships one keeps it off by default and never confines a replay. Honest ceiling — the
+  synthesized policy can only ever subset what the observed run already reached, so
+  genuine least-privilege *discovery* still needs the open record route
+  — [TRY-IT Level 2.5](docs/TRY-IT.md). **[shipped]**
 
 - **AI Run Composer (optional).** Describe a task in plain English and Wardyn
   proposes a confined run and grades it deterministically — advisory; the binary

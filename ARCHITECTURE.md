@@ -4,10 +4,11 @@
 > a formal trademark clearance is still pending and the name may change before a
 > 1.0. Module path `github.com/cjohnstoniv/wardyn` (personal namespace for now).
 
-**Thesis:** the open-source governance control plane for coding agents —
+**Thesis:** the open-source governed-sandbox control plane for any workload —
 identity, controls, and audit are the product; the sandbox is a pluggable
-commodity. Apache-2.0 everything; no `enterprise/` directory; CNCF Sandbox is
-the governance target.
+commodity. Coding agents (Claude Code, Codex CLI, and successors) are the
+flagship use, so most of what follows is framed around them. Apache-2.0
+everything; no `enterprise/` directory; CNCF Sandbox is the governance target.
 
 > **Status markers.** Controls below are tagged **[shipped]** /
 > **[experimental]** / **[v0.5+ — planned]**, matching
@@ -65,13 +66,17 @@ audit streams".
   requirements contract: what the workspace carries into every run (Required)
   versus what a run may enable (Optional). Endpoints under
   `/api/v1/workspaces/`.
-- **Record Mode** — run a task open once, then synthesize a least-privilege
-  policy from its captured audit trail (`internal/recordmode`,
-  `POST /api/v1/runs/{id}/profile`) and re-run it confined. The synthesized
-  *allowlist* is derived from PROXY-observed egress only (exact hosts that were
-  actually allowed, never wildcarded, never a denied/pending host); kernel
-  ground-truth (exec / connect / sensitive write) has no policy field and is
-  surfaced as review warnings, never as silent policy. **KNOWN GAP**: that
+- **Record Mode — the moat.** Run a task open once, then synthesize a
+  least-privilege policy from its captured audit trail (`internal/recordmode`,
+  `POST /api/v1/runs/{id}/profile`) and re-run it confined, by reference. It is
+  the rarest capability in the surveyed field — most competitors have no
+  policy-derivation loop at all, and the one that does keeps it off by default and
+  never confines a replay. The synthesized *allowlist* is derived from
+  PROXY-observed egress only (exact hosts that were actually allowed, never
+  wildcarded, never a denied/pending host), so it can only ever subset what the
+  observed run already reached — genuine least-privilege *discovery* still needs
+  the open record route; kernel ground-truth (exec / connect / sensitive write)
+  has no policy field and is surfaced as review warnings, never as silent policy. **KNOWN GAP**: that
   kernel evidence comes from the opt-in eBPF/Tetragon sensor, which is blind
   inside CC3/Kata guests — and `Synthesize` does not flag its own blindness, so
   a profile proposal for a CC3 run reads identically to a fully-observed one.
@@ -97,6 +102,14 @@ audit streams".
   `deploy/images/common/agent-run-lib.sh`). `scripts/ci-run.sh` composes it:
   fresh compose stack → preflight → run → artifacts → teardown. Docs:
   `docs/CI.md`.
+- **AI Run Composer** *(optional, advisory)* — describe a task in plain English
+  and the Composer proposes a confined run, then grades it deterministically
+  (`internal/composer`, `POST /api/v1/runs/compose`; the proposal is
+  policy-clamped before anything runs — `internal/api/policy.go`, "composer/
+  profile clamp"). Advisory only: the binary ships with no backend, `make setup`
+  seeds a no-API-key `fake` composer (`composer.FakeComposer`) so the flow works
+  out of the box, and nothing it proposes launches until the operator starts the
+  run. Docs: [TRY-IT Level 3](docs/TRY-IT.md).
 
 ## The four nouns (`internal/types`)
 
@@ -134,14 +147,19 @@ forward-compatibility values; no transition produces them today.
 1. **Secrets never enter the sandbox — with three named, bounded exceptions.**
    Late binding via the broker; third-party API credentials are injected
    proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
-   disk, or args. Three residuals break that rule deliberately — each bounded
-   and disclosed rather than hidden (`threatmodel/THREAT-MODEL.md` §5.1a):
+   disk, or args — static API keys and OAuth subscription tokens never enter the
+   sandbox (env inside shows only an inert placeholder, the real value injected
+   on the wire), and broker-scoped credentials are minted and revoked per run,
+   where even the one competitor that matches this hygiene (Cloudflare OS) leans
+   on a long-lived human OAuth grant persisted server-side. Three residuals break
+   that rule deliberately — each bounded and disclosed rather than hidden
+   (`threatmodel/THREAT-MODEL.md` §5.1a):
 
    | Exception | Why it can't be brokered | Bound / disclosure |
    |---|---|---|
    | `ssh_key` grant | `ssh` reads the key from disk | RESIDENT private key, written 0400, descendant-scoped, wiped after clone |
    | Bedrock **access-key** mode | SigV4 request-signing happens in-process, so there is nothing to inject on the wire | `aws-access-key-id`/`aws-secret-access-key` sit in the sandbox env; the preferred bearer mode is never resident |
-   | `WARDYN_SUBSCRIPTION_INJECT=off` (`cmd/wardynd/main.go`) | Opt-in escape hatch, not a limitation: stages a sanitized RESIDENT COPY of the operator's Claude credential — `~/.claude` + `~/.claude.json`, copied read-only by `scripts/stage-claude-creds.sh` from a host staging dir (default `~/.wardyn/claude-creds`). It is a real, refreshable OAuth token, unlike the default's inert sentinel that the proxy replaces on the wire, and it goes stale as the operator's own `claude` rotates its refresh token (re-run the staging script) | The ABSENCE of the `run.llm.subscription_inject` audit event on an otherwise subscription-mounted run (present = proxy-injected; absent = resident copy) |
+   | `WARDYN_SUBSCRIPTION_INJECT=off` (`cmd/wardynd/boot_deps.go`) | Opt-in escape hatch, not a limitation: stages a sanitized RESIDENT COPY of the operator's Claude credential — `~/.claude` + `~/.claude.json`, copied read-only by `scripts/stage-claude-creds.sh` from a host staging dir (default `~/.wardyn/claude-creds`). It is a real, refreshable OAuth token, unlike the default's inert sentinel that the proxy replaces on the wire, and it goes stale as the operator's own `claude` rotates its refresh token (re-run the staging script) | The ABSENCE of the `run.llm.subscription_inject` audit event on an otherwise subscription-mounted run (present = proxy-injected; absent = resident copy) |
 
    Secret values are masked on the audit/recording/decision-log streams by
    `internal/secretmask` (verbatim-match; the encoded/transformed-exfil residual
@@ -176,16 +194,22 @@ forward-compatibility values; no transition produces them today.
    Enforcement points live at the proxy/gateway/broker — never inside the
    agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
-   policy refuses what a substrate cannot enforce (Confinement Classes
-   CC1 runc / CC2 gVisor, preferred wherever `runsc` is registered / CC3 Kata
-   **[experimental]** — surfaced in
-   the README, UI, and CLI by their friendly names **Fence / Wall / Vault**).
+   policy refuses what a substrate cannot enforce — it refuses to *start* rather
+   than silently downgrading the tier you asked for (Northflank's own docs
+   document silent substitution to gVisor; Anthropic's flagship path fails open),
+   and the tier actually enforced is a queryable fact of the run record
+   (Confinement Classes CC1 runc / CC2 gVisor, preferred wherever `runsc` is
+   registered / CC3 Kata **[experimental]** — surfaced in the README, UI, and CLI
+   by their friendly names **Fence / Wall / Vault**).
    Embedded identity provider
    refuses `cloud_sts` grants (SPIRE required). Residual risks are
    published in `threatmodel/`, not hidden.
 6. **Audit is append-only and free.** Every mint/revoke/approval/policy
    change/egress decision is an event. The Postgres trigger blocks
-   UPDATE/DELETE, so a written event can never be altered or erased. NOTE:
+   UPDATE/DELETE/TRUNCATE, so a written event can never be altered or erased —
+   append-only is enforced at the datastore, not by app convention (the closest
+   competitor's own docs recommend `DELETE FROM audit_logs` for maintenance).
+   NOTE:
    control-plane audit WRITES (identity mint/revoke, approval decide, broker
    mint/revoke) are still best-effort — the call site is fire-and-forget
    (`_ = rec.Record(...)`, not wrapped in the mint transaction), so a write can
@@ -194,7 +218,9 @@ forward-compatibility values; no transition produces them today.
    (API, broker, identity, approvals, sweeper) shares it — so when the primary
    Postgres write fails, the (already-masked) event is spooled to a durable
    local append-only JSONL fallback (`WARDYN_AUDIT_SPOOL`) instead of being
-   silently lost, for EVERY writer, not just the API server. This is
+   silently lost, for EVERY writer, not just the API server — so Wardyn keeps
+   both availability and completeness where Vault's fail-closed audit trades
+   availability away. This is
    durability via a local fallback, not a transactional guarantee — it is
    still possible for a write and its spool append to both fail (logged
    loudly when that happens). (The ground-truth ingest path is a stronger,
@@ -243,7 +269,7 @@ is decided by grant kind and host, and neither can cover the other's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
-| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default (no surveyed competitor combines branch-namespace confinement, per-run identity, and a provable one-action kill+revoke) — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
 | `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git`. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
 
@@ -281,7 +307,7 @@ L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftabl
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve — the field fail-then-retries, and the nearest analog in Vault/Teleport is Enterprise-only); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 ## Deployment surface (anti-sprawl constraint)
