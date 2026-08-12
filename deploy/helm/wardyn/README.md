@@ -50,12 +50,27 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 
 ## Prerequisites
 
-- Kubernetes 1.20+ with a CNI that enforces NetworkPolicy (the chart renders a
-  portable `networking.k8s.io/v1` policy — no specific CNI required)
-- Postgres 12+ (external or managed)
+Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a
+NetworkPolicy-enforcing CNI, and Postgres 12+.** Everything else the control
+plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets
+wiring) is rendered by this chart. In detail:
+
+- **Kubernetes 1.20+** and **Helm 3**.
+- **A CNI that enforces NetworkPolicy** (Calico, Cilium, ...). The chart
+  renders portable `networking.k8s.io/v1` policies — no specific CNI required
+  — but enforcement is load-bearing: with `k8s.enabled`, a boot-time egress
+  canary verifies it and refuses to start the substrate on a non-enforcing
+  CNI (kind's default kindnet is the classic case — the conformance CI lane
+  pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the
+  refusal to a loud warning).
+- **Postgres 12+** (external or managed).
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.
+- Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via
+  `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement
+  tiers — CC1 works out of the box. An **OIDC issuer** for SSO and
+  admin/member RBAC (see [Multi-user](#multi-user-adminmember-rbac)).
 
 ## Build and push wardynd
 

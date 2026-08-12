@@ -173,6 +173,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   in-flight connection hold vs. the Enterprise-only analog in Vault/Teleport,
   the Apache-2.0 no-paid-tier + audit-completeness framing, and the L1/L2
   metadata-server defense-in-depth.
+- **Kubernetes platform requirements.** The Helm chart README's
+  Prerequisites now state the full platform contract in one place:
+  Kubernetes 1.20+, Helm 3, a NetworkPolicy-**enforcing** CNI (verified by
+  the boot-time egress canary, which refuses a non-enforcing substrate),
+  Postgres 12+, and the optional RuntimeClass (CC2/CC3) and OIDC add-ons.
 
 ## [0.4.5] — 2026-08-11
 
