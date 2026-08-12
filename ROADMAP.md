@@ -240,6 +240,16 @@ shipped behavior; none is scheduled.
   secret-exfil vector — the member grant-scope drop above means no operator
   secret can be injected on the widened host — but gating scan-seeded egress by
   provenance is a residual follow-up (`threatmodel/THREAT-MODEL.md`).
+- **Custom base-image build steps are collected but not layered into the image.**
+  The New Workspace wizard's "custom recipe" base image collects, validates, and
+  stores Dockerfile-style RUN/ENV/ARG steps, but no build path applies them —
+  `FinalizeBase` wraps only the base ref (`internal/api/workspace_run.go`; the
+  `ImageBuilder` interface has no `steps` parameter). Until step-layering is
+  wired, the typed steps are recorded, not executed; the wizard copy
+  (`ui/src/app/lib/workspace-copy.ts`) should not imply they run. The supported
+  customization paths today are a devcontainer repo (`WARDYN_ENVBUILD`) or a
+  pre-built BYOI image, both of which DO reach the sandbox. Surfaced by the
+  2026-08-12 functional-paths review (`local/functional-paths-2026-08-12/`).
 
 ## What is not on the roadmap
 

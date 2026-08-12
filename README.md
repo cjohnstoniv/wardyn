@@ -261,8 +261,10 @@ status`), YAML policies, container workspaces with their own model
 credentials, Bedrock via AWS SSO, and the corporate-network build/egress
 lanes. v0.1–v0.3.1 shipped per-run identity, the approval FSM and credential
 broker, the L2 egress proxy and append-only audit, CC1/CC2 confinement, CI
-mode (BYOA), and the repo-scoped git-broker. **v0.5 is code-complete and
-CI-green on this branch — not yet merged to main or tagged** — see
+mode (BYOA), and the repo-scoped git-broker. **v0.5 adds the Kubernetes runner
+substrate (alpha), admin/member RBAC with owner scoping, SSH into a running
+sandbox, and signed release images; it is merged into `main` and CI-green, with
+the tagged release the remaining maintainer step** — see
 [ROADMAP.md](ROADMAP.md) for what it adds.
 
 Exactly two deployment paths, and **both now run sandboxes**: `deploy/compose`

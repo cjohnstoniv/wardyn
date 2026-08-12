@@ -213,8 +213,8 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
                 </a>
               </Button>
               <p className="mt-2 text-center text-xs text-muted-foreground">
-                No per-user roles yet — anyone who signs in this way has the same powers as
-                the admin token.
+                Your role — admin or member — comes from your SSO role assignment. Everyone is
+                an admin only when neither a role map nor the operator allowlist is set.
               </p>
             </>
           ) : (

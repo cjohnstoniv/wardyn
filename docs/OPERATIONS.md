@@ -104,7 +104,7 @@ forcing a re-login that derives one fresh.
 
 | `WARDYN_OIDC_ROLE_MAP` | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| unset | all **admin** (today's pre-0.5 behavior — opt-in, upgrade-safe) | always **admin** |
+| unset | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
 | set | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
 
 The admin token and local mode are **always admin** — both are a single
@@ -197,7 +197,7 @@ an admin who needs another human's run uses the web terminal, same as a
 member would (`docs/SSH.md`'s Bounds section; `threatmodel/THREAT-MODEL.md`
 residual #15). See [ROADMAP.md](../ROADMAP.md) for what's queued.
 
-**None of this governance is a paid tier.** The operator/viewer split above, the
+**None of this governance is a paid tier.** The admin/member split above, the
 approval broker, and the append-only audit log all ship in the Apache-2.0 build —
 there is no license key, no "Premium" gate, no entitlement check anywhere in the
 tree (`grep -riE 'license.key|premium|enterprise.(only|tier)|entitlement'
@@ -217,19 +217,24 @@ the other way here.
 ## Second viewer, same host
 
 > This recipe gives a second person their own SSO identity instead of the shared
-> admin token — and what that identity *can do* is exactly the operator/viewer
-> split above. List their address in `WARDYN_OIDC_OPERATOR_EMAILS` and they are an
-> operator; leave them off it and they are a real **viewer**: they read everything
-> and launch/kill runs — any run, nothing is owner-scoped — but 403 on the
-> operator-only surface enumerated under
-> [Who can change what](#who-can-change-what). Every signed-in human has
-> admin-equivalent power only when the operator list is *unset* — and with OIDC
-> configured that is **refused at boot** unless
-> `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant it, with a boot
-> warning telling you to set the list instead (`cmd/wardynd/boot_deps.go`). The
-> ceiling that remains is narrower than "no roles at all": there are no per-user
-> custom roles, and the admin token is always an operator and cannot be demoted
-> (real roles and owner scoping are v0.5+ — [ROADMAP.md](../ROADMAP.md)).
+> admin token — and what that identity *can do* is exactly the **admin/member**
+> model in [Multi-user: who can change what](#multi-user-who-can-change-what)
+> above. Under OIDC, `WARDYN_OIDC_OPERATOR_EMAILS` is the boot-required allowlist
+> (an empty one **refuses to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`,
+> which — absent a role map — instead makes every signed-in human admin —
+> `cmd/wardynd/boot_deps.go`):
+> everyone on it is an **admin**, and `WARDYN_OIDC_ROLE_MAP` (opt-in, on top) can
+> also derive **admin**/**member** from SSO roles/groups. Anyone neither listed
+> nor mapped to admin is a **member** (or, with a role map set, denied login
+> unless `WARDYN_OIDC_DEFAULT_ROLE` catches them) — a member reads and
+> launches/kills runs, but is owner-scoped: only their OWN runs/approvals/audit
+> are visible (a foreign run id gets the byte-identical 404 a missing one does, so
+> there is no existence oracle), they may decide only `egress_domain` approvals on
+> runs they own, their `inline_policy` is clamped to your ceiling, and every
+> admin-only surface 403s. What remains unbuilt is narrower than "no roles at
+> all": no custom roles beyond admin/member and no "read-only share"/co-owner
+> concept, and the admin token is always an admin and cannot be demoted
+> ([ROADMAP.md](../ROADMAP.md)).
 
 A **remote** second person is a dead end regardless: both the bundled Dex and
 wardynd itself publish loopback-only (`127.0.0.1:PORT`,
@@ -258,8 +263,10 @@ setup `make setup` does not do for you:
    `docker-compose.yaml` carries those defaults), so the two you set are the
    issuer and the operator allowlist. With OIDC configured, an **empty**
    `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot (the split has to mean
-   something — [Who can change what](#who-can-change-what)), so list yourself:
-   everyone listed is an operator, everyone else who can sign in is a viewer.
+   something — [Multi-user: who can change what](#multi-user-who-can-change-what)),
+   so list yourself: everyone listed is an **admin**, everyone else who can sign
+   in is a **member** (add `WARDYN_OIDC_ROLE_MAP` to derive admin/member from SSO
+   roles/groups instead).
 
    ```sh
    echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env

@@ -262,10 +262,11 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		// the log never overstates OR understates what the deployment enforces.
 		// Log only the COUNT — the list itself is not disclosed.
 		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
-			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled. "+
-				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are VIEWERS — they read everything and may launch runs, "+
-				"but get 403 on configuring the deployment (harness-credential, policy, workspace, site-config writes), on secret writes/deletes, "+
-				"on deciding an approval, and on minting an attach ticket. That is the ONLY role tier — everything else, incl. the admin token, is operator",
+			slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet, but admin/member RBAC does. "+
+				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are MEMBERS — owner-scoped: they launch/kill runs and "+
+				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment (harness-credential, "+
+				"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a member may still "+
+				"decide egress_domain approvals on their own runs). admin/member is the only role tier — everything else, incl. the admin token, is always admin",
 				slog.Int("operator_emails", len(ops)))
 			// The allowlist matches the IdP's email claim, and email_verified is
 			// only enforced when the domains list is set — without it, an IdP
@@ -282,12 +283,16 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 		// Role-map posture (independent knob from the operator-emails split
 		// above; a later lane unifies the two — see internal/auth/oidc's
-		// deriveRole doc). An unset roleMap means deriveRole grants every
-		// signed-in human RoleAdmin, unconditionally — loud so an operator
-		// adding a second human notices before finding out the hard way that
-		// everyone is an admin.
+		// deriveRole doc). With no roleMap, deriveRole derives roles from the
+		// WARDYN_OIDC_OPERATOR_EMAILS allowlist alone (listed = admin, everyone
+		// else = member); only when the allowlist is ALSO empty does every
+		// signed-in human become admin — and that case is the loud else-branch
+		// warning above, so here we only nudge an allowlist-split operator toward
+		// a role map for claim-based members.
 		if len(roleMap) == 0 {
-			slog.Warn("wardynd: SSO users all receive the admin role; set WARDYN_OIDC_ROLE_MAP to introduce members")
+			if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
+				slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = member); set a role map to derive admin/member from SSO roles/groups instead")
+			}
 		} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
 			// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
 			// (~:270), fired independently since either var can be set without

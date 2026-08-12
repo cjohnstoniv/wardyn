@@ -32,8 +32,9 @@ describe("SignIn — SSO entry point", () => {
     renderSignIn();
     const link = await screen.findByRole("link", { name: /sign in with sso/i });
     expect(link).toHaveAttribute("href", "/auth/login");
-    // The caveat that survives enabling it: there is no per-user role gate yet.
-    expect(screen.getByText(/no per-user roles yet/i)).toBeInTheDocument();
+    // The caveat under the SSO button: a role (admin/member) is derived from the
+    // caller's SSO role assignment (admin/member RBAC shipped in v0.5).
+    expect(screen.getByText(/comes from your SSO role assignment/i)).toBeInTheDocument();
   });
 
   it("stays disabled when OIDC is not configured", async () => {
