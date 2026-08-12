@@ -36,12 +36,20 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		for _, directive := range []string{
 			"default-src 'self'",
 			"frame-ancestors 'none'",
-			"font-src 'self' data:",       // console webfont is a data: URI
-			"connect-src 'self' ws: wss:", // PTY attach WebSocket
+			"font-src 'self' data:",                  // console webfont is a data: URI
+			"connect-src 'self' ws: wss:",            // PTY attach WebSocket
+			"script-src 'self' 'wasm-unsafe-eval'",   // recording replay player instantiates WASM
 		} {
 			if !strings.Contains(csp, directive) {
 				t.Errorf("%s: CSP %q missing %q", path, csp, directive)
 			}
+		}
+		// The recording player needs 'wasm-unsafe-eval' (WASM compile only), NOT
+		// the far broader 'unsafe-eval' (arbitrary JS eval/Function). Guard against
+		// a future "just add unsafe-eval" shortcut: the leading space+quote can't
+		// match inside 'wasm-unsafe-eval'.
+		if strings.Contains(csp, " 'unsafe-eval'") {
+			t.Errorf("%s: CSP %q must not grant 'unsafe-eval' (use 'wasm-unsafe-eval')", path, csp)
 		}
 	}
 }

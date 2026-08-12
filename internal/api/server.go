@@ -780,12 +780,21 @@ func (s *Server) routes() chi.Router {
 //   - connect-src names ws:/wss: explicitly. 'self' matching a same-origin
 //     WebSocket is CSP3 behavior WebKit has historically not implemented, and
 //     the PTY attach must not silently die there.
+//   - script-src is 'self' plus 'wasm-unsafe-eval' — the RECORDING replay player
+//     (asciinema-player, a WASM VT core) calls WebAssembly.instantiate(), which
+//     browsers refuse under a bare default-src 'self'. 'wasm-unsafe-eval' permits
+//     WASM compilation ONLY; it is not 'unsafe-eval' (no JS eval/Function), so
+//     scripts stay locked to same-origin. Without it the player renders its chrome
+//     but never plays (duration stuck at --:--). The live attach terminal (xterm,
+//     no WASM) is unaffected either way. run-ui-e2e asserts on console errors so a
+//     future CSP tightening against a WASM component can't silently regress this.
 //
 // No HSTS: the default posture is plain http on loopback, where an HSTS header
 // would poison every other localhost port.
 func securityHeaders(next http.Handler) http.Handler {
 	const csp = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; " +
 		"object-src 'none'; connect-src 'self' ws: wss:; " +
+		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

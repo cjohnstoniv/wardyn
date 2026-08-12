@@ -125,4 +125,40 @@ test.describe("Recordings library", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("e2e fixture 4")).toBeVisible();
   });
+
+  // Regression for the CSP-vs-WASM replay bug: the recording player is an
+  // asciinema-player whose VT core instantiates a WASM module. A CSP without
+  // 'wasm-unsafe-eval' (the shipped default-src 'self') makes WebAssembly.instantiate()
+  // throw a CompileError, so the player renders its chrome but never plays. That
+  // shipped once precisely because no e2e asserted on the console — the visual
+  // "dialog opened" check above passes even with a dead player. This guard fails
+  // if opening the player logs any CSP/WASM error.
+  test("opening the player instantiates its WASM core without a CSP violation", async ({ page }) => {
+    const cspWasmErrors: string[] = [];
+    const collect = (text: string) => {
+      if (/content security policy|wasm|webassembly|compileerror|unsafe-eval/i.test(text)) {
+        cspWasmErrors.push(text);
+      }
+    };
+    page.on("console", (msg) => {
+      if (msg.type() === "error") collect(msg.text());
+    });
+    page.on("pageerror", (err) => collect(err.message));
+
+    await page.route(RECORDING_GLOB, (route) =>
+      route.fulfill({ status: 200, contentType: "text/plain", body: CAST }),
+    );
+    await openRecordings(page);
+    await page.getByText("e2e fixture 4").click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    // Give the player a beat to mount and attempt WASM instantiation, then assert
+    // the console stayed clean of any CSP/WASM violation.
+    await page.waitForTimeout(500);
+    expect(
+      cspWasmErrors,
+      `recording player logged CSP/WASM errors (CSP missing 'wasm-unsafe-eval'?):\n${cspWasmErrors.join("\n")}`,
+    ).toEqual([]);
+  });
 });
