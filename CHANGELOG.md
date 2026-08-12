@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-12
+
 ### Security
 
 - **OIDC sessions now carry a derived admin/member role** (`WARDYN_OIDC_ROLE_MAP`,
