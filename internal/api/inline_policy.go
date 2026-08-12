@@ -86,6 +86,22 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
 			spec, clampWarnings = composer.Clamp(spec, s.cfg.DefaultPolicy)
+			// composer.Clamp bounds egress/confinement/TTL and drops grant KINDS
+			// outside the ceiling, but NOT a stored-secret grant's SCOPE (which
+			// operator secret is paired with which host) — that stays member-
+			// authored and would be a secret-exfil primitive. Drop a member's
+			// api_key/git_pat/ssh_key grant whose pairing the operator did not
+			// eligible-list; the run's own model-access grant is re-added at
+			// launch by foldRunIntegration (an operator integration) or
+			// applyWorkspaceRequirements (a workspace requirement) below. See
+			// filterMemberGrants.
+			kept, grantWarns, code, gerr := s.filterMemberGrants(spec.EligibleGrants)
+			if gerr != nil {
+				writeError(w, code, "invalid inline_policy: "+gerr.Error())
+				return types.RunPolicySpec{}, nil, nil, false
+			}
+			spec.EligibleGrants = kept
+			clampWarnings = append(clampWarnings, grantWarns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
@@ -146,6 +162,100 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 // Other grant kinds are skipped here — the structural validity of a grant scope
 // is the job of validatePolicySpec / the broker; this check is solely about
 // secret existence.
+// filterMemberGrants drops a MEMBER's inline stored-secret grant (api_key /
+// git_pat / ssh_key) whose {host, secret} pairing the operator did not
+// eligible-list. composer.Clamp bounds egress, confinement, TTL and grant
+// KINDS, but the SCOPE of a non-github grant — which stored credential is
+// injected on which host — is member-authored and left unclamped; without this
+// a member could pair ANY non-reserved stored secret with ANY allowlisted host
+// (a secret-exfil primitive, amplified by scan-seeded egress). DROPPED, not
+// rejected: a run's legitimate model-access grant is re-added admin-side at
+// launch (handleCreateRun) AFTER this returns — foldRunIntegration folds an
+// operator integration's own key (DefaultFor:agent_runs or a workspace pin),
+// applyWorkspaceRequirements folds a workspace requirement's secret — so a
+// member's own copy of one is redundant, and dropping an unmatched grant
+// removes a genuine exfil pairing while the real grant still arrives. (A member
+// run whose model access relies on a raw operator secret with NO integration
+// and NO workspace requirement gets no grant re-added — fail-closed, no exfil;
+// operators provision member model access via an integration.) Rejecting
+// instead would 403 the composer's own model-access grant under a wildcard
+// api_key ceiling, and an integration key's name is not the provider convention
+// so it cannot be exempt-matched at this layer anyway. Called for MEMBERS only —
+// an operator is the ceiling authority and stays unclamped. A sentinel LLM
+// api_key grant is kept: it references no operator stored secret and
+// validateInlineSecretRefs host-pins it to the provider. An UNDECODABLE scope is
+// a malformed request → error (fail closed), never a silent drop.
+func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
+	ceiling := s.cfg.DefaultPolicy.EligibleGrants
+	for _, g := range grants {
+		host, secretRef, covered, derr := storedSecretGrantPairing(g)
+		if !covered {
+			kept = append(kept, g) // github_token (scope-intersected by the clamp), cloud_sts, …
+			continue
+		}
+		if derr != nil {
+			return nil, nil, http.StatusUnprocessableEntity, fmt.Errorf("%s grant scope invalid: %w", g.Kind, derr)
+		}
+		if g.Kind == types.GrantAPIKey {
+			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
+				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
+				continue
+			}
+		}
+		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, ceiling) {
+			warns = append(warns, fmt.Sprintf(
+				"dropped %s grant pairing secret %q with host %q: not in the operator's eligible grants (the run's own model access is provisioned by the platform)",
+				g.Kind, secretRef, host))
+			continue
+		}
+		kept = append(kept, g)
+	}
+	return kept, warns, 0, nil
+}
+
+// storedSecretGrantPairing returns the (host, secretRef) a stored-secret grant
+// pairs and whether the kind is one enforceMemberGrantScope covers. An
+// undecodable scope returns covered=true WITH the error (fail closed — an
+// unreadable stored-secret grant is rejected, never skipped).
+func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef string, covered bool, err error) {
+	switch g.Kind {
+	case types.GrantAPIKey:
+		r, e := injectionRuleFromScope(g.Scope)
+		return r.Host, r.SecretName, true, e
+	case types.GrantGitPAT:
+		h, sn, _, e := gitPATScopeFields(g.Scope)
+		return h, sn, true, e
+	case types.GrantSSHKey:
+		h, kr, _, _, e := sshKeyScopeFields(g.Scope)
+		return h, kr, true, e
+	default:
+		return "", "", false, nil
+	}
+}
+
+// storedSecretPairingInCeiling reports whether some operator eligible-grant of
+// the same kind pairs the SAME host with the SAME secret (host case-insensitive)
+// — an exact-pairing match, so a member may only reuse a pairing the operator
+// explicitly listed, never invent one. An operator ceiling grant with a wildcard
+// (empty/undecodable) scope carries no pairing and matches nothing here, so it
+// authorizes the kind for the composer's own (sentinel, host-pinned) grants
+// without empowering a member to pick the secret and host.
+func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef string, ceiling []types.GrantSpec) bool {
+	for _, cg := range ceiling {
+		if cg.Kind != kind {
+			continue
+		}
+		ch, cs, covered, err := storedSecretGrantPairing(cg)
+		if !covered || err != nil {
+			continue
+		}
+		if cs == secretRef && hostEqual(ch, host) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPolicySpec) (int, error) {
 	// Collect the secret names referenced by api_key AND git_pat grants (both
 	// resolve a stored secret by name — api_key proxy-side, git_pat via the git

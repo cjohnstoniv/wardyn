@@ -302,9 +302,11 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // into oidc.Config.LegacyAdminEmails, so an email on it is still an ADDITIONAL
 // RoleAdmin match at derivation time (see deriveRole) — the mechanism is not
 // deleted, it now flows through Session.Role like every other role signal
-// instead of being re-checked here a second time. WARDYN_OIDC_ROLE_MAP unset
-// means deriveRole grants every signed-in human RoleAdmin unconditionally
-// (today's pre-0.5 behavior, additive by construction) — see oidc.deriveRole.
+// instead of being re-checked here a second time. With WARDYN_OIDC_ROLE_MAP
+// unset, deriveRole derives the role from this operator allowlist ALONE (an
+// email on it => RoleAdmin, everyone else => RoleMember); only with NEITHER a
+// role map nor an allowlist does every signed-in human default to RoleAdmin
+// (true pre-0.5) — see oidc.deriveRole.
 //
 // Admin-token and local-mode callers are ALWAYS admins. Both are a single
 // shared credential with no per-human identity to key a role off — the token IS

@@ -108,11 +108,13 @@ type Config struct {
 	// telling them to ask their operator for a WARDYN_OIDC_ROLE_MAP entry.
 	// Ignored when RoleMap is empty (see RoleMap's own empty-map behavior).
 	DefaultRole string
-	// LegacyAdminEmails is WARDYN_OIDC_OPERATOR_EMAILS — the pre-0.5 operator
-	// allowlist internal/api's requireOperator still enforces separately. An
-	// email on this list always derives RoleAdmin, same top precedence as any
-	// RoleMap admin match, so a 0.4.5 deployment that adopts WARDYN_OIDC_ROLE_MAP
-	// keeps its existing operators as admins with zero re-configuration.
+	// LegacyAdminEmails is WARDYN_OIDC_OPERATOR_EMAILS — the operator allowlist,
+	// now the SOLE source of the admin tier (internal/api's isOperator reads the
+	// derived role, not this list directly). An email on it always derives
+	// RoleAdmin, same top precedence as any RoleMap admin match, and with no
+	// RoleMap at all the list alone splits admin from member — so a 0.4.5
+	// deployment keeps its operators as admins and everyone else as members
+	// (viewers) with zero re-configuration, with or without a role map.
 	LegacyAdminEmails []string
 	// SecureCookies, when true, marks every cookie Wardyn issues (the session
 	// cookie and the one-time login state/nonce/pkce cookies) with the Secure
@@ -607,9 +609,12 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 // empty — the caller (CallbackHandler) must then deny the login.
 //
 // Precedence:
-//  1. An empty roleMap disables derivation entirely: the role is always
-//     RoleAdmin — today's pre-0.5 behavior, so introducing WARDYN_OIDC_ROLE_MAP
-//     is opt-in and upgrade-safe.
+//  1. An empty roleMap disables claim-based derivation: the role comes from the
+//     legacy operator allowlist alone — an email on legacyAdminEmails is
+//     RoleAdmin, anyone else RoleMember (main's operator/viewer split, preserved
+//     with no role map). With NEITHER a role map nor an allowlist every human is
+//     RoleAdmin (true pre-0.5) — so adopting WARDYN_OIDC_ROLE_MAP is opt-in and
+//     upgrade-safe, and so is running on only WARDYN_OIDC_OPERATOR_EMAILS.
 //  2. Otherwise, build the case-insensitive union of rolesClaim, groupsClaim,
 //     and email, and look each value up in roleMap. ANY match resolving to
 //     RoleAdmin wins over one resolving to RoleMember, no matter which claim
@@ -619,7 +624,21 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 //  3. If nothing matched at all: defaultRole if set, else deny.
 func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, ok bool) {
 	if len(roleMap) == 0 {
-		return RoleAdmin, true
+		// No role map: claim-based derivation is disabled, but the legacy
+		// operator allowlist still splits admin from member. WARDYN_OIDC_OPERATOR_EMAILS
+		// is the mandatory-minimum SSO config (validateOperatorPosture) and a role
+		// map is opt-in on top, so honoring the list here is what keeps main's
+		// operator/viewer split working after an upgrade — without this, a 0.4.5
+		// deployment that set only the allowlist would silently promote every
+		// signed-in human to admin. Only when NEITHER is set does every human
+		// default to admin (true pre-0.5, before the operator allowlist existed).
+		if len(legacyAdminEmails) == 0 {
+			return RoleAdmin, true
+		}
+		if emailInList(email, legacyAdminEmails) {
+			return RoleAdmin, true
+		}
+		return RoleMember, true
 	}
 	admin := emailInList(email, legacyAdminEmails)
 	member := false

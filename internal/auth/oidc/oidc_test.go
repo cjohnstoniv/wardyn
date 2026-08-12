@@ -464,6 +464,34 @@ func TestCallbackRoleMapUnsetDefaultsAdmin(t *testing.T) {
 	}
 }
 
+func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
+	// Regression (silent viewer→admin escalation on upgrade): with the role map
+	// UNSET but WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
+	// an upgrading 0.4.5 deployment runs (validateOperatorPosture refuses an empty
+	// list; a role map is opt-in on top) — the operator allowlist alone must still
+	// split admin from member. Before the fix, deriveRole's empty-map short-circuit
+	// returned RoleAdmin for EVERYONE, promoting every existing viewer to admin.
+	env := newIdPEnv(t)
+	auth := env.newRoleAuth(t, nil, "", []string{"olivia@corp.example"}) // role map unset, operator list set
+
+	// A listed operator email still derives admin.
+	wOp, opSess := doRoleCallback(t, env, auth, "Olivia@Corp.Example", nil, nil) // mixed case: case-insensitive match
+	if wOp.Code != http.StatusFound {
+		t.Fatalf("operator status = %d, want %d (body: %s)", wOp.Code, http.StatusFound, wOp.Body.String())
+	}
+	if opSess.Role != writoidc.RoleAdmin {
+		t.Errorf("listed operator role = %q, want %q", opSess.Role, writoidc.RoleAdmin)
+	}
+	// Any other signed-in human is a member (main's viewer tier), NOT admin.
+	wMem, memSess := doRoleCallback(t, env, auth, "victor@corp.example", nil, nil)
+	if wMem.Code != http.StatusFound {
+		t.Fatalf("member status = %d, want %d (body: %s)", wMem.Code, http.StatusFound, wMem.Body.String())
+	}
+	if memSess.Role != writoidc.RoleMember {
+		t.Errorf("non-listed role = %q, want %q (must not be promoted to admin on upgrade)", memSess.Role, writoidc.RoleMember)
+	}
+}
+
 func TestCallbackRoleLegacyOperatorEmailAdmin(t *testing.T) {
 	env := newIdPEnv(t)
 	// The map is SET and this user also hits a MEMBER entry via groups — the

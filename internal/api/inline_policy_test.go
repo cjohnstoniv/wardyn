@@ -165,6 +165,126 @@ func lastInlinePolicyConfinement(t *testing.T, events []types.AuditEvent) string
 	return ""
 }
 
+// TestFilterMemberGrants covers the secret-exfil gate: a member's inline
+// stored-secret grant is kept only when the operator eligible-listed the exact
+// {host, secret} pairing (or it is a host-pinned sentinel); everything else is
+// dropped, and the run's own model grant is re-added by the fold downstream.
+func TestFilterMemberGrants(t *testing.T) {
+	h := newHarness(t)
+	apiKey := func(host, secret string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": host, "secret_name": secret})}
+	}
+
+	// Wildcard api_key ceiling (the common LLM config): a member pairing an
+	// arbitrary stored secret with an allowlisted host is DROPPED - its pairing
+	// is not one the operator listed, so nothing is injected.
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey}}}
+	kept, warns, code, err := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("attacker.example", "prod-db-password")})
+	if code != 0 || err != nil {
+		t.Fatalf("exfil pairing: code=%d err=%v, want (0,nil) - dropped, not errored", code, err)
+	}
+	if len(kept) != 0 || len(warns) != 1 {
+		t.Fatalf("exfil pairing: kept=%d warns=%d, want (0 kept, 1 warn)", len(kept), len(warns))
+	}
+	// The run's OWN model-access grant (real provider key) is likewise dropped
+	// under a wildcard ceiling - that is fine, ensureLLMGrant re-adds it after
+	// resolveRunPolicy returns (see TestCreateRun_MemberInlineGrantExfilDropped).
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("api.anthropic.com", "anthropic-api-key")}); len(kept) != 0 {
+		t.Fatalf("real-key LLM grant under wildcard ceiling: kept=%d, want 0 (dropped, re-folded downstream)", len(kept))
+	}
+
+	// A SPECIFIC operator pairing lets a member reuse THAT exact pairing...
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKey("api.corp.example", "corp-key")}}
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("API.Corp.Example", "corp-key")}); len(kept) != 1 {
+		t.Fatalf("exact operator-listed pairing (host case-insensitive): kept=%d, want 1", len(kept))
+	}
+	// ...but not that secret on a DIFFERENT host, nor a DIFFERENT secret on it.
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("attacker.example", "corp-key")}); len(kept) != 0 {
+		t.Fatalf("operator secret on attacker host: kept=%d, want 0 (dropped)", len(kept))
+	}
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("api.corp.example", "prod-db-password")}); len(kept) != 0 {
+		t.Fatalf("different secret on listed host: kept=%d, want 0 (dropped)", len(kept))
+	}
+
+	// git_pat references a stored secret too - same drop.
+	gitPAT := types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "git.attacker.example", "secret_name": "corp-key"})}
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{gitPAT}); len(kept) != 0 {
+		t.Fatalf("member git_pat exfil pairing: kept=%d, want 0 (dropped)", len(kept))
+	}
+
+	// github_token references no stored secret - always kept (its scope is
+	// intersected by composer.Clamp, not gated here).
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{{Kind: types.GrantGitHubToken}}); len(kept) != 1 {
+		t.Fatalf("github_token grant: kept=%d, want 1", len(kept))
+	}
+	// A malformed api_key scope is a bad request (fail closed), not a silent drop.
+	bad := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": "api.corp.example"})} // no secret_name
+	if _, _, code, err := h.srv.filterMemberGrants([]types.GrantSpec{bad}); code != http.StatusUnprocessableEntity || err == nil {
+		t.Fatalf("malformed api_key scope: code=%d err=%v, want (422, error)", code, err)
+	}
+	// No grants: nothing to filter.
+	if kept, warns, code, err := h.srv.filterMemberGrants(nil); len(kept) != 0 || len(warns) != 0 || code != 0 || err != nil {
+		t.Fatalf("no grants: kept=%d warns=%d code=%d err=%v", len(kept), len(warns), code, err)
+	}
+}
+
+// TestCreateRun_MemberInlineGrantExfilDropped proves the gate is wired into the
+// create-run inline path and is member-only: a member's unmatched stored-secret
+// pairing is dropped from the resolved policy (eligible_grants=0), while an
+// operator (ceiling authority) keeps theirs.
+func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
+	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	// Wildcard api_key ceiling + the attacker host allowlisted, so ONLY the
+	// grant-scope gate - not egress - stands between a member and exfil.
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"attacker.example"},
+		EligibleGrants:      []types.GrantSpec{{Kind: types.GrantAPIKey}},
+	}
+	h.srv.router = h.srv.routes()
+
+	// Pair a REAL operator secret (seeded) with an attacker-controlled but
+	// allowlisted host. CC2 (like TestCreateRun_MemberInlineClamped) stops the run
+	// at the confinement gate on this daemonless harness — AFTER resolveRunPolicy
+	// records policy.inline — so the audit shows the resolved grant count, and the
+	// admin's kept grant clears validateInlineSecretRefs (the secret exists).
+	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
+
+	// Member: the exfil pairing is dropped - the resolved inline policy carries
+	// zero grants, so nothing is ever injected.
+	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 0 {
+		t.Fatalf("member: policy.inline eligible_grants = %d, want 0 (exfil pairing dropped)", got)
+	}
+
+	// Operator (ceiling authority) is unclamped - their grant is kept.
+	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 1 {
+		t.Fatalf("admin: policy.inline eligible_grants = %d, want 1 (unclamped)", got)
+	}
+}
+
+// lastInlinePolicyGrantCount returns the eligible_grants count of the LAST
+// policy.inline audit event in events, failing the test if there is none.
+func lastInlinePolicyGrantCount(t *testing.T, events []types.AuditEvent) int {
+	t.Helper()
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Action != "policy.inline" {
+			continue
+		}
+		var d struct {
+			EligibleGrants int `json:"eligible_grants"`
+		}
+		if err := json.Unmarshal(events[i].Data, &d); err != nil {
+			t.Fatalf("decode policy.inline data: %v", err)
+		}
+		return d.EligibleGrants
+	}
+	t.Fatal("no policy.inline audit event recorded")
+	return 0
+}
+
 // TestValidateInlineSecretRefs_Matrix exercises validateInlineSecretRefs across
 // the four documented outcomes: present ok / missing err / reserved err / no
 // store err. It uses the memSecrets fake (seeded with "anthropic-api-key").
