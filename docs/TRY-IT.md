@@ -89,7 +89,11 @@ with OIDC configured makes wardynd **refuse to boot** unless
 `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant everyone-is-admin. That
 split is the whole of it — the admin token is always an operator (one shared
 credential carries no human to demote), and per-user RBAC beyond the two tiers is
-unscheduled ([ROADMAP.md](../ROADMAP.md)).
+unscheduled ([ROADMAP.md](../ROADMAP.md)). All of it — the split, the approval
+broker, the append-only audit log — ships in the Apache-2.0 build with no paid
+tier, unlike the field that puts audit logging and RBAC behind a license. To give
+a second person on this host their own viewer login instead of the shared admin
+token, see [OPERATIONS.md](OPERATIONS.md#second-viewer-same-host).
 
 By hand against the same stack:
 

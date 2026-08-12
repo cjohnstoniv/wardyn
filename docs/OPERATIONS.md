@@ -53,6 +53,27 @@ fresh volume, untar into the recordings volume (`fs` store only), put
 > with no backup counterpart. It leaves `.env` — and so the age key — alone.
 > `make compose-down` stops the stack and keeps the volumes.
 
+### The audit log can't quietly rot
+
+"Append-only" here is enforced by the database, not by convention. A row-level
+Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
+statement-level guard (migration `0004`) rejects `TRUNCATE` — all three are
+asserted in `TestPG_AuditAppendOnly_TriggerRejects`
+(`internal/store/store_pg_test.go`), so an operator with direct database access
+cannot rewrite or silently thin the trail through Wardyn's own schema. The
+nearest competitor's own maintenance docs, by contrast, recommend `DELETE FROM
+audit_logs` to prune.
+
+Completeness survives an outage too. When a Postgres write fails — the store is
+briefly down, a transient error — the event is not dropped: it is fsync'd, one
+JSON line at a time, to a local append-only spool (`WARDYN_AUDIT_SPOOL`, default
+`./data/audit-spool.jsonl`, empty to disable — `internal/api/auditspool.go`), and
+a background drain replays it back into Postgres once the store recovers. Where a
+fail-closed audit trades *availability* for integrity — refusing to serve until
+it can record — Wardyn keeps both. The spool is per-process by design: it is the
+fallback for one pod's failed write, and each `wardynd` drains its own back on
+recovery (see [One replica, by construction](#one-replica-by-construction)).
+
 ## Monitoring
 
 `GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`)
@@ -111,6 +132,134 @@ one shared credential with no human behind it. Real roles and owner scoping
 are v0.5+ ([ROADMAP.md](../ROADMAP.md); `threatmodel/THREAT-MODEL.md`
 residual #14). Wardyn's operator boundary is still "everyone with a login is
 trusted staff".
+
+**None of this governance is a paid tier.** The operator/viewer split above, the
+approval broker, and the append-only audit log all ship in the Apache-2.0 build —
+there is no license key, no "Premium" gate, no entitlement check anywhere in the
+tree (`grep -riE 'license.key|premium|enterprise.(only|tier)|entitlement'
+internal/ cmd/` returns nothing), and the gating is completeness-tested:
+`internal/api/rbac_test.go` enumerates all 34 operator-gated routes and fails the
+build if any non-GET `/api/v1` route goes unclassified — a new mutating route
+must either join the gate or be explicitly declared viewer-safe
+(`launchARunAllowlist`). Worth stating plainly,
+because the field Wardyn is measured against puts exactly these controls behind a
+license — Coder bundles audit logging and template RBAC into a 30-day **Premium**
+trial, Vault's namespaces and hold-then-resume are Enterprise/HCP, OpenHands gates
+RBAC/SSO to Enterprise. What Wardyn gives up is *breadth* — this is a deliberate
+two-tier split, not per-user roles or multi-org depth — not the governance itself.
+A corporate evaluator used to OSS meaning a crippled trial should read the trade
+the other way here.
+
+## Second viewer, same host
+
+> This recipe gives a second person their own SSO identity instead of the shared
+> admin token — and what that identity *can do* is exactly the operator/viewer
+> split above. List their address in `WARDYN_OIDC_OPERATOR_EMAILS` and they are an
+> operator; leave them off it and they are a real **viewer**: they read everything
+> and launch/kill runs — any run, nothing is owner-scoped — but 403 on the
+> operator-only surface enumerated under
+> [Who can change what](#who-can-change-what). Every signed-in human has
+> admin-equivalent power only when the operator list is *unset* — and with OIDC
+> configured that is **refused at boot** unless
+> `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant it, with a boot
+> warning telling you to set the list instead (`cmd/wardynd/boot_deps.go`). The
+> ceiling that remains is narrower than "no roles at all": there are no per-user
+> custom roles, and the admin token is always an operator and cannot be demoted
+> (real roles and owner scoping are v0.5+ — [ROADMAP.md](../ROADMAP.md)).
+
+A **remote** second person is a dead end regardless: both the bundled Dex and
+wardynd itself publish loopback-only (`127.0.0.1:PORT`,
+`deploy/compose/docker-compose.yaml`) by design, so nothing off-host can reach
+either. What *does* work is narrower — two people on the same box, each with
+their own identity instead of sharing the admin token — and takes explicit
+setup `make setup` does not do for you:
+
+1. **Turn local mode off.** The containerized `make setup` path writes
+   `WARDYN_LOCAL_MODE=true` into `deploy/compose/.env` (see the
+   `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)); left in place it wins over
+   OIDC — no login is ever required, for anyone, regardless of what you
+   configure below (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`: an
+   explicit `-local-mode` short-circuits even when an OIDC issuer is set; a
+   `make setup` re-run warns about exactly this combination, and boot announces
+   LOCAL HOST MODE). In `deploy/compose/.env`:
+
+   ```sh
+   WARDYN_LOCAL_MODE=false
+   ```
+
+2. **Turn Dex on, and choose who's an operator.** Dex is the `sso` compose
+   profile; every other OIDC var already defaults to match the bundled
+   `deploy/compose/dex.yaml` client (client id/secret, redirect URL, email
+   domain — the `wardynd` service's `environment` block in
+   `docker-compose.yaml` carries those defaults), so the two you set are the
+   issuer and the operator allowlist. With OIDC configured, an **empty**
+   `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot (the split has to mean
+   something — [Who can change what](#who-can-change-what)), so list yourself:
+   everyone listed is an operator, everyone else who can sign in is a viewer.
+
+   ```sh
+   echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env
+   echo 'WARDYN_OIDC_OPERATOR_EMAILS=you@wardyn.local'    >> deploy/compose/.env
+   docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex wardynd
+   ```
+
+   This is not a soft gate: wardynd runs synchronous OIDC discovery against
+   the issuer at boot and **exits nonzero if it fails**
+   (`cmd/wardynd/boot_deps.go`) — an unreachable Dex refuses the whole boot,
+   not just SSO. Compose's `depends_on: dex: condition: service_healthy`
+   already sequences this for the command above; it only bites if you later
+   restart wardynd alone while Dex is down.
+
+3. **Give the second person their own login.** For the bundled Dex,
+   `staticPasswords` in `deploy/compose/dex.yaml` is the authentication list —
+   `enablePasswordDB: true` with no external connector means an email absent
+   from it has no password to authenticate with, full stop. (Whether that
+   sign-in is an operator or a viewer is decided by
+   `WARDYN_OIDC_OPERATOR_EMAILS`, not here: Dex authenticates, the operator list
+   authorizes.) Mint a bcrypt hash (Dex's own recipe; any bcrypt tool at the
+   same cost works):
+
+   ```sh
+   htpasswd -bnBC 10 "" 'their-password' | tr -d ':\n'
+   ```
+
+   and add an entry alongside the demo user:
+
+   ```yaml
+   staticPasswords:
+     - email: "demo@wardyn.local"
+       hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+       username: "demo"
+       userID: "demo-0001"
+     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a viewer;
+       hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
+       username: "reviewer2"
+       userID: "reviewer2-0001"
+   ```
+
+   then reload it — `up -d` does not notice a bind-mounted file's *content*
+   changing, only `restart` does:
+
+   ```sh
+   docker compose -f deploy/compose/docker-compose.yaml restart dex
+   ```
+
+4. **Each person signs in on their own.** The browser is redirected to Dex
+   directly for the login leg, so both `:8080` (wardynd/UI) and `:5556` (Dex)
+   must be reachable from each browser — trivial at a shared console, an
+   `ssh -L 8080:localhost:8080 -L 5556:localhost:5556 <host>` tunnel per person
+   otherwise (a tunnel to reach the existing loopback bind, not a change to
+   Wardyn's own network posture). Each clicks **Sign in with SSO** and
+   authenticates as themselves instead of pasting the admin token.
+
+`WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
+empty value is not "deny all", it fails **open** — any account the IdP
+authenticates gets a session (a viewer one unless the address is in the operator
+list), and without the domains list the `email_verified` claim is not checked at
+all (both checks live inside the domains branch — `AllowedEmailDomains`,
+`internal/auth/oidc/oidc.go`). The bundled Dex's hand-curated `staticPasswords`
+makes that moot for this recipe; set the domain(s) for real once you point this
+at a corporate IdP that isn't hand-curated the same way.
 
 ## Workspaces: three tiers
 
