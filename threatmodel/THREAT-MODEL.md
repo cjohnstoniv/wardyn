@@ -169,8 +169,8 @@ has a residual or bypass class, that is noted and also listed in section 5.
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
+| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); kernel-level block of `169.254.169.254` | Non-HTTP raw-socket tunnels that never reach the proxy process at all; extends "no route but the proxy" to the v0.5 Kubernetes topology. Defense-in-depth ATOP the metadata/link-local guard L2 already enforces below — the metadata block does not wait on L1 to ship |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard, checked pre-policy on a literal-IP target and again post-DNS-resolution on every direct-dialed hostname (the opt-in upstream corp-proxy hop defers that re-check to the corp proxy — §5's disclosed residual), that `allow_all_egress` does not reach | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 Four egress layers stack outward from the sandbox — the shipped L0 structural
@@ -181,7 +181,7 @@ the L3 tool gateway planned at v0.5.
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. | B1, B2, B4 |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
-| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | On the shipped Docker path this holds at **L0**: each run's network is `Internal:true` (gatewayless), so the sandbox has no off-host route and 169.254.169.254 is structurally unreachable **[shipped]**. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]**. | L0 (L1 v0.5) |
+| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Two independent layers already close this — L1 below adds depth, it is not what this residual is waiting on. **L0 [shipped]:** each run's Docker network is `Internal:true` (gatewayless), so the sandbox has no off-host route at all; 169.254.169.254 is structurally unreachable regardless of what runs inside it. **L2 [shipped]:** even a request that DOES reach the proxy is independently checked against an unconditional IP guard — a literal-IP target is denied before policy or approval ever run (`evaluate` step 0, `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`, `policy.go:342,385`) against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved, and NAT64-embedded-v4 ranges — a check that runs AFTER, and is unaffected by, the policy verdict, so a host that `allow_all_egress` would otherwise pass is still denied if it resolves into one of those ranges (the one hop that defers this post-resolution re-check — the opt-in upstream corp-proxy lane, where the corp proxy performs its own DNS+dial — is §5's disclosed TOCTOU residual, and the step-0 literal-IP denial still holds there). L2's guard lives in the proxy's own code, not the network topology, so — unlike L0 — it does not depend on Docker's gatewaylessness to hold. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]** is a third, kernel-level layer for defense-in-depth (chiefly: a non-HTTP path that bypasses the proxy process entirely, and parity on the v0.5 Kubernetes topology, where a pod is not gatewayless by default the way a Docker `Internal:true` network is) — not a precondition for the metadata block itself. | L0, L2 (L1 v0.5 adds depth) |
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5+ — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5+ — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
@@ -954,3 +954,97 @@ and asserts the `Internal=true` network and the static `wardyn-proxy` hosts
 entry both hold — the CC1 topology test
 (`TestCreateSandbox_TopologyPreservesL0`) never ran CC2, so this was the one
 gap in that guard.
+
+---
+
+## 9. Why Not Teleport + HashiCorp Vault + an Egress Gateway?
+
+**A naming note first, because this document already owns two of these
+words.** Every "Vault" and "Boundary" below is the HashiCorp product — never
+Wardyn's own CC3 confinement tier (branded "Vault", §7) or the B1-B8 trust
+boundaries defined in §3. Spelled out in full throughout this section for
+exactly that reason.
+
+The honest answer to "why not just wire this up yourself out of an identity
+broker, a secrets engine, and a proxy" starts by naming what that stack
+genuinely gives you — none of it should be reinvented:
+
+- Short-lived, auto-rotating machine certificates and SPIFFE-compatible
+  workload identity (Teleport's Machine ID / `tbot`).
+- Inbound session recording and replay for infrastructure you already own and
+  administer (Teleport; HashiCorp Boundary's session recording).
+- Credential injection for a session against a pre-registered SSH/RDP/database
+  target, so the human at the keyboard never sees the credential (HashiCorp
+  Boundary).
+- A battle-tested lease engine — per-lease TTL, renewal, prefix-revoke,
+  fail-closed at the backend, fail-closed auditing (HashiCorp Vault refuses to
+  service a request it cannot record).
+- A mature default-deny L7 allowlist proxy, assembly required (Squid or
+  equivalent).
+
+These are real, are the hard kind to retrofit, and Wardyn does not attempt to
+replace them. What the stack structurally cannot give you — verified against
+each vendor's own docs, not a strawman — is a different list, because it was
+built for a different job:
+
+1. **No sandbox noun.** Teleport, HashiCorp Boundary, and HashiCorp Vault all
+   broker trusted access INTO infrastructure that already exists — a server, a
+   database, a secret. None creates, isolates, or contains a unit of compute;
+   containment is not a concept any of their documentation uses. An autonomous
+   coding agent is not a pre-registered target reached by an authenticated
+   human — it is arbitrary code about to run, and nothing in this stack puts
+   it in a box.
+2. **No in-flight HOLD in any free tier.** Teleport's Access Requests grant a
+   role BEFORE a connection opens, Enterprise only. HashiCorp Vault's Control
+   Groups genuinely hold-and-resume a request, but Enterprise/HCP only.
+   HashiCorp Boundary's equivalent is an open, unshipped GitHub feature
+   request (`hashicorp/boundary#3084`) — a customer asking HashiCorp to build
+   what Wardyn ships today, free, as `wait_for_review` (§4): the connection
+   stays open, a human decides, and on approval the SAME request completes —
+   no retry, no restart. (Degrades closed, never to allow, on a 30s hold
+   timeout — `internal/egress/proxy/approvals.go:68`.)
+3. **The credential still reaches the caller.** HashiCorp Vault's own
+   quickstart returns the plaintext secret in the API response; Teleport's
+   `tbot` writes credentials to disk for downstream tools to read. Short-lived
+   is not the same property as never-resident — §5.1a states exactly what
+   "never-resident" means here, qualifiers and the complete exception list
+   included.
+4. **Audit stops at each product's own front door.** HashiCorp Vault knows a
+   credential was minted and revoked, never what happened with it in between.
+   The bolted-on proxy's log (Squid, the standard assembly) carries no
+   identity or session concept.
+   Nothing joins "who approved this, what was minted, what the network saw,
+   and what the terminal showed" under one id, because no single component in
+   the stack sees all four.
+5. **The egress leg is cooperative, not structural.** The standard assembly is
+   an explicit forward proxy — an `HTTP_PROXY` environment variable a process
+   can simply decline to set. A transparent-intercept alternative is DIY
+   firewall engineering, not something any of these three products ships.
+6. **No derived least-privilege loop, no pre-mint validation.** HashiCorp
+   Vault's `-output-policy` flag derives a policy from one command, statically,
+   with no replay step, and a general `vault policy validate` command is
+   itself an open feature request (`hashicorp/vault#24654`). HashiCorp
+   Boundary's audit stream ships off by default. Teleport concedes its async
+   session-recording mode is tamperable before upload. And two of the three
+   have narrowed what "free" means recently — Teleport caps its distribution
+   tier, HashiCorp Boundary sits under BSL/IBM licensing — worth naming before
+   calling this a free 15-year-old stack.
+
+| | The identity/access-broker stack | Wardyn |
+|---|---|---|
+| Unit it governs | A human or service session against a pre-registered target | An autonomous run's compute, network, and credentials, as one unit |
+| Mid-action human decision | Nearest analogs: pre-connection and Enterprise-only (Teleport); hold-then-resume but Enterprise/HCP-only (HashiCorp Vault); unshipped (HashiCorp Boundary `#3084`) | `wait_for_review` holds the live connection — ships free, OSS (§4) |
+| Where the credential lands | The caller's disk or process (`tbot`, a returned secret) | Proxy-injected, minted+revoked per run, never resident outside the named, bounded opt-in exceptions §5.1a carries in full — chiefly an `ssh_key` file and Bedrock's resident SigV4 env keys |
+| Audit scope | Per-product — each front door sees only its own slice | One run id correlating approval, mint, network egress, and terminal, control-plane-side |
+
+Frame this as different-scope, not a head-to-head loss, because it is one:
+multi-operator RBAC and fleet-wide session management are this stack's home
+turf and Wardyn's own declared weak spot (§5 residual 14). What Wardyn adds is
+the noun the stack has none of — a contained unit of UNTRUSTED execution, with
+a single run id that answers "what did this autonomous run actually do," a
+question human-session recording was never built to pose because it assumes a
+trusted human at the keyboard. And it is not either/or: `ROADMAP.md`'s v0.5
+line commits Wardyn to sit ON `identity.Provider`/SPIRE and
+`secretstore.Store`/OpenBao — the open-source continuation of Vault's own
+lease engine, post-BSL — as integration seams, not to reinvent short-lived
+certs or lease/revoke once a mature engine already does them well.
