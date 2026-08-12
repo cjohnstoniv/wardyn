@@ -51,11 +51,15 @@ CI_OVERLAY="${REPO_ROOT}/deploy/compose/docker-compose.ci.yaml"
 CI_PROJECT="${WARDYN_CI_PROJECT:-wardyn-ci-$$}"
 export COMPOSE_PROJECT_NAME="${CI_PROJECT}"
 export WARDYN_NS="${CI_PROJECT}"
-# Host UI/postgres ports are unused in CI (the CLI runs in-container and health is
-# read from the container): bind them to OS-assigned ephemeral ports so two jobs
-# never fight over 8080/5432.
+# Host UI/postgres/registry ports are unused in CI (the CLI runs in-container
+# and health is read from the container): bind them to OS-assigned ephemeral
+# ports so two jobs never fight over 8080/5432/5010. Registry included because
+# `up -d ... wardynd` always starts it too (a wardynd dependency, docs/CI.md
+# "Concurrent jobs on a shared host") — left at its fixed default, two
+# concurrent jobs collide on the bind and the second job's wardynd never starts.
 export WARDYN_UP_PORT="${WARDYN_UP_PORT:-0}"
 export WARDYN_PG_PORT="${WARDYN_PG_PORT:-0}"
+export WARDYN_REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-0}"
 COMPOSE=(docker compose -p "${CI_PROJECT}" -f "${COMPOSE_FILE}" -f "${CI_OVERLAY}")
 
 TASK="${WARDYN_CI_TASK:-}"
@@ -131,6 +135,16 @@ cleanup() {
     warn "WARDYN_CI_KEEP=1 — leaving the stack up (tear down with: ${COMPOSE[*]} down --volumes)"
   else
     log "Tearing down the compose stack (volumes included — the stack is ephemeral)"
+    # compose down only reaps objects compose itself created. The docker runner
+    # mints the agent + proxy containers and the per-run internal network
+    # directly via the Docker API (internal/runner/docker/naming.go), so they
+    # are invisible to compose and survive `down` untouched. Remove them by
+    # their deterministic names before the network they share endpoints on
+    # goes away, or every CI run leaks a sandbox.
+    if [[ -n "${run_id:-}" ]]; then
+      docker rm -f "wardyn-proxy-${run_id}" "wardyn-agent-${run_id}" >/dev/null 2>&1 || true
+      docker network rm "wardyn-int-${run_id}" >/dev/null 2>&1 || true
+    fi
     "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
     rm -rf "${TOOLS_DIR}"
   fi

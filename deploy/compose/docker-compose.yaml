@@ -45,6 +45,9 @@ services:
     container_name: ${WARDYN_NS:-wardyn}-registry
     restart: unless-stopped
     ports:
+      # Host-port parameterized like WARDYN_PG_PORT above so concurrent stacks
+      # on a shared host don't collide on 5010; set WARDYN_REGISTRY_PORT=0 for
+      # an OS-assigned ephemeral port (scripts/ci-run.sh does this by default).
       - "127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}:5000"
     volumes:
       - registry_data:/var/lib/registry
