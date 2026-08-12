@@ -55,7 +55,7 @@ type bootFlags struct {
 	oidcClientSecret *string
 	oidcRedirectURL  *string
 	oidcEmailDomains *string
-	// oidcOperatorEmails is the minimal viewer/operator role gate's allowlist
+	// oidcOperatorEmails is the minimal member/admin role gate's allowlist
 	// (api.Config.OperatorEmails). Empty = every authenticated human is an
 	// operator, i.e. exactly the pre-existing behavior — which is REFUSED at boot
 	// when OIDC is configured unless allowOIDCNoOperatorList overrides it (see
@@ -149,11 +149,11 @@ func parseBootFlags() *bootFlags {
 		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
 		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
 		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)"),
-		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator emails; a signed-in human NOT listed is a viewer (reads + launching runs, 403 on configuring the deployment, secret writes, approval decisions and attach tickets). Empty with OIDC configured is REFUSED at boot — see -allow-oidc-no-operator-list"),
+		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human NOT listed is a member (owner-scoped: reads + launches/kills their OWN runs, 403 on configuring the deployment, secret writes, and admin-only credential/tool_call approvals — still decides egress_domain approvals on and attaches to their own runs). Empty with OIDC configured is REFUSED at boot — see -allow-oidc-no-operator-list"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
-		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
+		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. — absent a WARDYN_OIDC_ROLE_MAP — every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
 		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin" or "member" (e.g. "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin"); any admin match wins when more than one matches. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
 

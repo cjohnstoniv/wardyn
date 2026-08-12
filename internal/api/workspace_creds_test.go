@@ -230,13 +230,15 @@ func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t
 }
 
 // TestApplyPrimaryWorkspaceCreds_ExecRunBindsNoIntegration pins the exec
-// contract at the grant-folding layer: a task-mode=exec run ("no agent, no LLM
-// credentials") must NOT fold the operator's site-wide default ai_provider
-// integration, or persistRunGrants would inject the operator's api key + widen
-// egress to api.anthropic.com for a plain shell command that never asked for a
-// model (the api-key sibling of the subscription/managed injection resolveLLM-
-// Transport already suppresses for exec). Same server/default as the test above,
-// which DOES fold it for a normal run — the only difference is TaskMode.
+// contract at the grant-folding layer: a task-mode=exec run (the operator's model
+// access is not AUTO-injected) must NOT fold the operator's site-wide default
+// ai_provider integration, or persistRunGrants would inject the operator's api key
+// + widen egress to api.anthropic.com for a plain shell command that never asked
+// for a model (the api-key sibling of the subscription/managed injection
+// resolveLLMTransport already suppresses for exec). An EXPLICIT policy grant or a
+// workspace's own declared secret still applies — that is the run's own credential,
+// not the operator's default. Same server/default as the test above, which DOES
+// fold it for a normal run — the only difference is TaskMode.
 func TestApplyPrimaryWorkspaceCreds_ExecRunBindsNoIntegration(t *testing.T) {
 	in := apiKeyIntegration("acme-anthropic", "acme-anthropic-key")
 	in.DefaultFor = []string{"agent_runs"}

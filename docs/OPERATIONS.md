@@ -214,7 +214,7 @@ two-tier split, not per-user roles or multi-org depth — not the governance its
 A corporate evaluator used to OSS meaning a crippled trial should read the trade
 the other way here.
 
-## Second viewer, same host
+## Second user, same host
 
 > This recipe gives a second person their own SSO identity instead of the shared
 > admin token — and what that identity *can do* is exactly the **admin/member**
@@ -256,7 +256,7 @@ setup `make setup` does not do for you:
    WARDYN_LOCAL_MODE=false
    ```
 
-2. **Turn Dex on, and choose who's an operator.** Dex is the `sso` compose
+2. **Turn Dex on, and choose who's an admin.** Dex is the `sso` compose
    profile; every other OIDC var already defaults to match the bundled
    `deploy/compose/dex.yaml` client (client id/secret, redirect URL, email
    domain — the `wardynd` service's `environment` block in
@@ -285,7 +285,7 @@ setup `make setup` does not do for you:
    `staticPasswords` in `deploy/compose/dex.yaml` is the authentication list —
    `enablePasswordDB: true` with no external connector means an email absent
    from it has no password to authenticate with, full stop. (Whether that
-   sign-in is an operator or a viewer is decided by
+   sign-in is an admin or a member is decided by
    `WARDYN_OIDC_OPERATOR_EMAILS`, not here: Dex authenticates, the operator list
    authorizes.) Mint a bcrypt hash (Dex's own recipe; any bcrypt tool at the
    same cost works):
@@ -302,7 +302,7 @@ setup `make setup` does not do for you:
        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
        username: "demo"
        userID: "demo-0001"
-     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a viewer;
+     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a member;
        hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
        username: "reviewer2"
        userID: "reviewer2-0001"
@@ -325,7 +325,7 @@ setup `make setup` does not do for you:
 
 `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
 empty value is not "deny all", it fails **open** — any account the IdP
-authenticates gets a session (a viewer one unless the address is in the operator
+authenticates gets a session (a member one unless the address is in the operator
 list), and without the domains list the `email_verified` claim is not checked at
 all (both checks live inside the domains branch — `AllowedEmailDomains`,
 `internal/auth/oidc/oidc.go`). The bundled Dex's hand-curated `staticPasswords`
@@ -673,7 +673,7 @@ are the deliberate exception, on the same footing as the GitHub ref-ruleset
 check ([TRY-IT.md](TRY-IT.md)): the check is real. Each launches a throwaway,
 one-shot confined sandbox, makes an actual outbound request through it — the
 same path a real run's egress takes — and tears the sandbox down. Both are
-**operator-only** (a viewer 403s, like `PUT /site-config` itself) and
+**admin-only** (a member 403s, like `PUT /site-config` itself) and
 **audited** (`site_config.test_proxy` / `site_config.test_redirect`); the
 audit row carries the host(s) probed and the outcome, never the proxy URL,
 which may legitimately carry a credential.

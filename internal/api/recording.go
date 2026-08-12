@@ -151,8 +151,8 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	if len(snap) == 0 {
 		return src, func() {}
 	}
-	// The upload body is asciicast JSON: wardyn-rec / asciinema json.Marshal each
-	// terminal-output chunk into an "o" event, so a secret containing any byte
+	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
+	// json-encodes each terminal-output chunk into an "o" event, so a secret containing any byte
 	// JSON escapes (newline, quote, backslash, control char) never appears
 	// verbatim in the body — and the Masker's exact-byte match would miss it.
 	// Critically that includes a MULTI-LINE SSH private key, which broker.mint()

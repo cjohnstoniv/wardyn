@@ -187,8 +187,8 @@ username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `run.created_by == the key's registered principal` — a single equality
 check, deliberately narrower than the browser terminal's `requireOperator`
 gate (which lets an operator attach to *any* run). SSH has no session
-cookie to carry an operator role through, so today an operator who needs
-another human's run uses the web terminal, same as a viewer would. Extending
+cookie to carry an operator role through, so today an admin who needs
+another human's run uses the web terminal, same as a member would. Extending
 SSH to admins/operators needs a role column this table doesn't have yet —
 tracked as a residual in
 [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), not

@@ -80,20 +80,21 @@ The UI is at http://localhost:8080. The demo stack configures no OIDC, so the
 "Sign in with SSO" button is disabled and the admin token below is the way in;
 set `WARDYN_OIDC_*` and the button lights up (the local Dex recipe is in
 [`deploy/compose/README.md`](../deploy/compose/README.md)). Once OIDC is on there
-is **one** role split: `WARDYN_OIDC_OPERATOR_EMAILS` names the operators, and any
-other signed-in human is a **viewer** — still reads everything and still launches
-and kills runs, but 403 on configuring the deployment (policies, workspaces,
-site-config, the managed harness credential), writing or deleting secrets,
-deciding an approval, and attaching to a running sandbox. Leaving that list empty
-with OIDC configured makes wardynd **refuse to boot** unless
-`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant everyone-is-admin. That
-split is the whole of it — the admin token is always an operator (one shared
-credential carries no human to demote), and per-user RBAC beyond the two tiers is
-unscheduled ([ROADMAP.md](../ROADMAP.md)). All of it — the split, the approval
+is **one** role split (admin/member): `WARDYN_OIDC_OPERATOR_EMAILS` names the
+**admins**, and any other signed-in human is a **member** — owner-scoped: they
+read their OWN runs/approvals/audit and launch/kill runs, but 403 on configuring
+the deployment (policies, workspaces, site-config, the managed harness
+credential), writing or deleting secrets, and admin-only credential/tool_call
+approvals (a member still decides `egress_domain` approvals on, and attaches to,
+their own runs). Leaving that list empty with OIDC configured makes wardynd
+**refuse to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant
+everyone-is-admin. The admin token is always an admin (one shared credential
+carries no human to demote), and per-user RBAC beyond the two tiers is unscheduled
+([ROADMAP.md](../ROADMAP.md)). All of it — the split, the approval
 broker, the append-only audit log — ships in the Apache-2.0 build with no paid
 tier, unlike the field that puts audit logging and RBAC behind a license. To give
-a second person on this host their own viewer login instead of the shared admin
-token, see [OPERATIONS.md](OPERATIONS.md#second-viewer-same-host).
+a second person on this host their own member login instead of the shared admin
+token, see [OPERATIONS.md](OPERATIONS.md#second-user-same-host).
 
 By hand against the same stack:
 

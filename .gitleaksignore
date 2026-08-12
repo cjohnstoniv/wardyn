@@ -22,3 +22,8 @@
 988490e36861e86bd68389f5048f82bb76ec3e22:internal/workspacescan/verify_test.go:curl-auth-header:134
 a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:778
 a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
+# Synthetic multi-line SSH private key in the recording upload-path masking test:
+# it registers a fake PEM key (the broker.mint case) so it can assert the persisted
+# asciicast masks it. Same category as internal/broker/sshkey_test.go above — a
+# detector's test must hold the shape it detects. Not a real key.
+156f25a90c2e9eb89c8cbb9d48474c1ffeaa3cd2:internal/api/recording_upload_test.go:private-key:174
