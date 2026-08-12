@@ -414,6 +414,13 @@ cmd_up() {
   # preserved untouched. (A commented example line reads as unset — env_get ignores it.)
   if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
     log "Preserving existing OIDC config (WARDYN_OIDC_ISSUER is set) — leaving auth in SSO mode, not forcing local no-auth."
+    # An issuer alone is not enough: a pre-SSO `make setup` wrote LOCAL_MODE=true
+    # into this same .env, and local mode SHORT-CIRCUITS auth entirely (no login,
+    # for anyone) regardless of the issuer. Warn — don't auto-flip, which could
+    # lock the operator out if the IdP is down.
+    if [ "$(env_get "${ENV_FILE}" WARDYN_LOCAL_MODE)" = "true" ]; then
+      warn "WARDYN_LOCAL_MODE=true is still set in ${ENV_FILE} — it bypasses SSO entirely (no login required). Set it false to actually enforce the OIDC operator/viewer split."
+    fi
   else
     env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
     env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
