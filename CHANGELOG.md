@@ -8,6 +8,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **Integrations no longer install tools; the tool side of the integration
+  concept is removed.** An integration is a connection — secrets + egress —
+  and never decides what is installed in an image. Concretely: naming an
+  `anthropic_*` integration no longer conditions the `claude-code` bake;
+  instead **every Wardyn-generated recommended image now carries `claude-code`
+  unconditionally as standard tooling** (like git or curl — the same
+  checksum-verified native install, `genStandardTools` in
+  `internal/workspacescan/gen.go`). Repo-own devcontainers and BYO/registry
+  images stay verbatim — never injected into. The image cache key is salted
+  (`v2`), so every previously built workspace image rebuilds once on next
+  use — pre-change images may lack the now-standard CLI and are never
+  trusted. (docs/OPERATIONS.md "Every generated image carries the
+  claude-code CLI as standard tooling".)
+
+### Removed
+
+- **The Integrations page's Tools tab**, the integration→tool "carries"
+  chips in the workspace wizard (base-image, build, and verify steps), and
+  the client-side mirrors of the bake conditions. Tools are what the image
+  carries; the Integrations surface now speaks only to connections.
+
 ## [0.5.0] — 2026-08-12
 
 ### Security

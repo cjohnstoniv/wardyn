@@ -13,7 +13,7 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
 }));
 
-import { StepRequirements, VerifyBody } from "./step-requirements";
+import { StepRequirements } from "./step-requirements";
 import { deriveInitialRequirements, newSourceRow, type PowerSource, type SourceRow, type WorkspaceRequirementsMap } from "./wizard-types";
 import { C, RD2 } from "../../../lib/workspace-copy";
 import type { WorkspaceProfile } from "../../../lib/types";
@@ -325,40 +325,6 @@ describe("StepRequirements — Record, LAST: prove & discover", () => {
     render(<Harness profile={profile} powerSource={{ kind: "pinned", integrationId: "i1", name: "Team API key" }} />);
     await openTab("Verify");
     expect(within(screen.getByTestId("record-carry")).getByText(/Team API key — pinned to this workspace/)).toBeInTheDocument();
-  });
-});
-
-// carryTools (agent-CLI bake honesty) is a VerifyBody-only prop — the wizard
-// passes it straight to its own direct <VerifyBody> at the Verify step;
-// StepRequirements' internal Record tab never receives it (that caller has
-// no reliable "is this the recommended/envbuilt lane" signal), so it's
-// exercised directly here rather than through the Harness/tab dance above.
-describe("VerifyBody — carryTools (agent-CLI bake honesty)", () => {
-  it("shows a Tools row naming what the built image carries, when passed", () => {
-    render(
-      <VerifyBody
-        requirements={{}}
-        powerSource={{ kind: "default" }}
-        carryImage="wardyn-workspace/ws-1:abc123"
-        carryTools={["claude-code"]}
-        onOpenReach={vi.fn()}
-      />,
-    );
-    const carry = screen.getByTestId("record-carry");
-    expect(within(carry).getByText("Tools")).toBeInTheDocument();
-    expect(within(carry).getByText("claude-code")).toBeInTheDocument();
-  });
-
-  it("renders no Tools row when carryTools is absent (a catalog/BYO image, or nothing named)", () => {
-    render(
-      <VerifyBody
-        requirements={{}}
-        powerSource={{ kind: "default" }}
-        carryImage="ghcr.io/acme/dev:latest"
-        onOpenReach={vi.fn()}
-      />,
-    );
-    expect(within(screen.getByTestId("record-carry")).queryByText("Tools")).not.toBeInTheDocument();
   });
 });
 

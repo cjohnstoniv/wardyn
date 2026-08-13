@@ -46,17 +46,14 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 		t.Skip("set WARDYN_TEST_TOOLS_DIR=<dir with the runner tools> to run the bake test")
 	}
 
-	// The exact production inputs: the profile a scan derives, and the tool set
-	// a NAMED anthropic integration implies. Nothing test-specific is injected —
-	// if this image carries claude, so does the one a workspace build produces.
+	// The exact production input: the profile a scan derives. Nothing
+	// test-specific is injected — the standard agent-tool install is baked
+	// unconditionally now (no integration wiring), so if this image carries
+	// claude, so does the one a workspace build produces.
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
 	}
-	tools := workspacescan.AgentToolsForIntegrationTypes([]string{"anthropic_api_key"})
-	if len(tools) == 0 {
-		t.Fatal("a named anthropic integration must imply an agent tool to bake")
-	}
-	files, err := workspacescan.GenerateDevcontainer(profile, tools)
+	files, err := workspacescan.GenerateDevcontainer(profile)
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer: %v", err)
 	}

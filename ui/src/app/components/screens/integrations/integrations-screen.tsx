@@ -36,7 +36,6 @@ import { T, type AiType, type IntegrationCategory } from "../../../lib/integrati
 import type { SetupStatus, SiteConfig, WireIntegration } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -58,7 +57,6 @@ import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor, t
 import { AddIntegrationDialog, type AddIntegrationTarget } from "./add-integration-dialog";
 import { AddServiceDialog } from "./add-service-dialog";
 import { GenericSections } from "./generic-sections";
-import { ToolsTab } from "./tools-tab";
 
 const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
   ai_provider: Sparkles,
@@ -88,10 +86,10 @@ export function IntegrationsScreen({
   onChanged,
 }: {
   /** Thin-embed mode (the Getting Started Integrations step): drops the
-   *  PageHeader, the Integrations/Tools tab strip and the page-side pointer at
-   *  Corporate network (the step renders its own, T.EMBED_SCOPE_NOTE), keeping
-   *  everything else — proxy banner, category sections with their full row
-   *  actions, empty state, footnote, and the Add/rotate/delete dialogs. */
+   *  PageHeader and the page-side pointer at Corporate network (the step
+   *  renders its own, T.EMBED_SCOPE_NOTE), keeping everything else — proxy
+   *  banner, category sections with their full row actions, empty state,
+   *  footnote, and the Add/rotate/delete dialogs. */
   embedded?: boolean;
   /** Called after a successful (re)load — lets an embedding parent (Getting
    *  Started) refresh its own copy of status/siteConfig/secrets so the rail's
@@ -102,7 +100,6 @@ export function IntegrationsScreen({
   const navigate = useNavigate();
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
   const [loaded, setLoaded] = React.useState<Loaded | null>(null);
-  const [tab, setTab] = React.useState<"integrations" | "tools">("integrations");
   const [addOpen, setAddOpen] = React.useState(false);
   const [addServiceOpen, setAddServiceOpen] = React.useState(false);
   const [addTarget, setAddTarget] = React.useState<AddIntegrationTarget | undefined>();
@@ -209,103 +206,90 @@ export function IntegrationsScreen({
         </div>
       )}
 
-      {!embedded && (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="mb-5">
-          <TabsList>
-            <TabsTrigger value="integrations">Integrations</TabsTrigger>
-            <TabsTrigger value="tools">Tools</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      )}
+      <div className="space-y-6">
+        {/* Detection only — there is no "add it here" button any more,
+            because there is no host_proxy category here to add it to. The
+            sentence names the one place that configures a proxy. */}
+        {showBanner && (
+          <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+            <Network className="mt-0.5 size-4 shrink-0 text-warning" />
+            <p className="min-w-0 flex-1 text-[0.8125rem] leading-snug text-warning">{T.PROXY_BANNER}</p>
+            {/* The banner names one place, so it takes you there — the old
+                "or add the Host proxy integration here" alternative went with
+                the category it offered. */}
+            <Button size="sm" variant="outline" className="shrink-0" onClick={() => navigate("/setup?step=corp_network")}>
+              Open Corporate network
+            </Button>
+          </div>
+        )}
 
-      {tab === "tools" ? (
-        <ToolsTab data={data} redirects={siteConfig.egress_redirects ?? []} />
-      ) : (
-        <div className="space-y-6">
-          {/* Detection only — there is no "add it here" button any more,
-              because there is no host_proxy category here to add it to. The
-              sentence names the one place that configures a proxy. */}
-          {showBanner && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
-              <Network className="mt-0.5 size-4 shrink-0 text-warning" />
-              <p className="min-w-0 flex-1 text-[0.8125rem] leading-snug text-warning">{T.PROXY_BANNER}</p>
-              {/* The banner names one place, so it takes you there — the old
-                  "or add the Host proxy integration here" alternative went with
-                  the category it offered. */}
-              <Button size="sm" variant="outline" className="shrink-0" onClick={() => navigate("/setup?step=corp_network")}>
-                Open Corporate network
-              </Button>
-            </div>
-          )}
+        {/* UX-2: embedded mode has no PageHeader (its Add button included)
+            and, once any row exists, neither the EmptyState's own button
+            (totalRows!==0) nor GenericSections' dashed panel one
+            (sections.length!==0) — all three conditions can be
+            simultaneously false, leaving no Add affordance anywhere on the
+            step and no in-app link to /integrations either (the nav is
+            gated). This is the one case the other three don't cover. */}
+        {embedded && totalRows > 0 && (
+          <div className="flex items-center justify-end gap-2">
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button size="sm" onClick={() => setAddServiceOpen(true)} disabled={!operator}>
+              <Plus className="size-4" /> Add integration
+            </Button>
+          </div>
+        )}
 
-          {/* UX-2: embedded mode has no PageHeader (its Add button included)
-              and, once any row exists, neither the EmptyState's own button
-              (totalRows!==0) nor GenericSections' dashed panel one
-              (sections.length!==0) — all three conditions can be
-              simultaneously false, leaving no Add affordance anywhere on the
-              step and no in-app link to /integrations either (the nav is
-              gated). This is the one case the other three don't cover. */}
-          {embedded && totalRows > 0 && (
-            <div className="flex items-center justify-end gap-2">
-              {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-              <Button size="sm" onClick={() => setAddServiceOpen(true)} disabled={!operator}>
-                <Plus className="size-4" /> Add integration
-              </Button>
-            </div>
-          )}
+        {totalRows === 0 ? (
+          <div className="rounded-xl border border-border">
+            <EmptyState
+              icon={Cable}
+              title={T.EMPTY_TITLE}
+              description={operator ? T.EMPTY_BODY : `${T.EMPTY_BODY} ${OPERATOR_ONLY_REASON}`}
+              action={
+                <Button onClick={() => setAddServiceOpen(true)} disabled={!operator}>
+                  <Plus className="size-4" /> Add integration
+                </Button>
+              }
+            />
+          </div>
+        ) : (
+          <>
+            <CategorySection
+              category="ai_provider"
+              label="AI providers"
+              rows={data.ai}
+              operator={operator}
+              onOpen={(r) => navigate(`/integrations/${r.id}`)}
+              onRotate={setRotateName}
+              onReCheck={load}
+              onDelete={requestDelete}
+              wireById={wireById}
+              onSetDefault={setDefault}
+            />
+            <CategorySection
+              category="scm_host"
+              label="SCM hosts"
+              rows={data.scm}
+              operator={operator}
+              onOpen={(r) => navigate(`/integrations/${r.id}`)}
+              onRotate={setRotateName}
+              onReCheck={load}
+              onDelete={requestDelete}
+              wireById={wireById}
+              onSetDefault={setDefault}
+            />
+            <GenericSections rows={generic} operator={operator} onAdd={() => setAddServiceOpen(true)} onChanged={load} />
+          </>
+        )}
 
-          {totalRows === 0 ? (
-            <div className="rounded-xl border border-border">
-              <EmptyState
-                icon={Cable}
-                title={T.EMPTY_TITLE}
-                description={operator ? T.EMPTY_BODY : `${T.EMPTY_BODY} ${OPERATOR_ONLY_REASON}`}
-                action={
-                  <Button onClick={() => setAddServiceOpen(true)} disabled={!operator}>
-                    <Plus className="size-4" /> Add integration
-                  </Button>
-                }
-              />
-            </div>
-          ) : (
-            <>
-              <CategorySection
-                category="ai_provider"
-                label="AI providers"
-                rows={data.ai}
-                operator={operator}
-                onOpen={(r) => navigate(`/integrations/${r.id}`)}
-                onRotate={setRotateName}
-                onReCheck={load}
-                onDelete={requestDelete}
-                wireById={wireById}
-                onSetDefault={setDefault}
-              />
-              <CategorySection
-                category="scm_host"
-                label="SCM hosts"
-                rows={data.scm}
-                operator={operator}
-                onOpen={(r) => navigate(`/integrations/${r.id}`)}
-                onRotate={setRotateName}
-                onReCheck={load}
-                onDelete={requestDelete}
-                wireById={wireById}
-                onSetDefault={setDefault}
-              />
-              <GenericSections rows={generic} operator={operator} onAdd={() => setAddServiceOpen(true)} onChanged={load} />
-            </>
-          )}
-
-          {/* Where the Host proxy / Egress redirection sections used to be.
-              Skipped in the embed — the Getting Started step renders its own
-              (backwards-pointing) half of the same pointer. */}
-          {!embedded && (
-            <p className="max-w-2xl text-[0.6875rem] leading-snug text-muted-foreground">{T.CORP_POINTER}</p>
-          )}
-          <p className="max-w-2xl text-[0.6875rem] leading-snug text-muted-foreground">{T.FOOTNOTE}</p>
-        </div>
-      )}
+        {/* Where the Host proxy / Egress redirection sections used to be.
+            Skipped in the embed — the Getting Started step renders its own
+            (backwards-pointing) half of the same pointer. */}
+        {!embedded && (
+          <p className="max-w-2xl text-[0.6875rem] leading-snug text-muted-foreground">{T.CORP_POINTER}</p>
+        )}
+        <p className="max-w-2xl text-[0.6875rem] leading-snug text-muted-foreground">{T.FOOTNOTE}</p>
+      </div>
 
       {/* One Add button, routed by what you pick: a model provider or a git host
           hands off to the established AI/SCM dialog below, everything else is

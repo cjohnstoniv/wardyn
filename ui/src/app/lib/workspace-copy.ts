@@ -113,7 +113,7 @@ export const RD2 = {
   RECORD_LEAD:
     "Verify what you've set up — and discover what you couldn't declare. A session drives the workspace for real; anything not already in the contract is held at the door for you to approve or deny, live.",
   RECORD_NEEDS:
-    "Nothing resolves for this image's agent tool, so an agent-driven verify session has nothing driving it. The power source lives on the Reach tab. A terminal session needs no model.",
+    "No model provider resolves for this workspace, so an agent-driven verify session has nothing driving it. The power source lives on the Reach tab. A terminal session needs no model.",
   RECORD_LOOP:
     "Approving a held host writes it into this workspace's contract immediately. Everything else a session observes comes back as \u201cfrom session\u201d suggestions in Reach, Secrets and Files & services — reviewed row by row, never promoted for you.",
   RECORD_SUB: "Drive it once; approve or deny what it asks for at the door, adjust, retry — then save.",
@@ -122,5 +122,5 @@ export const RD2 = {
   POWER_NONE_BODY:
     "Nothing pinned here and no server default — governed commands still run; an agent-driven session has nothing driving it. Pin one on its page.",
   POWER_RESOLVES_BODY: "Resolves from Integrations — run override → workspace pin → server default. Pin one on its page.",
-  TERMINAL_ONLY: "A terminal verify session drives the sandbox by hand — no model, no agent tool.",
+  TERMINAL_ONLY: "A terminal verify session drives the sandbox by hand — no model, no agent.",
 };

@@ -181,10 +181,8 @@ export function BuildStepsEditor({ value, onChange }: { value: string; onChange:
 }
 
 // The per-card inventory: what this image carries, as the same mono chips the
-// needs card speaks in. Inventory may NAME a tool (claude-code is one tool
-// among tools); only the requirements and run surfaces say what a tool is FOR
-// — the tools-not-AI law this step now follows. Empty = say nothing (the BYO
-// card: Wardyn doesn't inspect, so it makes no inventory claim).
+// needs card speaks in. Empty = say nothing (the BYO card: Wardyn doesn't
+// inspect, so it makes no inventory claim).
 function Carries({ tools }: { tools: string[] }) {
   if (tools.length === 0) return null;
   return (
@@ -247,17 +245,11 @@ function stopPropagation(e: React.SyntheticEvent) {
 
 export function ImageCards({
   detectedChips,
-  agentTools = [],
   partial,
   state,
   onChange,
 }: {
   detectedChips: string[];
-  /** What the RECOMMENDED build actually bakes (agentToolsCarried) — named
-   *  here, not folded into detectedChips, because it is true ONLY of that one
-   *  card: catalog/registry/BYO/custom images are never inspected, so they
-   *  never get this chip (the tools-not-AI law this whole section follows). */
-  agentTools?: string[];
   partial: boolean;
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
@@ -285,7 +277,7 @@ export function ImageCards({
           <Chip tone="primary">recommended</Chip>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
-        <Carries tools={[...detectedChips, ...agentTools]} />
+        <Carries tools={detectedChips} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.REC_SUB}</p>
       </ImageCard>
 
@@ -382,7 +374,6 @@ export function StepBaseImage({
   onEditSource,
   onRescan,
   detectedChips,
-  agentTools,
   state,
   onChange,
 }: {
@@ -393,7 +384,6 @@ export function StepBaseImage({
   onEditSource: () => void;
   onRescan: () => void;
   detectedChips: string[];
-  agentTools?: string[];
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
 }) {
@@ -419,13 +409,7 @@ export function StepBaseImage({
         </div>
       </div>
 
-      <ImageCards
-        detectedChips={detectedChips}
-        agentTools={agentTools}
-        partial={partial}
-        state={state}
-        onChange={onChange}
-      />
+      <ImageCards detectedChips={detectedChips} partial={partial} state={state} onChange={onChange} />
     </div>
   );
 }

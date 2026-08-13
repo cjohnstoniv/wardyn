@@ -180,7 +180,7 @@ export function StepRequirements({
   // The resolved model/harness access from step ②'s power-source line/peek
   // (wizard.tsx's `s.powerSource`) or, on the workspace detail page, the real
   // llm_cred binding mapped onto the same shape (requirements-card.tsx) — one
-  // idiom for "does anything resolve for this image's agent tool" everywhere
+  // idiom for "does a model provider resolve for this workspace" everywhere
   // StepRequirements is reused.
   powerSource: PowerSource;
   // Live setup status, only for the integrations a workspace may name. Optional
@@ -570,18 +570,12 @@ export function VerifyBody({
   requirements,
   powerSource,
   carryImage,
-  carryTools,
   verifyPanel,
   onOpenReach,
 }: {
   requirements: WorkspaceRequirementsMap;
   powerSource: PowerSource;
   carryImage?: string;
-  /** What the built image actually bakes (agentToolsCarried) — the wizard
-   *  passes this only while the recommended/envbuilt lane is what's actually
-   *  in play; absent elsewhere (the detail page's own Verify tab), this row
-   *  just doesn't render rather than guessing. */
-  carryTools?: string[];
   verifyPanel?: React.ReactNode;
   onOpenReach: () => void;
 }) {
@@ -616,7 +610,6 @@ export function VerifyBody({
           )}
         </CarryRow>
         {carryImage && <CarryRow label="Image">{carryImage}</CarryRow>}
-        {carryTools && carryTools.length > 0 && <CarryRow label="Tools">{carryTools.join(", ")}</CarryRow>}
         <CarryRow label="Required secrets">{carrySecrets}</CarryRow>
         <CarryRow label="Egress posture">{carryEgress}</CarryRow>
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.CARRY_FROM}</p>

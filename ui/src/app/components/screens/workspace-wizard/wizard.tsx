@@ -52,7 +52,6 @@ import { StepDone, type DoneVariant } from "./step-done";
 import {
   isFixtureLeak,
   WIZARD_STEPS,
-  agentToolsCarried,
   baseImageStateFromWorkspace,
   canDriveClaudeCode,
   defaultBaseImageState,
@@ -62,7 +61,6 @@ import {
   newSourceRow,
   parseRepoSource,
   removeSource,
-  repoOwnDevcontainerWins,
   seedFloor,
   sourceRowsFromWorkspace,
   suggestedRegistryImage,
@@ -209,7 +207,7 @@ export function WorkspaceWizard({
   const s = state;
   // The wizard no longer pins a power source (that control lives on the
   // workspace page); it only READS the resolution, derived from whether any
-  // integration can drive this image's agent tool.
+  // integration can drive an agent harness for this workspace.
   const powerSource: PowerSource = s.harnessAvailable ? { kind: "default" } : { kind: "none" };
 
   React.useEffect(() => {
@@ -409,21 +407,6 @@ export function WorkspaceWizard({
   const phaseA = s.step === "image" && (anyScanning || anyFailed) && !s.partial;
   const profile = profileOf(s.workspace);
   const detectedChips = detectedChipsFor(profile);
-  // What the RECOMMENDED/envbuilt build carries — computed unconditionally so
-  // step ②'s recommended CARD can describe itself regardless of which card is
-  // currently selected. Withheld entirely when the primary source's own
-  // devcontainer would win instead (repoOwnDevcontainerWins) — that lane
-  // builds the repo's devcontainer as-is and never bakes anything named here
-  // (workspace_run.go's repoDevcontainerToolCaveat is the same fact,
-  // surfaced post-hoc once a build exists; this is the pre-build preview).
-  // Build and Verify describe the actual resolved outcome instead, so they
-  // only see this when "recommended" is what's actually chosen (catalog/BYO/
-  // registry/custom images are never inspected — a chip there would claim a
-  // binary Wardyn didn't put in them).
-  const bakedAgentTools = repoOwnDevcontainerWins(s.sources, profile)
-    ? []
-    : agentToolsCarried(s.requirements, s.setupStatus?.integrations ?? []);
-  const carriedAgentTools = s.baseImage.choice === "recommended" ? bakedAgentTools : [];
 
   // ---------- Back-to-Sources gate (C.RESCAN_DESTROYS-style warning) ----------
   const goToSources = () => {
@@ -680,7 +663,6 @@ export function WorkspaceWizard({
               onEditSource={() => goToSources()}
               onRescan={() => s.workspace && void startScan(s.workspace)}
               detectedChips={detectedChips}
-              agentTools={bakedAgentTools}
               state={s.baseImage}
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
             />
@@ -710,18 +692,13 @@ export function WorkspaceWizard({
             />
           )}
           {s.step === "build" && s.workspace && (
-            <StepBuild
-              workspaceId={s.workspace.id}
-              onStateChange={(b) => patch({ buildState: b })}
-              agentTools={carriedAgentTools}
-            />
+            <StepBuild workspaceId={s.workspace.id} onStateChange={(b) => patch({ buildState: b })} />
           )}
           {s.step === "verify" && s.workspace && (
             <VerifyBody
               requirements={s.requirements}
               powerSource={powerSource}
               carryImage={carryImage}
-              carryTools={carriedAgentTools}
               onOpenReach={() => patch({ step: "reqs" })}
               verifyPanel={
                 <WizardVerifySession

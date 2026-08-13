@@ -276,9 +276,9 @@ export interface SetupStatus {
   // managed model credential or a container-login subscription. Distinct
   // from `harness` above (a CAPTURED credential's live readiness). DEADCODE-2:
   // not read client-side yet (same as `capabilities` above) — new-run's
-  // WizardAgent literal union and the Tools tab's hand-written rows are
-  // hand-maintained copies of the same facts, pending consolidation onto this
-  // field. Optional for the same fixture-compat reason as `bedrock`.
+  // WizardAgent literal union is a hand-maintained copy of the same facts,
+  // pending consolidation onto this field. Optional for the same
+  // fixture-compat reason as `bedrock`.
   harnesses?: SetupHarnessTool[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not

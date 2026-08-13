@@ -40,12 +40,11 @@ export const T = {
   // The pair of pointers at the SAME consolidation, one per surface: the
   // Getting Started embed points one step back, the full page points forward
   // into Getting started. Both verbatim from the mock (round G).
-  // UX-8: was "...shows the same two categories" — false in both directions
-  // (the embed renders all ten, and the full page's Tools tab isn't in the
-  // embed). State what's actually true instead of a category count that can
-  // go stale the next time a category is added.
+  // UX-8: was "...shows the same two categories" — false (the embed renders
+  // all ten). State what's actually true instead of a category count that
+  // can go stale the next time a category is added.
   EMBED_SCOPE_NOTE:
-    "This is the full Integrations page, minus its Tools tab. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+    "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
   CORP_POINTER:
     "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
@@ -140,7 +139,6 @@ export const T = {
   X_AZURE_DIRECT: "No sandbox lane exists — Azure is called from the control plane only.",
   BEDROCK_FEATURES:
     "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses.",
-  LAW: "A tool is what the image carries. An integration is what it connects through. Wardyn never installs tools into your image — it only wires them at run time.",
   CACHE_CAVEAT: "Answers are cached for 5 minutes — Re-check may return the cached one.",
   WRITE_ONLY: "The store is write-only: the value can't be read back.",
   MANAGED_LINE: "One login in a sandbox; the token is injected proxy-side and the sandbox holds only an inert sentinel.",
@@ -443,41 +441,4 @@ export const IMPOSSIBLE: Partial<Record<AiType, Partial<Record<AiCapability, str
   bedrock: { codex_cli: T.X_BEDROCK_CODEX },
   openai_api_key: { claude_code: T.X_OPENAI_CLAUDE },
   azure_openai: { claude_code: T.X_AZURE_HARNESS, codex_cli: T.X_AZURE_HARNESS, direct_api: T.X_AZURE_DIRECT },
-};
-
-// ---- Tools tab (mockup's Harnesses frame / toolRow calls, verbatim) ----
-// A tool is installable client software the image carries; an integration is
-// what it connects through (T.LAW) — this copy is the "How Wardyn wires it" /
-// "Image" text for each of the Tools tab's six rows. Not part of CAPS: these
-// are fixed mechanism descriptions, not a capability matrix.
-export type ToolRowId = "git" | "package_managers" | "claude_code" | "codex_cli" | "gh_cli" | "own_tools";
-export interface ToolRowCopy {
-  wire: string;
-  image?: string;
-  /** git's own trailing note ("In every Wardyn image.") — distinct from `image`,
-   *  which names a REQUIREMENT the other rows' images must satisfy. */
-  extra?: string;
-}
-export const TOOLS: Record<ToolRowId, ToolRowCopy> = {
-  git: {
-    wire: "Clone and push rerouted through the broker (App), a credential helper (PAT), or a key file (SSH) — set up at run start.",
-    extra: "In every Wardyn image.",
-  },
-  package_managers: {
-    wire: "Per-tool config files generated at run start (.npmrc, pip.conf, …); the mirror token is injected proxy-side.",
-  },
-  claude_code: {
-    wire: "Sign-in injected proxy-side — a subscription sentinel or a key; never resident.",
-    image: "Must carry the Claude Code CLI — Wardyn's built-in agent image does.",
-  },
-  codex_cli: {
-    wire: "API key only — Wardyn has no Codex login capture.",
-    image: "Must carry the Codex CLI.",
-  },
-  gh_cli: {
-    wire: "Recognized on the host, never wired. Its token is broad; Wardyn never imports it — use an SCM host integration instead.",
-  },
-  own_tools: {
-    wire: "Whatever your image carries. Wardyn wires nothing; your tools authenticate however they like. The self-test still runs, and governed commands skip all wiring entirely.",
-  },
 };

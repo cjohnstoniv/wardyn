@@ -896,10 +896,6 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 			artifactBases = artifactBaseURLs(sc)
 		}
 	}
-	// tools: same derivation resolveWorkspaceImage uses, so an exported
-	// devcontainer and the one Wardyn itself builds never drift on what they
-	// claim to carry.
-	tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(r.Context(), ws))
 	// baseRef: the SAME "explicit non-recommended choice" predicate
 	// resolveWorkspaceImage uses (workspace_run.go) — WITHOUT it every export
 	// described the generic devcontainer base regardless of what this
@@ -908,7 +904,7 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		baseRef = b.Image
 	}
-	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, tools, baseRef)
+	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, baseRef)
 	if gerr != nil {
 		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
 		return nil, false

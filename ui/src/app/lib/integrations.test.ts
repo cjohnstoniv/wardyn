@@ -13,7 +13,6 @@ import {
   SUBSCRIPTION_LANE_META,
   BEDROCK_LANE_META,
   IMPOSSIBLE,
-  TOOLS,
   EGRESS_SUGGEST,
 } from "./integrations";
 
@@ -26,9 +25,6 @@ import {
 // sentinels are the fast, in-repo tripwire for the same class of drift.
 describe("integrations — T canon sentinel pins", () => {
   it("pins plain entries verbatim, em-dashes included", () => {
-    expect(T.LAW).toBe(
-      "A tool is what the image carries. An integration is what it connects through. Wardyn never installs tools into your image — it only wires them at run time.",
-    );
     expect(T.X_SUB_DIRECT).toBe(
       "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting.",
     );
@@ -61,8 +57,11 @@ describe("integrations — T canon sentinel pins", () => {
     );
     expect(T.CORP_LEDE).not.toContain("Required");
     expect(T.EMBED_SCOPE_NOTE).toBe(
-      "This is the full Integrations page, minus its Tools tab. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+      "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
     );
+    // The Tools tab no longer exists anywhere — the embed note must not
+    // resurrect it.
+    expect(T.EMBED_SCOPE_NOTE).not.toContain("Tools tab");
     // …and NOT the old tail claiming the full page still shows all four.
     expect(T.EMBED_SCOPE_NOTE).not.toContain("all four categories");
     // …and not UX-8's false claim either — the embed renders all ten
@@ -243,22 +242,6 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
   it("control_plane reads distinctly from varies (Azure has one lane, not several)", () => {
     expect(RESIDENCY_META.control_plane.label).toBe("control-plane side");
     expect(RESIDENCY_META.control_plane.label).not.toBe(RESIDENCY_META.varies.label);
-  });
-
-  it("TOOLS covers all six Tools-tab rows, verbatim against the mock's toolRow calls", () => {
-    expect(TOOLS.git.wire).toBe(
-      "Clone and push rerouted through the broker (App), a credential helper (PAT), or a key file (SSH) — set up at run start.",
-    );
-    expect(TOOLS.git.extra).toBe("In every Wardyn image.");
-    expect(TOOLS.package_managers.wire).toBe(
-      "Per-tool config files generated at run start (.npmrc, pip.conf, …); the mirror token is injected proxy-side.",
-    );
-    expect(TOOLS.gh_cli.wire).toBe(
-      "Recognized on the host, never wired. Its token is broad; Wardyn never imports it — use an SCM host integration instead.",
-    );
-    for (const id of ["git", "package_managers", "claude_code", "codex_cli", "gh_cli", "own_tools"] as const) {
-      expect(TOOLS[id].wire).toBeTruthy();
-    }
   });
 
   it("BEDROCK_LANE_META covers all four lanes and points each at a residency kind", () => {

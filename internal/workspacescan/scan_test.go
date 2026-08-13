@@ -334,46 +334,24 @@ func TestProfileHash(t *testing.T) {
 }
 
 // TestCacheKey pins the build-cache-key contract CacheKey adds on top of
-// ProfileHash: naming an integration (a different tools set) must change the
-// key — the whole reason CacheKey exists, or toggling an integration would
-// never trigger a rebuild — while staying deterministic and independent of
-// the caller's slice order, and never letting an equal tools set collapse
-// two different profiles into the same key.
+// ProfileHash: it must be deterministic, distinct from ProfileHash itself
+// (so bumping cacheKeySalt can force a rebuild without a hash collision), and
+// still distinguish different profiles.
 func TestCacheKey(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: ConfidenceHigh, Source: SourceDeterministic}
-	if got := len(p.CacheKey(nil)); got != 64 {
+	if got := len(p.CacheKey()); got != 64 {
 		t.Errorf("hash length = %d, want 64 (sha256 hex)", got)
 	}
-
-	// NO tools is ProfileHash() itself, not a digest of it: the devcontainer
-	// generated for an empty tool set is byte-identical to what the old
-	// ProfileHash-only key described, so re-hashing would invalidate every
-	// already-built workspace image on upgrade and rebuild each one to
-	// reproduce exactly what was already cached.
-	noTools := p.CacheKey(nil)
-	if noTools != p.ProfileHash() {
-		t.Error("CacheKey(nil) must equal ProfileHash() — otherwise every cached image rebuilds once on upgrade for no reason")
-	}
-	if got := p.CacheKey([]string{}); got != noTools {
-		t.Error("an empty (non-nil) tools slice is the same no-tools case")
-	}
-	withClaude := p.CacheKey([]string{"claude-code"})
-	if withClaude == noTools {
-		t.Error("naming a tool must change the cache key, or toggling an integration never rebuilds")
-	}
-	withBoth := p.CacheKey([]string{"claude-code", "codex-cli"})
-	if withBoth == withClaude {
-		t.Error("adding a second tool must change the cache key")
-	}
-	if got := p.CacheKey([]string{"codex-cli", "claude-code"}); got != withBoth {
-		t.Error("CacheKey must be independent of the caller's tools slice order")
-	}
-	if got := p.CacheKey([]string{"claude-code"}); got != withClaude {
+	k1, k2 := p.CacheKey(), p.CacheKey()
+	if k1 != k2 {
 		t.Error("CacheKey must be deterministic for identical inputs")
+	}
+	if p.CacheKey() == p.ProfileHash() {
+		t.Error("CacheKey must be a salted digest of ProfileHash, not ProfileHash itself — a bare ProfileHash key would collide with a pre-salt-bump cached image")
 	}
 
 	other := WorkspaceProfile{Languages: []string{"Python"}, Confidence: ConfidenceHigh, Source: SourceDeterministic}
-	if other.CacheKey([]string{"claude-code"}) == withClaude {
-		t.Error("different profiles with the same tools must still hash differently")
+	if other.CacheKey() == p.CacheKey() {
+		t.Error("different profiles must still hash differently")
 	}
 }

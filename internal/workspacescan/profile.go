@@ -30,7 +30,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
-	"strings"
 )
 
 // Confidence buckets how much a WorkspaceProfile can be trusted without a
@@ -234,47 +233,20 @@ func (p WorkspaceProfile) ProfileHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// cacheKeySalt versions CacheKey's preimage. Bump it whenever a change to
+// what the generator BAKES isn't already reflected in WorkspaceProfile's own
+// fields, so a previously-built image never reads as a false cache hit. v2:
+// the standard agent-tool install became unconditional (previously it was
+// folded in via a separate tools param, keyed on named integrations) — a v1
+// image may predate the install entirely and must rebuild, not reuse.
+const cacheKeySalt = "v2"
+
 // CacheKey returns the SHA-256 hex digest that keys a workspace's BUILT image
-// cache (Workspace.BuiltProfileHash), folding the derived agent-tool set
-// (AgentToolsForIntegrationTypes' output — gen.go) in alongside the profile:
-// two workspaces with an identical scanned profile but a different named AI
-// integration must build (and cache) DIFFERENT images, because the generated
-// devcontainer (and its generated Dockerfile) differs — without this,
-// toggling an integration would never trigger a rebuild. tools is the closed small set
-// AgentToolsForIntegrationTypes returns ({claude-code} today), so joining it
-// verbatim carries no escaping risk. Sorted so the caller's slice order never
-// changes the hash.
-//
-// NO tools is ProfileHash() ITSELF, not a "|tools=" digest of it: the
-// devcontainer generated for an empty tool set is byte-identical to the one
-// the old ProfileHash-only key described, so re-hashing would invalidate
-// every already-built workspace image on upgrade and rebuild each one once to
-// reproduce exactly what was already cached. That is the same rebuild storm
-// this key deliberately avoids by folding the derived TOOL SET rather than a
-// wider fingerprint. No collision risk: ProfileHash and this digest are
-// distinct hashes of distinct preimages, and the no-tools case is precisely
-// the case the old key already covered.
-//
-// KNOWN GAP, deliberately not closed: this formula cannot distinguish a
-// c39f591-era image (an inert devcontainer onCreateCommand, baking nothing —
-// see gen.go's package comment) from a 342da88-era one (a real Dockerfile
-// RUN) for the SAME tools=["claude-code"] input — both hash identically, so a
-// workspace built in that window would read as a cache HIT forever. No
-// migration/version bump ships for it: both commits landed the same day,
-// entirely inside CHANGELOG.md's [Unreleased] section (never a tagged/dated
-// release), so the only images that could exist in that state are from an
-// in-campaign dev build within that ~2-hour window. A version-salt bump also
-// could not target just those rows — c39f591 and 342da88 produce the exact
-// same preimage by construction, so bumping the key would invalidate every
-// CURRENT, correctly-built tools row too: pure churn for a window nothing
-// released ever shipped.
-func (p WorkspaceProfile) CacheKey(tools []string) string {
-	if len(tools) == 0 {
-		return p.ProfileHash()
-	}
-	sorted := slices.Clone(tools)
-	slices.Sort(sorted)
-	sum := sha256.Sum256([]byte(p.ProfileHash() + "|tools=" + strings.Join(sorted, ",")))
+// cache (Workspace.BuiltProfileHash): a salted digest of ProfileHash, not
+// ProfileHash itself, so bumping cacheKeySalt can force a rebuild without
+// colliding with it.
+func (p WorkspaceProfile) CacheKey() string {
+	sum := sha256.Sum256([]byte(p.ProfileHash() + "|" + cacheKeySalt))
 	return hex.EncodeToString(sum[:])
 }
 

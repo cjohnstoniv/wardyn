@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // workspace_build.go — the wizard's BUILD step endpoints. Building the
@@ -198,14 +197,12 @@ type buildResponse struct {
 
 // resolveBuildView derives the honest view for GET/POST responses.
 //
-// ctx is needed only for the cache-hit branch: it re-derives the workspace's
-// named agent tools so the stored BuiltProfileHash is compared against the
-// SAME expression resolveWorkspaceImage wrote it with (p.CacheKey(tools), not
-// a bare ProfileHash()). Keying the reader on anything else makes this branch
-// unreachable by construction — which reports state:"none" for a workspace
-// that IS built as soon as s.builds (in-memory, per-process) no longer knows
-// about it: after any restart, or from a second replica.
-func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) buildResponse {
+// No ctx: the cache-hit branch compares the stored BuiltProfileHash against
+// the SAME expression resolveWorkspaceImage wrote it with (p.CacheKey(), not
+// a bare ProfileHash()) — both are pure functions of the profile now that the
+// standard agent-tool install is unconditional rather than derived from the
+// workspace's named integrations.
+func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 	// An explicit image choice boots verbatim — there is nothing to build.
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" {
 		return buildResponse{State: "nothing_to_build", Image: b.Image,
@@ -218,26 +215,16 @@ func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) build
 	case st.Error != "":
 		return buildResponse{State: "failed", Detail: st.Error, Log: st.Log}
 	case st.Image != "":
-		// st.Image only ever comes from THIS process's own resolveWorkspaceImage
-		// call, and the persisted cache-hit branch below is unreachable for a
-		// repo-own-devcontainer image (that lane never calls
-		// SetWorkspaceBuiltImage) — so re-deriving the caveat against ws's
-		// CURRENT sources/profile is safe: a "done" backed by that lane can only
-		// be this one.
-		return buildResponse{State: "done", Image: st.Image, Detail: s.repoDevcontainerToolCaveat(ctx, ws), Log: st.Log}
+		return buildResponse{State: "done", Image: st.Image, Log: st.Log}
 	}
 	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" {
-		tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, ws))
-		if ws.BuiltProfileHash == prof.CacheKey(tools) {
+		if ws.BuiltProfileHash == prof.CacheKey() {
 			return buildResponse{State: "done", Image: ws.ImageRef}
 		}
 	}
 	if s.cfg.ImageBuilder == nil {
 		return buildResponse{State: "none",
 			Detail: "devcontainer builds are not enabled on this host — sessions boot the stock agent image"}
-	}
-	if caveat := s.repoDevcontainerToolCaveat(ctx, ws); caveat != "" {
-		return buildResponse{State: "none", Detail: caveat}
 	}
 	return buildResponse{State: "none"}
 }
@@ -254,7 +241,7 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.resolveBuildView(r.Context(), ws))
+	writeJSON(w, http.StatusOK, s.resolveBuildView(ws))
 }
 
 // handleBuildWorkspace kicks the workspace's image build asynchronously —
@@ -274,7 +261,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := s.resolveBuildView(r.Context(), ws)
+	view := s.resolveBuildView(ws)
 	if view.State == "nothing_to_build" || view.State == "done" {
 		writeJSON(w, http.StatusOK, view)
 		return

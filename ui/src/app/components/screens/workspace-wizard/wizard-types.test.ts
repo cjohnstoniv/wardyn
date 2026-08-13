@@ -6,7 +6,6 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TARGET,
-  agentToolsCarried,
   baseImageStateFromWorkspace,
   canDriveClaudeCode,
   credFlags,
@@ -21,7 +20,6 @@ import {
   operatorOverlay,
   parseRepoSource,
   removeSource,
-  repoOwnDevcontainerWins,
   requirementKey,
   seedFloor,
   sourceRowsFromWorkspace,
@@ -132,29 +130,6 @@ describe("parseRepoSource / isSshRemote", () => {
   });
 });
 
-describe("repoOwnDevcontainerWins — mirrors workspace_run.go's repoOwnDevcontainerURL", () => {
-  it("is true for a non-SSH repo primary source with a scanned devcontainer", () => {
-    const repo = { ...newSourceRow("repo"), source: "https://github.com/acme/payments" };
-    expect(repoOwnDevcontainerWins([repo], { has_devcontainer: true })).toBe(true);
-  });
-  it("is false when the primary source is not a repo", () => {
-    const dir = newSourceRow("local_dir");
-    expect(repoOwnDevcontainerWins([dir], { has_devcontainer: true })).toBe(false);
-  });
-  it("is false when the profile never detected a devcontainer", () => {
-    const repo = { ...newSourceRow("repo"), source: "https://github.com/acme/payments" };
-    expect(repoOwnDevcontainerWins([repo], { has_devcontainer: false })).toBe(false);
-    expect(repoOwnDevcontainerWins([repo], null)).toBe(false);
-  });
-  it("is false for an SSH remote — the image builder can't clone it, so the generator runs instead", () => {
-    const ssh = { ...newSourceRow("repo"), source: "git@ghes.corp.internal:acme/payments.git" };
-    expect(repoOwnDevcontainerWins([ssh], { has_devcontainer: true })).toBe(false);
-  });
-  it("is false with no sources at all", () => {
-    expect(repoOwnDevcontainerWins([], { has_devcontainer: true })).toBe(false);
-  });
-});
-
 describe("toSourceInput", () => {
   it("toSourceInput strips UI-only fields and fills the derived target", () => {
     const row: SourceRow = { ...newSourceRow("repo"), source: "acme/payments", ref: "main" };
@@ -218,44 +193,6 @@ describe("requirementKey / splitRequirementKey — the server's fixed key gramma
   it("rejects a key with no colon or an empty suffix", () => {
     expect(splitRequirementKey("nocolon")).toBeNull();
     expect(splitRequirementKey("secret:")).toBeNull();
-  });
-});
-
-describe("agentToolsCarried — a named anthropic_* integration is the only thing that ever bakes", () => {
-  it("resolves claude-code when the named id's TYPE starts with anthropic_", () => {
-    const reqs: WorkspaceRequirementsMap = {
-      "integration:anthropic_subscription:managed": { level: "required", provenance: "operator_set" },
-    };
-    const integrations = [{ id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" }];
-    expect(agentToolsCarried(reqs, integrations)).toEqual(["claude-code"]);
-  });
-
-  it("contributes nothing for openai_* — codex-cli has no bakeable install lane", () => {
-    const reqs: WorkspaceRequirementsMap = {
-      "integration:openai_api_key": { level: "required", provenance: "operator_set" },
-    };
-    const integrations = [{ id: "openai_api_key", category: "ai_provider", type: "openai_api_key" }];
-    expect(agentToolsCarried(reqs, integrations)).toEqual([]);
-  });
-
-  it("contributes nothing for bedrock/azure — unrecognized types stay unmapped", () => {
-    const reqs: WorkspaceRequirementsMap = {
-      "integration:bedrock": { level: "required", provenance: "operator_set" },
-    };
-    const integrations = [{ id: "bedrock", category: "ai_provider", type: "bedrock" }];
-    expect(agentToolsCarried(reqs, integrations)).toEqual([]);
-  });
-
-  it("ignores non-integration requirement keys and a named id absent from the integrations list", () => {
-    const reqs: WorkspaceRequirementsMap = {
-      "secret:database-url": { level: "required", provenance: "scan_seeded" },
-      "integration:not-configured-yet": { level: "required", provenance: "operator_set" },
-    };
-    expect(agentToolsCarried(reqs, [])).toEqual([]);
-  });
-
-  it("is empty when nothing is named at all", () => {
-    expect(agentToolsCarried({}, [])).toEqual([]);
   });
 });
 

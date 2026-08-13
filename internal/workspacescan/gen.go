@@ -17,7 +17,10 @@ package workspacescan
 // feature (Elixir, Dart, ...) are simply left off the image and surface via
 // the profile's NeedsReview elsewhere.
 //
-// The agent CLI an integration implies is baked by a generated
+// The standard agent tool set (genStandardTools — claude-code today) is baked
+// UNCONDITIONALLY into every generated devcontainer, independent of which
+// integrations (if any) a workspace names: it's standard tooling, like the
+// shipped deploy/images/claude-code convention image. The bake is a generated
 // .devcontainer/Dockerfile (genAgentToolDockerfile) that devcontainer.json
 // points `build.dockerfile` at, so its RUN steps are layers of the image
 // kaniko builds and PUSHES. Two mechanisms were tried and rejected against a
@@ -53,7 +56,6 @@ package workspacescan
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 )
@@ -63,10 +65,10 @@ import (
 // needed).
 const genDevcontainerPath = ".devcontainer/devcontainer.json"
 
-// genDockerfilePath is the OPTIONAL second file: emitted only when something
-// has to be baked in with a RUN (genAgentToolDockerfile). It sits beside
-// devcontainer.json, which is also the build context devcontainer.json's
-// `build` block resolves `dockerfile` against.
+// genDockerfilePath is the second file, always emitted: it carries the
+// standard-tooling RUN layers (genAgentToolDockerfile over genStandardTools).
+// It sits beside devcontainer.json, which is also the build context
+// devcontainer.json's `build` block resolves `dockerfile` against.
 const genDockerfilePath = ".devcontainer/Dockerfile"
 
 // EnvAsCodeDockerfilePath exports genDockerfilePath for callers outside this
@@ -118,10 +120,10 @@ func featuresFor(langs []string) map[string]map[string]any {
 	return features
 }
 
-// genAgentToolInstalls maps an AgentToolsForIntegrationTypes value to the
-// Dockerfile RUN body that BAKES that agent CLI in. This table is the whole
-// bake surface: anything absent from it is not bakeable, and
-// AgentToolsForIntegrationTypes must therefore not name it.
+// genAgentToolInstalls maps a genStandardTools entry to the Dockerfile RUN
+// body that BAKES that agent CLI in. This table is the whole bake surface:
+// anything absent from it is not bakeable, and genStandardTools must
+// therefore not name it.
 //
 // claude-code's is the checksum-verified native-binary lane — the same
 // downloads.claude.ai + manifest.json sha256 pattern as
@@ -164,6 +166,12 @@ var genAgentToolInstalls = map[string]string{
     rm -f /tmp/claude-manifest.json`,
 }
 
+// genStandardTools is the standard agent-tool set baked into EVERY generated
+// devcontainer, unconditionally — not keyed to which (if any) integrations a
+// workspace names. Today just claude-code; genAgentToolInstalls is the table
+// of what each entry actually installs.
+var genStandardTools = []string{"claude-code"}
+
 // genAgentToolDockerfile returns the .devcontainer/Dockerfile that bakes tools
 // into the image, or "" when nothing in tools is bakeable (including the
 // no-tools case) — callers must then emit no Dockerfile at all and leave
@@ -188,39 +196,6 @@ func genAgentToolDockerfile(tools []string, baseImage string) string {
 		baseImage = genBaseImage
 	}
 	return "FROM " + baseImage + "\n\n" + b.String()
-}
-
-// AgentToolsForIntegrationTypes derives the agent CLIs implied by naming
-// integration TYPES (types.Integration.Type values, e.g. "anthropic_api_key"/
-// "anthropic_subscription"/"openai_api_key") on a workspace, so its
-// recommended build can bake them in — inventory honesty: "Carries:
-// claude-code" becomes true only once the server actually bakes it, never the
-// reverse. Prefix-only and deliberately narrow: "bedrock"/"azure_openai" and
-// every other unrecognized type stay unmapped and contribute nothing — this
-// decides what gen.go BAKES into an image, a different question from
-// run-time auth compatibility (ui/lib/integrations.ts's canDriveClaudeCode
-// says bedrock CAN drive an already-baked claude-code at run time — not
-// whether the image should bake one for it). Sorted + deduped so the result
-// is a stable devcontainer/cache-key input regardless of call order.
-//
-// The result is exactly the set genAgentToolInstalls can INSTALL, never a
-// wider "requested" set: this value is both the generator's input and (via
-// WorkspaceProfile.CacheKey) the built-image cache key, so a tool the
-// generator would silently drop must not appear here either — it would key a
-// rebuild that reproduces a byte-identical devcontainer. That is why
-// "openai_*" contributes nothing: codex-cli has no bakeable install lane (see
-// genAgentToolInstalls).
-func AgentToolsForIntegrationTypes(integrationTypes []string) []string {
-	seen := map[string]bool{}
-	for _, t := range integrationTypes {
-		if strings.HasPrefix(t, "anthropic_") {
-			seen["claude-code"] = true
-		}
-	}
-	if len(seen) == 0 {
-		return nil
-	}
-	return slices.Sorted(maps.Keys(seen))
 }
 
 // genDevcontainer is the minimal devcontainer.json shape we emit. Struct field
@@ -257,17 +232,18 @@ type genBuild struct {
 }
 
 // baseOrBuild points a devcontainer at either the resolved base image or the
-// generated Dockerfile (whose own FROM is that same base), and returns the
-// extra files to emit alongside it. baseRef is the workspace's OWN resolved
-// base (a registry/custom/byo pick's Image; "" for "recommended"/nil, which
-// keeps the universal genBaseImage default) — WITHOUT it, EmitEnvAsCode
-// described the generic devcontainer base regardless of what Wardyn actually
-// boots for that workspace (WSPIPE-9). GenerateDevcontainer is reached only
-// for the recommended/derived build, so it always passes "".
+// generated Dockerfile baking genStandardTools in (whose own FROM is that
+// same base), and returns the extra files to emit alongside it. baseRef is
+// the workspace's OWN resolved base (a registry/custom/byo pick's Image; ""
+// for "recommended"/nil, which keeps the universal genBaseImage default) —
+// WITHOUT it, EmitEnvAsCode described the generic devcontainer base
+// regardless of what Wardyn actually boots for that workspace (WSPIPE-9).
+// GenerateDevcontainer is reached only for the recommended/derived build, so
+// it always passes "".
 // Shared by EmitEnvAsCode and GenerateDevcontainer so the committable export
 // and the image Wardyn builds can never drift on what they carry.
-func baseOrBuild(dc *genDevcontainer, tools []string, baseRef string) map[string]string {
-	dockerfile := genAgentToolDockerfile(tools, baseRef)
+func baseOrBuild(dc *genDevcontainer, baseRef string) map[string]string {
+	dockerfile := genAgentToolDockerfile(genStandardTools, baseRef)
 	if dockerfile == "" {
 		dc.Image = baseRef
 		if dc.Image == "" {
@@ -280,10 +256,10 @@ func baseOrBuild(dc *genDevcontainer, tools []string, baseRef string) map[string
 }
 
 // EmitEnvAsCode produces committable environment-as-code from a scanned
-// profile: a devcontainer.json (base + language features + agent-tool
-// install + artifact-registry redirects) and an AGENTS.md documenting the
-// DETECTED toolchain and setup commands (profile.SetupCommands, a scan-time
-// heuristic — never verified) as prose, for a human/agent to run
+// profile: a devcontainer.json (base + language features + the standard
+// agent-tool install + artifact-registry redirects) and an AGENTS.md
+// documenting the DETECTED toolchain and setup commands (profile.SetupCommands,
+// a scan-time heuristic — never verified) as prose, for a human/agent to run
 // deliberately. Returned as path -> content.
 //
 // artifactBases maps an artifact ecosystem (npm|pip|cargo|maven|go|nuget) to the
@@ -296,15 +272,11 @@ func baseOrBuild(dc *genDevcontainer, tools []string, baseRef string) map[string
 // committed workspace pulls from the corporate mirror; pass nil when no
 // redirect is configured.
 //
-// tools is AgentToolsForIntegrationTypes' output (the caller derives it from
-// the workspace's named integrations) — see genAgentToolInstalls for the
-// bake-lane rule; pass nil when nothing is named.
-//
 // baseRef is the workspace's OWN resolved base-image ref (a registry/custom/
 // byo pick's Image), or "" for "recommended"/nil — see baseOrBuild.
-func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []string, baseRef string) (map[string]string, error) {
+func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef string) (map[string]string, error) {
 	var dc genDevcontainer
-	extra := baseOrBuild(&dc, tools, baseRef)
+	extra := baseOrBuild(&dc, baseRef)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
@@ -495,24 +467,24 @@ func genAgentsMD(p WorkspaceProfile) string {
 
 // GenerateDevcontainer produces a minimal, deterministic
 // .devcontainer/devcontainer.json for the profile: the universal base image
-// plus one devcontainer feature per detected, feature-supported language. When
-// tools names something bakeable, a .devcontainer/Dockerfile is emitted
-// alongside it and devcontainer.json points `build.dockerfile` at that instead
-// of naming the base directly (see genAgentToolInstalls). The returned map is
-// path -> file content; it is safe to feed straight to the envbuilder
-// local-context build (BuildFromDevcontainerFiles).
+// plus one devcontainer feature per detected, feature-supported language,
+// plus the standard agent-tool install (genStandardTools), baked
+// unconditionally. A .devcontainer/Dockerfile is always emitted alongside it
+// and devcontainer.json points `build.dockerfile` at that instead of naming
+// the base directly (see genAgentToolInstalls). The returned map is path ->
+// file content; it is safe to feed straight to the envbuilder local-context
+// build (BuildFromDevcontainerFiles).
 //
 // Pure: no I/O, no clock, no randomness. p.Languages is already sorted+deduped
 // by DeriveProfile, so iterating it and letting encoding/json sort the features
-// map yields identical bytes for identical profiles. tools is
-// AgentToolsForIntegrationTypes' output; pass nil when nothing is named.
-func GenerateDevcontainer(p WorkspaceProfile, tools []string) (files map[string]string, err error) {
+// map yields identical bytes for identical profiles.
+func GenerateDevcontainer(p WorkspaceProfile) (files map[string]string, err error) {
 	var dc genDevcontainer
 	// Always "" (the universal genBaseImage default): this path is reached
 	// only for the recommended/derived build (resolveWorkspaceImage falls
 	// through to it precisely when the workspace names no explicit base
 	// image), which by definition has no OTHER base to resolve.
-	out := baseOrBuild(&dc, tools, "")
+	out := baseOrBuild(&dc, "")
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}

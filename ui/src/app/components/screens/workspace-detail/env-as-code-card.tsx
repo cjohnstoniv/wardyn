@@ -84,7 +84,7 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
           </Button>
           <p className="text-xs text-muted-foreground">
             {ws.profile
-              ? "devcontainer.json (base image, language features, registry redirects) + AGENTS.md (detected recipe and declared services, as prose)."
+              ? "devcontainer.json (base image, language features, registry redirects) + its Dockerfile (standard tooling layers) + AGENTS.md (detected recipe and declared services, as prose)."
               : "Needs a scanned profile — scan first."}
           </p>
           {/* UI-WS-12: this branch (files still null) is exactly where a

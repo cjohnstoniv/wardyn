@@ -442,7 +442,7 @@ type integrationRow struct {
 //
 // present/bedrock are legacyIntegrations' two live signals, taken as
 // parameters (PLATFORM-API-7) rather than recomputed here: a caller resolving
-// several refs in one request (resolveIntegrationRef, namedIntegrationTypes)
+// several refs in one request (resolveIntegrationRef, launchRecordRun)
 // computes each ONCE and reuses it, instead of paying a full secret listing +
 // Bedrock age-decrypt probe per call — /setup/status, the endpoint the wizard
 // polls, used to redo both 2-3x per request this way.

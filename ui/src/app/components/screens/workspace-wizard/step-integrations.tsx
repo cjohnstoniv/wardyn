@@ -5,11 +5,10 @@
 
 // Step ③ Integrations — what this workspace CONNECTS THROUGH, chosen before
 // the Requirements step so the selection can shape it. AI arrives here: an
-// API-key/token integration, a harness login, or a tool your base image
-// already carries. Naming an integration writes an `integration:<id>` row
-// into the workspace's contract (required = every run gets its wiring;
-// optional = a run opts in) — one name, and the hosts and credential ride
-// along instead of being restated on every workspace.
+// API-key/token integration, or a harness login. Naming an integration writes
+// an `integration:<id>` row into the workspace's contract (required = every
+// run gets its wiring; optional = a run opts in) — one name, and the hosts
+// and credential ride along instead of being restated on every workspace.
 import * as React from "react";
 import { toast } from "sonner";
 import { integrationsApi, type IntegrationRow as AiScmRow } from "../../../lib/api/integrations";
@@ -22,7 +21,7 @@ import { RequiredOptionalToggle } from "./step-requirements";
 import { requirementKey, type RequirementLevel, type WorkspaceRequirementsMap } from "./wizard-types";
 
 export const INTEGRATIONS_BLURB =
-  "Pick what this workspace connects through — AI via an API key, token, or harness login (or a tool your base image already carries), plus git hosts and feeds. The selection joins your sources and base image in shaping the next step.";
+  "Pick what this workspace connects through — AI via an API key, token, or harness login, plus git hosts and feeds. The selection joins your sources and base image in shaping the next step.";
 
 function NamedRow({
   id,
@@ -151,8 +150,7 @@ export function StepIntegrations({
           <p className="text-xs font-medium text-foreground">AI &amp; model access</p>
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             A named AI integration gives runs here its wiring — key or session injected proxy-side,
-            never resident. A workspace with none still runs governed commands; a base image can also
-            carry its own tool.
+            never resident. A workspace with none still runs governed commands.
           </p>
           <div className="divide-y divide-border rounded-lg border border-border">{ai.map(rowFor)}</div>
         </section>

@@ -818,25 +818,26 @@ need hand-set knobs, or didn't work at all, ship pre-wired:
   set an image builder needs instead of dropping everything, which used to
   break rootfs extraction for any featureful build.
 
-### A named Anthropic integration bakes the claude-code CLI; nothing bakes codex-cli
+### Every generated image carries the claude-code CLI as standard tooling; nothing bakes codex-cli
 
-A workspace whose requirements name an `anthropic_*`-type integration gets
-`claude-code` baked into its GENERATED recommended image as a real layer: a
+Every Wardyn-GENERATED recommended image bakes `claude-code` as a real layer —
+unconditionally, the way it carries git or curl, regardless of which
+integrations the workspace names (integrations are connections — secrets +
+egress — and never decide what is installed). Mechanically: a
 `.devcontainer/Dockerfile` the emitted `devcontainer.json` points
 `build.dockerfile` at, carrying a checksum-verified native install
 (architecture-detected, sha256-checked against the release manifest) that
 runs as root, before every devcontainer feature, inside the hardened build
-container (`AgentToolsForIntegrationTypes` folded into `GenerateDevcontainer`,
+container (`genStandardTools` folded into `GenerateDevcontainer`,
 `internal/workspacescan/gen.go`; proven with a gated integration test that
-runs the built image and checks `claude --version`). An `openai_*`
-integration bakes nothing — codex-cli has no Wardyn-verified native-download
-contract, and its npm lane would need a Node runtime the bake stage doesn't
-carry, so `AgentToolsForIntegrationTypes` never names it: the image is built
-without it, never with a guessed URL or a false claim that it's there. A
-devcontainer's own `onCreateCommand`/`postCreateCommand` cannot be used for
-this either way: envbuilder runs lifecycle commands AFTER the image is
-already pushed, so they never reach the delivered image, and they would run
-as the base image's unprivileged user besides.
+runs the built image and checks `claude --version`). codex-cli is not in the
+standard set — it has no Wardyn-verified native-download contract, and its
+npm lane would need a Node runtime the bake stage doesn't carry: the image
+is built without it, never with a guessed URL or a false claim that it's
+there. A devcontainer's own `onCreateCommand`/`postCreateCommand` cannot be
+used for this either way: envbuilder runs lifecycle commands AFTER the image
+is already pushed, so they never reach the delivered image, and they would
+run as the base image's unprivileged user besides.
 
 **This only applies to Wardyn's OWN generated devcontainer.** When the
 workspace's primary source is a repo carrying its own devcontainer file
@@ -844,12 +845,9 @@ workspace's primary source is a repo carrying its own devcontainer file
 path instead, since the image builder has no SSH-clone wiring),
 `resolveWorkspaceImage` (`internal/api/workspace_run.go`) builds that
 devcontainer AS-IS via `ImageBuilder.BuildDevcontainer` — cloned and built
-verbatim, never routed through `GenerateDevcontainer`/
-`AgentToolsForIntegrationTypes` at all. A named integration's agent CLI is
-therefore silently absent from that image unless the repo's own devcontainer
-happens to install it — the same workspace behaves differently depending on
-whether its primary repo carries a `.devcontainer/` of its own, which is
-easy to miss when only the no-devcontainer case has been tried.
+verbatim, never injected into. An agent CLI is present in that image only if
+the repo's own devcontainer installs it; an agent run on an image without
+one fails at the CLI, visibly, rather than being silently patched.
 
 ## The age key has no rotation path
 

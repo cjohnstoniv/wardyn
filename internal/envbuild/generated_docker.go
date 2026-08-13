@@ -27,7 +27,7 @@ const (
 	localContextWorkspaceFolder = "/workspaces/empty"
 
 	// Bounds on the caller-supplied generated context, mirroring builder.go's
-	// input hardening. GenerateDevcontainer emits a single small file; these
+	// input hardening. GenerateDevcontainer emits two small files; these
 	// caps just keep a hostile/oversized map from staging a huge context.
 	// fixed caps; raise if a legitimate generated context ever needs
 	// more than a handful of small files.

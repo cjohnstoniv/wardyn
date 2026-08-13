@@ -5,9 +5,9 @@
 
 // Integrations step (13 -> 9 -> 10 collapse) — a THIN EMBED of the real
 // /integrations page: IntegrationsScreen's `embedded` mode drops its own
-// PageHeader and the Integrations/Tools tab strip; everything else (category
-// sections with their full row actions, the empty state, the footnote, and
-// the Add/rotate/delete dialogs) renders exactly as it does on the full page.
+// PageHeader; everything else (category sections with their full row actions,
+// the empty state, the footnote, and the Add/rotate/delete dialogs) renders
+// exactly as it does on the full page.
 // This step replaces the old provider/host_proxy/scm_provider/artifact_repo
 // steps — their configuration now lives on /integrations, so Getting Started
 // links to it instead of forking a second copy of that configuration surface.

@@ -19,7 +19,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 			{Stage: "test", Command: "go test ./..."},
 		},
 	}
-	files, err := EmitEnvAsCode(p, nil, nil, "")
+	files, err := EmitEnvAsCode(p, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,9 @@ func TestEmitEnvAsCode(t *testing.T) {
 		t.Fatal("no devcontainer.json emitted")
 	}
 	var parsed struct {
-		Image        string            `json:"image"`
+		Build *struct {
+			Dockerfile string `json:"dockerfile"`
+		} `json:"build"`
 		Features     map[string]any    `json:"features"`
 		ContainerEnv map[string]string `json:"containerEnv"`
 	}
@@ -40,6 +42,14 @@ func TestEmitEnvAsCode(t *testing.T) {
 	// on container create — it's prose in AGENTS.md instead (asserted below).
 	if strings.Contains(dc, "postCreateCommand") {
 		t.Errorf("devcontainer.json must never carry postCreateCommand (no verify step to prove it works): %s", dc)
+	}
+	// The standard agent-tool install is unconditional: every emit points
+	// build.dockerfile at the generated Dockerfile rather than naming `image`.
+	if parsed.Build == nil || parsed.Build.Dockerfile != "Dockerfile" {
+		t.Errorf("expected build.dockerfile pointing at the generated Dockerfile: %+v", parsed)
+	}
+	if df := files[".devcontainer/Dockerfile"]; !strings.Contains(df, "downloads.claude.ai") {
+		t.Errorf("the exported Dockerfile must carry claude-code's install: %q", df)
 	}
 	if len(parsed.Features) != 2 {
 		t.Errorf("expected go+node features, got %v", parsed.Features)
@@ -64,7 +74,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 
 func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Java"}, PackageManagers: []string{"maven"}}
-	files, err := EmitEnvAsCode(p, nil, nil, "")
+	files, err := EmitEnvAsCode(p, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,59 +98,16 @@ func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	}
 }
 
-// TestEmitEnvAsCode_AgentToolBake mirrors GenerateDevcontainer's tool-bake
-// wiring for the exported/committable devcontainer path, so an exported
-// workspace and the one Wardyn itself builds never drift on what they claim
-// to carry.
-func TestEmitEnvAsCode_AgentToolBake(t *testing.T) {
-	p := WorkspaceProfile{Languages: []string{"JavaScript"}, Confidence: "high", Source: "deterministic"}
-	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var parsed struct {
-		Image string `json:"image"`
-		Build *struct {
-			Dockerfile string `json:"dockerfile"`
-		} `json:"build"`
-	}
-	if err := json.Unmarshal([]byte(files[".devcontainer/devcontainer.json"]), &parsed); err != nil {
-		t.Fatalf("devcontainer.json not valid JSON: %v", err)
-	}
-	if parsed.Build == nil || parsed.Build.Dockerfile != "Dockerfile" || parsed.Image != "" {
-		t.Errorf("a baked tool must point build.dockerfile at the emitted Dockerfile, not name the base image: %+v", parsed)
-	}
-	if df := files[".devcontainer/Dockerfile"]; !strings.Contains(df, "downloads.claude.ai") {
-		t.Errorf("the exported Dockerfile must carry claude-code's install: %q", df)
-	}
-}
-
 // TestEmitEnvAsCode_ResolvedBaseRef pins WSPIPE-9: a workspace pinned to a
 // non-recommended base image (registry/custom/byo) must export a devcontainer
-// naming THAT image, not the universal genBaseImage default — otherwise a
-// committed devcontainer.json describes an environment nobody actually boots.
-// Covers both the plain-image branch and the generated-Dockerfile FROM line
-// (a named tool still bakes, but onto the caller's own base).
+// whose generated Dockerfile FROMs THAT image, not the universal genBaseImage
+// default — otherwise a committed devcontainer.json describes an environment
+// nobody actually boots.
 func TestEmitEnvAsCode_ResolvedBaseRef(t *testing.T) {
 	const custom = "mycorp/build:2024.3"
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
 
-	files, err := EmitEnvAsCode(p, nil, nil, custom)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dc := files[".devcontainer/devcontainer.json"]
-	var parsed struct {
-		Image string `json:"image"`
-	}
-	if err := json.Unmarshal([]byte(dc), &parsed); err != nil {
-		t.Fatalf("devcontainer.json not valid JSON: %v", err)
-	}
-	if parsed.Image != custom {
-		t.Errorf("image = %q, want the resolved base ref %q (not the generic devcontainer base)", parsed.Image, custom)
-	}
-
-	files, err = EmitEnvAsCode(p, nil, []string{"claude-code"}, custom)
+	files, err := EmitEnvAsCode(p, nil, custom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,22 +116,19 @@ func TestEmitEnvAsCode_ResolvedBaseRef(t *testing.T) {
 	}
 }
 
-// TestEmitEnvAsCode_NoToolsNoAgentBake pins the negative case: no named
-// tools must add no agent-CLI bake (no generated Dockerfile), and no path
-// emits a lifecycle command (which would bake nothing into the pushed image
-// anyway).
-func TestEmitEnvAsCode_NoToolsNoAgentBake(t *testing.T) {
+// TestEmitEnvAsCode_AlwaysBakesAgentTool pins the unconditional bake: every
+// emit carries the generated Dockerfile (never a lifecycle command, which
+// would bake nothing into the pushed image anyway) — independent of anything
+// about the workspace's integrations.
+func TestEmitEnvAsCode_AlwaysBakesAgentTool(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
-	files, err := EmitEnvAsCode(p, nil, nil, "")
+	files, err := EmitEnvAsCode(p, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dc := files[".devcontainer/devcontainer.json"]
-	if _, ok := files[".devcontainer/Dockerfile"]; ok {
-		t.Error("no named tools must emit no Dockerfile at all")
-	}
-	if !strings.Contains(dc, `"image"`) {
-		t.Errorf("no named tools must name the base image directly: %s", dc)
+	if _, ok := files[".devcontainer/Dockerfile"]; !ok {
+		t.Error("every emit must carry the generated Dockerfile — the standard agent-tool install is unconditional")
 	}
 	if strings.Contains(dc, "CreateCommand") {
 		t.Errorf("a lifecycle command bakes nothing into the pushed image: %s", dc)

@@ -275,28 +275,20 @@ describe("IntegrationsScreen — embedded mode (Getting Started's Integrations s
   });
 });
 
-describe("IntegrationsScreen — Tools tab", () => {
-  it("switching tabs shows the Tools table and the LAW footer", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus());
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue([]);
-    const user = userEvent.setup();
-
-    renderScreen();
-    await screen.findByText(T.EMPTY_TITLE);
-    await user.click(screen.getByRole("tab", { name: "Tools" }));
-
-    expect(await screen.findByText("git")).toBeInTheDocument();
-    expect(screen.getByText(T.LAW)).toBeInTheDocument();
-  });
-});
-
 // The seam that actually broke, twice, pinned end to end through the screen:
 // Add → search → pick. The first break sent an Anthropic click to the old
 // category grid ("AI provider or SCM host?"); the second sent it to the API-key
 // connect panel with the Claude subscription nowhere in sight. The law both
 // broke: never re-ask an answered question, never skip a real one.
 describe("IntegrationsScreen — the Add handoff seam", () => {
+  // Each test wants a bare, nothing-configured screen (T.EMPTY_TITLE) — set
+  // explicitly rather than relying on whatever an earlier describe block's
+  // last test happened to leave these persistent mocks resolving to.
+  beforeEach(() => {
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue([]);
+  });
+
   it("Add → Anthropic lands on the type panel with Claude subscription visible, never the category grid", async () => {
     const user = userEvent.setup();
     getSetupStatusMock.mockResolvedValue(baseStatus());

@@ -14,7 +14,6 @@ import { CircleCheck, Loader2, RotateCw, TriangleAlert } from "lucide-react";
 import { workspaces as workspacesApi, type WorkspaceBuildState } from "../../../lib/api/workspaces";
 import { usePoll } from "../../../lib/use-poll";
 import { Mono } from "../../wardyn/code-block";
-import { Chip } from "../../wardyn/primitives";
 import { Button } from "../../ui/button";
 
 export const BUILD_BLURB =
@@ -65,15 +64,10 @@ function BuildLogPane({ log }: { log: string[] }) {
 export function StepBuild({
   workspaceId,
   onStateChange,
-  agentTools = [],
 }: {
   workspaceId: string;
   /** Reports the current terminal-or-not state so the wizard can gate Continue. */
   onStateChange: (state: WorkspaceBuildState) => void;
-  /** What the recommended build actually bakes (agentToolsCarried), passed
-   *  only while that lane is what's building — the wizard already gates it
-   *  to the "recommended" choice before handing it down. */
-  agentTools?: string[];
 }) {
   const [build, setBuild] = React.useState<WorkspaceBuildState | null>(null);
   const [, forceTick] = React.useReducer((n: number) => n + 1, 0);
@@ -132,25 +126,6 @@ export function StepBuild({
             <CircleCheck className="size-4" /> Image ready
           </p>
           {build.image && <Mono className="text-xs">{build.image}</Mono>}
-          {/* build.detail is the server's own AUTHORITATIVE backstop on top of
-              the wizard's client-side preview (agentTools): resolveBuildView
-              sets it on a "done" state ONLY for the repo-own-devcontainer
-              caveat (that lane builds the repo's devcontainer as-is and bakes
-              nothing) — so it, not just agentTools, gates the claim, and its
-              own text explains the gap instead of leaving it silent. */}
-          {agentTools.length > 0 && !build.detail && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                Carries
-              </span>
-              {agentTools.map((t) => (
-                <Chip key={t} tone="neutral" mono>
-                  {t}
-                </Chip>
-              ))}
-            </div>
-          )}
-          {build.detail && <p className="text-[0.6875rem] leading-snug text-warning">{build.detail}</p>}
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Cached until the profile changes — sessions and runs boot it immediately.
           </p>

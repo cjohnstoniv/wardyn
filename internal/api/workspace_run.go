@@ -157,13 +157,6 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		return "", false // unscanned/malformed → convention image
 	}
 
-	// tools: the agent CLIs this workspace's NAMED integrations imply (gen.go's
-	// AgentToolsForIntegrationTypes). Computed up front (not just below the
-	// repo-devcontainer branch) so that branch can honestly RECORD what it is
-	// NOT baking in its own audit entry, even though it never reaches the
-	// generator.
-	tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, primary))
-
 	// A repo PRIMARY source (Sources[0]) carrying its OWN devcontainer: respect
 	// it, build from the repo — UNLESS the source is an SSH URL. The image
 	// builder (envbuilder) clones with no minted key / known_hosts / :443
@@ -172,26 +165,23 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// image; agent-run still clones the repo itself using the run's ssh_key
 	// grant (the repo's own devcontainer is just not built in v1).
 	//
-	// This lane never bakes `tools`: it builds the repo's own devcontainer
-	// file(s) verbatim rather than rewriting them to point at the generated
-	// Dockerfile gen.go's baseOrBuild would otherwise layer a RUN onto (see
-	// its package comment — the two mechanisms that WOULD add one without
-	// rewriting the operator's own devcontainer, a lifecycle hook and the
-	// vendor's own devcontainer feature, were both tried against a real build
-	// and rejected). A named integration's agent CLI is therefore silently
-	// absent from this image unless the operator's own devcontainer happens to
-	// install it — deliberate (see resolveBuildView's repoDevcontainerToolCaveat,
-	// which surfaces that honestly instead of leaving it silent), not an
-	// oversight. repoOwnDevcontainerURL is shared with that caveat so "does
-	// this lane bake the tool" can never drift from the branch that decides it.
+	// This lane never bakes the standard agent-tool install: it builds the
+	// repo's own devcontainer file(s) verbatim rather than rewriting them to
+	// point at the generated Dockerfile gen.go's baseOrBuild would otherwise
+	// layer a RUN onto (see its package comment — the two mechanisms that
+	// WOULD add one without rewriting the operator's own devcontainer, a
+	// lifecycle hook and the vendor's own devcontainer feature, were both
+	// tried against a real build and rejected). claude-code is therefore
+	// silently absent from this image unless the operator's own devcontainer
+	// happens to install it — deliberate, not an oversight.
 	if url := repoOwnDevcontainerURL(primary, p); url != "" {
 		repoSrc := primary.Sources[0]
 		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
 		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
-			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built, "tools_named_not_baked": tools})
+			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
 			return built, true
 		} else {
-			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "error": err.Error(), "tools_named_not_baked": tools})
+			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "error": err.Error()})
 			return "", false
 		}
 	}
@@ -201,15 +191,15 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		}
 	}
 
-	hash := p.CacheKey(tools)
-	// Reuse a cached generated image when the profile+tools are unchanged.
+	hash := p.CacheKey()
+	// Reuse a cached generated image when the profile is unchanged.
 	if primary.ImageRef != "" && primary.BuiltProfileHash == hash {
 		return primary.ImageRef, true
 	}
 
-	// Generate a devcontainer for the detected toolchain (+ any named agent
-	// tool) and build it.
-	files, gerr := workspacescan.GenerateDevcontainer(p, tools)
+	// Generate a devcontainer for the detected toolchain (the standard
+	// agent-tool install rides unconditionally — gen.go) and build it.
+	files, gerr := workspacescan.GenerateDevcontainer(p)
 	if gerr != nil {
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": gerr.Error()})
 		return "", false
@@ -237,10 +227,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 // FROM when ws's primary source is a repo carrying its own devcontainer
 // (HasDevcontainer) — or "" when that lane does not apply: no repo primary,
 // no devcontainer, an SSH source (the image builder cannot clone one — see
-// resolveWorkspaceImage's comment), or an unparseable source. Extracted so
-// resolveBuildView's repoDevcontainerToolCaveat can ask "is THIS the lane
-// that will not bake the named tool" without a second, independently-drifting
-// copy of the same four conditions.
+// resolveWorkspaceImage's comment), or an unparseable source.
 func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile) string {
 	if len(ws.Sources) == 0 || ws.Sources[0].Type != types.WorkspaceSourceTypeRepo || !p.HasDevcontainer {
 		return ""
@@ -250,26 +237,6 @@ func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile
 		return ""
 	}
 	return repoCloneURL(repoSrc.Source)
-}
-
-// repoDevcontainerToolCaveat reports the honest caveat for a workspace whose
-// primary source is a repo carrying its own devcontainer: resolveWorkspaceImage
-// builds that devcontainer AS-IS (repoOwnDevcontainerURL), so a named
-// integration's agent CLI is not baked into the resulting image. Returns ""
-// when the caveat does not apply — no repo-own-devcontainer lane, or nothing
-// named that would have been baked anyway. Used by resolveBuildView so the
-// wizard's Build step can say so instead of leaving the gap silent.
-func (s *Server) repoDevcontainerToolCaveat(ctx context.Context, ws types.Workspace) string {
-	prof, ok := workspaceProfile(ws)
-	if !ok || repoOwnDevcontainerURL(ws, prof) == "" {
-		return ""
-	}
-	tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, ws))
-	if len(tools) == 0 {
-		return ""
-	}
-	return "this repo carries its own devcontainer, built as-is — Wardyn does not add " +
-		strings.Join(tools, ", ") + " to it"
 }
 
 // claimImportStep atomically claims the workspace's serial import-step slot for
