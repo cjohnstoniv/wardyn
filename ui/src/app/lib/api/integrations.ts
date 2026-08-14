@@ -34,7 +34,7 @@ import {
   type IntegrationGroup,
   type IntegrationTypeMeta,
 } from "../integration-catalog";
-import type { WireIntegration } from "../types/setup";
+import type { WireIntegration, WireIntegrationProbe, WireIntegrationSecret } from "../types/setup";
 import { HttpError, wfetch, errText } from "./core";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
@@ -582,16 +582,37 @@ export interface GenericIntegrationRow {
   delivery: ResidencyKind;
 }
 
-/** category -> group, so a wire row finds the section it belongs in. */
-const GROUP_BY_CATEGORY = new Map(INTEGRATION_GROUPS.map((g) => [g.category as string, g]));
+/** id -> group, so a derived section id finds its group object. */
+const GROUP_BY_ID = new Map(INTEGRATION_GROUPS.map((g) => [g.id, g]));
 
-// deliveryForRow states how THIS row's credential reaches a request, from the row
-// itself rather than from its type: a header naming a stored secret is
+// track-b: B1 shim, removed in B3 — the stored category died with the
+// base-component fold (one `kind` field), so the section a wire row belongs in
+// DERIVES from kind: the AI set -> model, github_app/git_host -> scm, a
+// catalog-known slug -> its catalog group, anything else -> the catch-all.
+// The two legacy topology slugs get NO section here (Corporate network owns
+// them; the server only ever derives them read-only).
+const AI_KINDS = new Set(["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"]);
+function groupForKind(kind: string): IntegrationGroup | undefined {
+  if (kind === "artifact_mirror" || kind === "host_proxy") return undefined;
+  if (AI_KINDS.has(kind)) return GROUP_BY_ID.get("model");
+  if (kind === "github_app" || kind === "git_host") return GROUP_BY_ID.get("scm");
+  const meta = integrationTypeById(kind);
+  return GROUP_BY_ID.get(meta?.group ?? "other");
+}
+
+/** The first proxy_header-delivered secret row — the generic proxy-injected
+ *  credential lane — or undefined when this row delivers none. */
+export function proxyHeaderSecret(wire: WireIntegration) {
+  return wire.secrets?.find((s) => s.delivery?.mode === "proxy_header");
+}
+
+// deliveryForRow states how THIS row's credential reaches a request, from the
+// row itself rather than from its type: a proxy_header-delivered secret is
 // proxy-injected, and anything else honestly has no lane. The catalog's own
 // delivery is the fallback for the types with bespoke lanes (varies, brokered)
 // that a generic row never has.
 function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): ResidencyKind {
-  if (wire.header && wire.credentials?.token) return "proxy_injected";
+  if (proxyHeaderSecret(wire)?.secret_name) return "proxy_injected";
   if (meta && meta.delivery !== "proxy_injected") return meta.delivery;
   return "notbuilt";
 }
@@ -622,16 +643,16 @@ function isLegacyClaimedId(id: string): boolean {
 export function genericIntegrations(status: SetupStatus): GenericIntegrationRow[] {
   const rows: GenericIntegrationRow[] = [];
   for (const wire of status.integrations ?? []) {
-    const group = GROUP_BY_CATEGORY.get(wire.category);
+    const group = groupForKind(wire.kind);
     if (!group) continue;
     if ((group.id === "model" || group.id === "scm") && isLegacyClaimedId(wire.id)) continue;
-    const meta = integrationTypeById(wire.type);
+    const meta = integrationTypeById(wire.kind);
     rows.push({
       wire,
       group,
       meta,
       name: wire.name || meta?.label || wire.id,
-      hosts: wire.hosts ?? [],
+      hosts: wire.egress ?? [],
       delivery: deliveryForRow(wire, meta),
     });
   }
@@ -645,28 +666,27 @@ export function genericSections(rows: GenericIntegrationRow[]): { group: Integra
     .filter((s) => s.rows.length > 0);
 }
 
-/** The body PUT /integrations/{id} takes — every operator-settable field.
- *  REPLACE semantics, not a merge (putIntegrationRequest's own doc comment):
- *  a field omitted here is written back as its zero value, silently wiping
- *  whatever the stored row had. WIRE-4: a GET's response carries five
- *  read-only echo fields this body does NOT accept (id, created_at,
- *  updated_at, source, capabilities) — putIntegrationRequest decodes with
- *  DisallowUnknownFields, so spreading a GET straight in 400s. Hand-pick the
- *  twelve fields below off the wire row instead, before changing one — the
- *  same discipline actions.ts's setDefaultFor already uses. */
+/** The body PUT /integrations/{id} takes — every operator-settable field of
+ *  the base-component shape. REPLACE semantics, not a merge
+ *  (putIntegrationRequest's own doc comment): a field omitted here is written
+ *  back as its zero value, silently wiping whatever the stored row had.
+ *  WIRE-4: a GET's response carries read-only echo fields this body does NOT
+ *  accept (id, probe_status, created_at, updated_at, source, capabilities) —
+ *  putIntegrationRequest decodes with DisallowUnknownFields, so spreading a
+ *  GET straight in 400s. Hand-pick the fields below off the wire row instead,
+ *  before changing one — the same discipline actions.ts's setDefaultFor
+ *  already uses. */
 export interface IntegrationWrite {
   name: string;
-  category: string;
-  type: string;
+  kind: string;
   disabled?: boolean;
-  hosts?: string[];
-  header?: string;
-  format?: string;
-  docs?: string;
-  credentials?: Record<string, string>;
-  /** Type-specific knobs (e.g. "lane", "ecosystems") — arbitrary JSON, mirrors
-   *  the server's json.RawMessage (putIntegrationRequest.Config). */
+  /** Required secrets, each with its delivery (WireIntegrationSecret). */
+  secrets?: WireIntegrationSecret[];
+  egress?: string[];
+  /** Kind-validated non-secret knobs (e.g. "lane", "region", "ecosystems"). */
   config?: Record<string, unknown>;
+  probe?: WireIntegrationProbe;
+  docs?: string;
   /** Capability ids the operator turned off individually, overriding what the
    *  live matrix would otherwise report. */
   disabled_capabilities?: string[];

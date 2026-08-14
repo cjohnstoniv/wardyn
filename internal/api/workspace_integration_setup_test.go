@@ -18,10 +18,10 @@ import (
 
 func integWith(fn func(*types.Integration)) *types.Integration {
 	i := types.Integration{
-		ID: "corp-artifactory", Category: types.IntegrationPackageFeed, Type: "artifactory",
-		Hosts:       []string{"artifactory.corp.internal"},
-		Header:      "Authorization",
-		Credentials: map[string]string{types.IntegrationCredentialToken: "artifactory-token"},
+		ID: "corp-artifactory", Kind: "artifactory",
+		Egress: []string{"artifactory.corp.internal"},
+		Secrets: []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: "artifactory-token",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization"}}},
 	}
 	if fn != nil {
 		fn(&i)
@@ -55,7 +55,7 @@ func TestIntegrationSetupItem(t *testing.T) {
 		},
 		{
 			name:       "no hosts opens nothing",
-			integ:      integWith(func(i *types.Integration) { i.Hosts = nil }),
+			integ:      integWith(func(i *types.Integration) { i.Egress = nil }),
 			present:    stored,
 			wantStatus: "missing", wantDetail: "names no hosts",
 		},
@@ -71,7 +71,7 @@ func TestIntegrationSetupItem(t *testing.T) {
 			// the path alone; there is no credential lane to be missing.
 			name: "no header lane is satisfied, not a gap",
 			integ: integWith(func(i *types.Integration) {
-				i.Header, i.Credentials = "", nil
+				i.Secrets = nil
 			}),
 			present:    nil,
 			wantStatus: "satisfied", wantDetail: "authenticates outside HTTP",

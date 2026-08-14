@@ -29,24 +29,20 @@ import (
 //     harness catalog (harnessCatalog, harness.go) for SetupStatus.Harnesses.
 
 // toIntegrationView adapts an integrationRow into the shape capabilitiesFor
-// consumes. A malformed stored Config just yields fewer capability facts (a
-// nil map, same as "no config") rather than an error surface here — the
-// write path (a later wave) is where a bad Config should be rejected, not
-// this read path.
+// consumes: Type carries the row's Kind, Header the proxy_header-delivered
+// secret's header, and Credentials the flattened role → secret_name map.
+// track-b: B1 shim mapping — B2 re-keys capabilitiesFor on the base-component
+// shape directly.
 func toIntegrationView(row integrationRow) integrationView {
-	var cfg map[string]any
-	if len(row.Config) > 0 {
-		_ = json.Unmarshal(row.Config, &cfg)
-	}
+	_, header, _, _ := row.HeaderSecret()
 	return integrationView{
 		ID:           row.ID,
-		Category:     string(row.Category),
-		Type:         row.Type,
+		Type:         row.Kind,
 		Disabled:     row.Disabled,
-		Header:       row.Header,
-		Hosts:        row.Hosts,
-		Credentials:  row.Credentials,
-		Config:       cfg,
+		Header:       header,
+		Hosts:        row.Egress,
+		Credentials:  row.CredentialsMap(),
+		Config:       row.Config,
 		DisabledCaps: row.DisabledCapabilities,
 	}
 }
@@ -86,6 +82,23 @@ func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, provid
 type SetupIntegration struct {
 	integrationRow
 	Capabilities []Capability `json:"capabilities"`
+}
+
+// UnmarshalJSON decodes the embedded row (see integrationRow.UnmarshalJSON —
+// the embedded Integration's custom decoder would otherwise be promoted here
+// and swallow capabilities) and then the wrapper's own field.
+func (si *SetupIntegration) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, &si.integrationRow); err != nil {
+		return err
+	}
+	var caps struct {
+		Capabilities []Capability `json:"capabilities"`
+	}
+	if err := json.Unmarshal(b, &caps); err != nil {
+		return err
+	}
+	si.Capabilities = caps.Capabilities
+	return nil
 }
 
 // integrationsWithCapabilities computes the full effective integration set
@@ -154,21 +167,19 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 // intend to change.
 type putIntegrationRequest struct {
 	Name                 string                    `json:"name"`
-	Category             types.IntegrationCategory `json:"category"`
-	Type                 string                    `json:"type"`
+	Kind                 string                    `json:"kind"`
 	Disabled             bool                      `json:"disabled,omitempty"`
-	Hosts                []string                  `json:"hosts,omitempty"`
-	Header               string                    `json:"header,omitempty"`
-	Format               string                    `json:"format,omitempty"`
+	Secrets              []types.IntegrationSecret `json:"secrets,omitempty"`
+	Egress               []string                  `json:"egress,omitempty"`
+	Config               map[string]any            `json:"config,omitempty"`
+	Probe                *types.IntegrationProbe   `json:"probe,omitempty"`
 	Docs                 string                    `json:"docs,omitempty"`
-	Credentials          map[string]string         `json:"credentials,omitempty"`
-	Config               json.RawMessage           `json:"config,omitempty"`
 	DisabledCapabilities []string                  `json:"disabled_capabilities,omitempty"`
 	DefaultFor           []string                  `json:"default_for,omitempty"`
 }
 
 // handlePutIntegration creates-or-replaces a STORED Integration. operatorOnly
-// (same corp-wide blast radius as site-config: an ai_provider row here can
+// (same corp-wide blast radius as site-config: an AI-provider row here can
 // steer every run's model credential — a strictly larger reach than a single
 // workspace/policy write). Validated by validateIntegrationWrite
 // (integrations.go) before anything is read/written. DefaultFor uses RADIO
@@ -195,9 +206,9 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := types.Integration{
-		ID: id, Name: req.Name, Category: req.Category, Type: req.Type,
-		Disabled: req.Disabled, Hosts: req.Hosts, Header: req.Header, Format: req.Format, Docs: req.Docs,
-		Credentials: req.Credentials, Config: req.Config,
+		ID: id, Name: req.Name, Kind: req.Kind,
+		Disabled: req.Disabled, Secrets: req.Secrets, Egress: req.Egress,
+		Config: req.Config, Probe: req.Probe, Docs: req.Docs,
 		DisabledCapabilities: req.DisabledCapabilities, DefaultFor: req.DefaultFor,
 	}
 	if err := validateIntegrationWrite(in); err != nil {
@@ -232,15 +243,16 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
-	// hosts and header are the two facts an incident review actually needs from
-	// this event: what a granted run may now REACH, and what credential header
-	// gets presented there. Both are non-secret by construction (Credentials
+	// egress and header are the two facts an incident review actually needs
+	// from this event: what a granted run may now REACH, and what credential
+	// header gets presented there. Both are non-secret by construction (Secrets
 	// holds names, never values), and neither is recoverable from a later GET
 	// once the row is edited again.
+	_, auditHeader, _, _ := in.HeaderSecret()
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"integration.write", id, "success", mustJSON(map[string]any{
-			"category": string(in.Category), "type": in.Type, "default_for": in.DefaultFor,
-			"hosts": in.Hosts, "header": in.Header,
+			"kind": in.Kind, "default_for": in.DefaultFor,
+			"egress": in.Egress, "header": auditHeader,
 		})))
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
@@ -280,8 +292,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 	// contract), which is why the credential refs are worth keeping too.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"integration.delete", id, "success", mustJSON(map[string]any{
-			"category": string(gone.Category), "type": gone.Type,
-			"hosts": gone.Hosts, "credentials": gone.Credentials,
+			"kind": gone.Kind, "egress": gone.Egress, "credentials": gone.CredentialsMap(),
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -342,7 +353,7 @@ func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"integration.adopt", id, "success", mustJSON(map[string]any{"category": string(in.Category), "type": in.Type})))
+		"integration.adopt", id, "success", mustJSON(map[string]any{"kind": in.Kind})))
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
 

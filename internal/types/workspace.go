@@ -5,6 +5,7 @@ package types
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +41,7 @@ const (
 
 // WorkspaceLLMCred is the OPERATOR-owned model/harness credential BINDING on a
 // workspace: a run that picks this workspace inherits this model access via
-// the named Integration (IntegrationCategory=ai_provider) — the generalized
+// the named Integration (one of the AI-provider kinds) — the generalized
 // replacement for the old inline {mode, api_key_secret, bedrock} shape. Refs/
 // NAMES only, never secret values (the SiteConfig precedent): the actual
 // secret lives in the store, resolved/injected via the Integration at
@@ -302,74 +303,131 @@ type Workspace struct {
 	UpdatedAt time.Time         `json:"updated_at"`
 }
 
-// IntegrationCategory classifies what an Integration connects Wardyn to.
-//
-// The categories split into two kinds, and the difference decides how strictly
-// a write is validated (validateIntegrationWrite, internal/api):
-//
-//   - TYPED categories (ai_provider, scm_host, and the two legacy-derived
-//     topology ones) drive behavior off Type — capabilitiesFor switches on it,
-//     so their type sets are CLOSED and a new type there is a code change.
-//   - GENERIC categories (everything from IntegrationPackageFeed down) derive
-//     nothing from Type: the row carries its own hosts, header and secret ref,
-//     which is everything the runtime needs. Their Type is an open slug, which
-//     is what keeps the catalog from being a closed enum forever — the "Other
-//     service" type is a first-class outcome, not a fallback.
-type IntegrationCategory string
-
+// Integration kinds. An integration is a BASE COMPONENT extended by kind: a
+// connection — secrets + egress — never an installer. The closed set below is
+// every kind Wardyn has bespoke behavior for (provider transports, brokered
+// clone lanes); ANY other kind is a GENERIC open slug (shape-validated), whose
+// row carries its own secrets/egress/config — which is everything the runtime
+// needs. UI grouping DERIVES from kind (AI set → "AI providers", github_app/
+// git_host → "Source control", else → "Connections"); there is no stored
+// category.
 const (
-	IntegrationAIProvider IntegrationCategory = "ai_provider"
-	IntegrationSCMHost    IntegrationCategory = "scm_host"
-	// IntegrationArtifactMirror and IntegrationHostProxy are NETWORK TOPOLOGY,
-	// not integrations in the sense the surface uses the word — a corporate
-	// proxy and a mirror substitution are the path everything travels, not a
-	// named account. They live in the Corporate network step, on the same
-	// screen as the probe that proves them, and the Integrations page no longer
-	// renders either. They survive here because legacyIntegrations still DERIVES
-	// read-only rows in these categories from SiteConfig.EgressRedirects /
-	// UpstreamProxySecretRef; nothing writes one.
-	IntegrationArtifactMirror IntegrationCategory = "artifact_mirror"
-	IntegrationHostProxy      IntegrationCategory = "host_proxy"
-
-	// The generic categories. Sections on the surface, ordered by how often
-	// they matter; each is one answer to "what kind of external system is this".
-	IntegrationPackageFeed       IntegrationCategory = "package_feed"
-	IntegrationContainerRegistry IntegrationCategory = "container_registry"
-	IntegrationCloudProvider     IntegrationCategory = "cloud_provider"
-	IntegrationDataStore         IntegrationCategory = "data_store"
-	IntegrationMCPServer         IntegrationCategory = "mcp_server"
-	IntegrationWorkTracking      IntegrationCategory = "work_tracking"
-	IntegrationObservability     IntegrationCategory = "observability"
-	IntegrationOtherService      IntegrationCategory = "other_service"
+	IntegrationKindAnthropicAPIKey       = "anthropic_api_key"
+	IntegrationKindAnthropicSubscription = "anthropic_subscription"
+	IntegrationKindBedrock               = "bedrock"
+	IntegrationKindOpenAIAPIKey          = "openai_api_key"
+	IntegrationKindAzureOpenAI           = "azure_openai"
+	IntegrationKindGitHubApp             = "github_app"
+	IntegrationKindGitHost               = "git_host"
 )
 
-// Integration is one operator-configured external connection — an AI
-// provider, an SCM host, an artifact mirror, or the corporate host proxy. It
-// generalizes the ad hoc per-feature refs SiteConfig carried before it
-// (UpstreamProxySecretRef, ArtifactOverride.TokenSecretRef): one shape for "an
-// external system Wardyn talks to, plus the secret(s) that authenticate it."
-// Like every other SiteConfig-doctrine type, Credentials holds secret NAMES
-// (refs), never VALUES — the broker/proxy resolve the named secret at
-// dispatch/injection time.
+// ClosedIntegrationKinds is the closed kind set — the kinds with bespoke
+// behavior in code. A write naming one is validated against that kind's
+// contract (config keys, DefaultFor eligibility); anything else is a generic
+// open slug.
+var ClosedIntegrationKinds = map[string]bool{
+	IntegrationKindAnthropicAPIKey: true, IntegrationKindAnthropicSubscription: true,
+	IntegrationKindBedrock: true, IntegrationKindOpenAIAPIKey: true, IntegrationKindAzureOpenAI: true,
+	IntegrationKindGitHubApp: true, IntegrationKindGitHost: true,
+}
+
+// AIProviderKind reports whether kind is one of the five AI provider flavors —
+// the set eligible for DefaultFor marks and the run-time model-credential fold
+// (applyIntegrationCreds), and the "AI providers" UI group.
+func AIProviderKind(kind string) bool {
+	switch kind {
+	case IntegrationKindAnthropicAPIKey, IntegrationKindAnthropicSubscription,
+		IntegrationKindBedrock, IntegrationKindOpenAIAPIKey, IntegrationKindAzureOpenAI:
+		return true
+	}
+	return false
+}
+
+// Integration delivery modes: how one secret reaches the run.
+const (
+	// DeliveryProxyHeader: the egress proxy presents the secret in an HTTP
+	// header on requests bound for the integration's egress hosts. The sandbox
+	// never holds it. The default, never-resident lane.
+	DeliveryProxyHeader = "proxy_header"
+	// DeliveryResidentFile: the secret is materialized as a file inside the
+	// sandbox — a disclosed exception to never-resident.
+	DeliveryResidentFile = "resident_file"
+	// DeliveryResidentEnv: the secret is exported as an environment variable
+	// inside the sandbox — a disclosed exception to never-resident.
+	DeliveryResidentEnv = "resident_env"
+)
+
+// IntegrationDelivery says how ONE secret reaches the run. Exactly one mode;
+// the mode decides which of the other fields apply.
+type IntegrationDelivery struct {
+	Mode string `json:"mode"` // proxy_header | resident_file | resident_env
+	// Header/Format apply to proxy_header: the HTTP field name the proxy adds,
+	// and the value template it wraps the secret in (exactly one %s; empty
+	// means the raw secret IS the value, i.e. "%s").
+	Header string `json:"header,omitempty"`
+	Format string `json:"format,omitempty"`
+	// Path applies to resident_file: the in-sandbox path the secret lands at.
+	Path string `json:"path,omitempty"`
+	// Var applies to resident_env: the environment variable name.
+	Var string `json:"var,omitempty"`
+}
+
+// IntegrationSecret is one required secret of an integration: a role (what it
+// is to this system), a ref into the secret store (a NAME, never a value), and
+// how it is delivered. A nil Delivery is allowed on CLOSED kinds only and
+// means the kind's own bespoke transport delivers it (the brokered github_app
+// halves, git_host clone credentials) — hand-written per provider, not
+// declarable here.
+type IntegrationSecret struct {
+	Role       string               `json:"role"`
+	SecretName string               `json:"secret_name"`
+	Delivery   *IntegrationDelivery `json:"delivery,omitempty"`
+}
+
+// IntegrationProbe is the optional verification request behind the row's
+// "Test" action: a plain method+URL the server probes through the SAME
+// egress+injection path a run uses.
+type IntegrationProbe struct {
+	Method string `json:"method"`
+	URL    string `json:"url"`
+}
+
+// IntegrationProbeStatus is the server-cached, read-only result of the last
+// probe. Cached in-memory only (single replica): "not_tested" after a reboot
+// is the honest state. Never operator-writable.
+type IntegrationProbeStatus struct {
+	State     string    `json:"state"` // passed | failed | not_tested
+	CheckedAt time.Time `json:"checked_at,omitzero"`
+	Detail    string    `json:"detail,omitempty"`
+}
+
+// Integration is one operator-configured external connection: a base
+// component — required secrets (each with its delivery), required egress,
+// non-secret config, an optional verification probe — extended by kind. Like
+// every other SiteConfig-doctrine type, Secrets holds secret NAMES (refs),
+// never VALUES — the broker/proxy resolve the named secret at dispatch/
+// injection time.
+//
+// STORAGE COMPATIBILITY: UnmarshalJSON also accepts the pre-base-component
+// shape ({category, type, hosts, header, format, credentials, config}) and
+// folds it into this one at read time — one-way, write-new (marshal emits
+// only this shape). See foldLegacyIntegration.
 type Integration struct {
 	// ID is an operator-chosen stable slug, unique within SiteConfig.Integrations
 	// (this is a config sub-object inside the SiteConfig singleton, not its own
 	// table, so there is no generated uuid — the operator names it, and
 	// WorkspaceLLMCred.IntegrationRef / DefaultFor point at this ID).
-	ID       string              `json:"id"`
-	Name     string              `json:"name"`
-	Category IntegrationCategory `json:"category"`
-	// Type is the specific provider within Category, e.g. "anthropic_api_key"|
-	// "bedrock" (ai_provider), "github_app"|"git_host" (scm_host) — the CLOSED
-	// sets validateIntegrationWrite actually accepts for those two; a GENERIC
-	// category's Type is open-ended by contrast, e.g. "jira" (work_tracking) —
-	// a new provider type there is just a new string, no schema change.
-	// Closed per category for the TYPED categories only; see
-	// IntegrationCategory.
-	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is the ONE field that says what this connects to: a closed-set kind
+	// (ClosedIntegrationKinds) with bespoke behavior, or any other slug — a
+	// generic connection whose row carries its whole contract.
+	Kind string `json:"kind"`
 	// Disabled turns the integration off without deleting its configuration.
 	Disabled bool `json:"disabled,omitempty"`
-	// Hosts is WHERE THE SYSTEM LIVES: the host entries a run granted this
+	// Secrets are the required secrets, each with its delivery. Refs/names only.
+	Secrets []IntegrationSecret `json:"secrets,omitempty"`
+	// Egress is WHERE THE SYSTEM LIVES: the host entries a run granted this
 	// integration may reach. This is the reason a host is on a run's egress
 	// allowlist, instead of being hand-listed in every workspace that needs it.
 	// Entries use the policy allowlist's own syntax (proxy.ValidDomainEntry):
@@ -377,34 +435,24 @@ type Integration struct {
 	//
 	// A WILDCARD OPENS THE PATH BUT NEVER CARRIES THE CREDENTIAL: proxy-side
 	// injection requires an EXACT allowlist entry (Policy.AllowedExactHost), so
-	// a secret can never leak to a wildcard-matched host. An integration that
-	// sets Header is therefore rejected at write time if any of its hosts is a
-	// wildcard — the alternative is a row that looks credentialed and silently
-	// isn't.
-	Hosts []string `json:"hosts,omitempty"`
-	// Header is the HTTP field name the egress proxy adds to requests bound for
-	// this integration's hosts, e.g. "Authorization" or "x-api-key". Set
-	// together with a Credentials entry: Wardyn holds the secret, the proxy
-	// presents it, the sandbox never holds it and cannot read it. Empty means
-	// this integration delivers no credential proxy-side — either it takes none
-	// (a read-public endpoint) or its credential lane is one of the bespoke
-	// resident/brokered ones, which are hand-written per provider and cannot be
-	// declared here.
-	Header string `json:"header,omitempty"`
-	// Format wraps the secret into the header VALUE, e.g. "Bearer %s" (the
-	// default when Header is set and Format is not). Exactly one %s, which the
-	// resolved secret substitutes into at injection time — the value itself
-	// never lives here.
-	Format string `json:"format,omitempty"`
+	// a secret can never leak to a wildcard-matched host. An integration with a
+	// proxy_header-delivered secret is therefore rejected at write time if any
+	// of its egress entries is a wildcard or carries a port — the alternative
+	// is a row that looks credentialed and silently isn't.
+	Egress []string `json:"egress,omitempty"`
+	// Config is non-secret, kind-validated configuration. Closed kinds accept
+	// only their known keys (bedrock ⇒ region/model/auth_lane, github_app ⇒
+	// app_id/installation_id/host, anthropic_subscription ⇒ lane — an unknown
+	// key 400s by name at write); generic kinds take any string keys.
+	Config map[string]any `json:"config,omitempty"`
+	// Probe is the optional verification request behind "Test".
+	Probe *IntegrationProbe `json:"probe,omitempty"`
+	// ProbeStatus is the server-cached last probe result. READ-ONLY on the
+	// wire; never operator-written.
+	ProbeStatus *IntegrationProbeStatus `json:"probe_status,omitempty"`
 	// Docs optionally points at whatever documents this system, so whoever
 	// comes after the operator who added it can find out what it is.
 	Docs string `json:"docs,omitempty"`
-	// Credentials maps a role (e.g. "api_key", "token") to a store secret NAME —
-	// never a value.
-	Credentials map[string]string `json:"credentials,omitempty"`
-	// Config is provider-specific, non-secret configuration (opaque here, like
-	// Workspace.Profile).
-	Config json.RawMessage `json:"config,omitempty"`
 	// DisabledCapabilities lists capability names this integration does NOT
 	// support, so callers don't need a hardcoded per-provider capability matrix.
 	DisabledCapabilities []string `json:"disabled_capabilities,omitempty"`
@@ -414,10 +462,228 @@ type Integration struct {
 	DefaultFor []string  `json:"default_for,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// legacyTopology marks a row that FOLDED from a legacy-shaped
+	// artifact_mirror/host_proxy category — network topology, not an
+	// integration; its config lives (and stays) under Corporate network.
+	// IntegrationList's decode drops such rows from this surface. Unexported:
+	// never serialized, never set on a new-shape row.
+	legacyTopology bool
 }
 
-// IntegrationCredentialToken is the Credentials role a HEADER-DELIVERED
-// credential uses — the generic proxy-injected lane every header-authenticating
-// system shares. The typed categories keep their own role names, which encode a
+// IntegrationCredentialToken is the secret ROLE a generic header-delivered
+// credential uses — the proxy-injected lane every header-authenticating
+// system shares. The closed kinds keep their own role names, which encode a
 // lane the runtime treats differently ("api_key", "pat", "ssh_key").
 const IntegrationCredentialToken = "token"
+
+// CredentialsMap flattens Secrets into the pre-base-component role →
+// secret_name map shape.
+// track-b: B1 shim for consumers not yet reading Secrets rows directly;
+// removed in B2/B3.
+func (in Integration) CredentialsMap() map[string]string {
+	if len(in.Secrets) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(in.Secrets))
+	for _, s := range in.Secrets {
+		m[s.Role] = s.SecretName
+	}
+	return m
+}
+
+// RoleSecret returns the secret NAME stored for role ("" when the role is not
+// configured).
+func (in Integration) RoleSecret(role string) string {
+	for _, s := range in.Secrets {
+		if s.Role == role {
+			return s.SecretName
+		}
+	}
+	return ""
+}
+
+// HeaderSecret returns the first proxy_header-delivered secret row — the
+// generic proxy-injected credential lane — as the (secretName, header, format)
+// triple injection consumes. An empty stored format reads as "%s" (the raw
+// secret IS the header value; injectionRuleFromScope would otherwise default
+// "" to "Bearer %s", which is wrong for every custom credential header).
+// ok=false when no secret is proxy_header-delivered.
+func (in Integration) HeaderSecret() (secretName, header, format string, ok bool) {
+	for _, s := range in.Secrets {
+		if s.Delivery == nil || s.Delivery.Mode != DeliveryProxyHeader {
+			continue
+		}
+		format = s.Delivery.Format
+		if format == "" {
+			format = "%s"
+		}
+		return s.SecretName, s.Delivery.Header, format, true
+	}
+	return "", "", "", false
+}
+
+// AIKeyDelivery is the proxy-header injection convention an AI api-key kind's
+// "api_key" secret rides — the same convention the harness catalog's Gateway
+// rows encode (internal/api/harness.go), recorded here so a folded/derived row
+// states the delivery that actually happens. nil for a kind whose api_key has
+// no proxy-header lane.
+func AIKeyDelivery(kind string) *IntegrationDelivery {
+	switch kind {
+	case IntegrationKindAnthropicAPIKey:
+		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "x-api-key", Format: "%s"}
+	case IntegrationKindOpenAIAPIKey, IntegrationKindAzureOpenAI:
+		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}
+	}
+	return nil
+}
+
+// legacyIntegrationJSON is the pre-base-component wire/storage shape, decoded
+// only by the read-time fold below. The field set is frozen — this is a
+// decode-compat shadow, never written.
+type legacyIntegrationJSON struct {
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Category             string            `json:"category"`
+	Type                 string            `json:"type"`
+	Disabled             bool              `json:"disabled"`
+	Hosts                []string          `json:"hosts"`
+	Header               string            `json:"header"`
+	Format               string            `json:"format"`
+	Docs                 string            `json:"docs"`
+	Credentials          map[string]string `json:"credentials"`
+	Config               map[string]any    `json:"config"`
+	DisabledCapabilities []string          `json:"disabled_capabilities"`
+	DefaultFor           []string          `json:"default_for"`
+	CreatedAt            time.Time         `json:"created_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
+}
+
+// integrationJSON is Integration minus its methods, so UnmarshalJSON can
+// decode the new shape without recursing.
+type integrationJSON Integration
+
+// UnmarshalJSON accepts BOTH the base-component shape (discriminated by its
+// "kind" key) and the legacy {category, type, hosts, header, credentials}
+// shape, folding the latter forward (foldLegacyIntegration). This is the ONE
+// read-time migration chokepoint: every decode path — the store's SiteConfig
+// document, a saved wire body — folds here, and marshal emits only the new
+// shape (one-way, write-new). Precedent: foldLegacyArtifactOverrides
+// (internal/api/site_config.go).
+func (in *Integration) UnmarshalJSON(b []byte) error {
+	var probe struct {
+		Kind     *string `json:"kind"`
+		Category *string `json:"category"`
+		Type     *string `json:"type"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return err
+	}
+	if probe.Kind == nil && (probe.Category != nil || probe.Type != nil) {
+		var legacy legacyIntegrationJSON
+		if err := json.Unmarshal(b, &legacy); err != nil {
+			return err
+		}
+		*in = foldLegacyIntegration(legacy)
+		return nil
+	}
+	var row integrationJSON
+	if err := json.Unmarshal(b, &row); err != nil {
+		return err
+	}
+	*in = Integration(row)
+	return nil
+}
+
+// foldLegacyIntegration maps one legacy-shaped row onto the base-component
+// shape: kind = the old Type (which for a generic category WAS the open slug;
+// falls back to Category for a degenerate type-less row), egress = Hosts,
+// config = Config (bedrock's old "lane" key renamed to its contract name
+// "auth_lane"), and secrets = the Credentials map with each role's delivery
+// derived from what actually delivered it — the row's own Header/Format for
+// the generic token lane, the provider convention for an AI api_key, and nil
+// (the kind's bespoke brokered lane) for everything else. A legacy
+// artifact_mirror/host_proxy row is marked legacyTopology so IntegrationList
+// drops it from this surface (its config lives under Corporate network).
+func foldLegacyIntegration(l legacyIntegrationJSON) Integration {
+	kind := l.Type
+	if kind == "" {
+		kind = l.Category
+	}
+	cfg := l.Config
+	if kind == IntegrationKindBedrock {
+		if lane, ok := cfg["lane"]; ok {
+			cfg = cloneAnyMap(cfg)
+			delete(cfg, "lane")
+			cfg["auth_lane"] = lane
+		}
+	}
+	var secrets []IntegrationSecret
+	for _, role := range sortedKeys(l.Credentials) {
+		name := l.Credentials[role]
+		var d *IntegrationDelivery
+		switch {
+		case role == IntegrationCredentialToken && l.Header != "":
+			format := l.Format
+			if format == "" {
+				format = "%s"
+			}
+			d = &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: l.Header, Format: format}
+		case role == "api_key":
+			d = AIKeyDelivery(kind)
+		}
+		secrets = append(secrets, IntegrationSecret{Role: role, SecretName: name, Delivery: d})
+	}
+	return Integration{
+		ID: l.ID, Name: l.Name, Kind: kind, Disabled: l.Disabled,
+		Secrets: secrets, Egress: l.Hosts, Config: cfg, Docs: l.Docs,
+		DisabledCapabilities: l.DisabledCapabilities, DefaultFor: l.DefaultFor,
+		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
+		legacyTopology: l.Category == "artifact_mirror" || l.Category == "host_proxy",
+	}
+}
+
+// cloneAnyMap shallow-copies m so the fold never mutates a caller's map.
+func cloneAnyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// sortedKeys returns m's keys sorted, so the fold's secrets order is
+// deterministic regardless of map iteration.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// IntegrationList is SiteConfig's integrations slice with the read-time
+// migration applied at decode: each row folds individually (see
+// Integration.UnmarshalJSON), and rows folded from the legacy
+// artifact_mirror/host_proxy categories are DROPPED — they are network
+// topology, homed under Corporate network, and this surface stops carrying
+// them. A NEW-shape row is never dropped, whatever its kind slug.
+type IntegrationList []Integration
+
+// UnmarshalJSON decodes the rows then drops legacy topology rows.
+func (l *IntegrationList) UnmarshalJSON(b []byte) error {
+	var rows []Integration
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return err
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.legacyTopology {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	*l = IntegrationList(kept)
+	return nil
+}

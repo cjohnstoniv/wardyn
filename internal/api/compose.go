@@ -94,11 +94,11 @@ func (s *Server) handleComposeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Same eager integration_id check create-run applies (runs_create.go):
-	// fail loud on a typo or a non-ai_provider id before any pipeline stage
+	// fail loud on a typo or a non-AI-provider id before any pipeline stage
 	// runs, in BOTH transports.
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
+		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
 	}
@@ -357,8 +357,8 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	integ, hasInteg := s.resolveRunIntegration(ctx, req.IntegrationID, s.primaryWorkspaceLLMRef(ctx, req.Workspaces))
 	subscriptionRequested, managedByChoice := false, false
 	if hasInteg {
-		subscriptionRequested = integ.Type == "anthropic_subscription" && subscriptionLane(integ) == "resident_host"
-		managedByChoice = integ.Type == "anthropic_subscription" && subscriptionLane(integ) != "resident_host"
+		subscriptionRequested = integ.Kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host"
+		managedByChoice = integ.Kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) != "resident_host"
 	}
 	// Subscription transport engages only when the run's resolved integration IS
 	// a resident_host subscription AND a ceiling-blessed cred mount AND a Claude

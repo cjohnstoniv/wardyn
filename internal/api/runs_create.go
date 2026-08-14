@@ -26,7 +26,7 @@ import (
 // fail-closed request-shape checks: agent required, BYOI/devcontainer
 // exclusivity, a known confinement_class, the task_mode enum, the
 // compose_session_id UUID contract, and (the one check that DOES need the
-// store) integration_id naming a real ai_provider integration. On any
+// store) integration_id naming a real AI-provider integration. On any
 // violation it writes the HTTP error itself and returns ok=false. Extracted
 // verbatim from handleCreateRun.
 func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, bool) {
@@ -94,13 +94,13 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	}
 
 	// A run-explicit integration_id must name a real, run-selectable
-	// (ai_provider) integration — checked eagerly, before any run is created,
-	// so a typo or an scm_host/artifact_mirror/host_proxy id (operator-wide,
+	// (AI-provider) integration — checked eagerly, before any run is created,
+	// so a typo or a source-control / corporate-network id (operator-wide,
 	// never run-selectable) fails loud here rather than silently resolving to
 	// nothing at foldRunIntegration time (llmcred.go).
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
+		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return req, "", false
 		}
 	}

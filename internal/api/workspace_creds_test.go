@@ -56,8 +56,9 @@ func integrationTestServer(t *testing.T, rows []types.Integration, secretNames .
 
 func apiKeyIntegration(id, credSecret string) types.Integration {
 	return types.Integration{
-		ID: id, Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-		Credentials: map[string]string{"api_key": credSecret},
+		ID: id, Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: credSecret,
+			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
 	}
 }
 
@@ -106,8 +107,8 @@ func TestApplyWorkspaceCreds_APIKeyIntegration_AbsentSecretFallsBack(t *testing.
 // restores TestApplyWorkspaceCreds_Managed_EnsuresEgressDropsCompetingAPIKey.
 func TestApplyWorkspaceCreds_ManagedIntegration_EnsuresEgressDropsCompetingAPIKey(t *testing.T) {
 	s := integrationTestServer(t, []types.Integration{{
-		ID: "acme-sub", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-		Config: mustJSON(map[string]any{"lane": "managed"}),
+		ID: "acme-sub", Kind: types.IntegrationKindAnthropicSubscription,
+		Config: map[string]any{"lane": "managed"},
 	}})
 	scope, _ := json.Marshal(map[string]string{"host": "api.anthropic.com", "secret_name": "stray"})
 	spec := &types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}}}
@@ -129,8 +130,8 @@ func TestApplyWorkspaceCreds_ManagedIntegration_EnsuresEgressDropsCompetingAPIKe
 // the managed (no-mount) path.
 func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *testing.T) {
 	s := integrationTestServer(t, []types.Integration{{
-		ID: "acme-sub-host", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-		Config: mustJSON(map[string]any{"lane": "resident_host"}),
+		ID: "acme-sub-host", Kind: types.IntegrationKindAnthropicSubscription,
+		Config: map[string]any{"lane": "resident_host"},
 	}})
 	s.cfg.DefaultPolicy = types.RunPolicySpec{
 		AllowedDomains:  []string{"api.anthropic.com"},
@@ -155,8 +156,8 @@ func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *test
 func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel(t *testing.T) {
 	const wsRegion, wsModel = "eu-central-1", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	s := integrationTestServer(t, []types.Integration{{
-		ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
-		Config: mustJSON(map[string]any{"region": wsRegion, "model": wsModel}),
+		ID: "acme-bedrock", Kind: types.IntegrationKindBedrock,
+		Config: map[string]any{"region": wsRegion, "model": wsModel},
 	}})
 	s.cfg.BedrockRegion, s.cfg.BedrockModel = "us-east-1", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
@@ -186,8 +187,9 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 // to the wrong vendor).
 func TestApplyIntegrationCreds_IncompatibleAgentProvider_FoldsNothing(t *testing.T) {
 	openaiInteg := types.Integration{
-		ID: "acme-openai", Category: types.IntegrationAIProvider, Type: "openai_api_key",
-		Credentials: map[string]string{"api_key": "acme-openai-key"},
+		ID: "acme-openai", Kind: types.IntegrationKindOpenAIAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-openai-key",
+			Delivery: types.AIKeyDelivery(types.IntegrationKindOpenAIAPIKey)}},
 	}
 	s := integrationTestServer(t, []types.Integration{openaiInteg}, "acme-openai-key")
 	// A pre-existing working Anthropic api_key grant the fold must NOT remove.
@@ -317,8 +319,8 @@ func TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef(t
 // pinned to that exact same integration.
 func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin(t *testing.T) {
 	s := integrationTestServer(t, []types.Integration{{
-		ID: "acme-sub-host", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-		Config: mustJSON(map[string]any{"lane": "resident_host"}),
+		ID: "acme-sub-host", Kind: types.IntegrationKindAnthropicSubscription,
+		Config: map[string]any{"lane": "resident_host"},
 	}})
 
 	// No workspace pin at all (a run with no workspace, or one the operator
@@ -338,8 +340,8 @@ func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin
 	// The managed lane (no resident host credentials involved) is untouched by
 	// this gate — an explicit id alone is enough, exactly as before.
 	managed := integrationTestServer(t, []types.Integration{{
-		ID: "acme-sub-managed", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-		Config: mustJSON(map[string]any{"lane": "managed"}),
+		ID: "acme-sub-managed", Kind: types.IntegrationKindAnthropicSubscription,
+		Config: map[string]any{"lane": "managed"},
 	}})
 	if _, ok := managed.resolveRunIntegration(context.Background(), "acme-sub-managed", ""); !ok {
 		t.Error("managed-lane subscription must still resolve via the explicit tier alone")

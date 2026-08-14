@@ -48,8 +48,8 @@ func integrationWriteHarness(t *testing.T, stored []types.Integration) (*Server,
 
 func TestHandlePutIntegration_CreatesStoredRow(t *testing.T) {
 	srv, fake, audit := integrationWriteHarness(t, nil)
-	body := `{"name":"Acme Anthropic","category":"ai_provider","type":"anthropic_api_key",` +
-		`"credentials":{"api_key":"acme-anthropic-key"}}`
+	body := `{"name":"Acme Anthropic","kind":"anthropic_api_key",` +
+		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -72,17 +72,33 @@ func TestHandlePutIntegration_CreatesStoredRow(t *testing.T) {
 	}
 }
 
+// A legacy-shaped PUT body (category/type/hosts/header/credentials) is
+// rejected by decodeStrict — writes are NEW-SHAPE ONLY (the read-time fold is
+// one-way; see types.Integration.UnmarshalJSON's doc).
+func TestHandlePutIntegration_LegacyShapeBodyIs400(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
+	body := `{"name":"Acme Anthropic","category":"ai_provider","type":"anthropic_api_key",` +
+		`"credentials":{"api_key":"acme-anthropic-key"}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 (writes are new-shape only); body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 0 {
+		t.Errorf("a rejected write must persist nothing; got %+v", fake.cfg.Integrations)
+	}
+}
+
 func TestHandlePutIntegration_UpdatesExistingRow_PreservesCreatedAt(t *testing.T) {
 	firstCreated := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	existing := types.Integration{
-		ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-		Credentials: map[string]string{"api_key": "acme-anthropic-key"},
-		CreatedAt:   firstCreated, UpdatedAt: firstCreated,
+		ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets:   []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
+		CreatedAt: firstCreated, UpdatedAt: firstCreated,
 	}
 	srv, fake, _ := integrationWriteHarness(t, []types.Integration{existing})
 
-	body := `{"name":"Acme Anthropic (renamed)","category":"ai_provider","type":"anthropic_api_key",` +
-		`"credentials":{"api_key":"acme-anthropic-key"}}`
+	body := `{"name":"Acme Anthropic (renamed)","kind":"anthropic_api_key",` +
+		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -105,56 +121,73 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	cases := []struct {
 		name, id, body string
 	}{
-		{"bad id shape (uppercase, from the URL)", "Bad_ID!", `{"category":"ai_provider","type":"anthropic_api_key"}`},
-		{"unknown category", "acme-anthropic", `{"category":"bogus","type":"anthropic_api_key"}`},
-		{"unknown type for category", "acme-anthropic", `{"category":"ai_provider","type":"bogus"}`},
-		{"reserved credential secret", "acme-anthropic", `{"category":"ai_provider","type":"anthropic_api_key","credentials":{"api_key":"wardyn-signing-key"}}`},
-		{"bad credential secret shape", "acme-anthropic", `{"category":"ai_provider","type":"anthropic_api_key","credentials":{"api_key":"Not Valid!"}}`},
-		{"unknown default_for", "acme-anthropic", `{"category":"ai_provider","type":"anthropic_api_key","default_for":["bogus"]}`},
-		{"bedrock half-set region only", "acme-bedrock", `{"category":"ai_provider","type":"bedrock","config":{"region":"us-east-1"}}`},
-		{"bedrock half-set model only", "acme-bedrock", `{"category":"ai_provider","type":"bedrock","config":{"model":"anthropic.claude-3"}}`},
-		{"artifact_mirror unknown ecosystem", "acme-mirror", `{"category":"artifact_mirror","type":"artifact_mirror","config":{"ecosystems":["rubygems"]}}`},
+		{"bad id shape (uppercase, from the URL)", "Bad_ID!", `{"kind":"anthropic_api_key"}`},
+		{"kind not a slug", "acme-feed", `{"kind":"Not A Slug!"}`},
+		{"reserved credential secret", "acme-anthropic", `{"kind":"anthropic_api_key","secrets":[{"role":"api_key","secret_name":"wardyn-signing-key"}]}`},
+		{"bad credential secret shape", "acme-anthropic", `{"kind":"anthropic_api_key","secrets":[{"role":"api_key","secret_name":"Not Valid!"}]}`},
+		{"duplicate secret role", "acme-anthropic", `{"kind":"anthropic_api_key","secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"},{"role":"api_key","secret_name":"acme-anthropic-key"}]}`},
+		{"unknown default_for", "acme-anthropic", `{"kind":"anthropic_api_key","default_for":["bogus"]}`},
+		{"bedrock half-set region only", "acme-bedrock", `{"kind":"bedrock","config":{"region":"us-east-1"}}`},
+		{"bedrock half-set model only", "acme-bedrock", `{"kind":"bedrock","config":{"model":"anthropic.claude-3"}}`},
+		{"artifact_mirror unknown ecosystem", "acme-mirror", `{"kind":"artifact_mirror","config":{"ecosystems":["rubygems"]}}`},
 
-		// Generic categories: the type is an open slug, but still a slug.
-		{"generic type not a slug", "acme-feed", `{"category":"package_feed","type":"Not A Slug!"}`},
+		// Config keys are CLOSED per closed kind — a typo'd key 400s by name
+		// instead of silently storing config nothing reads.
+		{"unknown config key on a closed kind", "acme-anthropic", `{"kind":"anthropic_api_key","config":{"regoin":"us-east-1"}}`},
+		{"bedrock legacy lane key (renamed auth_lane)", "acme-bedrock", `{"kind":"bedrock","config":{"lane":"auto","region":"us-east-1","model":"anthropic.claude-3"}}`},
 
-		// Hosts — the same shape rule every policy allowlist entry runs.
-		{"host is a URL, not a host", "acme-feed", `{"category":"package_feed","type":"artifactory","hosts":["https://artifactory.corp.internal/repo"]}`},
-		{"host has a mid-label wildcard that can never match", "acme-feed", `{"category":"package_feed","type":"artifactory","hosts":["oidc.*.amazonaws.com"]}`},
-		{"host has a malformed port qualifier", "acme-db", `{"category":"data_store","type":"postgres","hosts":["db.corp.internal:not-a-port"]}`},
+		// A generic kind's secret rows must SAY how they deliver — the row is
+		// the whole contract; only a closed kind's bespoke transport may omit it.
+		{"generic secret without a delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key"}]}`},
+		{"unknown delivery mode", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"carrier_pigeon"}}]}`},
+		{"resident_file delivery without a path", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_file"}}]}`},
+		{"resident_env delivery without a var", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_env"}}]}`},
+		{"cross-mode fields on a delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_env","var":"TOKEN","header":"Authorization"}}]}`},
+
+		// Egress — the same shape rule every policy allowlist entry runs.
+		{"host is a URL, not a host", "acme-feed", `{"kind":"artifactory","egress":["https://artifactory.corp.internal/repo"]}`},
+		{"host has a mid-label wildcard that can never match", "acme-feed", `{"kind":"artifactory","egress":["oidc.*.amazonaws.com"]}`},
+		{"host has a malformed port qualifier", "acme-db", `{"kind":"postgres","egress":["db.corp.internal:not-a-port"]}`},
 
 		// The wildcard/injection interaction: a credential header is only ever
 		// added to an EXACT allowlist entry, so this row would open the path and
 		// silently never present the credential.
 		{"wildcard host on a header-delivering integration", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["*.corp.internal"],"header":"Authorization","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["*.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization"}}]}`},
 		// Worse than the wildcard: a port-qualified entry compiles into
 		// allowedExactPort, which AllowedExactHost never consults, so
 		// buildInjector REFUSES the rule and the proxy fails closed at startup —
 		// a bricked run rather than a merely uncredentialed one.
 		{"port-qualified host on a header-delivering integration", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["nexus.corp.internal:8443"],"header":"Authorization","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["nexus.corp.internal:8443"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization"}}]}`},
 
 		// Header name — the trust boundary. CRLF is the header-splitting shape.
 		{"header name with CRLF", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X-Tok\r\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"X-Tok\r\nX-Evil: 1"}}]}`},
 		{"header name with a bare newline", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X-Tok\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"X-Tok\nX-Evil: 1"}}]}`},
 		{"header name containing a colon", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization: Bearer","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization: Bearer"}}]}`},
 		{"header name containing a space", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X Tok","credentials":{"token":"acme-anthropic-key"}}`},
-		{"header set but names no secret", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization"}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"X Tok"}}]}`},
+		{"proxy_header delivery with no header at all", "acme-feed",
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header"}}]}`},
+		{"proxy_header delivery names no secret", "acme-feed",
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"","delivery":{"mode":"proxy_header","header":"Authorization"}}]}`},
 
 		// Format — the other half of the same wire value.
-		{"format without a header", "acme-feed", `{"category":"package_feed","type":"artifactory","format":"Bearer %s"}`},
 		{"format with no %s drops the credential silently", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer"}}]}`},
 		{"format with two verbs", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer %s %s","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer %s %s"}}]}`},
 		{"format with a line break", "acme-feed",
-			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer %s\r\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer %s\r\nX-Evil: 1"}}]}`},
+
+		// Probe — stored now, probed by B2; still validated at write.
+		{"probe with a non-GET/HEAD method", "acme-feed",
+			`{"kind":"artifactory","probe":{"method":"POST","url":"https://artifactory.corp.internal/"}}`},
+		{"probe with a junk URL", "acme-feed",
+			`{"kind":"artifactory","probe":{"method":"GET","url":"not a url"}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -170,27 +203,28 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	}
 }
 
-// TestHandlePutIntegration_GenericCategoryRoundTrip is the round-H shape: a
-// category Wardyn has no per-type code for, an open type slug, its own hosts,
-// and a header-delivered credential. Everything the runtime needs rides on the
-// row itself — which is what lets a system Wardyn has never heard of be added
-// with no backend change.
-func TestHandlePutIntegration_GenericCategoryRoundTrip(t *testing.T) {
+// TestHandlePutIntegration_GenericKindRoundTrip is the round-H shape: a kind
+// Wardyn has no code for, an open slug, its own egress, and a proxy-header-
+// delivered secret. Everything the runtime needs rides on the row itself —
+// which is what lets a system Wardyn has never heard of be added with no
+// backend change.
+func TestHandlePutIntegration_GenericKindRoundTrip(t *testing.T) {
 	srv, fake, audit := integrationWriteHarness(t, nil)
-	body := `{"name":"Corp Artifactory","category":"package_feed","type":"artifactory",` +
-		`"hosts":["artifactory.corp.internal","nexus.corp.internal"],` +
-		`"header":"Authorization","format":"Bearer %s","docs":"https://wiki.corp.internal/artifactory",` +
-		`"credentials":{"token":"acme-anthropic-key"}}`
+	body := `{"name":"Corp Artifactory","kind":"artifactory",` +
+		`"egress":["artifactory.corp.internal","nexus.corp.internal"],` +
+		`"docs":"https://wiki.corp.internal/artifactory",` +
+		`"secrets":[{"role":"token","secret_name":"acme-anthropic-key",` +
+		`"delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer %s"}}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/corp-artifactory", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	got := fake.cfg.Integrations[0]
-	if len(got.Hosts) != 2 || got.Hosts[0] != "artifactory.corp.internal" {
-		t.Errorf("hosts = %v, want both entries persisted verbatim", got.Hosts)
+	if len(got.Egress) != 2 || got.Egress[0] != "artifactory.corp.internal" {
+		t.Errorf("egress = %v, want both entries persisted verbatim", got.Egress)
 	}
-	if got.Header != "Authorization" || got.Format != "Bearer %s" {
-		t.Errorf("delivery = %q/%q, want Authorization/Bearer %%s", got.Header, got.Format)
+	if secret, header, format, ok := got.HeaderSecret(); !ok || secret != "acme-anthropic-key" || header != "Authorization" || format != "Bearer %s" {
+		t.Errorf("delivery = %q/%q/%q (ok=%v), want acme-anthropic-key/Authorization/Bearer %%s", secret, header, format, ok)
 	}
 	if got.Docs != "https://wiki.corp.internal/artifactory" {
 		t.Errorf("docs = %q, want the submitted link", got.Docs)
@@ -216,24 +250,25 @@ func TestHandlePutIntegration_GenericCategoryRoundTrip(t *testing.T) {
 	// and what header presents the credential there.
 	ev := lastAuditEvent(t, audit.events, "integration.write")
 	var detail struct {
-		Hosts  []string `json:"hosts"`
+		Egress []string `json:"egress"`
 		Header string   `json:"header"`
 	}
 	if err := json.Unmarshal(ev.Data, &detail); err != nil {
 		t.Fatalf("decode audit detail: %v", err)
 	}
-	if len(detail.Hosts) != 2 || detail.Header != "Authorization" {
-		t.Errorf("audit detail = %+v, want both hosts and the header name", detail)
+	if len(detail.Egress) != 2 || detail.Header != "Authorization" {
+		t.Errorf("audit detail = %+v, want both egress hosts and the header name", detail)
 	}
 }
 
-// A generic row with NO header is the honest "egress only" case the two groups
-// that authenticate outside HTTP (cloud providers, data stores) land in: the
-// path opens, and the credential cell states the gap rather than showing an
-// empty field. A wildcard host is fine HERE — nothing is being injected.
+// A generic row with NO proxy-header secret is the honest "egress only" case
+// the systems that authenticate outside HTTP (cloud providers, data stores)
+// land in: the path opens, and the credential cell states the gap rather than
+// showing an empty field. A wildcard host is fine HERE — nothing is being
+// injected.
 func TestHandlePutIntegration_GenericNoHeaderIsEgressOnly(t *testing.T) {
 	srv, _, _ := integrationWriteHarness(t, nil)
-	body := `{"name":"Prod Postgres","category":"data_store","type":"postgres","hosts":["*.db.corp.internal:5432"]}`
+	body := `{"name":"Prod Postgres","kind":"postgres","egress":["*.db.corp.internal:5432"]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/prod-postgres", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -258,7 +293,7 @@ func TestHandlePutIntegration_GenericNoHeaderIsEgressOnly(t *testing.T) {
 
 func TestHandlePutIntegration_BedrockBothSetIsAccepted(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
-	body := `{"category":"ai_provider","type":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3"}}`
+	body := `{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3","auth_lane":"auto"}}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-bedrock", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -273,11 +308,11 @@ func TestHandlePutIntegration_BedrockBothSetIsAccepted(t *testing.T) {
 // every OTHER row in the SAME write — never a 409.
 func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
 	rowA := types.Integration{
-		ID: "acme-a", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+		ID: "acme-a", Kind: types.IntegrationKindAnthropicAPIKey,
 		DefaultFor: []string{"agent_runs", "wardyn_features"},
 	}
 	srv, fake, _ := integrationWriteHarness(t, []types.Integration{rowA})
-	body := `{"category":"ai_provider","type":"openai_api_key","default_for":["agent_runs"]}`
+	body := `{"kind":"openai_api_key","default_for":["agent_runs"]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-b", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200 (radio semantics must never 409); body=%s", w.Code, w.Body.String())
@@ -303,19 +338,19 @@ func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
 }
 
 // TestHandlePutIntegration_DefaultForRejectsNonAIProvider pins PLATFORM-API-3:
-// only an ai_provider row may carry default_for. Both marks are defined only
-// for that category (types.Integration.DefaultFor's doc), and both readers
+// only an AI provider row may carry default_for. Both marks are defined only
+// for those kinds (types.Integration.DefaultFor's doc), and both readers
 // (defaultAgentRunsIntegration, WardynFeaturesBackend) already filter on it —
-// so a non-ai_provider row that took the mark would STEAL it from the real
-// ai_provider default (applyDefaultForRadio clears every other row's mark
-// regardless of category) while never being able to serve it itself: silent,
-// site-wide loss of model access through a write that validated clean.
+// so a non-AI row that took the mark would STEAL it from the real AI default
+// (applyDefaultForRadio clears every other row's mark regardless of kind)
+// while never being able to serve it itself: silent, site-wide loss of model
+// access through a write that validated clean.
 func TestHandlePutIntegration_DefaultForRejectsNonAIProvider(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
-	body := `{"category":"container_registry","type":"acme-registry","default_for":["agent_runs"]}`
+	body := `{"kind":"acme-registry","default_for":["agent_runs"]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-registry", adminToken, body)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code = %d, want 400 (default_for is ai_provider-only); body=%s", w.Code, w.Body.String())
+		t.Fatalf("code = %d, want 400 (default_for is AI-provider-only); body=%s", w.Code, w.Body.String())
 	}
 	if len(fake.cfg.Integrations) != 0 {
 		t.Errorf("rejected write must not persist, got %+v", fake.cfg.Integrations)
@@ -329,11 +364,11 @@ func TestHandlePutIntegration_DefaultForRejectsNonAIProvider(t *testing.T) {
 // derivation both need to actually be unset again through the API.
 func TestHandlePutIntegration_DefaultForClear(t *testing.T) {
 	rowA := types.Integration{
-		ID: "acme-a", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+		ID: "acme-a", Kind: types.IntegrationKindAnthropicAPIKey,
 		DefaultFor: []string{"agent_runs", "wardyn_features"},
 	}
 	srv, fake, _ := integrationWriteHarness(t, []types.Integration{rowA})
-	body := `{"category":"ai_provider","type":"anthropic_api_key"}` // default_for omitted
+	body := `{"kind":"anthropic_api_key"}` // default_for omitted
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-a", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -347,7 +382,7 @@ func TestHandlePutIntegration_DefaultForClear(t *testing.T) {
 }
 
 func TestHandleDeleteIntegration_RemovesStoredRow(t *testing.T) {
-	existing := types.Integration{ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"}
+	existing := types.Integration{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey}
 	srv, fake, audit := integrationWriteHarness(t, []types.Integration{existing})
 	w := do(t, srv, http.MethodDelete, "/api/v1/integrations/acme-anthropic", adminToken, "")
 	if w.Code != http.StatusNoContent {
@@ -372,7 +407,7 @@ func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 // TestHandleAdoptIntegration_PersistsDerivedRowVerbatim exercises a REAL
 // legacy-derived row (the anthropic-api-key secret is present in
 // integrationWriteHarness), adopting it into a stored row with the SAME id,
-// category, type, and credentials the derived row already carried.
+// kind, and secret rows the derived row already carried.
 func TestHandleAdoptIntegration_PersistsDerivedRowVerbatim(t *testing.T) {
 	srv, fake, audit := integrationWriteHarness(t, nil)
 	// Legacy derivation keys off "anthropic-api-key" (integrations.go), not the
@@ -388,11 +423,11 @@ func TestHandleAdoptIntegration_PersistsDerivedRowVerbatim(t *testing.T) {
 		t.Fatalf("expected exactly one stored row after adopt, got %+v", fake.cfg.Integrations)
 	}
 	got := fake.cfg.Integrations[0]
-	if got.ID != "anthropic_api_key" || got.Type != "anthropic_api_key" || got.Category != types.IntegrationAIProvider {
+	if got.ID != "anthropic_api_key" || got.Kind != types.IntegrationKindAnthropicAPIKey {
 		t.Errorf("adopted row = %+v, want the derived anthropic_api_key row verbatim", got)
 	}
-	if got.Credentials["api_key"] != "anthropic-api-key" {
-		t.Errorf("adopted credentials = %+v, want api_key -> anthropic-api-key", got.Credentials)
+	if got.RoleSecret("api_key") != "anthropic-api-key" {
+		t.Errorf("adopted secrets = %+v, want api_key -> anthropic-api-key", got.Secrets)
 	}
 	if got.CreatedAt.IsZero() {
 		t.Error("expected the adopted row to be stamped with CreatedAt")
@@ -430,7 +465,7 @@ func TestHandleAdoptIntegration_ColonIDThenPutBack(t *testing.T) {
 		t.Fatalf("expected exactly one stored row with the colon id, got %+v", fake.cfg.Integrations)
 	}
 
-	body := `{"name":"Claude subscription (managed)","category":"ai_provider","type":"anthropic_subscription",` +
+	body := `{"name":"Claude subscription (managed)","kind":"anthropic_subscription",` +
 		`"config":{"lane":"managed"},"default_for":["agent_runs"]}`
 	w = do(t, srv, http.MethodPut, escapedPath, adminToken, body)
 	if w.Code != http.StatusOK {

@@ -76,12 +76,15 @@ describe("AddServiceDialog", () => {
     const [id, body] = vi.mocked(genericIntegrationsApi.put).mock.calls[0];
     expect(id).toBe("jfrog-artifactory");
     expect(body).toMatchObject({
-      category: "package_feed",
-      type: "artifactory",
-      hosts: ["artifactory.corp.internal"],
-      header: "Authorization",
-      format: "Bearer %s",
-      credentials: { token: "artifactory-token" },
+      kind: "artifactory",
+      egress: ["artifactory.corp.internal"],
+      secrets: [
+        {
+          role: "token",
+          secret_name: "artifactory-token",
+          delivery: { mode: "proxy_header", header: "Authorization", format: "Bearer %s" },
+        },
+      ],
     });
     expect(props.onAdded).toHaveBeenCalled();
   });
@@ -98,8 +101,7 @@ describe("AddServiceDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /add integration/i }));
     await waitFor(() => expect(genericIntegrationsApi.put).toHaveBeenCalled());
     const [, body] = vi.mocked(genericIntegrationsApi.put).mock.calls[0];
-    expect(body.header).toBeUndefined();
-    expect(body.credentials).toBeUndefined();
+    expect(body.secrets).toBeUndefined();
   });
 
   it("never offers a working Add for a type with no backend home", async () => {

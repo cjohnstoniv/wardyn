@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -29,8 +28,8 @@ func (f *fakeComposerSecrets) Get(_ context.Context, name string) ([]byte, error
 	return nil, secretstore.ErrNotFound
 }
 
-func aiIntegration(id, typ string, defaultFor ...string) types.Integration {
-	return types.Integration{ID: id, Category: types.IntegrationAIProvider, Type: typ, DefaultFor: defaultFor}
+func aiIntegration(id, kind string, defaultFor ...string) types.Integration {
+	return types.Integration{ID: id, Kind: kind, DefaultFor: defaultFor}
 }
 
 // TestBuildComposerRegistry_ZeroIntegrations_NilRegistry pins the literal
@@ -85,21 +84,21 @@ func TestWardynFeaturesBackendSpec_Mapping(t *testing.T) {
 		wantTransp string
 		wantOK     bool
 	}{
-		{"anthropic_api_key -> anthropic", types.Integration{Type: "anthropic_api_key"}, "anthropic", "", true},
-		{"openai_api_key -> openai", types.Integration{Type: "openai_api_key"}, "openai", "", true},
-		{"azure_openai -> openai/azure", types.Integration{Type: "azure_openai"}, "openai", "azure", true},
+		{"anthropic_api_key -> anthropic", types.Integration{Kind: "anthropic_api_key"}, "anthropic", "", true},
+		{"openai_api_key -> openai", types.Integration{Kind: "openai_api_key"}, "openai", "", true},
+		{"azure_openai -> openai/azure", types.Integration{Kind: "azure_openai"}, "openai", "azure", true},
 		{
-			"bedrock -> anthropic/bedrock", types.Integration{Type: "bedrock",
-				Config: mustJSONForTest(map[string]any{"region": "us-east-1"})}, "anthropic", "bedrock", true,
+			"bedrock -> anthropic/bedrock", types.Integration{Kind: "bedrock",
+				Config: map[string]any{"region": "us-east-1"}}, "anthropic", "bedrock", true,
 		},
 		{
 			"anthropic_subscription managed -> sandbox",
-			types.Integration{Type: "anthropic_subscription", Config: mustJSONForTest(map[string]any{"lane": "managed"})},
+			types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
 			"sandbox", "", true,
 		},
 		{
 			"anthropic_subscription unset lane -> sandbox (managed default)",
-			types.Integration{Type: "anthropic_subscription"}, "sandbox", "", true,
+			types.Integration{Kind: "anthropic_subscription"}, "sandbox", "", true,
 		},
 		{
 			// PLATFORM-API-6: resident_host has no mapping — WardynFeaturesBackend
@@ -107,10 +106,10 @@ func TestWardynFeaturesBackendSpec_Mapping(t *testing.T) {
 			// place (subscriptionCaps hard-codes its wardyn_features cell OFF), so
 			// it falls to the same "sandbox" default every other lane value gets.
 			"anthropic_subscription resident_host -> sandbox (no dead cli mapping)",
-			types.Integration{Type: "anthropic_subscription", Config: mustJSONForTest(map[string]any{"lane": "resident_host"})},
+			types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
 			"sandbox", "", true,
 		},
-		{"unmapped type -> not ok", types.Integration{Type: "git_host"}, "", "", false},
+		{"unmapped kind -> not ok", types.Integration{Kind: "git_host"}, "", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -135,10 +134,10 @@ func TestWardynFeaturesBackendSpec_Mapping(t *testing.T) {
 func TestBuildComposerRegistry_DerivesFromIntegration_AnthropicAPIKey(t *testing.T) {
 	sc := types.SiteConfig{Integrations: []types.Integration{
 		{
-			ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-			Credentials: map[string]string{"api_key": "acme-anthropic-key"},
-			Config:      mustJSONForTest(map[string]any{"model": "claude-sonnet-4-5"}),
-			DefaultFor:  []string{"wardyn_features"},
+			ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+			Secrets:    []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
+			Config:     map[string]any{"model": "claude-sonnet-4-5"},
+			DefaultFor: []string{"wardyn_features"},
 		},
 	}}
 	secrets := &fakeComposerSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
@@ -161,8 +160,8 @@ func TestBuildComposerRegistry_DerivesFromIntegration_AnthropicAPIKey(t *testing
 func TestBuildComposerRegistry_NotMarkedDefault_StaysNil(t *testing.T) {
 	sc := types.SiteConfig{Integrations: []types.Integration{
 		{
-			ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-			Credentials: map[string]string{"api_key": "acme-anthropic-key"},
+			ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
 			// no DefaultFor
 		},
 	}}
@@ -194,15 +193,4 @@ func TestBuildComposerRegistry_MisconfiguredDerivedIntegration_DegradesToNil(t *
 	if reg != nil || readiness != nil {
 		t.Fatalf("registry/readiness = %+v/%+v, want nil/nil", reg, readiness)
 	}
-}
-
-// mustJSONForTest is a local json-marshal-or-panic helper (mirrors the
-// package's own mustJSON precedent in internal/api, kept local since this
-// package has no equivalent already).
-func mustJSONForTest(v any) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
 }

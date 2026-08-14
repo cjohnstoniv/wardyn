@@ -47,7 +47,7 @@ beforeEach(() => {
   // the "server default" wording pinned throughout this file. Tests that care
   // about the unmarked case override this per-test.
   getSetupStatusMock.mockResolvedValue(
-    baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", default_for: ["agent_runs"] }] }),
+    baseStatus({ integrations: [{ id: "anthropic_api_key", kind: "anthropic_api_key", default_for: ["agent_runs"] }] }),
   );
 });
 
@@ -156,7 +156,7 @@ describe("StepAccess — model access resolution card", () => {
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" }] }),
+      baseStatus({ integrations: [{ id: "anthropic_api_key", kind: "anthropic_api_key" }] }),
     );
     renderStep();
     expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
@@ -188,7 +188,7 @@ describe("StepAccess — model access resolution card", () => {
     listIntegrationsMock.mockResolvedValue(integrations([managedSubscription]));
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
-        integrations: [{ id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" }],
+        integrations: [{ id: "anthropic_subscription:managed", kind: "anthropic_subscription" }],
       }),
     );
     renderStep();
@@ -222,7 +222,7 @@ describe("StepAccess — model access resolution card", () => {
     listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
-        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        integrations: [{ id: "bedrock", kind: "bedrock" }],
         // Region set, nothing else — configured() (the row exists) is true,
         // but ready() (region AND model AND a credential) is false.
         bedrock: { region: "us-east-1", creds_present: false, ready: false },
@@ -251,7 +251,7 @@ describe("StepAccess — model access resolution card", () => {
     listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
-        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        integrations: [{ id: "bedrock", kind: "bedrock" }],
         bedrock: {
           region: "us-east-1",
           model: "anthropic.claude-3-sonnet",
@@ -291,7 +291,7 @@ describe("StepAccess — model access resolution card", () => {
     listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
-        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        integrations: [{ id: "bedrock", kind: "bedrock" }],
         bedrock: {
           region: "us-east-1",
           model: "anthropic.claude-3-sonnet",
@@ -349,8 +349,8 @@ describe("StepAccess — model access resolution card", () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         integrations: [
-          { id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" },
-          { id: "bedrock", category: "ai_provider", type: "bedrock" },
+          { id: "anthropic_subscription:managed", kind: "anthropic_subscription" },
+          { id: "bedrock", kind: "bedrock" },
         ],
         bedrock: { region: "us-east-1", model: "anthropic.claude-3-sonnet", creds_present: true, ready: true },
         harness: [{ provider: "anthropic", captured: true }],
@@ -456,7 +456,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
     // Configured, but not marked DefaultFor:agent_runs -> nothing resolves.
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" }] }),
+      baseStatus({ integrations: [{ id: "anthropic_api_key", kind: "anthropic_api_key" }] }),
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();
@@ -479,7 +479,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([azureFeaturesOnly]));
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "azure_openai", category: "ai_provider", type: "azure_openai" }] }),
+      baseStatus({ integrations: [{ id: "azure_openai", kind: "azure_openai" }] }),
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
@@ -493,7 +493,7 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([openaiTeam]));
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "openai_api_key", category: "ai_provider", type: "openai_api_key" }] }),
+      baseStatus({ integrations: [{ id: "openai_api_key", kind: "openai_api_key" }] }),
     );
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();

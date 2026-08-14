@@ -62,7 +62,7 @@ import (
 // the host and still fail to present the credential.
 func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integrationRow, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
 	integ, found := resolveIntegrationRefFrom(rows, id)
-	if !found || integ.Disabled || len(integ.Hosts) == 0 {
+	if !found || integ.Disabled || len(integ.Egress) == 0 {
 		return requirementAuditEntry{}, false
 	}
 	disabledCap := make(map[string]bool, len(integ.DisabledCapabilities))
@@ -71,7 +71,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 	}
 	var addedEgress, grantedHosts []string
 	if !disabledCap["egress_host"] {
-		addedEgress = unionAllowedDomains(spec, integ.Hosts)
+		addedEgress = unionAllowedDomains(spec, integ.Egress)
 	}
 	if !disabledCap["credential"] {
 		grantedHosts = s.applyIntegrationInjection(ctx, spec, integ)
@@ -83,11 +83,12 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 		// nothing to audit.
 		return requirementAuditEntry{}, false
 	}
+	_, header, _, _ := integ.HeaderSecret()
 	return requirementAuditEntry{
 		action: "run.workspace.requirement.integration", target: id,
 		data: map[string]any{
 			"integration_id": id, "added_domains": addedEgress,
-			"injected_hosts": grantedHosts, "header": integ.Header,
+			"injected_hosts": grantedHosts, "header": header,
 		},
 	}, true
 }
@@ -112,20 +113,17 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 //     double-grant a host, mirroring ensureLLMGrant/applyWorkspaceCreds.
 //     Whichever caller proposed it first wins.
 func (s *Server) applyIntegrationInjection(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration) []string {
-	secretName := integ.Credentials[types.IntegrationCredentialToken]
-	if integ.Header == "" || secretName == "" || !s.secretPresent(ctx, secretName) {
+	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored
+	// format is already materialized as "%s" (the raw secret IS the header
+	// value — the right default for a custom credential header like x-api-key
+	// or DD-API-KEY; injectionRuleFromScope defaults an empty format to
+	// "Bearer %s", which would be wrong for every one of those).
+	secretName, header, format, ok := integ.HeaderSecret()
+	if !ok || secretName == "" || !s.secretPresent(ctx, secretName) {
 		return nil
 	}
-	// An empty Format means the raw secret IS the header value — the right
-	// default for a custom credential header (x-api-key, DD-API-KEY). It must be
-	// written explicitly: injectionRuleFromScope defaults an empty format to
-	// "Bearer %s", which would be wrong for every one of those.
-	format := integ.Format
-	if format == "" {
-		format = "%s"
-	}
 	var granted []string
-	for _, host := range integ.Hosts {
+	for _, host := range integ.Egress {
 		if !bareExactHost(host) {
 			continue
 		}
@@ -133,7 +131,7 @@ func (s *Server) applyIntegrationInjection(ctx context.Context, spec *types.RunP
 			continue
 		}
 		scope, _ := json.Marshal(map[string]string{
-			"host": host, "header": integ.Header, "format": format, "secret_name": secretName,
+			"host": host, "header": header, "format": format, "secret_name": secretName,
 		})
 		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
 			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,

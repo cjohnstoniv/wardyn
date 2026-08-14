@@ -552,11 +552,12 @@ type SiteConfig struct {
 	// "github.example.com") the SCM Provider step / egress bundling consult.
 	ScmHosts []string `json:"scm_hosts,omitempty"`
 	// Integrations are the operator-configured external connections (AI
-	// providers, SCM hosts, artifact mirrors, the host proxy) — the generalized
-	// replacement UpstreamProxySecretRef/EgressRedirects are migrating
-	// toward. Both the legacy fields and this one are read; nothing here
-	// removes the legacy fields yet.
-	Integrations []Integration `json:"integrations,omitempty"`
+	// providers, SCM hosts, generic connections) — the generalized replacement
+	// UpstreamProxySecretRef/EgressRedirects are migrating toward. Both the
+	// legacy fields and this one are read; nothing here removes the legacy
+	// fields yet. IntegrationList folds pre-base-component rows forward at
+	// decode and drops legacy artifact_mirror/host_proxy topology rows.
+	Integrations IntegrationList `json:"integrations,omitempty"`
 }
 
 // ArtifactOverride is one ecosystem's corporate artifact-registry redirect: the

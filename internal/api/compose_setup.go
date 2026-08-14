@@ -699,26 +699,27 @@ func integrationSetupItem(id, wsName string, integ types.Integration, ok bool, p
 	case integ.Disabled:
 		it.Detail = "Integration " + id + " is turned off, so it opens no hosts and delivers no credential."
 		return it
-	case len(integ.Hosts) == 0:
+	case len(integ.Egress) == 0:
 		it.Detail = "Integration " + id + " names no hosts, so nothing becomes reachable."
 		return it
 	}
-	hosts := strings.Join(integ.Hosts, ", ")
-	secret := integ.Credentials[types.IntegrationCredentialToken]
+	hosts := strings.Join(integ.Egress, ", ")
+	secret, header, _, hasHeader := integ.HeaderSecret()
 	switch {
-	case integ.Header == "":
-		// No header lane is the HONEST state for a system that authenticates
-		// outside HTTP, not a gap — the path opening is the whole value.
+	case !hasHeader:
+		// No proxy_header-delivered secret is the HONEST state for a system
+		// that authenticates outside HTTP, not a gap — the path opening is the
+		// whole value.
 		it.Status, it.Residency = "satisfied", "none"
 		it.Detail = "Opens " + hosts + " for this run. No credential is delivered — this system authenticates outside HTTP."
 	case secret == "":
-		it.Detail = "Opens " + hosts + ", but names no secret to present in " + integ.Header + "."
+		it.Detail = "Opens " + hosts + ", but names no secret to present in " + header + "."
 	case !presentSecrets[secret]:
 		it.Detail = "Opens " + hosts + ", but the secret " + secret + " is not in the store, so no credential is presented."
 		it.Fix = &SetupFix{Action: "add_secret", SecretName: secret}
 	default:
 		it.Status, it.Residency = "satisfied", "proxy_injected"
-		it.Detail = "Opens " + hosts + " and presents " + secret + " in " + integ.Header + ". The sandbox never holds it."
+		it.Detail = "Opens " + hosts + " and presents " + secret + " in " + header + ". The sandbox never holds it."
 	}
 	return it
 }

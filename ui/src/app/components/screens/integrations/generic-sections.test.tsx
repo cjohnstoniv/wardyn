@@ -20,21 +20,23 @@ function rowsFrom(integrations: WireIntegration[]): GenericIntegrationRow[] {
 const FEED: WireIntegration = {
   id: "corp-artifactory",
   name: "Corp Artifactory",
-  category: "package_feed",
-  type: "artifactory",
-  hosts: ["artifactory.corp.internal"],
-  header: "Authorization",
-  format: "Bearer %s",
-  credentials: { token: "artifactory-token" },
+  kind: "artifactory",
+  egress: ["artifactory.corp.internal"],
+  secrets: [
+    {
+      role: "token",
+      secret_name: "artifactory-token",
+      delivery: { mode: "proxy_header", header: "Authorization", format: "Bearer %s" },
+    },
+  ],
   source: "stored",
 };
 
 const DB: WireIntegration = {
   id: "prod-postgres",
   name: "Prod Postgres",
-  category: "data_store",
-  type: "postgres",
-  hosts: ["db.corp.internal:5432"],
+  kind: "postgres",
+  egress: ["db.corp.internal:5432"],
   source: "stored",
 };
 
@@ -48,9 +50,9 @@ describe("genericIntegrations", () => {
   it("selects only the generic categories, leaving the derived legacy ones alone", () => {
     const rows = rowsFrom([
       FEED,
-      { id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" },
-      { id: "github_app", category: "scm_host", type: "github_app" },
-      { id: "artifact_mirror:x", category: "artifact_mirror", type: "artifact_mirror" },
+      { id: "anthropic_api_key", kind: "anthropic_api_key" },
+      { id: "github_app", kind: "github_app" },
+      { id: "artifact_mirror:x", kind: "artifact_mirror" },
     ]);
     expect(rows.map((r) => r.wire.id)).toEqual(["corp-artifactory"]);
   });
@@ -59,7 +61,7 @@ describe("genericIntegrations", () => {
     // A header naming a stored secret is proxy-injected...
     expect(rowsFrom([FEED])[0].delivery).toBe("proxy_injected");
     // ...and the same type WITHOUT one cannot be, however it usually works.
-    const naked = { ...FEED, header: undefined, credentials: undefined };
+    const naked = { ...FEED, secrets: undefined };
     expect(rowsFrom([naked])[0].delivery).toBe("notbuilt");
     // A group that authenticates outside HTTP is egress-only by its own nature.
     expect(rowsFrom([DB])[0].delivery).toBe("notbuilt");

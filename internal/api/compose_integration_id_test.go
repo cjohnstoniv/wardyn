@@ -141,8 +141,8 @@ func TestComposeRun_IntegrationID_UsesBedrockRegionOverride(t *testing.T) {
 		Summary:      "throwaway sandbox",
 	}})
 	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
-			Config: mustJSON(map[string]any{"region": region, "model": model})},
+		{ID: "acme-bedrock", Kind: types.IntegrationKindBedrock,
+			Config: map[string]any{"region": region, "model": model}},
 	}}}}
 	// The operator ceiling must bless the region's own Bedrock hosts for them
 	// to survive Clamp's allow-list intersection (composer/clamp.go) — the
@@ -197,7 +197,7 @@ func TestComposeRun_IntegrationID_BedrockUnsetIsNotModelAccess(t *testing.T) {
 		Summary:      "throwaway sandbox",
 	}})
 	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock"},
+		{ID: "acme-bedrock", Kind: types.IntegrationKindBedrock},
 	}}}}
 	// No global fallback either: s.cfg.BedrockRegion/Model are the other half
 	// of the same effective-config rule bedrockCaps applies.
@@ -241,7 +241,7 @@ func TestComposeRun_IntegrationID_NonAIProviderIs400(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{})
 	h.srv.cfg.Store = &fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-scm", Category: types.IntegrationSCMHost, Type: "git_host"},
+		{ID: "acme-scm", Kind: types.IntegrationKindGitHost},
 	}}}
 
 	body := `{"prompt":"build a small website","workspace":{"kind":"ephemeral"},"mode":"skip","integration_id":"acme-scm"}`
@@ -268,8 +268,8 @@ func TestComposeRun_ResidentHostSubscriptionPin_MountsCredsAndSurfacesConfigPair
 	const wsPath = "/home/ops/acme-sub-app"
 	h.srv.cfg.Store = &composeIntegrationStore{
 		fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-			{ID: "acme-subscription", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-				Config: mustJSON(map[string]any{"lane": "resident_host"})},
+			{ID: "acme-subscription", Kind: types.IntegrationKindAnthropicSubscription,
+				Config: map[string]any{"lane": "resident_host"}},
 		}}},
 		workspaces: []types.Workspace{{
 			Name:    "acme-sub-app",

@@ -47,8 +47,8 @@ func TestHandleListIntegrations_ShapeAndNoSecretValues(t *testing.T) {
 	if row.Source != "legacy" {
 		t.Errorf("source = %q, want legacy", row.Source)
 	}
-	if row.Credentials["api_key"] != "anthropic-api-key" {
-		t.Errorf("credentials = %+v, want the secret NAME only", row.Credentials)
+	if row.RoleSecret("api_key") != "anthropic-api-key" {
+		t.Errorf("secrets = %+v, want the secret NAME only", row.Secrets)
 	}
 	var modelAPI *Capability
 	for i := range row.Capabilities {

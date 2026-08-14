@@ -389,7 +389,7 @@ func (s *Server) integrationRequirementHosts(ctx context.Context, ws types.Works
 	var hosts []string
 	for _, id := range requiredIntegrationIDs(ws) {
 		if integ, ok := s.resolveIntegrationRef(ctx, id); ok {
-			hosts = append(hosts, integ.Hosts...)
+			hosts = append(hosts, integ.Egress...)
 		}
 	}
 	return hosts
@@ -407,14 +407,10 @@ func (s *Server) workspaceModelProviderHosts(ctx context.Context, ws types.Works
 		return nil
 	}
 	integ, ok := s.resolveIntegrationRef(ctx, ws.LLMCred.IntegrationRef)
-	if !ok || integ.Type != "bedrock" {
+	if !ok || integ.Kind != types.IntegrationKindBedrock {
 		return nil
 	}
-	var cfg struct {
-		Region string `json:"region"`
-	}
-	_ = json.Unmarshal(integ.Config, &cfg)
-	region := cfg.Region
+	region, _ := integ.Config["region"].(string)
 	if region == "" {
 		region = s.cfg.BedrockRegion
 	}

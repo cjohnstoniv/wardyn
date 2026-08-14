@@ -279,7 +279,7 @@ describe("ConnectReviewPanel — Add integration persists the DefaultFor checkbo
       baseStatus({
         secrets: { present: ["openai-api-key"], github_app: false },
         integrations: [
-          { id: "openai_api_key", category: "ai_provider", type: "openai_api_key", source: "legacy", default_for: [] },
+          { id: "openai_api_key", kind: "openai_api_key", source: "legacy", default_for: [] },
         ],
       }),
     );
@@ -305,8 +305,7 @@ describe("ConnectReviewPanel — Add integration persists the DefaultFor checkbo
         integrations: [
           {
             id: "openai_api_key",
-            category: "ai_provider",
-            type: "openai_api_key",
+            kind: "openai_api_key",
             source: "stored",
             default_for: ["agent_runs", "wardyn_features"],
           },

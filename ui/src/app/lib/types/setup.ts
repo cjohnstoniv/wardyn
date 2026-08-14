@@ -175,23 +175,56 @@ export interface WireCapability {
 // credential reaches the request, and what it powers. `source` discriminates a
 // row an operator WROTE from one derived read-only from pre-existing config — a
 // derived row keeps working untouched and becomes editable only once adopted.
+/** How ONE secret reaches the run (types.IntegrationDelivery). */
+export interface WireIntegrationDelivery {
+  mode: "proxy_header" | "resident_file" | "resident_env" | (string & {});
+  header?: string;
+  format?: string;
+  path?: string;
+  var?: string;
+}
+
+/** One required secret: role + store ref + delivery (types.IntegrationSecret).
+ *  delivery is absent on a closed kind's bespoke brokered lanes. */
+export interface WireIntegrationSecret {
+  role: string;
+  secret_name: string;
+  delivery?: WireIntegrationDelivery;
+}
+
+/** The optional verification request behind "Test" (types.IntegrationProbe). */
+export interface WireIntegrationProbe {
+  method: string;
+  url: string;
+}
+
+/** Server-cached, read-only last probe result (types.IntegrationProbeStatus). */
+export interface WireIntegrationProbeStatus {
+  state: "passed" | "failed" | "not_tested" | (string & {});
+  checked_at?: string;
+  detail?: string;
+}
+
+// The base-component shape (types.Integration): one `kind` replacing the old
+// Category+Type split, secrets[] with per-row delivery, egress[], kind-
+// validated config. The server folds pre-base-component stored rows forward
+// at read, so this is the ONLY wire shape a client ever sees.
 export interface WireIntegration {
   id: string;
   name?: string;
-  category: string;
-  type: string;
+  kind: string;
   disabled?: boolean;
-  hosts?: string[];
-  header?: string;
-  format?: string;
-  docs?: string;
-  credentials?: Record<string, string>;
-  // Type-specific knobs (e.g. "lane", "ecosystems") — arbitrary JSON, mirrors
-  // the server's json.RawMessage (types.Integration.Config). UI-LIB-5: PUT
-  // /integrations/{id} is a full replacement (IntegrationWrite, api/
-  // integrations.ts), so a round-tripping caller needs this field on the GET
-  // shape too, or it silently writes the zero value back.
+  secrets?: WireIntegrationSecret[];
+  egress?: string[];
+  // Kind-validated non-secret config (e.g. "lane", "region", "ecosystems").
+  // UI-LIB-5: PUT /integrations/{id} is a full replacement (IntegrationWrite,
+  // api/integrations.ts), so a round-tripping caller needs this field on the
+  // GET shape too, or it silently writes the zero value back.
   config?: Record<string, unknown>;
+  probe?: WireIntegrationProbe;
+  // Read-only; never sent back on a write.
+  probe_status?: WireIntegrationProbeStatus;
+  docs?: string;
   // Capability ids the operator turned off individually. Same round-trip
   // reason as `config` above (UI-LIB-5).
   disabled_capabilities?: string[];

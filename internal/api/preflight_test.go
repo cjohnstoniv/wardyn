@@ -208,8 +208,9 @@ func (preflightIntegrationStore) ListWorkspaces(context.Context) ([]types.Worksp
 func TestPreflight_ModelAccessFromExplicitIntegrationID(t *testing.T) {
 	h := newHarness(t)
 	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-			Credentials: map[string]string{"api_key": "acme-anthropic-key"}},
+		{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key",
+				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}}},
 	}}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
@@ -238,7 +239,7 @@ func TestPreflight_ModelAccessFromExplicitIntegrationID(t *testing.T) {
 func TestPreflight_IntegrationID_NonAIProviderIs400(t *testing.T) {
 	h := newHarness(t)
 	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-scm", Category: types.IntegrationSCMHost, Type: "git_host"},
+		{ID: "acme-scm", Kind: types.IntegrationKindGitHost},
 	}}}
 	srv := New(baseTestConfig(h, st))
 

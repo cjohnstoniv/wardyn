@@ -92,7 +92,7 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
         // Genuinely marked the default — the blast radius's "first model call
         // fails" line is real state now (default_for), not a per-type guess.
         integrations: [
-          { id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", source: "legacy", default_for: ["agent_runs"] },
+          { id: "anthropic_api_key", kind: "anthropic_api_key", source: "legacy", default_for: ["agent_runs"] },
         ],
       }),
     );
@@ -224,10 +224,9 @@ describe("IntegrationDetailScreen — Make default is wired", () => {
     const row = {
       id: "anthropic_api_key",
       name: "Anthropic API key",
-      category: "ai_provider",
-      type: "anthropic_api_key",
+      kind: "anthropic_api_key",
       source: "legacy" as const,
-      credentials: { api_key: "anthropic-api-key" },
+      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
     };
     getSetupStatusMock.mockReset();
     getSetupStatusMock.mockResolvedValueOnce(
@@ -270,10 +269,9 @@ describe("IntegrationDetailScreen — Make default is wired", () => {
     const row = {
       id: "anthropic_api_key",
       name: "Anthropic API key",
-      category: "ai_provider",
-      type: "anthropic_api_key",
+      kind: "anthropic_api_key",
       source: "legacy" as const,
-      credentials: { api_key: "anthropic-api-key" },
+      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
     };
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [row] }),

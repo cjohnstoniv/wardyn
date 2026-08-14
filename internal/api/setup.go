@@ -95,7 +95,7 @@ type SetupStatus struct {
 	// exist" verdict (HIGH-4 review fix) — the same winning-signal logic that
 	// already decides llmProvenance's detail (resident CLI login, a real
 	// composer backend, a secret-name heuristic, Bedrock, a managed harness
-	// token) OR'd with an ai_provider Integration being configured. It exists
+	// token) OR'd with an AI-provider Integration being configured. It exists
 	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
 	// the checks/providers/secret-name detail that would otherwise let the
 	// console derive this itself — LLMReady is computed BEFORE redaction and
@@ -340,13 +340,13 @@ func llmProvenance(providers []SetupProvider, backends []ComposerBackendReadines
 // that handler's branching under the gocyclo gate — llmDetail already IS
 // llmProvenance's own winning signal (plus Bedrock/managed-harness, folded in
 // by the caller before this runs), so the only new branching here is the
-// ai_provider Integration fallback for when llmDetail came up empty.
+// AI-provider Integration fallback for when llmDetail came up empty.
 func computeLLMReady(llmDetail string, integrations []SetupIntegration) bool {
 	if llmDetail != "" {
 		return true
 	}
 	for _, in := range integrations {
-		if in.Category == types.IntegrationAIProvider {
+		if types.AIProviderKind(in.Kind) {
 			return true
 		}
 	}
@@ -637,7 +637,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// llm_ready (HIGH-4 review fix): llmDetail's own winning signal (resident
 	// CLI login, a real composer backend, a secret-name heuristic, Bedrock, or
 	// a managed harness token — everything folded in above) OR'd with an
-	// ai_provider Integration being configured, computed ONCE here and reused
+	// AI-provider Integration being configured, computed ONCE here and reused
 	// below for resp.Integrations so effectiveIntegrations() is not walked
 	// twice. Computed BEFORE redaction and left untouched by it (see
 	// redactSetupStatusForMember) — a member's console needs the ANSWER even

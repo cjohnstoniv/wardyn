@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -201,7 +200,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- bedrock ----------------
 		{
 			name: "bedrock: bearer lane, region+model set",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "bearer"}},
+			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "bearer"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
@@ -212,7 +211,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "bedrock: auto lane (resident, not bearer), region+model set",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "auto"}},
+			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "auto"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
@@ -223,7 +222,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "bedrock: region unset — every cell needs setup (resolveBedrockAuth is unready)",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "sso"}},
+			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "sso"}},
 			env:  capEnv{BedrockRegionSet: false, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
@@ -234,7 +233,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "bedrock: model unset — same, either unset takes the whole integration out",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "static"}},
+			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "static"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: false},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
@@ -393,10 +392,10 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 
-		// ---------------- generic categories ----------------
+		// ---------------- generic kinds ----------------
 		{
-			name: "generic category: header + stored secret but NO hosts — credential still needs_setup",
-			v: integrationView{Type: "acme_feed", Category: string(types.IntegrationPackageFeed),
+			name: "generic kind: header + stored secret but NO hosts — credential still needs_setup",
+			v: integrationView{Type: "acme_feed",
 				Header:      "x-api-key",
 				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
 			},
@@ -407,8 +406,8 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			name: "generic category: hosts present — credential gates on the stored secret as before",
-			v: integrationView{Type: "acme_feed", Category: string(types.IntegrationPackageFeed),
+			name: "generic kind: hosts present — credential gates on the stored secret as before",
+			v: integrationView{Type: "acme_feed",
 				Header: "x-api-key", Hosts: []string{"feed.corp.example"},
 				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
 			},
@@ -419,8 +418,13 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			name: "generic category routes to genericCaps even when Type collides with a typed name",
-			v: integrationView{Type: "host_proxy", Category: string(types.IntegrationOtherService),
+			// The pre-fold shape could carry a generic-category row whose open
+			// Type collided with a typed name ("host_proxy"); with the category
+			// gone, kind alone routes — a generic slug is anything outside the
+			// closed set and the two legacy topology slugs. This pins the
+			// generic route for an ordinary open slug with no credential lane.
+			name: "generic kind with no header: egress-only, credential honestly impossible",
+			v: integrationView{Type: "corp_tool",
 				Hosts: []string{"tool.internal"},
 			},
 			env: capEnv{},
@@ -460,12 +464,19 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 
-		// ---------------- unknown type ----------------
+		// ---------------- unknown kind ----------------
 		{
-			name: "unrecognized type produces no capabilities",
+			// Pre-fold, an unrecognized type in a TYPED category read as "no
+			// capabilities". With the category gone there is no such state: any
+			// slug outside the closed set IS a generic connection, and gets the
+			// generic row's two honest cells.
+			name: "unrecognized kind is a generic connection",
 			v:    integrationView{Type: "something-a-future-wave-invented"},
 			env:  capEnv{},
-			want: nil,
+			want: []Capability{
+				{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."},
+				{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane},
+			},
 		},
 	}
 
@@ -513,29 +524,20 @@ func findRow(rows []integrationRow, id string) (integrationRow, bool) {
 	return integrationRow{}, false
 }
 
-func decodeRowConfig(t *testing.T, raw json.RawMessage) map[string]any {
-	t.Helper()
-	if len(raw) == 0 {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("decode row config: %v", err)
-	}
-	return m
-}
-
 func TestEffectiveIntegrations_AnthropicAPIKey(t *testing.T) {
 	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
 	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "anthropic_api_key")
 	if !ok {
 		t.Fatal("expected an anthropic_api_key row")
 	}
-	if row.Source != "legacy" || row.Category != types.IntegrationAIProvider || row.Type != "anthropic_api_key" {
+	if row.Source != "legacy" || row.Kind != types.IntegrationKindAnthropicAPIKey {
 		t.Errorf("row = %+v", row)
 	}
-	if row.Credentials["api_key"] != "anthropic-api-key" {
-		t.Errorf("credentials = %+v, want api_key=anthropic-api-key", row.Credentials)
+	if row.RoleSecret("api_key") != "anthropic-api-key" {
+		t.Errorf("secrets = %+v, want api_key=anthropic-api-key", row.Secrets)
+	}
+	if d := row.Secrets[0].Delivery; d == nil || d.Mode != types.DeliveryProxyHeader || d.Header != "x-api-key" {
+		t.Errorf("delivery = %+v, want the anthropic proxy-header convention", row.Secrets[0].Delivery)
 	}
 }
 
@@ -545,11 +547,11 @@ func TestEffectiveIntegrations_OpenAIAPIKey(t *testing.T) {
 	if !ok {
 		t.Fatal("expected an openai_api_key row")
 	}
-	if row.Source != "legacy" || row.Category != types.IntegrationAIProvider || row.Type != "openai_api_key" {
+	if row.Source != "legacy" || row.Kind != types.IntegrationKindOpenAIAPIKey {
 		t.Errorf("row = %+v", row)
 	}
-	if row.Credentials["api_key"] != "openai-api-key" {
-		t.Errorf("credentials = %+v, want api_key=openai-api-key", row.Credentials)
+	if row.RoleSecret("api_key") != "openai-api-key" {
+		t.Errorf("secrets = %+v, want api_key=openai-api-key", row.Secrets)
 	}
 }
 
@@ -561,10 +563,10 @@ func TestEffectiveIntegrations_ResidentSubscriptionLive(t *testing.T) {
 	if !ok {
 		t.Fatal("expected an anthropic_subscription:resident_host row")
 	}
-	if row.Category != types.IntegrationAIProvider || row.Type != "anthropic_subscription" {
+	if row.Kind != types.IntegrationKindAnthropicSubscription {
 		t.Errorf("row = %+v", row)
 	}
-	if got := decodeRowConfig(t, row.Config); got["lane"] != "resident_host" {
+	if got := row.Config; got["lane"] != "resident_host" {
 		t.Errorf("config = %+v, want lane=resident_host", got)
 	}
 }
@@ -588,10 +590,10 @@ func TestEffectiveIntegrations_ManagedSubscription(t *testing.T) {
 	if !ok {
 		t.Fatal("expected an anthropic_subscription:managed row")
 	}
-	if row.Category != types.IntegrationAIProvider || row.Type != "anthropic_subscription" {
+	if row.Kind != types.IntegrationKindAnthropicSubscription {
 		t.Errorf("row = %+v", row)
 	}
-	if got := decodeRowConfig(t, row.Config); got["lane"] != "managed" {
+	if got := row.Config; got["lane"] != "managed" {
 		t.Errorf("config = %+v, want lane=managed", got)
 	}
 }
@@ -605,11 +607,11 @@ func TestEffectiveIntegrations_Bedrock(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a bedrock row")
 	}
-	if row.Category != types.IntegrationAIProvider || row.Type != "bedrock" {
+	if row.Kind != types.IntegrationKindBedrock {
 		t.Errorf("row = %+v", row)
 	}
-	got := decodeRowConfig(t, row.Config)
-	if got["lane"] != "auto" || got["region"] != "us-east-1" || got["model"] != "us.anthropic.claude-x" {
+	got := row.Config
+	if got["auth_lane"] != "auto" || got["region"] != "us-east-1" || got["model"] != "us.anthropic.claude-x" {
 		t.Errorf("config = %+v", got)
 	}
 }
@@ -629,13 +631,13 @@ func TestEffectiveIntegrations_GitHubApp(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a github_app row")
 	}
-	if row.Category != types.IntegrationSCMHost || row.Type != "github_app" {
+	if row.Kind != types.IntegrationKindGitHubApp {
 		t.Errorf("row = %+v", row)
 	}
-	if row.Credentials["app_id"] != secretGitHubAppID || row.Credentials["app_key"] != secretGitHubAppKey {
-		t.Errorf("credentials = %+v", row.Credentials)
+	if row.RoleSecret("app_id") != secretGitHubAppID || row.RoleSecret("app_key") != secretGitHubAppKey {
+		t.Errorf("secrets = %+v", row.Secrets)
 	}
-	if got := decodeRowConfig(t, row.Config); got["host"] != "github.com" {
+	if got := row.Config; got["host"] != "github.com" {
 		t.Errorf("config = %+v", got)
 	}
 }
@@ -659,19 +661,19 @@ func TestEffectiveIntegrations_GitPatAndSSHKeySecrets(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a git_host:github.com row")
 	}
-	if gh.Category != types.IntegrationSCMHost || gh.Type != "git_host" || gh.Name != "github.com" {
+	if gh.Kind != types.IntegrationKindGitHost || gh.Name != "github.com" {
 		t.Errorf("row = %+v", gh)
 	}
-	if gh.Credentials["pat"] != "git-pat-github-com" || gh.Credentials["ssh_key"] != "ssh-key-github-com" {
-		t.Errorf("credentials = %+v, want both lanes merged onto one row", gh.Credentials)
+	if gh.RoleSecret("pat") != "git-pat-github-com" || gh.RoleSecret("ssh_key") != "ssh-key-github-com" {
+		t.Errorf("secrets = %+v, want both lanes merged onto one row", gh.Secrets)
 	}
 
 	ado, ok := findRow(rows, "git_host:dev.azure.com")
 	if !ok {
 		t.Fatal("expected a git_host:dev.azure.com row")
 	}
-	if ado.Credentials["pat"] != "git-pat-dev-azure-com" || ado.Credentials["ssh_key"] != "" {
-		t.Errorf("credentials = %+v", ado.Credentials)
+	if ado.RoleSecret("pat") != "git-pat-dev-azure-com" || ado.RoleSecret("ssh_key") != "" {
+		t.Errorf("secrets = %+v", ado.Secrets)
 	}
 }
 
@@ -681,8 +683,8 @@ func TestEffectiveIntegrations_ScmHostsWithNoCredential(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a git_host row for a declared ScmHosts entry with no credential (egress_host only)")
 	}
-	if row.Credentials != nil {
-		t.Errorf("credentials = %+v, want nil", row.Credentials)
+	if row.Secrets != nil {
+		t.Errorf("secrets = %+v, want nil", row.Secrets)
 	}
 }
 
@@ -702,7 +704,7 @@ func TestEffectiveIntegrations_ScmHostsMergesWithCredential(t *testing.T) {
 	if len(matches) != 1 {
 		t.Fatalf("expected exactly ONE git_host:github.com row (merged), got %d: %+v", len(matches), matches)
 	}
-	if matches[0].Credentials["pat"] != "git-pat-github-com" {
+	if matches[0].RoleSecret("pat") != "git-pat-github-com" {
 		t.Errorf("merged row lost its credential: %+v", matches[0])
 	}
 }
@@ -725,7 +727,7 @@ func TestEffectiveIntegrations_ScmHostsHyphenatedHostMergesForward(t *testing.T)
 	if len(matches) != 1 || matches[0].ID != "git_host:ghe-prod.corp.com" {
 		t.Fatalf("expected exactly ONE git_host row named git_host:ghe-prod.corp.com, got %+v", matches)
 	}
-	if matches[0].Credentials["pat"] != "git-pat-ghe-prod-corp-com" {
+	if matches[0].RoleSecret("pat") != "git-pat-ghe-prod-corp-com" {
 		t.Errorf("merged row lost its credential: %+v", matches[0])
 	}
 }
@@ -740,15 +742,13 @@ func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
 	if !ok {
 		t.Fatal("expected one artifact_mirror row for the shared host")
 	}
-	if row.Category != types.IntegrationArtifactMirror || row.Type != "artifact_mirror" {
+	if row.Kind != "artifact_mirror" {
 		t.Errorf("row = %+v", row)
 	}
-	if row.Credentials["token"] != "npm-token" {
-		t.Errorf("credentials = %+v, want the npm token (first ecosystem alphabetically)", row.Credentials)
+	if row.RoleSecret("token") != "npm-token" {
+		t.Errorf("secrets = %+v, want the npm token (first ecosystem alphabetically)", row.Secrets)
 	}
-	cfg := decodeRowConfig(t, row.Config)
-	ecos, _ := cfg["ecosystems"].([]any)
-	if len(ecos) != 2 {
+	if ecos := stringSlice(row.Config["ecosystems"]); len(ecos) != 2 {
 		t.Errorf("ecosystems = %+v, want both npm and pip on the one shared-host row", ecos)
 	}
 }
@@ -766,8 +766,8 @@ func TestEffectiveIntegrations_ArtifactMirrorTokenFromLaterRedirect(t *testing.T
 	if !ok {
 		t.Fatal("expected one artifact_mirror row for the shared host")
 	}
-	if row.Credentials["token"] != "npm-token" {
-		t.Errorf("credentials = %+v, want the npm token even though the FIRST-stored redirect for this host carried none", row.Credentials)
+	if row.RoleSecret("token") != "npm-token" {
+		t.Errorf("secrets = %+v, want the npm token even though the FIRST-stored redirect for this host carried none", row.Secrets)
 	}
 }
 
@@ -777,11 +777,11 @@ func TestEffectiveIntegrations_HostProxy(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a host_proxy row")
 	}
-	if row.Category != types.IntegrationHostProxy || row.Type != "host_proxy" {
+	if row.Kind != "host_proxy" {
 		t.Errorf("row = %+v", row)
 	}
-	if row.Credentials["secret"] != "corp-proxy-url" {
-		t.Errorf("credentials = %+v", row.Credentials)
+	if row.RoleSecret("secret") != "corp-proxy-url" {
+		t.Errorf("secrets = %+v", row.Secrets)
 	}
 }
 
@@ -791,8 +791,9 @@ func TestEffectiveIntegrations_HostProxy(t *testing.T) {
 func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
 	stored := types.Integration{
 		ID: "anthropic_api_key", Name: "Prod Anthropic key",
-		Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-		Credentials: map[string]string{"api_key": "anthropic-api-key"},
+		Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
+			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
 	}
 	sc := types.SiteConfig{Integrations: []types.Integration{stored}, UpstreamProxySecretRef: "corp-proxy-url"}
 	srv := New(integrationsTestConfig(t, sc, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
@@ -816,8 +817,9 @@ func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
 	}
 }
 
-// The response must be deterministically ordered (category, then id) across
-// repeated calls, regardless of map iteration order upstream.
+// The response must be deterministically ordered (legacy sort-category from
+// kind, then id) across repeated calls, regardless of map iteration order
+// upstream.
 func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 	sc := types.SiteConfig{
 		UpstreamProxySecretRef: "corp-proxy-url",
@@ -844,8 +846,8 @@ func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 		}
 	}
 	for i := 1; i < len(first); i++ {
-		if first[i-1].Category > first[i].Category {
-			t.Errorf("not sorted by category: %q before %q", first[i-1].Category, first[i].Category)
+		if legacySortCategory(first[i-1].Kind) > legacySortCategory(first[i].Kind) {
+			t.Errorf("not sorted by category group: %q before %q", first[i-1].Kind, first[i].Kind)
 		}
 	}
 }

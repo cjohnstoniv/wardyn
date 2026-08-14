@@ -46,7 +46,7 @@ func apiKeyGrantScopeHost(scope json.RawMessage) string {
 
 // apiKeyGrantScopeSecret returns the secret_name an api_key grant's scope
 // carries. A grant may name a NON-convention secret (a workspace's resolved
-// ai_provider Integration does — applyIntegrationCreds grants the
+// AI-provider Integration does — applyIntegrationCreds grants the
 // INTEGRATION's own secret, not necessarily the provider convention name), so
 // verdict code must key on the grant's secret, not the provider default.
 func apiKeyGrantScopeSecret(scope json.RawMessage) string {
@@ -207,14 +207,11 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 // capabilitiesFor's subscriptionCaps documents for an unset/unrecognized
 // value, integrations.go).
 func subscriptionLane(integ types.Integration) string {
-	var cfg struct {
-		Lane string `json:"lane"`
-	}
-	_ = json.Unmarshal(integ.Config, &cfg)
-	return cfg.Lane
+	lane, _ := integ.Config["lane"].(string)
+	return lane
 }
 
-// applyIntegrationCreds folds a resolved ai_provider Integration into the
+// applyIntegrationCreds folds a resolved AI-provider Integration into the
 // run's policy — the Integration-based successor to the pre-Integration
 // Mode-switch (git history: `git show ecc1903~1:internal/api/llmcred.go`,
 // applyWorkspaceCreds's api_key/managed/bedrock cases). Returns the
@@ -230,15 +227,15 @@ func subscriptionLane(integ types.Integration) string {
 // secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
 // explicit run grant, never from an integration binding.
 func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
-	if integ.Category != types.IntegrationAIProvider {
-		return "", nil // defense-in-depth; every caller already filters to ai_provider
+	if !types.AIProviderKind(integ.Kind) {
+		return "", nil // defense-in-depth; every caller already filters to the AI kinds
 	}
 	p, ok := agentLLMProvider(agent)
 	if !ok {
 		return "", nil // non-LLM agent — nothing to bind
 	}
 	// AGENT×PROVIDER COMPATIBILITY (SPINE-1, security): the harness catalog
-	// (harness.go) is the single source of truth for which ai_provider TYPE can
+	// (harness.go) is the single source of truth for which AI provider KIND can
 	// drive which agent, and it is consulted here so a run can never fold an
 	// incompatible integration onto the agent's OWN provider host. Without this an
 	// openai_api_key integration on a claude-code run injected the operator's
@@ -247,17 +244,17 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 	// removeAPIKeyGrantForHost'd its working OpenAI grant. Bail with no grant and
 	// no removal; the reason is surfaced to the operator via capabilitiesFor and
 	// (for a composed/preflight run) the honest "no model access" verdict.
-	if harnessProviderReason(agent, integ.Type) != "" {
+	if harnessProviderReason(agent, integ.Kind) != "" {
 		return "", nil
 	}
-	switch integ.Type {
-	case "anthropic_api_key", "openai_api_key":
-		secret := integ.Credentials["api_key"]
+	switch integ.Kind {
+	case types.IntegrationKindAnthropicAPIKey, types.IntegrationKindOpenAIAPIKey:
+		secret := integ.RoleSecret("api_key")
 		if secret == "" || !s.secretPresent(ctx, secret) {
 			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
 		}
 		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-			return integ.Type, nil // an api_key grant for this host was already proposed; respect it
+			return integ.Kind, nil // an api_key grant for this host was already proposed; respect it
 		}
 		scope, _ := json.Marshal(map[string]string{
 			"host": p.host, "header": p.header, "format": p.format, "secret_name": secret,
@@ -274,8 +271,8 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		if !domainAllowedExact(spec.AllowedDomains, p.host) {
 			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
 		}
-		return integ.Type, nil
-	case "anthropic_subscription":
+		return integ.Kind, nil
+	case types.IntegrationKindAnthropicSubscription:
 		// Both lanes (managed / resident_host) displace a competing api-key
 		// grant and ensure Anthropic egress — the part common to the old
 		// pre-Integration managed-mode case. The resident_host lane ADDITIONALLY
@@ -288,24 +285,21 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 				spec.AllowedDomains = append(spec.AllowedDomains, d)
 			}
 		}
-		return integ.Type, nil
-	case "bedrock":
+		return integ.Kind, nil
+	case types.IntegrationKindBedrock:
 		removeAPIKeyGrantForHost(spec, p.host)
-		var cfg struct {
-			Region string `json:"region"`
-			Model  string `json:"model"`
-		}
-		_ = json.Unmarshal(integ.Config, &cfg)
-		if cfg.Region == "" && cfg.Model == "" {
-			return integ.Type, nil // inherit the global Bedrock config
+		region, _ := integ.Config["region"].(string)
+		model, _ := integ.Config["model"].(string)
+		if region == "" && model == "" {
+			return integ.Kind, nil // inherit the global Bedrock config
 		}
 		if !spec.AllowAllEgress {
-			unionAllowedDomains(spec, []string{bedrockRuntimeHost(cfg.Region), bedrockControlHost(cfg.Region)})
+			unionAllowedDomains(spec, []string{bedrockRuntimeHost(region), bedrockControlHost(region)})
 		}
-		return integ.Type, &types.WorkspaceBedrockRef{Region: cfg.Region, Model: cfg.Model}
+		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
 	default:
 		// azure_openai (no sandbox lane at all — model_api is a protocol-fact
-		// impossibility) and any unrecognized type: no fold.
+		// impossibility) and any unrecognized kind: no fold.
 		return "", nil
 	}
 }
@@ -314,25 +308,25 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 //
 //  1. integrationID (run-explicit: createRunRequest.IntegrationID /
 //     composeRequest.IntegrationID) when set — must already be known to name
-//     an ai_provider integration (validated at request time with a 400; see
+//     an AI-provider integration (validated at request time with a 400; see
 //     decodeAndValidateCreateRun / handleComposeRun) or this tier yields
 //     nothing rather than guessing.
 //  2. workspaceRef — the primary workspace's LLMCred.IntegrationRef, when it
-//     names an ai_provider integration. ok=false — today's honest "no
+//     names an AI-provider integration. ok=false — today's honest "no
 //     binding" outcome — for an empty ref, a ref naming nothing at all, or a
-//     ref naming something non-ai_provider: a dangling/miscategorized ref
+//     ref naming something non-AI-provider: a dangling/miscategorized ref
 //     falls back silently rather than cascading to tier 3 or erroring, since
 //     the operator who bound THIS workspace explicitly chose a SPECIFIC
 //     integration, and a stale binding silently promoting to a different one
 //     is a credential surprise, not a convenience.
-//  3. the operator's DefaultFor:agent_runs default (any ai_provider type).
+//  3. the operator's DefaultFor:agent_runs default (any AI-provider type).
 //
 // ok=false is today's honest no-model-access / global-provider-config
 // fallback, carried through every tier unchanged.
 func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, workspaceRef string) (types.Integration, bool) {
 	if integrationID != "" {
 		in, ok := s.resolveIntegrationRef(ctx, integrationID)
-		if !ok || in.Category != types.IntegrationAIProvider {
+		if !ok || !types.AIProviderKind(in.Kind) {
 			return types.Integration{}, false
 		}
 		// SECMODEL-3: a resident_host subscription mounts the OPERATOR'S OWN
@@ -346,13 +340,13 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		// than handing a run whose task an attacker authored a live,
 		// refreshable copy of the operator's OAuth credentials because it
 		// named a workspace the operator never pinned.
-		if in.Type == "anthropic_subscription" && subscriptionLane(in) == "resident_host" && workspaceRef != integrationID {
+		if in.Kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(in) == "resident_host" && workspaceRef != integrationID {
 			return types.Integration{}, false
 		}
 		return in, true
 	}
 	if workspaceRef != "" {
-		// A SET workspace ref that fails to resolve to an ai_provider row
+		// A SET workspace ref that fails to resolve to an AI-provider row
 		// (dangling, or naming something else entirely) is the honest "no
 		// binding" outcome — return here rather than falling through to tier
 		// 3: the operator who bound THIS workspace chose a SPECIFIC
@@ -360,7 +354,7 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		// site-wide default would be the exact credential surprise this
 		// tier's doc above says it refuses.
 		in, ok := s.resolveIntegrationRef(ctx, workspaceRef)
-		if !ok || in.Category != types.IntegrationAIProvider {
+		if !ok || !types.AIProviderKind(in.Kind) {
 			return types.Integration{}, false
 		}
 		return in, true
@@ -392,7 +386,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	// An exec run (task-mode=exec — a plain governed shell command, "no agent, no
 	// LLM credentials" per its `wardyn run --task-mode exec` contract) makes no
 	// model call, so it binds NO model integration. Without this, an operator's
-	// site-wide default (or a workspace-bound) ai_provider integration would fold
+	// site-wide default (or a workspace-bound) AI-provider integration would fold
 	// an api-key grant AND append the provider host to egress, and persistRunGrants
 	// would inject the operator's key proxy-side — the same implicit credential the
 	// exec contract forbids, on the api-key transport. resolveLLMTransport already
@@ -414,7 +408,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 		return types.Integration{}, "", nil
 	}
 	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, req.Agent)
-	if kind == "anthropic_subscription" && subscriptionLane(integ) == "resident_host" {
+	if kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host" {
 		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true)
 	}
 	return integ, kind, bedrockRef

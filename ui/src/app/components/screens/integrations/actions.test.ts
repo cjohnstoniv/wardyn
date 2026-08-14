@@ -205,7 +205,7 @@ describe("canRotateInline / primarySecretName", () => {
 // row permanently stored even though the operator's action never succeeded.
 describe("setDefaultFor", () => {
   function legacyWire(overrides: Partial<WireIntegration> = {}): WireIntegration {
-    return { id: "bedrock", category: "ai_provider", type: "bedrock", source: "legacy", default_for: [], ...overrides };
+    return { id: "bedrock", kind: "bedrock", source: "legacy", default_for: [], ...overrides };
   }
 
   beforeEach(() => {

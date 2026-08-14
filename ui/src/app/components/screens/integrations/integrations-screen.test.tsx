@@ -350,10 +350,9 @@ describe("IntegrationsScreen — default-for controls issue the write and render
     const legacyRow = {
       id: "anthropic_api_key",
       name: "Anthropic API key",
-      category: "ai_provider",
-      type: "anthropic_api_key",
+      kind: "anthropic_api_key",
       source: "legacy" as const,
-      credentials: { api_key: "anthropic-api-key" },
+      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
     };
     getSetupStatusMock.mockReset();
     getSetupStatusMock.mockResolvedValueOnce(
@@ -384,9 +383,8 @@ describe("IntegrationsScreen — default-for controls issue the write and render
         "anthropic_api_key",
         expect.objectContaining({
           name: "Anthropic API key",
-          category: "ai_provider",
-          type: "anthropic_api_key",
-          credentials: { api_key: "anthropic-api-key" },
+          kind: "anthropic_api_key",
+          secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
           default_for: ["agent_runs"],
         }),
       ),
@@ -404,10 +402,9 @@ describe("IntegrationsScreen — default-for controls issue the write and render
     const storedRow = {
       id: "anthropic_api_key",
       name: "Anthropic API key",
-      category: "ai_provider",
-      type: "anthropic_api_key",
+      kind: "anthropic_api_key",
       source: "stored" as const,
-      credentials: { api_key: "anthropic-api-key" },
+      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
       default_for: ["agent_runs"],
     };
     getSetupStatusMock.mockReset();
@@ -452,8 +449,7 @@ describe("IntegrationsScreen — the list delete confirm matches the detail page
         integrations: [
           {
             id: "anthropic_api_key",
-            category: "ai_provider",
-            type: "anthropic_api_key",
+            kind: "anthropic_api_key",
             source: "stored",
             default_for: ["agent_runs", "wardyn_features"],
           },
@@ -488,10 +484,9 @@ describe("IntegrationsScreen — embedded mode always has an Add affordance (UX-
           {
             id: "artifactory",
             name: "Artifactory",
-            category: "package_feed",
-            type: "artifactory",
+            kind: "artifactory",
             source: "stored",
-            hosts: ["artifactory.corp.internal"],
+            egress: ["artifactory.corp.internal"],
           },
         ],
       }),

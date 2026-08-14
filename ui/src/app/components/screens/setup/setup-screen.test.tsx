@@ -450,7 +450,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // "Skipped" on an operator who had just connected one.
   it("the Integrations badge counts a generic-category connection too, not just AI/SCM", async () => {
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "jira-1", category: "work_tracking", type: "jira", name: "Jira" }] }),
+      baseStatus({ integrations: [{ id: "jira-1", kind: "jira", name: "Jira" }] }),
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");

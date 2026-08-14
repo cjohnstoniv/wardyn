@@ -274,20 +274,18 @@ func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirec
 			// keeps injecting on every matching run.
 			return redirectToken{}, "the integration named by token_integration_ref has its credential capability disabled"
 		}
-		secretName := integ.Credentials[types.IntegrationCredentialToken]
-		if integ.Header == "" || secretName == "" {
+		// HeaderSecret is the integration's proxy_header-delivered secret, its
+		// empty stored format already materialized as "%s" (the raw secret IS
+		// the header value; injectionRuleFromScope reads "" as "Bearer %s",
+		// which would be wrong here).
+		secretName, header, format, ok := integ.HeaderSecret()
+		if !ok {
 			return redirectToken{}, "the integration named by token_integration_ref delivers no header credential"
 		}
 		if !present[secretName] {
 			return redirectToken{}, "the integration's secret is not in the store"
 		}
-		// An empty Format means the raw secret IS the header value; it must be
-		// explicit, since injectionRuleFromScope reads "" as "Bearer %s".
-		format := integ.Format
-		if format == "" {
-			format = "%s"
-		}
-		return redirectToken{secretName: secretName, header: integ.Header, format: format}, ""
+		return redirectToken{secretName: secretName, header: header, format: format}, ""
 	}
 	if !present[r.TokenSecretRef] {
 		return redirectToken{}, "token_secret_ref not found"

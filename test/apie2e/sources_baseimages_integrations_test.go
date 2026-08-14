@@ -224,13 +224,26 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 // (api.SetupIntegration, which flattens types.Integration's fields plus
 // "source" and "capabilities") — only the fields this file's assertions need.
 type integrationDoc struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Category    string            `json:"category"`
-	Type        string            `json:"type"`
-	Credentials map[string]string `json:"credentials,omitempty"`
-	Docs        string            `json:"docs,omitempty"`
-	Source      string            `json:"source"` // "stored" | "legacy"
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Secrets is the base-component secret list (role + secret_name + delivery).
+	Secrets []struct {
+		Role       string `json:"role"`
+		SecretName string `json:"secret_name"`
+	} `json:"secrets,omitempty"`
+	Docs   string `json:"docs,omitempty"`
+	Source string `json:"source"` // "stored" | "legacy"
+}
+
+// roleSecret picks the secret name stored for role ("" when absent).
+func (d integrationDoc) roleSecret(role string) string {
+	for _, s := range d.Secrets {
+		if s.Role == role {
+			return s.SecretName
+		}
+	}
+	return ""
 }
 
 // TestIntegrations_ListAdoptAndPutBack drives the integrations surface over
@@ -270,7 +283,7 @@ func TestIntegrations_ListAdoptAndPutBack(t *testing.T) {
 	if legacy.Source != "legacy" {
 		t.Fatalf("anthropic_api_key source = %q, want legacy (not yet adopted)", legacy.Source)
 	}
-	if legacy.Category != "ai_provider" || legacy.Credentials["api_key"] != secretName {
+	if legacy.Kind != "anthropic_api_key" || legacy.roleSecret("api_key") != secretName {
 		t.Fatalf("anthropic_api_key legacy row = %+v", legacy)
 	}
 
@@ -300,8 +313,10 @@ func TestIntegrations_ListAdoptAndPutBack(t *testing.T) {
 	// either way — see the sibling review row on that).
 	const newDocs = "https://docs.anthropic.com/apie2e-test"
 	putBody, _ := json.Marshal(map[string]any{
-		"name": adopted.Name, "category": adopted.Category, "type": adopted.Type,
-		"credentials": adopted.Credentials, "docs": newDocs,
+		"name": adopted.Name, "kind": adopted.Kind,
+		"secrets": []map[string]any{{"role": "api_key", "secret_name": secretName,
+			"delivery": map[string]string{"mode": "proxy_header", "header": "x-api-key", "format": "%s"}}},
+		"docs": newDocs,
 	})
 	status, raw = doAdmin(t, http.MethodPut, base+"/"+legacy.ID, putBody)
 	if status != http.StatusOK {

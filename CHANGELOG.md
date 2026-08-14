@@ -10,6 +10,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Integrations are now base components: one `kind` field plus
+  `secrets[]`/`egress[]`/`config{}`/`probe`.** The stored Category/Type split
+  is gone — `kind` is either one of the closed set (`anthropic_api_key`,
+  `anthropic_subscription`, `bedrock`, `openai_api_key`, `azure_openai`,
+  `github_app`, `git_host`) or any other slug, which is a generic connection
+  whose row carries its whole contract: each secret names its store ref and
+  its **delivery** (`proxy_header` — never resident, the default — or the
+  disclosed `resident_file`/`resident_env` exceptions), `egress` is where the
+  system lives, and `config` keys are validated per closed kind (an unknown
+  key 400s by name; bedrock's lane key is now `auth_lane`). Stored
+  pre-base-component rows are **folded forward at read time** (one-way,
+  write-new — old documents stay readable; writes emit only the new shape),
+  and legacy `artifact_mirror`/`host_proxy` rows are dropped from this
+  surface by the fold — their configuration lives under Corporate network.
+  `GET /api/v1/integrations` and `PUT /api/v1/integrations/{id}` speak the
+  new shape only.
+
 - **Integrations no longer install tools; the tool side of the integration
   concept is removed.** An integration is a connection — secrets + egress —
   and never decides what is installed in an image. Concretely: naming an

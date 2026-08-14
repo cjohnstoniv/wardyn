@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -27,16 +28,18 @@ import (
 
 // integrationView is the read-only shape capabilitiesFor needs from a stored
 // integration. Credentials/Config use generic string keys (documented per
-// case in capabilitiesFor) rather than a typed field per credential, since the
-// real shape arrives with types.Integration.
+// case in capabilitiesFor) rather than a typed field per credential.
+// track-b: B1 shim shape — Type carries the row's Kind and Header/Credentials
+// flatten the Secrets rows (toIntegrationView); B2 re-keys capabilitiesFor on
+// the base-component shape directly.
 type integrationView struct {
-	ID, Category, Type string
-	Disabled           bool
-	Header             string            // HTTP field the proxy presents this integration's credential in ("" = no proxy-injected lane)
-	Hosts              []string          // where the system lives; empty means this row opens nothing
-	Credentials        map[string]string // credential-slot name -> stored secret ref (e.g. "api_key" -> "anthropic-api-key")
-	Config             map[string]any    // type-specific knobs (e.g. "lane", "ecosystems")
-	DisabledCaps       []string          // capability IDs the operator turned off individually
+	ID, Type     string
+	Disabled     bool
+	Header       string            // HTTP field the proxy presents this integration's credential in ("" = no proxy_header-delivered secret)
+	Hosts        []string          // where the system lives; empty means this row opens nothing
+	Credentials  map[string]string // credential-slot name -> stored secret ref (e.g. "api_key" -> "anthropic-api-key")
+	Config       map[string]any    // kind-specific knobs (e.g. "lane", "ecosystems")
+	DisabledCaps []string          // capability IDs the operator turned off individually
 }
 
 // capEnv carries the external readiness signals capabilitiesFor cannot derive
@@ -102,12 +105,11 @@ const (
 // needs. Unknown v.Type reads as "no capabilities" (nil), the same honest
 // default an unrecognized harness id gets in harness.go.
 func capabilitiesFor(v integrationView, env capEnv) []Capability {
-	// A GENERIC-category row's behavior is fully described by its own hosts/
-	// header (genericCaps), never by Type — checked FIRST so an open-slug
-	// Type that happens to collide with a typed name below (e.g. a
-	// container_registry row named "host_proxy") is never routed into the
-	// typed switch, which is reached only for a genuinely TYPED category.
-	if genericIntegrationCategories[types.IntegrationCategory(v.Category)] {
+	// A GENERIC-kind row's behavior is fully described by its own hosts/
+	// header (genericCaps), never by code — checked FIRST; the closed kinds
+	// (and the two legacy-derived topology slugs, until B2 deletes their
+	// derivation) fall through to the bespoke matrices below.
+	if genericIntegrationKind(v.Type) {
 		caps := genericCaps(v, env)
 		applyDisabled(caps, v)
 		return caps
@@ -271,7 +273,7 @@ func residentHostReason(env capEnv) string {
 // credential fallback. Residency follows the lane (bearer is injected on the
 // wire; every other lane puts AWS credentials inside the sandbox).
 func bedrockCaps(v integrationView, env capEnv) []Capability {
-	lane, _ := v.Config["lane"].(string)
+	lane, _ := v.Config["auth_lane"].(string)
 	residency := "resident_env"
 	if lane == "bearer" {
 		residency = "proxy_injected"
@@ -391,13 +393,14 @@ func gatedCap(id, ref string, env capEnv, residency string) Capability {
 	return Capability{ID: id, State: CapAvailable, Residency: residency}
 }
 
-// stringSlice reads a []string out of a Config value shaped like []any — the
-// shape map[string]any takes after a JSON round-trip, and how every
-// production/test Config is constructed. Any other shape (including a bare
-// []string, which this switch has no case for) reads as nil rather than
-// panicking.
+// stringSlice reads a []string out of a Config value shaped like []any (the
+// shape map[string]any takes after a JSON round-trip) or a bare []string (the
+// shape a directly-constructed Config carries, e.g. artifactMirrorRows'
+// derived ecosystems). Any other shape reads as nil rather than panicking.
 func stringSlice(v any) []string {
 	switch vv := v.(type) {
+	case []string:
+		return vv
 	case []any:
 		out := make([]string, 0, len(vv))
 		for _, e := range vv {
@@ -433,6 +436,23 @@ type integrationRow struct {
 	Source string `json:"source"` // "stored" | "legacy"
 }
 
+// UnmarshalJSON decodes the embedded Integration (whose own custom
+// UnmarshalJSON would otherwise be PROMOTED onto this wrapper and silently
+// swallow the wrapper's fields) and then the wrapper's source field.
+func (r *integrationRow) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, &r.Integration); err != nil {
+		return err
+	}
+	var src struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(b, &src); err != nil {
+		return err
+	}
+	r.Source = src.Source
+	return nil
+}
+
 // effectiveIntegrations returns the operator's stored integrations union rows
 // derived from state that already exists, deterministically ordered
 // (category, then id) so the API response and any test are stable regardless
@@ -461,7 +481,10 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 	}
 	rows = append(rows, s.legacyIntegrations(ctx, sc, stored, present, bedrock)...)
 	slices.SortFunc(rows, func(a, b integrationRow) int {
-		if c := cmp.Compare(a.Category, b.Category); c != 0 {
+		// track-b: B1 shim sort key — reproduces the pre-base-component
+		// category grouping (AI first, topology and SCM where they were) from
+		// kind alone; B2 re-derives the surface's own ordering.
+		if c := cmp.Compare(legacySortCategory(a.Kind), legacySortCategory(b.Kind)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.ID, b.ID)
@@ -490,58 +513,68 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 		rows = append(rows, integrationRow{Integration: in, Source: "legacy"})
 	}
 
-	// ai_provider: direct API keys.
+	// AI providers: direct API keys. The api_key secret rides the provider's
+	// proxy-header injection convention (types.AIKeyDelivery — the same facts
+	// the harness catalog's Gateway rows encode), stated on the row so the
+	// derived shape says what actually happens.
 	if present["anthropic-api-key"] {
 		add("anthropic_api_key", types.Integration{
-			Name: "Anthropic API key", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
-			Credentials: map[string]string{"api_key": "anthropic-api-key"},
+			Name: "Anthropic API key", Kind: types.IntegrationKindAnthropicAPIKey,
+			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
+				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
 		})
 	}
 	if present["openai-api-key"] {
 		add("openai_api_key", types.Integration{
-			Name: "OpenAI API key", Category: types.IntegrationAIProvider, Type: "openai_api_key",
-			Credentials: map[string]string{"api_key": "openai-api-key"},
+			Name: "OpenAI API key", Kind: types.IntegrationKindOpenAIAPIKey,
+			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "openai-api-key",
+				Delivery: types.AIKeyDelivery(types.IntegrationKindOpenAIAPIKey)}},
 		})
 	}
 
-	// ai_provider: the two Claude-subscription lanes. These can coexist (a
-	// host-mode wardynd may also have a managed blob captured), so they get
-	// distinct ids rather than sharing "anthropic_subscription".
+	// The two Claude-subscription lanes. These can coexist (a host-mode
+	// wardynd may also have a managed blob captured), so they get distinct ids
+	// rather than sharing "anthropic_subscription".
 	if s.cfg.SubscriptionToken != nil {
 		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
 			add("anthropic_subscription:resident_host", types.Integration{
-				Name: "Claude subscription (resident host)", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-				Config: mustJSON(map[string]any{"lane": "resident_host"}),
+				Name: "Claude subscription (resident host)", Kind: types.IntegrationKindAnthropicSubscription,
+				Config: map[string]any{"lane": "resident_host"},
 			})
 		}
 	}
 	if s.managedInjectReady("claude-code") {
 		add("anthropic_subscription:managed", types.Integration{
-			Name: "Claude subscription (managed)", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
-			Config: mustJSON(map[string]any{"lane": "managed"}),
+			Name: "Claude subscription (managed)", Kind: types.IntegrationKindAnthropicSubscription,
+			Config: map[string]any{"lane": "managed"},
 		})
 	}
 
-	// ai_provider: Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock
-	// touched at all" predicate (region/model/AWS profile/any bedrock secret)
-	// rather than re-deriving it a second way.
+	// Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock touched at all"
+	// predicate (region/model/AWS profile/any bedrock secret) rather than
+	// re-deriving it a second way.
 	if bedrock.configured() {
 		add("bedrock", types.Integration{
-			Name: "AWS Bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
-			Config: mustJSON(map[string]any{"lane": "auto", "region": bedrock.Region, "model": bedrock.Model}),
+			Name: "AWS Bedrock", Kind: types.IntegrationKindBedrock,
+			Config: map[string]any{"auth_lane": "auto", "region": bedrock.Region, "model": bedrock.Model},
 		})
 	}
 
-	// scm_host: the GitHub App.
+	// Source control: the GitHub App. Both halves ride the broker's own
+	// bespoke lane (installation tokens minted control-plane-side), so neither
+	// declares a delivery.
 	if present[secretGitHubAppID] && present[secretGitHubAppKey] {
 		add("github_app", types.Integration{
-			Name: "GitHub App", Category: types.IntegrationSCMHost, Type: "github_app",
-			Credentials: map[string]string{"app_id": secretGitHubAppID, "app_key": secretGitHubAppKey},
-			Config:      mustJSON(map[string]any{"host": "github.com"}),
+			Name: "GitHub App", Kind: types.IntegrationKindGitHubApp,
+			Secrets: []types.IntegrationSecret{
+				{Role: "app_id", SecretName: secretGitHubAppID},
+				{Role: "app_key", SecretName: secretGitHubAppKey},
+			},
+			Config: map[string]any{"host": "github.com"},
 		})
 	}
 
-	// scm_host: git-pat-<slug>/ssh-key-<slug> secrets, merged with
+	// Source control: git-pat-<slug>/ssh-key-<slug> secrets, merged with
 	// SiteConfig.ScmHosts by host. Built directly (not through add) because
 	// each row's id depends on the derived host; gitHostRows applies the same
 	// stored-wins gate per row.
@@ -550,11 +583,12 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 	// artifact_mirror: one row per corp mirror host.
 	rows = append(rows, artifactMirrorRows(sc, stored)...)
 
-	// host_proxy: the corporate upstream proxy.
+	// host_proxy: the corporate upstream proxy. The secret rides the proxy's
+	// own upstream-CONNECT lane, so it declares no delivery.
 	if sc.UpstreamProxySecretRef != "" {
 		add("host_proxy", types.Integration{
-			Name: "Corporate upstream proxy", Category: types.IntegrationHostProxy, Type: "host_proxy",
-			Credentials: map[string]string{"secret": sc.UpstreamProxySecretRef},
+			Name: "Corporate upstream proxy", Kind: "host_proxy",
+			Secrets: []types.IntegrationSecret{{Role: "secret", SecretName: sc.UpstreamProxySecretRef}},
 		})
 	}
 
@@ -566,20 +600,18 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 // convention (the same convention setup.go's scmProviderCheck documents).
 type gitHostCreds struct{ pat, sshKey string }
 
-// credentials builds the git_host Credentials map capabilitiesFor's git_host
-// case reads ("pat"/"ssh_key"), or nil when neither lane is configured.
-func (c gitHostCreds) credentials() map[string]string {
-	m := map[string]string{}
+// secretRows builds the git_host secret rows capabilitiesFor's git_host case
+// reads ("pat"/"ssh_key"), or nil when neither lane is configured. No
+// delivery: both lanes are the SCM broker's own bespoke transport.
+func (c gitHostCreds) secretRows() []types.IntegrationSecret {
+	var rows []types.IntegrationSecret
 	if c.pat != "" {
-		m["pat"] = c.pat
+		rows = append(rows, types.IntegrationSecret{Role: "pat", SecretName: c.pat})
 	}
 	if c.sshKey != "" {
-		m["ssh_key"] = c.sshKey
+		rows = append(rows, types.IntegrationSecret{Role: "ssh_key", SecretName: c.sshKey})
 	}
-	if len(m) == 0 {
-		return nil
-	}
-	return m
+	return rows
 }
 
 // slugHost is the canonical secret-name slug for a host: lowercase, collapse
@@ -620,7 +652,7 @@ func hostFromSecretSlug(name, prefix string) string {
 	return strings.ReplaceAll(strings.TrimPrefix(name, prefix), "-", ".")
 }
 
-// gitHostRows derives one scm_host/git_host row per host named by a
+// gitHostRows derives one git_host row per host named by a
 // SiteConfig.ScmHosts entry OR a git-pat-<slug>/ssh-key-<slug> secret, merged
 // by host: an operator's declared ScmHosts host with no credential yet still
 // gets a row (egress_host only; clone:pat/clone:ssh read needs_setup), and a
@@ -682,8 +714,8 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 			continue
 		}
 		rows = append(rows, integrationRow{Integration: types.Integration{
-			ID: id, Name: host, Category: types.IntegrationSCMHost, Type: "git_host",
-			Credentials: c.credentials(),
+			ID: id, Name: host, Kind: types.IntegrationKindGitHost,
+			Secrets: c.secretRows(),
 		}, Source: "legacy"})
 	}
 	return rows
@@ -734,14 +766,16 @@ func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrati
 		if stored[id] {
 			continue
 		}
-		var creds map[string]string
+		var secrets []types.IntegrationSecret
 		if he.token != "" {
-			creds = map[string]string{"token": he.token}
+			// No delivery: the redirect machinery (planArtifactRedirect) owns
+			// how this token is presented.
+			secrets = []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: he.token}}
 		}
 		rows = append(rows, integrationRow{Integration: types.Integration{
-			ID: id, Name: host, Category: types.IntegrationArtifactMirror, Type: "artifact_mirror",
-			Credentials: creds,
-			Config:      mustJSON(map[string]any{"ecosystems": he.ecosystems}),
+			ID: id, Name: host, Kind: "artifact_mirror",
+			Secrets: secrets,
+			Config:  map[string]any{"ecosystems": he.ecosystems},
 		}, Source: "legacy"})
 	}
 	return rows

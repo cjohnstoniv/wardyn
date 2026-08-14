@@ -55,7 +55,7 @@ type preflightResponse struct {
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
 // that can't yet enforce the class shows a fixable checklist row on Review
 // rather than a fatal error that blanks the panel. Reproduced launch gates:
-// the run-explicit integration_id ai_provider check below, resolveRunPolicy's
+// the run-explicit integration_id AI-provider check below, resolveRunPolicy's
 // 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
 // image/devcontainer_repo XOR violation surfaced by a workspace's base_image,
 // target collision), the onboarded-workspace gate, the workspace
@@ -78,13 +78,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
-	// runs_create.go): a typo or a non-ai_provider id 400s here exactly as it
+	// runs_create.go): a typo or a non-AI-provider id 400s here exactly as it
 	// would at launch, instead of silently resolving to nothing at
 	// foldRunIntegration time below (previewing as "no model access" on
 	// Review) and only failing for real once the operator clicks launch.
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(ctx, req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
+		if in, ok := s.resolveIntegrationRef(ctx, req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
 	}

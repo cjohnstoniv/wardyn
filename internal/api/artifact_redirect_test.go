@@ -318,8 +318,8 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 	if !ok {
 		t.Fatal("expected an artifact_mirror row for the shared host after fold")
 	}
-	if row.Credentials["token"] != "npm-token" {
-		t.Errorf("post-fold shared-host token = %q, want npm-token (first ecosystem alphabetically)", row.Credentials["token"])
+	if row.RoleSecret("token") != "npm-token" {
+		t.Errorf("post-fold shared-host token = %q, want npm-token (first ecosystem alphabetically)", row.RoleSecret("token"))
 	}
 }
 

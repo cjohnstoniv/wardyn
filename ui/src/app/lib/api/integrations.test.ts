@@ -65,8 +65,8 @@ describe("deriveIntegrations — AI providers", () => {
       secrets: { present: ["anthropic-api-key"], github_app: false },
       bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
       integrations: [
-        { id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", source: "stored", default_for: [] },
-        { id: "bedrock", category: "ai_provider", type: "bedrock", source: "stored", default_for: ["agent_runs"] },
+        { id: "anthropic_api_key", kind: "anthropic_api_key", source: "stored", default_for: [] },
+        { id: "bedrock", kind: "bedrock", source: "stored", default_for: ["agent_runs"] },
       ],
     });
     const { ai } = deriveIntegrations(status, null, ["anthropic-api-key"]);

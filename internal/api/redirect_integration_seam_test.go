@@ -21,10 +21,10 @@ import (
 func seamIntegration() types.Integration {
 	return types.Integration{
 		ID: "corp-artifactory", Name: "Corp Artifactory",
-		Category: types.IntegrationPackageFeed, Type: "artifactory",
-		Hosts:  []string{"artifactory.corp.internal"},
-		Header: "X-JFrog-Art-Api", Format: "%s",
-		Credentials: map[string]string{types.IntegrationCredentialToken: "artifactory-token"},
+		Kind:   "artifactory",
+		Egress: []string{"artifactory.corp.internal"},
+		Secrets: []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: "artifactory-token",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "X-JFrog-Art-Api", Format: "%s"}}},
 	}
 }
 
@@ -76,7 +76,7 @@ func TestResolveRedirectToken_IntegrationSuppliesHeaderAndFormat(t *testing.T) {
 // injectionRuleFromScope reads an empty format as "Bearer %s".
 func TestResolveRedirectToken_EmptyFormatBecomesRawSecret(t *testing.T) {
 	integ := seamIntegration()
-	integ.Format = ""
+	integ.Secrets[0].Delivery.Format = ""
 	srv := seamSrv(t, []types.Integration{integ})
 	got, why := srv.resolveRedirectToken(context.Background(),
 		types.EgressRedirect{To: "artifactory.corp.internal", TokenIntegrationRef: "corp-artifactory"},
@@ -116,8 +116,8 @@ func TestResolveRedirectToken_DegradesToRedirectOnly(t *testing.T) {
 		{
 			name: "integration delivers no header credential", ref: "corp-postgres",
 			integs: []types.Integration{{
-				ID: "corp-postgres", Category: types.IntegrationDataStore, Type: "postgres",
-				Hosts: []string{"db.corp.internal:5432"},
+				ID: "corp-postgres", Kind: "postgres",
+				Egress: []string{"db.corp.internal:5432"},
 			}},
 			wantWhy: "the integration named by token_integration_ref delivers no header credential",
 		},

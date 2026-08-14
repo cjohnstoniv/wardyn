@@ -152,7 +152,7 @@ func composerSpecFromIntegrations(secrets secretstore.Store, sc types.SiteConfig
 	return wardynFeaturesBackendSpec(in)
 }
 
-// wardynFeaturesBackendSpec maps ONE ai_provider Integration onto the
+// wardynFeaturesBackendSpec maps ONE AI-provider Integration onto the
 // backends.BackendSpec shape:
 //
 //	anthropic_api_key      -> wire "anthropic"
@@ -179,25 +179,22 @@ func composerSpecFromIntegrations(secrets secretstore.Store, sc types.SiteConfig
 //
 // ok=false for any other type (there is no sandbox lane to map it to).
 func wardynFeaturesBackendSpec(in types.Integration) (backends.BackendSpec, bool) {
-	var cfg struct {
-		Region string `json:"region"`
-		Model  string `json:"model"`
-	}
-	_ = json.Unmarshal(in.Config, &cfg)
-	spec := backends.BackendSpec{Name: in.ID, Model: cfg.Model}
-	switch in.Type {
-	case "anthropic_api_key":
+	region, _ := in.Config["region"].(string)
+	model, _ := in.Config["model"].(string)
+	spec := backends.BackendSpec{Name: in.ID, Model: model}
+	switch in.Kind {
+	case types.IntegrationKindAnthropicAPIKey:
 		spec.Wire = "anthropic"
-		spec.APIKeySecret = in.Credentials["api_key"]
-	case "openai_api_key":
+		spec.APIKeySecret = in.RoleSecret("api_key")
+	case types.IntegrationKindOpenAIAPIKey:
 		spec.Wire = "openai"
-		spec.APIKeySecret = in.Credentials["api_key"]
-	case "azure_openai":
+		spec.APIKeySecret = in.RoleSecret("api_key")
+	case types.IntegrationKindAzureOpenAI:
 		spec.Wire, spec.Transport, spec.Auth = "openai", "azure", "apikey"
-		spec.APIKeySecret = in.Credentials["api_key"]
-	case "bedrock":
-		spec.Wire, spec.Transport, spec.Region = "anthropic", "bedrock", cfg.Region
-	case "anthropic_subscription":
+		spec.APIKeySecret = in.RoleSecret("api_key")
+	case types.IntegrationKindBedrock:
+		spec.Wire, spec.Transport, spec.Region = "anthropic", "bedrock", region
+	case types.IntegrationKindAnthropicSubscription:
 		spec.Wire = "sandbox"
 	default:
 		return backends.BackendSpec{}, false

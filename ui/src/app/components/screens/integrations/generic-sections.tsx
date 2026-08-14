@@ -14,7 +14,7 @@
 // has never heard of be added with no backend change.
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { genericSections, genericIntegrationsApi, type GenericIntegrationRow } from "../../../lib/api/integrations";
+import { genericSections, genericIntegrationsApi, proxyHeaderSecret, type GenericIntegrationRow } from "../../../lib/api/integrations";
 import { CATALOG_COPY } from "../../../lib/integration-catalog";
 import { RESIDENCY_META } from "../../../lib/integrations";
 import { Button } from "../../ui/button";
@@ -30,7 +30,7 @@ export function genericBlastRadius(row: GenericIntegrationRow): string[] {
       : "This integration opens no hosts, so nothing loses reach.",
     "Any workspace requirement naming it opens nothing until it is re-added.",
   ];
-  const secret = row.wire.credentials?.token;
+  const secret = proxyHeaderSecret(row.wire)?.secret_name;
   lines.push(
     secret
       ? `The stored secret ${secret} is not deleted — remove it under Secrets.`
@@ -133,7 +133,7 @@ function GenericRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-foreground">{row.name}</span>
-          <Mono className="text-xs text-muted-foreground">{row.wire.type}</Mono>
+          <Mono className="text-xs text-muted-foreground">{row.wire.kind}</Mono>
           {row.wire.disabled && <Chip tone="neutral">Off</Chip>}
         </div>
         {row.hosts.length > 0 && (

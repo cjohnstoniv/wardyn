@@ -16,11 +16,11 @@ import type { WorkspaceRequirementsMap } from "./wizard-types";
 const FEED: WireIntegration = {
   id: "corp-artifactory",
   name: "Corp Artifactory",
-  category: "package_feed",
-  type: "artifactory",
-  hosts: ["artifactory.corp.internal"],
-  header: "Authorization",
-  credentials: { token: "artifactory-token" },
+  kind: "artifactory",
+  egress: ["artifactory.corp.internal"],
+  secrets: [
+    { role: "token", secret_name: "artifactory-token", delivery: { mode: "proxy_header", header: "Authorization" } },
+  ],
 };
 
 function renderSection(
@@ -100,8 +100,7 @@ describe("IntegrationRequirements", () => {
     const sub: WireIntegration = {
       id: "anthropic_subscription:managed",
       name: "Claude subscription (managed)",
-      category: "ai_provider",
-      type: "anthropic_subscription",
+      kind: "anthropic_subscription",
     };
     const { setLane, clear } = renderSection([sub], {
       "integration:anthropic_subscription:managed": required,

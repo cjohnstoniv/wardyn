@@ -193,7 +193,6 @@ function ConnectPanel({
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const group = integrationGroup(type.group);
   // A type with no backend home is listed because people look for it — never
   // offered as an Add that cannot work.
   const unsupported = type.addLane === "unsupported";
@@ -218,14 +217,17 @@ function ConnectPanel({
     try {
       await genericIntegrationsApi.put(slug, {
         name: name.trim(),
-        category: group.category,
-        type: type.apiType ?? type.id,
-        hosts: hostList,
+        kind: type.apiType ?? type.id,
+        egress: hostList,
         ...(takesHeader && secret.trim()
           ? {
-              header: type.header,
-              format: type.format,
-              credentials: { token: secret.trim() },
+              secrets: [
+                {
+                  role: "token",
+                  secret_name: secret.trim(),
+                  delivery: { mode: "proxy_header", header: type.header!, format: type.format },
+                },
+              ],
             }
           : {}),
         ...(docs.trim() ? { docs: docs.trim() } : {}),

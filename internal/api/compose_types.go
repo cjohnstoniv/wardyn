@@ -56,8 +56,8 @@ type composeRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 
 	// IntegrationID, when set, pins the proposal's model/harness credential to
-	// a SPECIFIC ai_provider Integration (see client.CreateRunRequest.
-	// IntegrationID — same field, same rule: a non-ai_provider id is a 400).
+	// a SPECIFIC AI-provider Integration (see client.CreateRunRequest.
+	// IntegrationID — same field, same rule: a non-AI-provider id is a 400).
 	// Empty falls through resolveRunIntegration's remaining tiers (llmcred.go).
 	IntegrationID string `json:"integration_id,omitempty"`
 
@@ -112,7 +112,7 @@ type composeProposed struct {
 	// must send this alongside `workspaces` (later UI batch).
 	IntegrationID string `json:"integration_id,omitempty"`
 	// BedrockRef is the pinned integration's region/model override, when this
-	// proposal resolved a bedrock ai_provider integration with one (nil
+	// proposal resolved a bedrock AI-provider integration with one (nil
 	// otherwise). Advisory only, like the rest of this payload: the real run
 	// created from this proposal re-resolves its own bedrockRef from
 	// integration_id at launch (foldRunIntegration, runs.go) — a link that

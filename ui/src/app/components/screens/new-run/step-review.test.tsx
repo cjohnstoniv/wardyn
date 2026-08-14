@@ -28,7 +28,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 getSetupStatusMock.mockResolvedValue(
-  baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", default_for: ["agent_runs"] }] }),
+  baseStatus({ integrations: [{ id: "anthropic_api_key", kind: "anthropic_api_key", default_for: ["agent_runs"] }] }),
 );
 
 const teamKey: IntegrationRow = {
@@ -565,8 +565,8 @@ describe("StepReview — Model access (resolved from integrations)", () => {
     getSetupStatusMock.mockResolvedValueOnce(
       baseStatus({
         integrations: [
-          { id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" },
-          { id: "bedrock", category: "ai_provider", type: "bedrock" },
+          { id: "anthropic_subscription:managed", kind: "anthropic_subscription" },
+          { id: "bedrock", kind: "bedrock" },
         ],
         bedrock: { region: "us-east-1", model: "anthropic.claude-3-sonnet", creds_present: true, ready: true },
         harness: [{ provider: "anthropic", captured: true }],

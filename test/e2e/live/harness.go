@@ -413,7 +413,7 @@ func (h *harness) compose(ctx context.Context, prompt, wsPath string) (composePr
 
 var classRank = map[string]int{"": 0, "CC1": 1, "CC2": 2, "CC3": 3}
 
-// composerModelAccessConfigured reports whether the box has an ai_provider
+// composerModelAccessConfigured reports whether the box has an AI-provider
 // integration marked DefaultFor:agent_runs — the ONLY way a composed run can
 // resolve to the box's staged Claude subscription creds now that there is no
 // per-run "Use my Claude subscription" opt-in (resolveRunIntegration,
@@ -431,9 +431,11 @@ func (h *harness) composerModelAccessConfigured(ctx context.Context) bool {
 	if err != nil || status != http.StatusOK {
 		return false
 	}
+	// The wire shape is the base component: one `kind` field (the stored
+	// Category/Type split is gone), so the AI set is the membership test.
 	var list struct {
 		Integrations []struct {
-			Category   string   `json:"category"`
+			Kind       string   `json:"kind"`
 			DefaultFor []string `json:"default_for"`
 		} `json:"integrations"`
 	}
@@ -441,7 +443,7 @@ func (h *harness) composerModelAccessConfigured(ctx context.Context) bool {
 		return false
 	}
 	for _, in := range list.Integrations {
-		if in.Category == "ai_provider" && slices.Contains(in.DefaultFor, "agent_runs") {
+		if types.AIProviderKind(in.Kind) && slices.Contains(in.DefaultFor, "agent_runs") {
 			return true
 		}
 	}
@@ -463,7 +465,7 @@ func (h *harness) composerModelAccessConfigured(ctx context.Context) bool {
 func (h *harness) launchComposer(ctx context.Context, task Task, wsPath, bestClass string) (run types.AgentRun, p composeProposal, skipReason string) {
 	h.t.Helper()
 	if !h.composerModelAccessConfigured(ctx) {
-		h.t.Skipf("no ai_provider integration is DefaultFor:agent_runs on this box — the composer lane cannot resolve " +
+		h.t.Skipf("no AI-provider integration is DefaultFor:agent_runs on this box — the composer lane cannot resolve " +
 			"model access without one now that there is no per-run subscription opt-in (mark the box's Claude " +
 			"subscription/API-key integration as the agent-runs default, or pin the compose workspace to it; see " +
 			"resolveRunIntegration, internal/api/llmcred.go)")

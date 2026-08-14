@@ -20,15 +20,15 @@ import (
 // The load-bearing claim across the whole file is NOTHING IS AMBIENT —
 // configuring an integration grants nothing until a run is granted it.
 
-// feedIntegration is the round-H shape under test: a generic-category row that
-// names its own hosts and delivers its credential by header.
+// feedIntegration is the round-H shape under test: a generic-kind row that
+// names its own egress and delivers its credential by proxy header.
 func feedIntegration() types.Integration {
 	return types.Integration{
 		ID: "corp-artifactory", Name: "Corp Artifactory",
-		Category: types.IntegrationPackageFeed, Type: "artifactory",
-		Hosts:  []string{"artifactory.corp.internal", "nexus.corp.internal"},
-		Header: "Authorization", Format: "Bearer %s",
-		Credentials: map[string]string{types.IntegrationCredentialToken: "artifactory-token"},
+		Kind:   "artifactory",
+		Egress: []string{"artifactory.corp.internal", "nexus.corp.internal"},
+		Secrets: []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: "artifactory-token",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}},
 	}
 }
 
@@ -85,7 +85,7 @@ func TestIntegrationFold_NothingIsAmbient(t *testing.T) {
 			srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsRefs, nil)
 			// The egress-only case legitimately adds its own host; what must
 			// NEVER appear is anything belonging to the integration.
-			for _, h := range feedIntegration().Hosts {
+			for _, h := range feedIntegration().Egress {
 				if slices.Contains(spec.AllowedDomains, h) {
 					t.Errorf("host %q reached the run without being granted — integrations must never be ambient", h)
 				}
@@ -106,7 +106,7 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 	events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
 		wsRequiring(uuid.New(), "integration:corp-artifactory", "required"), nil)
 
-	for _, h := range feedIntegration().Hosts {
+	for _, h := range feedIntegration().Egress {
 		if !slices.Contains(spec.AllowedDomains, h) {
 			t.Errorf("AllowedDomains = %v, want %q — the integration is the reason it is reachable", spec.AllowedDomains, h)
 		}
@@ -119,7 +119,7 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 		if sc["header"] != "Authorization" || sc["format"] != "Bearer %s" || sc["secret_name"] != "artifactory-token" {
 			t.Errorf("grant scope = %+v, want the integration's own header/format/secret", sc)
 		}
-		if !slices.Contains(feedIntegration().Hosts, sc["host"]) {
+		if !slices.Contains(feedIntegration().Egress, sc["host"]) {
 			t.Errorf("grant scope host = %q, not one of the integration's hosts", sc["host"])
 		}
 	}
@@ -136,8 +136,8 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 // "Bearer %s", which would corrupt every custom-header credential.
 func TestIntegrationFold_EmptyFormatBecomesRawSecretNotBearer(t *testing.T) {
 	integ := feedIntegration()
-	integ.Header, integ.Format = "x-api-key", ""
-	integ.Hosts = []string{"artifactory.corp.internal"}
+	integ.Secrets[0].Delivery = &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "x-api-key"}
+	integ.Egress = []string{"artifactory.corp.internal"}
 	srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
 
 	spec := &types.RunPolicySpec{}
@@ -220,7 +220,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 		// A row stored before validateIntegrationHosts existed, or a derived
 		// one — the write path rejects this combination today.
 		integ := feedIntegration()
-		integ.Hosts = []string{"*.corp.internal", "nexus.corp.internal:8443", "artifactory.corp.internal"}
+		integ.Egress = []string{"*.corp.internal", "nexus.corp.internal:8443", "artifactory.corp.internal"}
 		srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
 		spec := &types.RunPolicySpec{}
 		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
@@ -236,7 +236,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 
 	t.Run("no hosts is a no-op", func(t *testing.T) {
 		integ := feedIntegration()
-		integ.Hosts = nil
+		integ.Egress = nil
 		srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
 		spec := &types.RunPolicySpec{}
 		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
@@ -254,7 +254,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 // — the same rule ensureLLMGrant/applyWorkspaceCreds follow.
 func TestIntegrationFold_NeverDoubleGrantsAHost(t *testing.T) {
 	integ := feedIntegration()
-	integ.Hosts = []string{"artifactory.corp.internal"}
+	integ.Egress = []string{"artifactory.corp.internal"}
 	srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
 
 	wsRefs := []types.Workspace{
