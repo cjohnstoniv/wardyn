@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -220,7 +221,13 @@ type probeRunResult struct {
 // by name -- the same channel compose uses for WARDYN_COMPOSE_*). It returns
 // the run id (so a launch failure can still be audited against it) and what
 // was actually observed.
-func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, allowedDomains []string, extraEnv map[string]string) (uuid.UUID, probeRunResult, error) {
+//
+// grants are the eligible credential grants the probe run should carry (nil for
+// the two site-config probes, which authenticate to nothing). They are
+// persisted and wired proxy-side exactly as persistRunGrants does for a real
+// run, so an integration probe traverses the SAME injection path a run granted
+// that integration takes -- the whole point of testing it at all.
+func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, allowedDomains []string, grants []types.GrantSpec, extraEnv map[string]string) (uuid.UUID, probeRunResult, error) {
 	start := s.cfg.Now()
 	// Detach the durable launch work from request cancellation -- a client
 	// that walks away before the mint/CreateRun lands must not abort it and
@@ -241,6 +248,10 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		s.cfg.Identity.RevokeRun(launchCtx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return runID, probeRunResult{}, fmt.Errorf("create probe run: %w", err)
 	}
+	injections, err := s.probeInjections(launchCtx, runID, grants)
+	if err != nil {
+		return runID, probeRunResult{}, err
+	}
 
 	s.dispatchRun(launchCtx, created, dispatchParams{
 		RunToken: token,
@@ -249,9 +260,11 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 			MinConfinementClass: cc,
 			AllowedDomains:      allowedDomains,
 			AutoStopAfterSec:    siteConfigProbeIdleCapSec,
+			EligibleGrants:      grants,
 		},
-		TaskMode: "exec",
-		ExtraEnv: extraEnv,
+		Injections: injections,
+		TaskMode:   "exec",
+		ExtraEnv:   extraEnv,
 	})
 
 	// The wait stays on the CALLER's ctx (a client disconnect stops it early,
@@ -277,6 +290,33 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		return runID, probeRunResult{hasExitCode: true, exitCode: 0, elapsed: elapsed}, nil
 	}
 	return runID, s.probeFailureDetail(ctx, runID, elapsed), nil
+}
+
+// probeInjections persists the probe run's eligible grants and derives the
+// proxy-side injection wiring — the same two steps persistRunGrants does for a
+// real run (runs_create.go), minus the SCM lanes a probe never has (an
+// integration authors api_key grants only). A write failure is FATAL, exactly
+// as it is there: a probe that reports "blocked" because its credential
+// silently never got wired would be worse than no probe at all.
+func (s *Server) probeInjections(ctx context.Context, runID uuid.UUID, grants []types.GrantSpec) ([]runner.InjectionGrant, error) {
+	var out []runner.InjectionGrant
+	for _, g := range grants {
+		if g.Kind != types.GrantAPIKey || g.RequiresApproval {
+			continue
+		}
+		grantID := uuid.New()
+		if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+			ID: grantID, RunID: runID, CreatedAt: s.cfg.Now().UTC(), Spec: g,
+		}); err != nil {
+			return nil, fmt.Errorf("create probe grant: %w", err)
+		}
+		rule, err := injectionRuleFromScope(g.Scope)
+		if err != nil {
+			return nil, fmt.Errorf("probe grant scope: %w", err)
+		}
+		out = append(out, runner.InjectionGrant{GrantID: grantID, Rule: rule})
+	}
+	return out, nil
 }
 
 // probeFailureDetail inspects a terminal-FAILED probe run's own audit trail
@@ -584,7 +624,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	}
 
 	actor := principalFromRequest(r)
-	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil)
+	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil, nil)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
@@ -651,7 +691,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	fromHost := workspacescan.HostOf(red.From)
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, redirectProbeScript,
-		[]string{toHost}, map[string]string{
+		[]string{toHost}, nil, map[string]string{
 			"WARDYN_PROBE_TO_URL":   probeTargetURL(red.To),
 			"WARDYN_PROBE_FROM_URL": probeTargetURL(red.From),
 		})

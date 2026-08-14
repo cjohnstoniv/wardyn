@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -221,14 +222,28 @@ func subscriptionLane(integ types.Integration) string {
 // integration with a region/model override, that override for dispatch to
 // resolve against (dispatchParams.BedrockRef).
 //
+// The switch below is now a base-component fold with TWO exceptions, not a
+// per-kind table: the default branch takes any row — an api-key AI kind or a
+// generic connection — and turns its proxy-header secret into one api_key grant
+// plus its egress into allowlist entries. anthropic_subscription and bedrock
+// keep bespoke branches because their credential is genuinely not an HTTP
+// header (an OAuth mount/inject lane; SigV4 request signing), and azure_openai
+// has no sandbox lane at all.
+//
 // model_api is deliberately NEVER granted here: resolving an integration for a
 // run grants the TOOL's ability to sign in (the harness), never ambient direct
 // model access for the sandbox WORKLOAD — that comes only from a workspace's
 // secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
 // explicit run grant, never from an integration binding.
 func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
+	// AI kinds only, even though the default branch below is kind-agnostic: this
+	// function answers "what credentials the run's MODEL". A generic connection
+	// is not a model provider, and resolveRunIntegration already refuses one at
+	// every tier of the ladder — a generic row reaches a run through the
+	// workspace's own `integration:<id>` requirement instead
+	// (applyIntegrationRequirement), which folds the same two halves.
 	if !types.AIProviderKind(integ.Kind) {
-		return "", nil // defense-in-depth; every caller already filters to the AI kinds
+		return "", nil
 	}
 	p, ok := agentLLMProvider(agent)
 	if !ok {
@@ -248,30 +263,10 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		return "", nil
 	}
 	switch integ.Kind {
-	case types.IntegrationKindAnthropicAPIKey, types.IntegrationKindOpenAIAPIKey:
-		secret := integ.RoleSecret("api_key")
-		if secret == "" || !s.secretPresent(ctx, secret) {
-			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
-		}
-		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-			return integ.Kind, nil // an api_key grant for this host was already proposed; respect it
-		}
-		scope, _ := json.Marshal(map[string]string{
-			"host": p.host, "header": p.header, "format": p.format, "secret_name": secret,
-		})
-		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-		})
-		// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
-		// (SPINE-4): the proxy's credential injector consults the exact allowlist
-		// only and deliberately does NOT honor allow-all (Policy.AllowedExactHost),
-		// so a grant whose host is missing from AllowedDomains fails buildInjector
-		// CLOSED at startup and the sandbox gets zero egress. Same rule the four
-		// dispatch/integration-side authors already follow (integrations_run.go).
-		if !domainAllowedExact(spec.AllowedDomains, p.host) {
-			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
-		}
-		return integ.Kind, nil
+	case types.IntegrationKindAzureOpenAI:
+		// No sandbox lane at all — model_api is a protocol-fact impossibility
+		// (capabilitiesFor's reasonXAzureDirect). No fold.
+		return "", nil
 	case types.IntegrationKindAnthropicSubscription:
 		// Both lanes (managed / resident_host) displace a competing api-key
 		// grant and ensure Anthropic egress — the part common to the old
@@ -298,10 +293,68 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		}
 		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
 	default:
-		// azure_openai (no sandbox lane at all — model_api is a protocol-fact
-		// impossibility) and any unrecognized kind: no fold.
-		return "", nil
+		// UNIFORM FOLD — the base-component default: an api-key AI kind and a
+		// generic connection are the same thing here. The row's proxy-header
+		// credential becomes ONE api_key grant on the agent's provider host, and
+		// the row's own egress joins the allowlist. The two kinds above keep
+		// bespoke transports because they genuinely are not header credentials
+		// (an OAuth mount/inject lane; SigV4 signing via WorkspaceBedrockRef).
+		secret, header, format := integrationKeyGrant(integ, p)
+		if secret == "" || !s.secretPresent(ctx, secret) {
+			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
+		}
+		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
+			return integ.Kind, nil // an api_key grant for this host was already proposed; respect it
+		}
+		scope, _ := json.Marshal(map[string]string{
+			"host": p.host, "header": header, "format": format, "secret_name": secret,
+		})
+		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+		})
+		// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
+		// (SPINE-4): the proxy's credential injector consults the exact allowlist
+		// only and deliberately does NOT honor allow-all (Policy.AllowedExactHost),
+		// so a grant whose host is missing from AllowedDomains fails buildInjector
+		// CLOSED at startup and the sandbox gets zero egress. Same rule the four
+		// dispatch/integration-side authors already follow (integrations_run.go).
+		if !domainAllowedExact(spec.AllowedDomains, p.host) {
+			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
+		}
+		// The row's OWN egress — where the system lives — comes along, the same
+		// half applyIntegrationRequirement folds for a workspace-named row. Under
+		// allow-all there is nothing to add (the injector's exact entry above is
+		// added regardless, for the reason stated there).
+		if !spec.AllowAllEgress {
+			unionAllowedDomains(spec, integ.Egress)
+		}
+		return integ.Kind, nil
 	}
+}
+
+// integrationKeyGrant is the (secret, header, format) triple a row contributes
+// to the run's model-credential grant: the "api_key"-role secret when the row
+// names one (the convention every AI provider row uses), else its
+// proxy_header-delivered secret whatever role it carries — role-agnostic, per
+// the base-component model.
+//
+// The row's OWN declared delivery wins where it states one; p (the harness
+// catalog's Gateway convention — harness.go) is the fallback for a row that
+// declares none, which is every legacy-folded and every derived AI row.
+func integrationKeyGrant(integ types.Integration, p llmProvider) (secret, header, format string) {
+	for _, s := range integ.Secrets {
+		if s.Role != "api_key" {
+			continue
+		}
+		if d := s.Delivery; d != nil && d.Mode == types.DeliveryProxyHeader {
+			return s.SecretName, d.Header, cmp.Or(d.Format, "%s")
+		}
+		return s.SecretName, p.header, p.format
+	}
+	if name, h, f, ok := integ.HeaderSecret(); ok {
+		return name, h, f
+	}
+	return "", "", ""
 }
 
 // resolveRunIntegration resolves the FULL run-level integration precedence:

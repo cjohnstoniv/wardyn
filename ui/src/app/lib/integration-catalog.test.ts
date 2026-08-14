@@ -10,7 +10,6 @@ import { describe, it, expect } from "vitest";
 import {
   INTEGRATION_GROUPS,
   INTEGRATION_TYPES,
-  notbuiltWhy,
   integrationTypeById,
   typesInGroup,
   searchIntegrationTypes,
@@ -55,28 +54,17 @@ describe("integration catalog", () => {
     }
   });
 
-  // Cloud providers and data stores authenticate outside HTTP, so the proxy has
-  // nothing to inject. They must stay honest rather than showing an empty
-  // credential field — the fact is the design, not a gap to paper over.
-  it("keeps cloud and data stores on 'egress only' with a stated reason", () => {
-    for (const t of [...typesInGroup("cloud"), ...typesInGroup("data")]) {
-      expect(t.delivery, `${t.id}`).toBe("notbuilt");
-      expect(notbuiltWhy(t), `${t.id} states why`).toBeTruthy();
-      expect(t.header, `${t.id} claims no header lane`).toBeUndefined();
+  // Every remaining catalog type has a real credential lane — the ten
+  // "notbuilt" rows (cloud providers, data stores, ECR, GAR) and the one
+  // unsupported row (a self-hosted endpoint) were deleted with the
+  // base-component rebuild: a generic kind is base-only (secret + egress),
+  // so a type with no header lane has no home in the catalog any more.
+  it("carries no dead 'notbuilt' or 'unsupported' rows", () => {
+    for (const t of INTEGRATION_TYPES) {
+      expect(t.delivery, `${t.id}`).not.toBe("notbuilt");
     }
-    expect(RESIDENCY_META.notbuilt.label).toBe("egress only");
-    expect(RESIDENCY_META.notbuilt.tone).toBe("warning");
-  });
-
-  // s3compat sits in the "data" section (alongside Postgres/MySQL/Redis/
-  // Mongo) but its gap is the CLOUD one (SigV4 signing) — its own `powers`
-  // line says so. The group-keyed default would wrongly hand it the
-  // datastore reason; pin the override.
-  it("gives s3compat the CLOUD reason, not its section's datastore one", () => {
-    const s3compat = integrationTypeById("s3compat")!;
-    expect(s3compat.group).toBe("data");
-    expect(notbuiltWhy(s3compat)).toBe(notbuiltWhy(integrationTypeById("aws")!));
-    expect(notbuiltWhy(s3compat)).not.toBe(notbuiltWhy(integrationTypeById("postgres")!));
+    expect(typesInGroup("cloud")).toHaveLength(0);
+    expect(typesInGroup("data")).toHaveLength(0);
   });
 
   // A generic-lane type is written straight through PUT /integrations, so it
@@ -86,20 +74,15 @@ describe("integration catalog", () => {
       if (t.addLane === "generic") {
         expect(t.apiType, `${t.id} is written through the generic flow`).toBeTruthy();
       }
-      if (t.addLane === "unsupported") {
-        expect(t.note, `${t.id} says why it can't be added yet`).toBeTruthy();
-      }
     }
     // The model and scm sections are the TYPED backend categories.
     for (const t of typesInGroup("scm")) expect(t.addLane).toBe("scm");
-    for (const t of typesInGroup("model")) expect(["ai", "unsupported"]).toContain(t.addLane);
+    for (const t of typesInGroup("model")) expect(t.addLane).toBe("ai");
   });
 
   it("finds a type by product name, by host, and by what people actually type", () => {
     expect(searchIntegrationTypes("jfrog").map((t) => t.id)).toContain("artifactory");
     expect(searchIntegrationTypes("ghcr.io").map((t) => t.id)).toContain("ghcr");
-    expect(searchIntegrationTypes("psql").map((t) => t.id)).toContain("postgres");
-    expect(searchIntegrationTypes("ollama").map((t) => t.id)).toContain("compat");
     expect(searchIntegrationTypes("model context protocol").map((t) => t.id)).toContain("mcp");
     // Anything unmatched falls to the generic escape hatch, not an error.
     expect(searchIntegrationTypes("zzzznope")).toHaveLength(0);

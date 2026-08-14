@@ -129,7 +129,6 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		{"unknown default_for", "acme-anthropic", `{"kind":"anthropic_api_key","default_for":["bogus"]}`},
 		{"bedrock half-set region only", "acme-bedrock", `{"kind":"bedrock","config":{"region":"us-east-1"}}`},
 		{"bedrock half-set model only", "acme-bedrock", `{"kind":"bedrock","config":{"model":"anthropic.claude-3"}}`},
-		{"artifact_mirror unknown ecosystem", "acme-mirror", `{"kind":"artifact_mirror","config":{"ecosystems":["rubygems"]}}`},
 
 		// Config keys are CLOSED per closed kind — a typo'd key 400s by name
 		// instead of silently storing config nothing reads.
@@ -140,9 +139,22 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		// the whole contract; only a closed kind's bespoke transport may omit it.
 		{"generic secret without a delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key"}]}`},
 		{"unknown delivery mode", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"carrier_pigeon"}}]}`},
-		{"resident_file delivery without a path", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_file"}}]}`},
-		{"resident_env delivery without a var", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_env"}}]}`},
-		{"cross-mode fields on a delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_env","var":"TOKEN","header":"Authorization"}}]}`},
+		// Resident deliveries are refused OUTRIGHT, not merely shape-checked:
+		// there is no generic lane that materializes a named secret into a
+		// sandbox path/env var, so storing one would be a promise nothing keeps
+		// (the resident lanes that DO exist are per-provider and declare no
+		// delivery at all). See residentDeliveryRefusal.
+		{"resident_file delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_file","path":"/etc/acme/token"}}]}`},
+		{"resident_env delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"resident_env","var":"ACME_TOKEN"}}]}`},
+		{"cross-mode fields on a delivery", "acme-feed", `{"kind":"artifactory","secrets":[{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization","path":"/etc/acme/token"}}]}`},
+
+		// One credential header per row: the proxy injector is keyed by HOST and
+		// every proxy_header secret targets this row's whole egress list, so a
+		// second one has nowhere of its own to go.
+		{"two proxy_header secrets", "acme-feed",
+			`{"kind":"artifactory","egress":["artifactory.corp.internal"],"secrets":[` +
+				`{"role":"token","secret_name":"acme-anthropic-key","delivery":{"mode":"proxy_header","header":"Authorization"}},` +
+				`{"role":"other","secret_name":"acme-openai-key","delivery":{"mode":"proxy_header","header":"X-Other"}}]}`},
 
 		// Egress — the same shape rule every policy allowlist entry runs.
 		{"host is a URL, not a host", "acme-feed", `{"kind":"artifactory","egress":["https://artifactory.corp.internal/repo"]}`},

@@ -311,15 +311,20 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 		t.Errorf("post-fold substitution: artifactory.corp should appear exactly once, got %d in %v", corpCount, got)
 	}
 
-	// Same token injection: the shared host artifactory.corp resolves to npm's
-	// token (npm sorts before pip in the fold's ecosystem-key order, matching
-	// the pre-refactor map-iteration code's "first alphabetically" winner).
-	row, ok := findRow(artifactMirrorRows(folded, map[string]bool{}), "artifact_mirror:artifactory.corp")
-	if !ok {
-		t.Fatal("expected an artifact_mirror row for the shared host after fold")
+	// Same token injection for the shared host: planArtifactRedirect dedupes by
+	// TO-host in EgressRedirects' STORED order (its seenHost loop), and the fold
+	// emits ecosystems in key order — so npm (sorting before pip) is the row
+	// whose token artifactory.corp injects, exactly the pre-refactor
+	// map-iteration code's "first alphabetically" winner.
+	first := ""
+	for _, red := range folded.EgressRedirects {
+		if strings.EqualFold(workspacescan.HostOf(red.To), "artifactory.corp") {
+			first = red.TokenSecretRef
+			break
+		}
 	}
-	if row.RoleSecret("token") != "npm-token" {
-		t.Errorf("post-fold shared-host token = %q, want npm-token (first ecosystem alphabetically)", row.RoleSecret("token"))
+	if first != "npm-token" {
+		t.Errorf("post-fold shared-host token = %q, want npm-token (first ecosystem alphabetically)", first)
 	}
 }
 

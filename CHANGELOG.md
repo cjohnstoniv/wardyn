@@ -16,8 +16,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `anthropic_subscription`, `bedrock`, `openai_api_key`, `azure_openai`,
   `github_app`, `git_host`) or any other slug, which is a generic connection
   whose row carries its whole contract: each secret names its store ref and
-  its **delivery** (`proxy_header` — never resident, the default — or the
-  disclosed `resident_file`/`resident_env` exceptions), `egress` is where the
+  its **delivery** (`proxy_header` — never resident), `egress` is where the
   system lives, and `config` keys are validated per closed kind (an unknown
   key 400s by name; bedrock's lane key is now `auth_lane`). Stored
   pre-base-component rows are **folded forward at read time** (one-way,
@@ -26,6 +25,44 @@ and does not yet follow semantic versioning (interfaces are not stable).
   surface by the fold — their configuration lives under Corporate network.
   `GET /api/v1/integrations` and `PUT /api/v1/integrations/{id}` speak the
   new shape only.
+
+  **Migration note.** Two write-time rules are stricter than what the old
+  shape stored, so a legacy row may need one edit before it re-saves:
+  - a **generic**-kind secret row must state a `delivery` (the row IS the
+    contract); a closed kind may still omit it, meaning its own bespoke
+    transport carries that secret;
+  - `delivery.mode` may only be `proxy_header`, and a row may carry **at most
+    one** such secret. The resident modes are refused rather than stored:
+    Wardyn has no generic lane that materializes a named secret into a sandbox
+    path or env var (the resident lanes that do exist — `git_host`'s SSH key,
+    Bedrock's AWS env — are per-provider and declare no delivery at all), and
+    the proxy injects one credential header per host, so a second
+    `proxy_header` secret would be silently dropped at dispatch. Split it into
+    its own integration.
+
+- **The run-time integration fold is now one base-component fold with two
+  exceptions.** An api-key AI provider and a generic connection take the same
+  path: the row's proxy-header secret becomes one `api_key` grant, and its
+  `egress` joins the run's allowlist. `anthropic_subscription` and `bedrock`
+  keep their own transports (an OAuth mount/inject lane; SigV4 via
+  `WorkspaceBedrockRef`) because their credential genuinely is not an HTTP
+  header. Injection is **role-agnostic** — a secret's declared delivery is what
+  makes it presentable, never the name of its role — and still applies only
+  where a workspace, a redirect, or a run actually NAMES the integration:
+  configuring one grants nothing by itself.
+
+- **A Bedrock integration's `region`/`model` now win over the boot flags** on
+  the Integrations surface, matching what dispatch already did
+  (`resolveBedrockAuth`: a selection wins only the fields it sets, with
+  `WARDYN_BEDROCK_*` as the fallback). A wizard-completed Bedrock row on a
+  deployment that never set those env vars reported `needs_setup` forever
+  while its runs authenticated fine.
+
+- **Adopting a derived integration is now explicit.** `PUT
+  /api/v1/integrations/{id}` naming a row that exists only as a derivation
+  answers 409 and points at `POST /api/v1/integrations/{id}/adopt`. Previously
+  any write to a derived id — the default-for checkbox being the one every
+  operator hit — silently persisted a frozen snapshot of live configuration.
 
 - **Integrations no longer install tools; the tool side of the integration
   concept is removed.** An integration is a connection — secrets + egress —
@@ -41,12 +78,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   trusted. (docs/OPERATIONS.md "Every generated image carries the
   claude-code CLI as standard tooling".)
 
+### Added
+
+- **`POST /api/v1/integrations/{id}/test`** (admin) probes an integration for
+  real: a throwaway confined sandbox curls the row's own `probe` URL through
+  the row's own egress allowlist and proxy-side credential injection — the same
+  fold a granted run gets — reusing the site-config probe machinery. The result
+  is served as `probe_status` on `GET /api/v1/integrations`. It is cached **in
+  memory only**, so after a restart a row honestly reads "not tested" rather
+  than showing a stale green tick, and a probe URL outside the row's own egress
+  is refused rather than quietly widened (a run granted that integration could
+  not reach it either).
+
 ### Removed
 
 - **The Integrations page's Tools tab**, the integration→tool "carries"
   chips in the workspace wizard (base-image, build, and verify steps), and
   the client-side mirrors of the bake conditions. Tools are what the image
   carries; the Integrations surface now speaks only to connections.
+
+- **The `artifact_mirror`/`host_proxy` derivations.** The Integrations surface
+  no longer synthesizes rows from `EgressRedirects`/`UpstreamProxySecretRef`:
+  that is network topology, it already has a surface (Corporate network), and
+  showing it twice made one config look like two. Nothing about how a run
+  redirects or chains through the corporate proxy changes.
 
 ## [0.5.0] — 2026-08-12
 

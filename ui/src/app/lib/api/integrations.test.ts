@@ -12,9 +12,12 @@ import {
   proxyBannerNeeded,
   describePosture,
   blastRadius,
+  genericIntegrations,
+  groupForKind,
   type IntegrationRow,
 } from "./integrations";
 import type { SetupStatus, SiteConfig } from "../types";
+import type { WireIntegration } from "../types/setup";
 
 // UI-WS-2: the Add dialog resolves which wire row to adopt/PUT via this
 // helper, BEFORE its first reload can hand it a derived IntegrationRow of its
@@ -286,5 +289,72 @@ describe("blastRadius", () => {
     const lines = blastRadius(row);
     expect(lines.some((l) => /disconnecting IS the removal/.test(l))).toBe(true);
     expect(lines.some((l) => /not deleted — remove it under Secrets/.test(l))).toBe(false);
+  });
+});
+
+// Moved here from the now-deleted generic-sections.test.tsx (B3): the
+// Integrations list no longer has a separate "eight generic sections"
+// component, but genericIntegrations/groupForKind/deliveryForRow are the same
+// functions, now reading rows directly and, with allKinds, driving the
+// base-component list's three sections (AI providers / Source control /
+// Connections) too.
+describe("genericIntegrations / groupForKind", () => {
+  const FEED: WireIntegration = {
+    id: "corp-artifactory",
+    name: "Corp Artifactory",
+    kind: "artifactory",
+    egress: ["artifactory.corp.internal"],
+    secrets: [
+      { role: "token", secret_name: "artifactory-token", delivery: { mode: "proxy_header", header: "Authorization", format: "Bearer %s" } },
+    ],
+    source: "stored",
+  };
+
+  it("by default selects only the generic categories, leaving legacy AI/SCM ids to the richer wizard derivation", () => {
+    const rows = genericIntegrations([
+      FEED,
+      { id: "anthropic_api_key", kind: "anthropic_api_key" },
+      { id: "github_app", kind: "github_app" },
+      { id: "artifact_mirror:x", kind: "artifact_mirror" },
+    ]);
+    expect(rows.map((r) => r.wire.id)).toEqual(["corp-artifactory"]);
+  });
+
+  it("allKinds:true renders AI/SCM rows too — the base-component list's own reading, minus topology", () => {
+    const rows = genericIntegrations(
+      [FEED, { id: "anthropic_api_key", kind: "anthropic_api_key" }, { id: "artifact_mirror:x", kind: "artifact_mirror" }],
+      { allKinds: true },
+    );
+    expect(rows.map((r) => r.wire.id).sort()).toEqual(["anthropic_api_key", "corp-artifactory"]);
+    expect(rows.find((r) => r.wire.id === "anthropic_api_key")!.group.id).toBe("model");
+  });
+
+  it("states delivery from the ROW, not from the type's ideal", () => {
+    expect(genericIntegrations([FEED])[0].delivery).toBe("proxy_injected");
+    const naked = { ...FEED, secrets: undefined };
+    expect(genericIntegrations([naked])[0].delivery).toBe("notbuilt");
+  });
+
+  it("a closed kind with a bespoke (no-delivery) secret states its real lane, not the dishonest 'notbuilt'", () => {
+    const app: WireIntegration = {
+      id: "github_app",
+      kind: "github_app",
+      secrets: [{ role: "app_id", secret_name: "github-app-id" }, { role: "app_key", secret_name: "github-app-key" }],
+    };
+    const gitHost: WireIntegration = { id: "git_host:gitlab.com", kind: "git_host", secrets: [{ role: "pat", secret_name: "gitlab-pat" }] };
+    expect(genericIntegrations([app], { allKinds: true })[0].delivery).toBe("brokered_mint");
+    expect(genericIntegrations([gitHost], { allKinds: true })[0].delivery).toBe("resident_mount");
+  });
+
+  it("an unknown kind with no catalog entry falls to the catch-all group, honestly egress-only", () => {
+    const mystery: WireIntegration = { id: "x", kind: "mystery-service", egress: ["x.example.com"] };
+    const [row] = genericIntegrations([mystery]);
+    expect(row.group.id).toBe("other");
+    expect(row.delivery).toBe("notbuilt");
+  });
+
+  it("groupForKind drops the two topology kinds — Corporate network owns them", () => {
+    expect(groupForKind("artifact_mirror")).toBeUndefined();
+    expect(groupForKind("host_proxy")).toBeUndefined();
   });
 });

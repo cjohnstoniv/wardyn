@@ -33,14 +33,12 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   harnessAuth: { harnessDisconnect: (...a: unknown[]) => harnessDisconnectMock(...a) },
 }));
 
-const adoptIntegrationMock = vi.fn();
 const putIntegrationMock = vi.fn();
 const removeIntegrationMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
   return {
     ...actual,
-    integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
     genericIntegrationsApi: {
       ...actual.genericIntegrationsApi,
       put: (...a: unknown[]) => putIntegrationMock(...a),
@@ -199,49 +197,43 @@ describe("canRotateInline / primarySecretName", () => {
   });
 });
 
-// adopt-then-PUT used to have no rollback: a rejected PUT (e.g. a half-set
-// Bedrock row — region set, model empty — passes the checkbox gate but
-// hard-400s server-side under validateIntegrationWrite) left the just-adopted
-// row permanently stored even though the operator's action never succeeded.
+// B3: setDefaultFor no longer adopts. A derived row's checkbox is gated on
+// wire.source === "stored" by the list/detail screens themselves — "Adopt to
+// edit" is the only promotion, and it's an explicit, visible operator action
+// (integrationsApi.adoptIntegration), never a side effect of a checkbox.
 describe("setDefaultFor", () => {
-  function legacyWire(overrides: Partial<WireIntegration> = {}): WireIntegration {
-    return { id: "bedrock", kind: "bedrock", source: "legacy", default_for: [], ...overrides };
+  function storedWire(overrides: Partial<WireIntegration> = {}): WireIntegration {
+    return { id: "bedrock", kind: "bedrock", source: "stored", default_for: [], ...overrides };
   }
 
   beforeEach(() => {
-    adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
     putIntegrationMock.mockReset();
     removeIntegrationMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("rolls back the adopt when the PUT rejects, and surfaces the real error", async () => {
-    putIntegrationMock.mockRejectedValueOnce(new Error("bedrock region and model must be set together"));
-
-    await expect(setDefaultFor(legacyWire(), "agent_runs", true)).rejects.toThrow(/region and model/);
-
-    expect(adoptIntegrationMock).toHaveBeenCalledWith("bedrock");
-    // The failed write leaves nothing stored — the just-adopted row is removed again.
-    expect(removeIntegrationMock).toHaveBeenCalledWith("bedrock");
-  });
-
-  it("an already-stored row is left alone on a rejected PUT — nothing was adopted, so there's nothing to roll back", async () => {
-    putIntegrationMock.mockRejectedValueOnce(new Error("500"));
-
-    await expect(setDefaultFor(legacyWire({ source: "stored", default_for: ["agent_runs"] }), "agent_runs", false)).rejects.toThrow(
-      "500",
-    );
-
-    expect(adoptIntegrationMock).not.toHaveBeenCalled();
-    expect(removeIntegrationMock).not.toHaveBeenCalled();
-  });
-
-  it("a successful PUT never rolls back the adopt", async () => {
+  it("PUTs the row directly — no adopt, ever", async () => {
     putIntegrationMock.mockResolvedValue(undefined);
 
-    await setDefaultFor(legacyWire(), "agent_runs", true);
+    await setDefaultFor(storedWire(), "agent_runs", true);
 
-    expect(adoptIntegrationMock).toHaveBeenCalledWith("bedrock");
+    expect(putIntegrationMock).toHaveBeenCalledWith("bedrock", expect.objectContaining({ default_for: ["agent_runs"] }));
     expect(removeIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  it("a rejected PUT surfaces the real error and touches nothing else", async () => {
+    putIntegrationMock.mockRejectedValueOnce(new Error("bedrock region and model must be set together"));
+
+    await expect(setDefaultFor(storedWire(), "agent_runs", true)).rejects.toThrow(/region and model/);
+
+    expect(removeIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  it("clearing a mark drops it from default_for without touching another", async () => {
+    putIntegrationMock.mockResolvedValue(undefined);
+
+    await setDefaultFor(storedWire({ default_for: ["agent_runs", "wardyn_features"] }), "agent_runs", false);
+
+    expect(putIntegrationMock).toHaveBeenCalledWith("bedrock", expect.objectContaining({ default_for: ["wardyn_features"] }));
   });
 
   // UI-LIB-5: config/disabled_capabilities now live on WireIntegration itself
@@ -251,8 +243,7 @@ describe("setDefaultFor", () => {
     putIntegrationMock.mockResolvedValue(undefined);
 
     await setDefaultFor(
-      legacyWire({
-        source: "stored",
+      storedWire({
         config: { lane: "auto", region: "us-east-1", model: "anthropic.claude-3" },
         disabled_capabilities: ["wardyn_features"],
       }),

@@ -3,52 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+// Detail — base-component model (B3): Secrets (w/ delivery language), Egress,
+// Config, Verification (w/ re-test), Used-by, delete-409 note. No capability
+// table — that was the legacy screen's own richness; a generic kind is
+// base-only, and the closed kinds differ only in prefill.
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { baseStatus } from "../setup/test-fixtures";
-import { T } from "../../../lib/integrations";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import type { WireIntegration } from "../../../lib/types/setup";
 
-const getSetupStatusMock = vi.fn();
-vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
-
-const getSiteConfigMock = vi.fn();
-const putSiteConfigMock = vi.fn();
-vi.mock("../../../lib/api/health", () => ({
-  health: {
-    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
-    putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
-  },
-}));
-
-const listSecretsMock = vi.fn();
-const deleteSecretMock = vi.fn();
-const setSecretMock = vi.fn();
-vi.mock("../../../lib/api/secrets", () => ({
-  secrets: {
-    listSecrets: (...a: unknown[]) => listSecretsMock(...a),
-    deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
-    setSecret: (...a: unknown[]) => setSecretMock(...a),
-  },
-}));
-
-const harnessDisconnectMock = vi.fn();
 vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: {
-    harnessDisconnect: (...a: unknown[]) => harnessDisconnectMock(...a),
-    harnessLogin: vi.fn(),
-    harnessCredentialPaste: vi.fn(),
-  },
+  harnessAuth: { harnessDisconnect: vi.fn(), harnessLogin: vi.fn(), harnessCredentialPaste: vi.fn() },
 }));
+vi.mock("../../../lib/api/health", () => ({ health: { getSiteConfig: vi.fn(), putSiteConfig: vi.fn() } }));
 
-// The default-for write path (actions.ts's setDefaultFor) calls adopt/put; the
-// delete path (deleteIntegration) removes the adopted stored integration via
-// remove — everything else this screen needs from the module stays real.
+const listMock = vi.fn();
 const adoptIntegrationMock = vi.fn();
 const putIntegrationMock = vi.fn();
 const removeIntegrationMock = vi.fn();
+const testIntegrationMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
   return {
@@ -56,243 +31,122 @@ vi.mock("../../../lib/api/integrations", async (importOriginal) => {
     integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
     genericIntegrationsApi: {
       ...actual.genericIntegrationsApi,
+      list: (...a: unknown[]) => listMock(...a),
       put: (...a: unknown[]) => putIntegrationMock(...a),
       remove: (...a: unknown[]) => removeIntegrationMock(...a),
+      test: (...a: unknown[]) => testIntegrationMock(...a),
     },
   };
 });
 
 import { IntegrationDetailScreen } from "./integration-detail";
 
-function renderDetail(id: string) {
+function renderDetail(id: string, operator = true) {
   return render(
-    <MemoryRouter initialEntries={[`/integrations/${id}`]}>
-      <Routes>
-        <Route path="/integrations/:id" element={<IntegrationDetailScreen />} />
-        <Route path="/integrations" element={<div>back on the list</div>} />
-      </Routes>
+    <MemoryRouter initialEntries={[`/integrations/${encodeURIComponent(id)}`]}>
+      <OperatorProvider operator={operator}>
+        <Routes>
+          <Route path="/integrations/:id" element={<IntegrationDetailScreen />} />
+        </Routes>
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
 
-describe("IntegrationDetailScreen — blast-radius confirm", () => {
-  beforeEach(() => {
-    deleteSecretMock.mockReset().mockResolvedValue(undefined);
-    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
-    removeIntegrationMock.mockReset().mockResolvedValue(undefined);
+const FEED_ROW: WireIntegration = {
+  id: "corp-artifactory",
+  name: "Corp Artifactory",
+  kind: "artifactory",
+  source: "stored",
+  egress: ["artifactory.corp.internal"],
+  secrets: [{ role: "api_key", secret_name: "artifactory-token", delivery: { mode: "proxy_header", header: "Authorization", format: "Bearer %s" } }],
+  probe: { method: "GET", url: "https://artifactory.corp.internal/" },
+  probe_status: { state: "not_tested" },
+};
+
+const BEDROCK_ROW: WireIntegration = {
+  id: "bedrock",
+  name: "AWS Bedrock",
+  kind: "bedrock",
+  source: "legacy",
+  config: { auth_lane: "bearer", region: "us-east-1", model: "anthropic.claude-3" },
+  secrets: [{ role: "api_key", secret_name: "bedrock-bearer-token", delivery: { mode: "proxy_header" } }],
+};
+
+describe("IntegrationDetailScreen — base sections", () => {
+  it("renders secrets w/ delivery language, egress, and the verification chip", async () => {
+    listMock.mockResolvedValue([FEED_ROW]);
+    renderDetail("corp-artifactory");
+
+    await screen.findByText("Corp Artifactory");
+    expect(screen.getByText("artifactory-token")).toBeInTheDocument();
+    expect(screen.getByText(/Never resident/)).toBeInTheDocument();
+    expect(screen.getByText("artifactory.corp.internal")).toBeInTheDocument();
+    expect(screen.getByText("not tested")).toBeInTheDocument();
   });
 
-  // UI-WS-4: the copy has always said the stored secret is NOT deleted — the
-  // CODE used to disagree and delete it anyway. Now they match: the secret
-  // (which may be referenced by another workspace/site-config field) survives.
-  it("Delete integration lists the computed blast radius, and does not touch the stored secret", async () => {
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({
-        secrets: { present: ["anthropic-api-key"], github_app: false },
-        // Genuinely marked the default — the blast radius's "first model call
-        // fails" line is real state now (default_for), not a per-type guess.
-        integrations: [
-          { id: "anthropic_api_key", kind: "anthropic_api_key", source: "legacy", default_for: ["agent_runs"] },
-        ],
-      }),
-    );
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  it("renders a bedrock row's config keys and resident secret language", async () => {
+    listMock.mockResolvedValue([BEDROCK_ROW]);
+    renderDetail("bedrock");
 
-    renderDetail("ai:anthropic_api_key");
-    await screen.findByRole("heading", { name: "Anthropic (API key)" });
-
-    // The danger-zone trigger (not the header kebab's menuitem of the same name).
-    await user.click(screen.getByRole("button", { name: /delete integration…/i }));
-
-    // The SAME computed lines also sit inline in the (always-visible) Danger
-    // zone region, so scope to the confirm dialog itself to avoid double-matches.
-    const dialog = within(await screen.findByRole("alertdialog"));
-    expect(dialog.getByText(/first model call fails/i)).toBeInTheDocument();
-    expect(dialog.getByText(/anthropic-api-key.*not deleted.*Secrets/i)).toBeInTheDocument();
-
-    await user.click(dialog.getByRole("button", { name: /^delete integration$/i }));
-    // A successful "delete" still returns to the list. The secret stays
-    // (UI-WS-4), but the ADOPTED stored integration — this row holds a real
-    // default_for mark — is removed server-side, so agent runs actually fall
-    // back to the server default the blast radius just warned about.
-    expect(await screen.findByText("back on the list")).toBeInTheDocument();
-    expect(deleteSecretMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(removeIntegrationMock).toHaveBeenCalledWith("anthropic_api_key"));
+    await screen.findByText("AWS Bedrock");
+    expect(screen.getByText("region")).toBeInTheDocument();
+    expect(screen.getByText("us-east-1")).toBeInTheDocument();
+    expect(screen.getByText("bedrock-bearer-token")).toBeInTheDocument();
   });
 
-  it("a harness-backed subscription's blast radius says disconnecting is the removal, and Delete calls harnessDisconnect", async () => {
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: new Date().toISOString() }] }),
-    );
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue([]);
-    harnessDisconnectMock.mockResolvedValue(undefined);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  it("a derived row shows Adopt to edit instead of the stored chip", async () => {
+    listMock.mockResolvedValue([BEDROCK_ROW]);
+    renderDetail("bedrock");
 
-    renderDetail("ai:anthropic_subscription:managed");
-    await screen.findByRole("heading", { name: "Claude subscription (managed)" });
-
-    await user.click(screen.getByRole("button", { name: /delete integration…/i }));
-    const dialog = within(await screen.findByRole("alertdialog"));
-    expect(dialog.getByText(/disconnecting IS the removal/i)).toBeInTheDocument();
-
-    await user.click(dialog.getByRole("button", { name: /^delete integration$/i }));
-    await waitFor(() => expect(harnessDisconnectMock).toHaveBeenCalledWith("anthropic"));
+    await screen.findByText("AWS Bedrock");
+    expect(screen.getByRole("button", { name: "Adopt to edit" })).toBeInTheDocument();
+    expect(screen.queryByText("stored")).not.toBeInTheDocument();
   });
 
-  it("shows a not-found panel with a way back for a stale/unknown id", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus());
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue([]);
+  it("re-testing calls test() and renders the verdict its response body carries, never inferring pass from a 2xx", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([FEED_ROW]);
+    testIntegrationMock.mockResolvedValue({ state: "passed", checked_at: "2026-08-14T00:00:00Z" });
+    renderDetail("corp-artifactory");
 
-    renderDetail("ai:does_not_exist");
-    expect(await screen.findByText(/integration not found/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /back to integrations/i })).toBeInTheDocument();
+    await screen.findByText("Corp Artifactory");
+    await user.click(screen.getByRole("button", { name: /re-test/i }));
+
+    await waitFor(() => expect(testIntegrationMock).toHaveBeenCalledWith("corp-artifactory"));
+    await screen.findByText("verified");
   });
 
-  // A bookmarked mirror:/proxy: link from before the Corporate-network
-  // consolidation. Those rows aren't derived any more, so the honest answer is
-  // not-found — never a resurrected detail page for a category the list no
-  // longer has, and never a danger zone offering to delete site config.
-  it("a pre-consolidation mirror/proxy id is not found, even with that config still present", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus());
-    getSiteConfigMock.mockResolvedValue({
-      egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/x" }],
-      upstream_proxy_url: "http://proxy.corp.acme.com:8080",
-    });
-    listSecretsMock.mockResolvedValue([]);
+  it("a row with no probe configured offers no Test button", async () => {
+    listMock.mockResolvedValue([{ ...FEED_ROW, probe: undefined }]);
+    renderDetail("corp-artifactory");
 
-    const { unmount } = renderDetail("mirror:0");
-    expect(await screen.findByText(/integration not found/i)).toBeInTheDocument();
-    unmount();
-
-    renderDetail("proxy:host");
-    expect(await screen.findByText(/integration not found/i)).toBeInTheDocument();
+    await screen.findByText("Corp Artifactory");
+    expect(screen.queryByRole("button", { name: /re-test/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/no probe configured/i)).toBeInTheDocument();
   });
 
-  it("renders the GitHub App's ruleset row Unknown (never fabricated) with T.CACHE_CAVEAT", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: [], github_app: true } }));
-    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com"] });
-    listSecretsMock.mockResolvedValue([]);
+  it("Used-by states the real default-for marks, honestly, with no fabricated workspace count", async () => {
+    listMock.mockResolvedValue([{ ...FEED_ROW, kind: "anthropic_api_key", source: "stored", default_for: ["agent_runs"] }]);
+    renderDetail("corp-artifactory");
 
-    renderDetail("scm:github.com");
-    await screen.findByRole("heading", { name: "GitHub" });
-
-    expect(screen.getByText(/Unknown/)).toBeInTheDocument();
-    expect(screen.getByText(T.CACHE_CAVEAT)).toBeInTheDocument();
+    await screen.findByText("Corp Artifactory");
+    expect(screen.getByText("Default for agent runs.")).toBeInTheDocument();
+    expect(screen.getByText(/binding isn't surfaced here yet/i)).toBeInTheDocument();
   });
 
-  // SCM-SEAM-1: deleting an SCM row must drop the site-config registration
-  // that widens every run's egress allowlist, or "Runs stop inheriting
-  // github.com" is a lie the moment the row disappears.
-  it("Delete integration on an SCM host also drops it from site-config scm_hosts", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["git-pat-github-com"], github_app: false } }));
-    getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com", "gitlab.com"] });
-    listSecretsMock.mockResolvedValue(["git-pat-github-com"]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  it("names the delete-409 possibility in the danger zone", async () => {
+    listMock.mockResolvedValue([FEED_ROW]);
+    renderDetail("corp-artifactory");
 
-    renderDetail("scm:github.com");
-    await screen.findByRole("heading", { name: "GitHub" });
-
-    await user.click(screen.getByRole("button", { name: /delete integration…/i }));
-    const dialog = within(await screen.findByRole("alertdialog"));
-    await user.click(dialog.getByRole("button", { name: /^delete integration$/i }));
-
-    await waitFor(() =>
-      expect(putSiteConfigMock).toHaveBeenCalledWith(expect.objectContaining({ scm_hosts: ["gitlab.com"] })),
-    );
-    // The secret itself still survives (UI-WS-4); the adopted stored host
-    // integration is removed too.
-    expect(deleteSecretMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(removeIntegrationMock).toHaveBeenCalledWith("git_host:github.com"));
-    expect(await screen.findByText("back on the list")).toBeInTheDocument();
-  });
-});
-
-// The "Make default" button used to be a bare <button> with no onClick at
-// all (hardening-review) — mirroring the mock's noop handlers from back when
-// there was no backend concept of a per-capability default. Now real.
-describe("IntegrationDetailScreen — Make default is wired", () => {
-  beforeEach(() => {
-    adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
-    putIntegrationMock.mockReset().mockResolvedValue(undefined);
+    await screen.findByText("Corp Artifactory");
+    expect(screen.getByText(/A 409 here means something still depends/i)).toBeInTheDocument();
   });
 
-  it("clicking Make default next to Claude Code adopts, PUTs agent_runs, and the row re-renders as the live default", async () => {
-    const row = {
-      id: "anthropic_api_key",
-      name: "Anthropic API key",
-      kind: "anthropic_api_key",
-      source: "legacy" as const,
-      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
-    };
-    getSetupStatusMock.mockReset();
-    getSetupStatusMock.mockResolvedValueOnce(
-      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [row] }),
-    );
-    getSetupStatusMock.mockResolvedValueOnce(
-      baseStatus({
-        secrets: { present: ["anthropic-api-key"], github_app: false },
-        integrations: [{ ...row, source: "stored", default_for: ["agent_runs"] }],
-      }),
-    );
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  it("an unknown id renders the not-found state instead of crashing", async () => {
+    listMock.mockResolvedValue([FEED_ROW]);
+    renderDetail("does-not-exist");
 
-    renderDetail("ai:anthropic_api_key");
-    await screen.findByRole("heading", { name: "Anthropic (API key)" });
-
-    // Scoped to the Claude Code capability row (label + chip + button share
-    // one flex container) — Wardyn features renders its own, separate button.
-    const claudeRow = within(screen.getByText("Claude Code").closest("div")!);
-    expect(claudeRow.queryByText("default")).not.toBeInTheDocument();
-    await user.click(claudeRow.getByRole("button", { name: /make default/i }));
-
-    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("anthropic_api_key"));
-    await waitFor(() =>
-      expect(putIntegrationMock).toHaveBeenCalledWith(
-        "anthropic_api_key",
-        expect.objectContaining({ default_for: ["agent_runs"] }),
-      ),
-    );
-
-    // Reload lands the server's real state: the chip appears, the button (now
-    // redundant) is gone — never a locally-guessed "still offering to set it".
-    await waitFor(() => expect(within(screen.getByText("Claude Code").closest("div")!).getByText("default")).toBeInTheDocument());
-    expect(within(screen.getByText("Claude Code").closest("div")!).queryByRole("button", { name: /make default/i })).not.toBeInTheDocument();
-  });
-
-  it("hides Make default for a viewer (disabled, with the operator-only hint) instead of letting it 403", async () => {
-    const row = {
-      id: "anthropic_api_key",
-      name: "Anthropic API key",
-      kind: "anthropic_api_key",
-      source: "legacy" as const,
-      secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }],
-    };
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [row] }),
-    );
-    getSiteConfigMock.mockResolvedValue({});
-    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
-
-    render(
-      <MemoryRouter initialEntries={["/integrations/ai:anthropic_api_key"]}>
-        <OperatorProvider operator={false}>
-          <Routes>
-            <Route path="/integrations/:id" element={<IntegrationDetailScreen />} />
-          </Routes>
-        </OperatorProvider>
-      </MemoryRouter>,
-    );
-    await screen.findByRole("heading", { name: "Anthropic (API key)" });
-
-    const claudeRow = within(screen.getByText("Claude Code").closest("div")!);
-    const button = claudeRow.getByRole("button", { name: /make default/i });
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("title", expect.stringMatching(/operator/i));
+    expect(await screen.findByText("Integration not found")).toBeInTheDocument();
   });
 });

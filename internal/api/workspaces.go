@@ -622,8 +622,8 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 		// The ref grammar is WIDER than an operator-authored id
 		// (validateIntegrationWrite's secretNameRE): Wardyn itself mints
 		// colon-qualified ids for ADOPTED legacy rows
-		// ("anthropic_subscription:managed", "git_host:<host>",
-		// "artifact_mirror:<host>") and stores them verbatim — a contract must
+		// ("anthropic_subscription:managed", "git_host:<host>") and stores
+		// them verbatim — a contract must
 		// be able to name what the store holds. Split on the FIRST colon at
 		// the key layer keeps this unambiguous.
 		if !integrationRefRE.MatchString(rest) {

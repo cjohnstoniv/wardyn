@@ -27,7 +27,7 @@
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { health } from "../../../lib/api/health";
 import { HttpError } from "../../../lib/api/core";
-import { genericIntegrationsApi, integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
+import { genericIntegrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
 import type { WireIntegration } from "../../../lib/types/setup";
 
 // The one secret a "Rotate credential…" click targets, for a row backed by
@@ -85,46 +85,64 @@ export async function deleteIntegration(row: IntegrationRow): Promise<void> {
   }
 }
 
+// deleteWireRow is deleteIntegration's twin for the base-component screens
+// (list/detail, B3): same two rules, read straight off the wire row instead
+// of the legacy IntegrationRow shape. A harness login has no wire secret at
+// all (delivery is absent on its bespoke lane) and disconnects through its
+// own endpoint; every other row's stored secret is left alone (UI-WS-4).
+// git_host is the one kind whose site-config coupling survives the rebuild:
+// gitHostRows (integrations.go) still derives from SiteConfig.ScmHosts, so a
+// row's own `name` IS the bare host (SCM-SEAM-1 — without this the host stays
+// in every future run's egress allowlist with no surface left to revoke it).
+export async function deleteWireRow(wire: WireIntegration, harnessProvider?: string): Promise<void> {
+  if (harnessProvider) {
+    await harnessAuthApi.harnessDisconnect(harnessProvider);
+    return;
+  }
+  if (wire.kind === "git_host") {
+    const siteConfig = await health.getSiteConfig();
+    const hosts = siteConfig.scm_hosts ?? [];
+    const remaining = hosts.filter((h) => h.trim().toLowerCase() !== wire.name?.trim().toLowerCase());
+    if (remaining.length !== hosts.length) {
+      await health.putSiteConfig({ ...siteConfig, scm_hosts: remaining });
+    }
+  }
+  // A never-adopted derived row 404s — that IS the done state (see
+  // deleteIntegration's header comment; same server contract).
+  await genericIntegrationsApi.remove(wire.id).catch((e) => {
+    if (e instanceof HttpError && e.status === 404) return;
+    throw e;
+  });
+}
+
 /** The two DefaultFor marks the console can toggle (types.Integration.DefaultFor's closed set). */
 export type DefaultForMark = "agent_runs" | "wardyn_features";
 
-// Toggle one DefaultFor mark on a row, adopting it first when it has no
-// stored identity yet (an unadopted legacy row can't be PUT directly — POST
-// .../adopt persists it VERBATIM first, so this never has to reconstruct
-// hosts/credentials it can't see client-side). PUT is a full replacement, so
-// every other field round-trips from the effective wire row untouched — only
-// `mark`'s membership changes. Radio semantics (naming a mark here clears it
-// on every OTHER row) are enforced server-side (applyDefaultForRadio);
-// callers should reload rather than guess the result.
+// Toggle one DefaultFor mark on an already-STORED row. PUT is a full
+// replacement, so every other field round-trips from the effective wire row
+// untouched — only `mark`'s membership changes. Radio semantics (naming a
+// mark here clears it on every OTHER row) are enforced server-side
+// (applyDefaultForRadio); callers should reload rather than guess the result.
 //
-// Atomic from the operator's point of view: a fresh adopt is only a means to
-// the PUT, never the goal itself. If the PUT rejects (e.g. a half-set Bedrock
-// row — region set, model empty — passes the checkbox gate but hard-400s
-// server-side), the just-adopted row is deleted again so a failed "set
-// default" attempt doesn't leave behind a row the operator never asked to
-// store. The rollback is best-effort (its own failure is swallowed) — either
-// way the PUT's real error propagates to the caller, which is what actually
-// explains the failure.
+// Never adopts (owner-approved mock): a derived row has no default-for
+// control to toggle in the first place — the list/detail screens gate the
+// checkbox on `wire.source === "stored"` and offer "Adopt to edit" instead,
+// the only promotion path for a derived row. Silently adopting-on-toggle used
+// to live here; it's gone because a checkbox must never have a write this
+// large (a whole new stored row) as an invisible side effect.
 export async function setDefaultFor(wire: WireIntegration, mark: DefaultForMark, on: boolean): Promise<void> {
-  const adopted = wire.source !== "stored";
-  if (adopted) await integrationsApi.adoptIntegration(wire.id);
   const current = wire.default_for ?? [];
   const default_for = on ? [...current, mark] : current.filter((m) => m !== mark);
-  try {
-    await genericIntegrationsApi.put(wire.id, {
-      name: wire.name ?? "",
-      kind: wire.kind,
-      disabled: wire.disabled,
-      secrets: wire.secrets,
-      egress: wire.egress,
-      config: wire.config,
-      probe: wire.probe,
-      docs: wire.docs,
-      disabled_capabilities: wire.disabled_capabilities,
-      default_for,
-    });
-  } catch (e) {
-    if (adopted) await genericIntegrationsApi.remove(wire.id).catch(() => {});
-    throw e;
-  }
+  await genericIntegrationsApi.put(wire.id, {
+    name: wire.name ?? "",
+    kind: wire.kind,
+    disabled: wire.disabled,
+    secrets: wire.secrets,
+    egress: wire.egress,
+    config: wire.config,
+    probe: wire.probe,
+    docs: wire.docs,
+    disabled_capabilities: wire.disabled_capabilities,
+    default_for,
+  });
 }

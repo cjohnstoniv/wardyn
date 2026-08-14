@@ -26,30 +26,12 @@ import (
 
 // genericIntegrationKind reports whether kind is a GENERIC open slug — one
 // whose behavior does NOT come from code: the row's own secrets, egress and
-// delivery are the whole contract (see types.ClosedIntegrationKinds). The two
-// legacy topology slugs are excluded so the legacy-DERIVED artifact_mirror/
-// host_proxy rows (legacyIntegrations) keep routing to their bespoke matrices.
-// track-b: B1 shim (the topology exception) — dies in B2 with the derivation.
+// delivery are the whole contract (see types.ClosedIntegrationKinds). No slug
+// is excepted: "artifact_mirror"/"host_proxy" as a NEW-shape kind are ordinary
+// generic connections (the legacy topology CATEGORIES are dropped at the fold,
+// types.IntegrationList, and no longer derived — integrations.go).
 func genericIntegrationKind(kind string) bool {
-	return !types.ClosedIntegrationKinds[kind] && kind != "artifact_mirror" && kind != "host_proxy"
-}
-
-// legacySortCategory reproduces the pre-base-component category grouping the
-// effective-set sort keyed on, from kind alone (all generic kinds collapse
-// into one "connection" bucket — the stored category is gone by design).
-// track-b: B1 shim, removed in B2/B3 when the surface re-derives its own
-// grouping from kind.
-func legacySortCategory(kind string) string {
-	switch {
-	case types.AIProviderKind(kind):
-		return "ai_provider"
-	case kind == "github_app" || kind == "git_host":
-		return "scm_host"
-	case kind == "artifact_mirror" || kind == "host_proxy":
-		return kind
-	default:
-		return "connection"
-	}
+	return !types.ClosedIntegrationKinds[kind]
 }
 
 // maxIntegrationHosts bounds one integration's host list. Well under the
@@ -105,10 +87,24 @@ func bareExactHost(h string) bool {
 	return !strings.HasPrefix(h, "*.") && !strings.Contains(h, ":")
 }
 
+// residentDeliveryRefusal is why an operator-authored secret row may not
+// declare a resident delivery today. types.Integration models three modes
+// because the two resident ones DO happen — but only on a closed kind's
+// hand-written transport (git_host's ssh_key file, bedrock's AWS env), which
+// is exactly the case that leaves Delivery nil. There is no generic lane that
+// materializes an arbitrary named secret into an arbitrary sandbox path or env
+// var, so accepting one here would store a promise nothing keeps: the row
+// would read "delivered" on the surface and deliver nothing to the run.
+const residentDeliveryRefusal = "delivery.mode %q is not deliverable for an operator-authored integration: Wardyn " +
+	"has no generic lane that materializes a named secret into the sandbox (the resident lanes that exist are " +
+	"hand-written per provider — git_host's SSH key, Bedrock's AWS env — and those closed kinds declare no delivery " +
+	"at all). Use proxy_header, or leave the delivery off on a closed kind whose own transport carries it"
+
 // validateIntegrationDelivery checks ONE secret row's delivery object.
 //
-// proxy_header's header is a trust boundary: it is written verbatim onto a
-// forwarded request, so it must be a real HTTP field-name token
+// proxy_header is the only mode an operator may declare (see
+// residentDeliveryRefusal). Its header is a trust boundary: it is written
+// verbatim onto a forwarded request, so it must be a real HTTP field-name token
 // (egress.ValidHeaderName — which excludes CR/LF, ':' and space by
 // construction). Format is the other half of the same wire value: fmt.Sprintf
 // substitutes the secret into it, so it needs exactly one %s (a format with
@@ -137,22 +133,8 @@ func validateIntegrationDelivery(d types.IntegrationDelivery) error {
 			}
 		}
 		return nil
-	case types.DeliveryResidentFile:
-		if d.Header != "" || d.Format != "" || d.Var != "" {
-			return fmt.Errorf("header/format/var: not part of resident_file delivery")
-		}
-		if d.Path == "" || strings.ContainsAny(d.Path, "\r\n\x00") {
-			return fmt.Errorf("path: resident_file delivery needs a sandbox file path")
-		}
-		return nil
-	case types.DeliveryResidentEnv:
-		if d.Header != "" || d.Format != "" || d.Path != "" {
-			return fmt.Errorf("header/format/path: not part of resident_env delivery")
-		}
-		if d.Var == "" || strings.ContainsAny(d.Var, "=\r\n\x00 ") {
-			return fmt.Errorf("var: resident_env delivery needs an environment variable name")
-		}
-		return nil
+	case types.DeliveryResidentFile, types.DeliveryResidentEnv:
+		return fmt.Errorf(residentDeliveryRefusal, d.Mode)
 	default:
 		return fmt.Errorf("mode: unknown %q (want proxy_header, resident_file or resident_env)", d.Mode)
 	}
@@ -162,12 +144,23 @@ func validateIntegrationDelivery(d types.IntegrationDelivery) error {
 // the condition that tightens the egress list to bare exact hosts
 // (validateIntegrationHosts).
 func hasProxyHeaderSecret(in types.Integration) bool {
+	return countProxyHeaderSecrets(in) > 0
+}
+
+// countProxyHeaderSecrets counts the row's proxy_header-delivered secrets.
+// More than one is refused at write time (validateIntegrationWrite): the
+// proxy's injector is keyed BY HOST (buildInjector's byHost map, one rule per
+// host) and every proxy_header secret of a row would target that row's whole
+// egress list — so a second one has nowhere of its own to go and would be
+// silently dropped at dispatch.
+func countProxyHeaderSecrets(in types.Integration) int {
+	n := 0
 	for _, s := range in.Secrets {
 		if s.Delivery != nil && s.Delivery.Mode == types.DeliveryProxyHeader {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // knownIntegrationConfigKeys is each CLOSED kind's accepted non-secret config
@@ -204,9 +197,8 @@ var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_fea
 // transport); config keys closed per kind (knownIntegrationConfigKeys — an
 // unknown key on a closed kind 400s BY NAME; a generic kind takes any string
 // keys); DefaultFor closed to {agent_runs, wardyn_features} on AI kinds only;
-// and the two per-kind Config checks this codebase already has an established
-// rule for: an artifact_mirror's ecosystems must be the same closed set
-// ArtifactOverrides uses (site_config.go), and a bedrock integration may not
+// and the one per-kind Config check this codebase already has an established
+// rule for: a bedrock integration may not
 // half-override region/model — the identical hazard
 // `git show ecc1903~1:internal/api/llmcred.go`'s
 // TestValidateWorkspaceLLMCred_Rejections pinned for the pre-Integration
@@ -245,6 +237,12 @@ func validateIntegrationWrite(in types.Integration) error {
 		if err := validateIntegrationDelivery(*s.Delivery); err != nil {
 			return fmt.Errorf("secrets[%d].delivery: %w", i, err)
 		}
+	}
+	if countProxyHeaderSecrets(in) > 1 {
+		return fmt.Errorf("secrets: at most one proxy_header-delivered secret per integration — the proxy injects " +
+			"ONE credential header per host and every such secret targets this row's whole egress list, so a second " +
+			"one has no host of its own and would be silently dropped at dispatch. Split the second credential into " +
+			"its own integration")
 	}
 	if err := validateIntegrationHosts(in.Egress, hasProxyHeaderSecret(in)); err != nil {
 		return err
@@ -288,16 +286,6 @@ func validateIntegrationWrite(in types.Integration) error {
 		model, _ := in.Config["model"].(string)
 		if (region == "") != (model == "") {
 			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
-		}
-	}
-	if in.Kind == "artifact_mirror" {
-		// track-b: B1 shim — keeps a derived topology row adoptable/editable
-		// with the same closed-ecosystem rule it always had; dies in B2 with
-		// the artifact_mirror derivation.
-		for _, eco := range stringSlice(in.Config["ecosystems"]) {
-			if !validArtifactEcosystems[eco] {
-				return fmt.Errorf("config.ecosystems: unknown ecosystem %q", eco)
-			}
 		}
 	}
 	return nil
@@ -411,7 +399,7 @@ func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool,
 		if !types.AIProviderKind(in.Kind) || !slices.Contains(in.DefaultFor, "wardyn_features") {
 			continue
 		}
-		for _, c := range capabilitiesFor(toIntegrationView(integrationRow{Integration: in}), env) {
+		for _, c := range capabilitiesFor(in, env) {
 			if c.ID == "wardyn_features" && c.State == CapAvailable {
 				return in, true
 			}

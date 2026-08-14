@@ -3,22 +3,35 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Add-integration dialog — mockup's AddCategory / AddTypeAI / AddKey / etc.
-// TWO categories: AI provider (fully modeled by the approved mock) and SCM
-// host, which hands off to the SAME ladder ScmProviderStep already uses
-// (AddProviderPanel1/2, exported from that file for exactly this reuse).
-// Egress redirection and Host proxy are NOT addable here — they're network
-// topology, owned by the Corporate network step, where a redirect has to prove
-// itself before the step hands off. That retired this dialog's hand-off to
-// setup/step-bodies.tsx's ArtifactRepoStep / HostProxyStep, and with it those
-// two step bodies.
+// Add integration — ONE dialog (B3), replacing the old AddServiceDialog ⇄
+// AddIntegrationDialog double-mount. Every kind — the seven closed ones and
+// any generic slug — walks the SAME ladder:
+//
+//   kind pick -> [flavor pick, AI kinds only] -> base form (prefilled per
+//   kind/flavor: secrets w/ delivery language, egress, config, docs) -> save
+//   -> Test.
+//
+// AI kinds are provider FLAVORS (subscription/api_key/bedrock/openai/azure)
+// that only change what the base form is prefilled with — there is no second,
+// richer AI-only flow any more. HarnessLoginPane survives, embedded as the
+// subscription/Bedrock-SSO flavor's sign-in card. AddSecretDialog survives
+// for inline secret creation — every credential field here is a NAME
+// reference into the secret store, never a value typed into this dialog.
 import * as React from "react";
-import { ChevronDown, KeyRound, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
+import { ChevronDown, KeyRound, Search, ShieldCheck } from "lucide-react";
 import {
-  AI_TYPES,
+  CATALOG_COPY,
+  INTEGRATION_GROUPS,
+  integrationGroup,
+  searchIntegrationTypes,
+  typesInGroup,
+  type IntegrationTypeMeta,
+} from "../../../lib/integration-catalog";
+import { AI_KINDS, aiServerId, genericIntegrationsApi, probeChip, SECRET_DELIVERY_NOTE, type IntegrationWrite } from "../../../lib/api/integrations";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
+import {
   BEDROCK_LANE_META,
-  CATEGORY_META,
   RESIDENCY_META,
   SUBSCRIPTION_LANE_META,
   T,
@@ -26,422 +39,449 @@ import {
   type BedrockLane,
   type SubscriptionLane,
 } from "../../../lib/integrations";
-import { aiResidency, aiRowName, aiServerId, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
-import { health } from "../../../lib/api/health";
-import { setup as setupApi } from "../../../lib/api/setup";
-import type { SetupStatus, SiteConfig, WireIntegration } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
+import type { WireIntegrationProbeStatus, WireIntegrationSecret } from "../../../lib/types/setup";
+import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
+import { Input } from "../../ui/input";
+import { Label } from "../../ui/label";
+import { Textarea } from "../../ui/textarea";
 import { Field, OptionCard } from "../new-run/step-shell";
 import { Mono } from "../../wardyn/code-block";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
-import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
-import { CapabilityTable } from "./integration-detail";
-import { setDefaultFor, type DefaultForMark } from "./actions";
-import type { Lane } from "../../../lib/scm-provider";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
 
-// Where the search-first Add flow (add-service-dialog.tsx) hands off TO. That
-// flow is the ONLY way in here — the old "AI provider or SCM host?" category
-// grid is gone, because by the time this dialog opens that question has always
-// been answered by the pick itself. Two landings exist for an AI pick:
-//
-//   - ai_connect: the pick left NO open question (an OpenAI key is an OpenAI
-//     key) — land straight on its connect panel.
-//   - ai_type, preselected: the pick left a REAL question — "Anthropic" still
-//     splits into API key vs Claude subscription, Bedrock still has its four
-//     credential lanes, a subscription still chooses managed vs host login.
-//     The type panel is where those sub-choices live, so it opens with the
-//     picked row selected and the siblings one click away.
-export type AddIntegrationTarget =
-  | { s: "ai_connect"; type: AiType }
-  | { s: "ai_type"; preselect?: AiType }
-  | { s: "scm" };
+/** One already-existing row's id + display name — enough to warn on a slug
+ *  collision before Save either silently replaces it (a STORED row: PUT is
+ *  create-or-REPLACE) or 409s (a DERIVED-only row: the server now refuses a
+ *  PUT there outright — adoption is explicit, POST {id}/adopt only, never a
+ *  side effect of this dialog). `stored` tells Save which case it's in. */
+export interface ExistingIntegrationRef {
+  id: string;
+  name: string;
+  stored: boolean;
+}
+
+/** A slug the API accepts as an integration id (secretNameRE: lowercase, dots/dashes/underscores). */
+export function slugifyIntegrationId(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 128);
+}
+
+/** Every operator-set value the PUT body is built from — exactly the BaseForm
+ *  state, so the payload is shaped in ONE place a non-mocked test can exercise
+ *  (add-integration-dialog.test.tsx's payload suite) instead of inline where
+ *  only a mocked put() ever saw it. */
+export interface IntegrationFormValues {
+  type: IntegrationTypeMeta;
+  hostCli?: boolean;
+  bedrockLane?: BedrockLane;
+  name: string;
+  hostList: string[];
+  docs: string;
+  region: string;
+  model: string;
+  defAgent: boolean;
+  defFeat: boolean;
+  genericSecret: string;
+  bearerSecret: string;
+  awsKeyId: string;
+  awsSecret: string;
+  awsSession: string;
+  appIdSecret: string;
+  appKeySecret: string;
+}
+
+/** Build the PUT /integrations/{id} body from the form values — the single
+ *  payload-shaping seam, matched to the server's write contract per kind/flavor
+ *  (internal/api/integrations_write.go, runs_bedrock.go):
+ *   - a Bedrock credential row carries NO delivery: its bespoke transport reads
+ *     the secret by NAME (bearer ⇒ `bedrock-api-key`, static ⇒ the fixed aws-*
+ *     globals), never generic proxy_header injection — exactly what
+ *     foldLegacyIntegration emits for a bedrock row, and a CLOSED kind may omit
+ *     delivery (validateIntegrationWrite only validates a delivery that's present);
+ *   - the AWS session token is optional (STS/AssumeRole) — its row is dropped
+ *     when empty rather than sent as an empty secret_name the server 400s;
+ *   - an AI-provider kind gets NO auto-probe: a bare unauthenticated GET / to an
+ *     AI host returns 4xx and the curl -f probe brands the healthy row "failed"
+ *     (an auth-aware AI reachability probe is a documented follow-up). */
+export function buildIntegrationWrite(v: IntegrationFormValues): IntegrationWrite {
+  const { type } = v;
+  const isSubscription = type.apiType === "anthropic_subscription";
+  const isBedrock = type.apiType === "bedrock";
+  const isGithubApp = type.apiType === "github_app";
+  const isGitHost = type.apiType === "git_host";
+  const isAi = !!type.apiType && AI_KINDS.has(type.apiType);
+  const takesHeader = !!type.header;
+  const bedrockLane = v.bedrockLane ?? "bearer";
+
+  const secrets: WireIntegrationSecret[] = [];
+  if (isSubscription) {
+    // Managed lane's token lives in harness state, not the secret store; the
+    // host-CLI lane has no stored credential at all — nothing to reference.
+  } else if (isBedrock && bedrockLane === "bearer") {
+    secrets.push({ role: "api_key", secret_name: v.bearerSecret.trim() });
+  } else if (isBedrock && bedrockLane === "static") {
+    secrets.push(
+      { role: "access_key_id", secret_name: v.awsKeyId.trim() },
+      { role: "secret_access_key", secret_name: v.awsSecret.trim() },
+    );
+    if (v.awsSession.trim()) secrets.push({ role: "session_token", secret_name: v.awsSession.trim() });
+  } else if (isBedrock) {
+    // sso / aws_dir: a harness session or boot-config mount, no secret row.
+  } else if (isGithubApp) {
+    secrets.push({ role: "app_id", secret_name: v.appIdSecret.trim() }, { role: "app_key", secret_name: v.appKeySecret.trim() });
+  } else if (isGitHost) {
+    secrets.push({ role: "pat", secret_name: v.genericSecret.trim() });
+  } else if (takesHeader && v.genericSecret.trim()) {
+    secrets.push({
+      role: "api_key",
+      secret_name: v.genericSecret.trim(),
+      delivery: { mode: "proxy_header", header: type.header!, format: type.format },
+    });
+  }
+
+  const config: Record<string, unknown> = {};
+  if (isBedrock) {
+    config.auth_lane = bedrockLane;
+    if (v.region.trim()) config.region = v.region.trim();
+    if (v.model.trim()) config.model = v.model.trim();
+  }
+  if (isSubscription) config.lane = v.hostCli ? "resident_host" : "managed";
+
+  const egress = isSubscription || isBedrock ? type.hosts.slice() : v.hostList;
+  const probeHost = egress[0];
+
+  return {
+    name: v.name.trim(),
+    kind: type.apiType ?? type.id,
+    egress,
+    ...(secrets.length ? { secrets } : {}),
+    ...(Object.keys(config).length ? { config } : {}),
+    ...(v.docs.trim() ? { docs: v.docs.trim() } : {}),
+    ...(probeHost && !isAi ? { probe: { method: "GET", url: `https://${probeHost}/` } } : {}),
+    ...(isAi && (v.defAgent || v.defFeat)
+      ? { default_for: [...(v.defAgent ? ["agent_runs"] : []), ...(v.defFeat ? ["wardyn_features"] : [])] }
+      : {}),
+  };
+}
 
 type Step =
-  | { s: "scm" }
-  | { s: "ai_type"; preselect?: AiType }
-  | { s: "ai_connect"; type: AiType; hostCli?: boolean; bedrockLane?: BedrockLane };
+  | { s: "pick" }
+  | { s: "flavor"; type: IntegrationTypeMeta }
+  | { s: "form"; type: IntegrationTypeMeta; hostCli?: boolean; bedrockLane?: BedrockLane }
+  | { s: "done"; id: string; name: string };
 
 export function AddIntegrationDialog({
   open,
   onOpenChange,
-  status,
-  siteConfig,
-  existingAiRows,
-  secretNames,
-  reload,
-  target,
-  onBackToSearch,
+  existingRows,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
-  status: SetupStatus;
-  siteConfig: SiteConfig;
-  existingAiRows: IntegrationRow[];
-  /** Every currently-stored secret name — so the credential dialogs this
-   *  hands off to (App PEM / PAT / SSH key / API key) can arm their own
-   *  overwrite gate on a name collision (SCM-SEAM-4) instead of silently
-   *  clobbering an in-use secret. */
-  secretNames: string[];
-  reload: () => void;
-  /** What the search-first flow picked — this dialog always opens ON it. */
-  target: AddIntegrationTarget;
-  /** Backing out of the first panel returns to the search dialog, so the walk
-   *  reads as one flow, not two dialogs trading places. */
-  onBackToSearch: () => void;
+  /** Every currently-existing row (stored or derived) — flags a slug
+   *  collision before Save either replaces a stored one or hits the
+   *  server's 409-on-a-derived-id refusal. */
+  existingRows: ExistingIntegrationRef[];
+  /** Called once after Save+Done — the list reloads to pick up the new row. */
+  onSaved: () => void;
 }) {
-  const [step, setStep] = React.useState<Step>(target);
-  const [localSiteConfig, setLocalSiteConfig] = React.useState<SiteConfig>(siteConfig);
+  const [step, setStep] = React.useState<Step>({ s: "pick" });
+  const [status, setStatus] = React.useState<SetupStatus | null>(null);
+  const [secretNames, setSecretNames] = React.useState<string[]>([]);
 
   React.useEffect(() => {
-    if (open) {
-      setStep(target);
-      setLocalSiteConfig(siteConfig);
-    }
-    // Only reset when the dialog transitions open — not on every siteConfig
-    // prop tick from the parent's own polling, which would stomp an in-flight
-    // edit inside the SCM hand-off panels.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!open) return;
+    setStep({ s: "pick" });
+    Promise.all([setupApi.getSetupStatus(), secretsApi.listSecrets()]).then(([st, names]) => {
+      setStatus(st);
+      setSecretNames(names);
+    });
   }, [open]);
 
-  if (!open) return null;
+  if (!open || !status) return null;
 
+  const close = () => onOpenChange(false);
   const finish = () => {
-    onOpenChange(false);
-    reload();
-  };
-  // V2 discipline (step-bodies.tsx's useSiteConfigStep): re-GET before a save
-  // so a copy that went stale while this dialog was open never clobbers it.
-  const reloadSiteConfig = async () => setLocalSiteConfig(await health.getSiteConfig());
-  const saveSiteConfig = async (next: SiteConfig) => {
-    await health.putSiteConfig(next);
-    setLocalSiteConfig(next);
+    close();
+    onSaved();
   };
 
-  if (step.s === "scm") {
+  if (step.s === "pick") {
     return (
-      <ScmHandoff
-        siteConfig={localSiteConfig}
-        reloadSiteConfig={reloadSiteConfig}
-        saveSiteConfig={saveSiteConfig}
-        secretNames={secretNames}
-        onBack={onBackToSearch}
-        onDone={finish}
-      />
+      <Dialog open onOpenChange={(o) => !o && close()}>
+        <DialogContent className="max-w-[640px]">
+          <DialogHeader>
+            <DialogTitle>Add integration</DialogTitle>
+            <DialogDescription>{CATALOG_COPY.ADD_DESC}</DialogDescription>
+          </DialogHeader>
+          <PickPanel
+            onPick={(type) => {
+              const flavored = type.apiType === "anthropic_subscription" || type.apiType === "bedrock";
+              setStep(flavored ? { s: "flavor", type } : { s: "form", type });
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     );
   }
 
-  if (step.s === "ai_type") {
+  if (step.s === "flavor") {
     return (
-      <AiTypePanel
-        status={status}
-        initialType={step.preselect}
-        onBack={onBackToSearch}
-        onContinue={(type, hostCli, bedrockLane) => setStep({ s: "ai_connect", type, hostCli, bedrockLane })}
-      />
+      <Dialog open onOpenChange={(o) => !o && close()}>
+        <DialogContent className="max-w-[640px]">
+          <DialogHeader>
+            <DialogTitle>Add integration — {step.type.label}</DialogTitle>
+            <DialogDescription>One integration; the lane is switchable later.</DialogDescription>
+          </DialogHeader>
+          <FlavorPanel
+            type={step.type}
+            status={status}
+            onBack={() => setStep({ s: "pick" })}
+            onContinue={(hostCli, bedrockLane) => setStep({ s: "form", type: step.type, hostCli, bedrockLane })}
+          />
+        </DialogContent>
+      </Dialog>
     );
   }
 
-  return (
-    <ConnectReviewPanel
-      type={step.type}
-      hostCli={step.hostCli}
-      bedrockLane={step.bedrockLane}
-      existingAiRows={existingAiRows}
-      secretNames={secretNames}
-      status={status}
-      onBack={() => setStep({ s: "ai_type", preselect: step.type })}
-      onDone={finish}
-    />
-  );
-}
-
-// ---- SCM hand-off: the existing App/PAT/SSH ladder, not a second one ----
-
-function ScmHandoff({
-  siteConfig,
-  reloadSiteConfig,
-  saveSiteConfig,
-  secretNames,
-  onBack,
-  onDone,
-}: {
-  siteConfig: SiteConfig;
-  reloadSiteConfig: () => Promise<void>;
-  saveSiteConfig: (next: SiteConfig) => Promise<void>;
-  secretNames: string[];
-  onBack: () => void;
-  onDone: () => void;
-}) {
-  React.useEffect(() => {
-    void reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  type Panel =
-    | { step: "panel1" }
-    | { step: "panel2"; kind: ProviderOption["kind"]; host: string; title: string; showHostedNote: boolean };
-  const [panel, setPanel] = React.useState<Panel>({ step: "panel1" });
-  const [secretDialog, setSecretDialog] = React.useState<{ name: string; host: string; lane: Lane } | null>(null);
-  const [saving, setSaving] = React.useState(false);
-
-  const addHost = async (h: string): Promise<boolean> => {
-    setSaving(true);
-    try {
-      const hosts = Array.from(new Set([...(siteConfig.scm_hosts ?? []), h]));
-      await saveSiteConfig({ ...siteConfig, scm_hosts: hosts });
-      // SCM-SEAM-2: the ONLY disclosure a hosted (GitHub/ADO/GitLab/Bitbucket)
-      // pick gets — Panel2's own inline note renders for the generic kind
-      // only. Every pick still widens every future run's egress allowlist, so
-      // every pick gets told so, even after the fact.
-      toast.info(`${h} added to the egress allowlist`, {
-        description: "Every future run can now reach it, credential or not — delete the integration to revoke that.",
-      });
-      return true;
-    } catch (e) {
-      // SCM-SEAM-3: this used to have no catch at all — a rejected write left
-      // the spinner stopping with no toast, no inline error, and the host
-      // never registered. Matches the retired predecessor step's own
-      // addHost (scm-provider-step.tsx, pre-7f8d091).
-      toast.error("Failed to add the SCM host", { description: getErrorMessage(e) });
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (panel.step === "panel1") {
+  if (step.s === "form") {
     return (
-      <AddProviderPanel1
-        onCancel={onBack}
-        onContinue={(opt, host) => setPanel({ step: "panel2", kind: opt.kind, host, title: opt.title, showHostedNote: !opt.host })}
-      />
+      <Dialog open onOpenChange={(o) => !o && close()}>
+        <DialogContent className="scroll-thin sm:max-w-2xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
+          <DialogHeader>
+            <DialogTitle>Add integration — {step.type.label}</DialogTitle>
+            <DialogDescription>{CATALOG_COPY.CONNECT_DESC}</DialogDescription>
+          </DialogHeader>
+          <BaseForm
+            type={step.type}
+            hostCli={step.hostCli}
+            bedrockLane={step.bedrockLane}
+            status={status}
+            secretNames={secretNames}
+            existingRows={existingRows}
+            onBack={() => (step.type.apiType === "anthropic_subscription" || step.type.apiType === "bedrock" ? setStep({ s: "flavor", type: step.type }) : setStep({ s: "pick" }))}
+            onSaved={(id, name) => setStep({ s: "done", id, name })}
+          />
+        </DialogContent>
+      </Dialog>
     );
   }
 
   return (
-    <>
-      <AddProviderPanel2
-        kind={panel.kind}
-        host={panel.host}
-        title={panel.title}
-        showHostedNote={panel.showHostedNote}
-        saving={saving}
-        siteConfigLoaded
-        onBack={() => setPanel({ step: "panel1" })}
-        onClose={onBack}
-        onDone={async () => {
-          if (await addHost(panel.host)) onDone();
-        }}
-        onOpenSecret={(name, host, lane) => setSecretDialog({ name, host, lane })}
-        onRecheck={() => {}}
-      />
-      <AddSecretDialog
-        open={!!secretDialog}
-        onOpenChange={(o) => !o && setSecretDialog(null)}
-        initialName={secretDialog?.name ?? ""}
-        lockName
-        existingNames={secretNames}
-        host={secretDialog?.host}
-        lane={secretDialog?.lane}
-        onSaved={() => setSecretDialog(null)}
-      />
-    </>
-  );
-}
-
-// ---- AI provider: Panel 2 (type pick) ----
-
-function AiTypePanel({
-  status,
-  initialType,
-  onBack,
-  onContinue,
-}: {
-  status: SetupStatus;
-  /** The search pick this panel opens on; its siblings stay one click away. */
-  initialType?: AiType;
-  onBack: () => void;
-  onContinue: (type: AiType, hostCli?: boolean, bedrockLane?: BedrockLane) => void;
-}) {
-  const [selected, setSelected] = React.useState<AiType>(initialType ?? "anthropic_api_key");
-  const [subLane, setSubLane] = React.useState<SubscriptionLane>("managed");
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
-  const [bedrockLane, setBedrockLane] = React.useState<BedrockLane>("bearer");
-  // Sealed control plane (wardynd itself runs in a container): the host-CLI
-  // subscription lane can never be satisfied here — the same rule the funnel
-  // applied before it folded into Integrations.
-  const sealed = status.deployment?.host_like === false;
-
-  const continueClick = () => {
-    if (selected === "anthropic_subscription") onContinue(selected, subLane === "resident_host");
-    else if (selected === "bedrock") onContinue(selected, undefined, bedrockLane);
-    else onContinue(selected);
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onBack()}>
-      <DialogContent className="scroll-thin sm:max-w-xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
+    <Dialog open onOpenChange={(o) => !o && finish()}>
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add integration — {CATEGORY_META.ai_provider.title}</DialogTitle>
+          <DialogTitle>Saved</DialogTitle>
           <DialogDescription>
-            Multiple integrations of the same type can coexist — a personal login and a team key are two
-            rows.
+            “{step.name}” is stored. {CATALOG_COPY.STORE_NOTE}
           </DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-2">
-          <OptionCard
-            selected={selected === "anthropic_api_key"}
-            onClick={() => setSelected("anthropic_api_key")}
-            title={AI_TYPES.anthropic_api_key.title}
-            hint={AI_TYPES.anthropic_api_key.desc}
-          />
-
-          <OptionCard
-            selected={selected === "anthropic_subscription"}
-            onClick={() => setSelected("anthropic_subscription")}
-            title={AI_TYPES.anthropic_subscription.title}
-            hint={selected === "anthropic_subscription" ? undefined : AI_TYPES.anthropic_subscription.desc}
-          />
-          {selected === "anthropic_subscription" && (
-            <div className="ml-3 space-y-2 border-l border-border pl-3">
-              <OptionCard
-                selected={subLane === "managed"}
-                onClick={() => setSubLane("managed")}
-                title={
-                  <span className="flex items-center gap-2">
-                    {SUBSCRIPTION_LANE_META.managed.title}
-                    <Chip tone="primary" className="uppercase tracking-wide">
-                      Recommended
-                    </Chip>
-                  </span>
-                }
-                hint={
-                  <>
-                    “{T.MANAGED_LINE}” <span className="block">{T.X_SUB_DIRECT}</span>
-                  </>
-                }
-              />
-              {advancedOpen ? (
-                <div className="space-y-2">
-                  <OptionCard
-                    selected={subLane === "resident_host"}
-                    onClick={() => setSubLane("resident_host")}
-                    title={SUBSCRIPTION_LANE_META.resident_host.title}
-                    hint={
-                      <>
-                        “{T.HOSTCLI_LINE}” <span className="block">{T.X_SUB_DIRECT}</span>
-                      </>
-                    }
-                  />
-                  {sealed && (
-                    <div className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2">
-                      <p className="text-[0.6875rem] leading-snug text-warning">{T.SEALED_NOTE}</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setAdvancedOpen(true)}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronDown className="size-3.5" /> Advanced
-                </button>
-              )}
-            </div>
-          )}
-
-          <OptionCard
-            selected={selected === "bedrock"}
-            onClick={() => setSelected("bedrock")}
-            title={AI_TYPES.bedrock.title}
-            hint={
-              selected === "bedrock"
-                ? "One integration, four credential lanes — pick how the AWS chain is fed."
-                : AI_TYPES.bedrock.desc
-            }
-          />
-          {selected === "bedrock" && (
-            <div className="ml-3 space-y-1.5 border-l border-border pl-3">
-              {(["bearer", "sso", "aws_dir", "static"] as const).map((lane) => {
-                const meta = BEDROCK_LANE_META[lane];
-                const res = RESIDENCY_META[meta.residency];
-                return (
-                  <button
-                    key={lane}
-                    type="button"
-                    onClick={() => setBedrockLane(lane)}
-                    className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${
-                      bedrockLane === lane ? "border-primary bg-primary/10" : "border-border hover:border-border-strong"
-                    }`}
-                  >
-                    <span className="text-sm text-foreground">
-                      {meta.title}
-                      {meta.extra && <span className="text-muted-foreground"> · {meta.extra}</span>}
-                    </span>
-                    <span className="ml-auto">
-                      <Chip tone={res.tone} className="text-[0.6875rem]">
-                        {res.label}
-                      </Chip>
-                    </span>
-                  </button>
-                );
-              })}
-              <p className="text-[0.6875rem] text-muted-foreground">
-                {T.LANE_SWITCH} Lanes are listed in real precedence order.
-              </p>
-            </div>
-          )}
-
-          <OptionCard
-            selected={selected === "openai_api_key"}
-            onClick={() => setSelected("openai_api_key")}
-            title={AI_TYPES.openai_api_key.title}
-            hint={AI_TYPES.openai_api_key.desc}
-          />
-          <OptionCard
-            selected={selected === "azure_openai"}
-            onClick={() => setSelected("azure_openai")}
-            title={AI_TYPES.azure_openai.title}
-            hint={AI_TYPES.azure_openai.desc}
-          />
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onBack}>
-            Back
-          </Button>
-          <Button onClick={continueClick}>Continue</Button>
-        </DialogFooter>
+        <DonePanel id={step.id} onDone={finish} />
       </DialogContent>
     </Dialog>
   );
 }
 
-// ---- AI provider: Panel 3 (connect & review) ----
+// ---- Step 1: kind pick — search-first, browse-by-section fallback ----
 
-// The credential cell for the two container-login lanes (Claude subscription,
-// Bedrock SSO). It owns the whole lifecycle the pane hands back — which the
-// panel previously threw away: after a login it showed a bare "Log in" again,
-// no sign anything had happened, no way to tell a relogin from a first login.
-// Three states: the pane itself (opens on its consent gate), captured-just-now,
-// and already-connected-from-an-earlier-capture (SetupStatus.harness — presence
-// and age, never a live check).
-function LoginCredentialCell({
-  provider,
+function PickPanel({ onPick }: { onPick: (t: IntegrationTypeMeta) => void }) {
+  const [query, setQuery] = React.useState("");
+  const results = searchIntegrationTypes(query);
+  const browsing = query.trim() === "";
+
+  return (
+    <div className="space-y-4">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          autoFocus
+          className="pl-8"
+          placeholder={CATALOG_COPY.SEARCH_PH}
+          aria-label="Search integration types"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+
+      {browsing ? (
+        <div className="max-h-[340px] space-y-3 overflow-y-auto">
+          {INTEGRATION_GROUPS.map((group) => {
+            const types = typesInGroup(group.id);
+            if (types.length === 0) return null;
+            return (
+              <div key={group.id}>
+                <p className="text-xs font-medium text-foreground">{group.label}</p>
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{group.desc}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {types.map((t) => (
+                    <Button key={t.id} size="sm" variant="outline" onClick={() => onPick(t)}>
+                      {t.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : results.length === 0 ? (
+        <p className="text-[0.8125rem] leading-snug text-muted-foreground">{CATALOG_COPY.SEARCH_NONE}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {results.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left hover:bg-muted/40"
+              onClick={() => onPick(t)}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm text-foreground">{t.label}</span>
+                <span className="block text-[0.6875rem] text-muted-foreground">
+                  {integrationGroup(t.group).label}
+                  {t.hosts.length > 0 ? ` · ${t.hosts[0]}` : ""}
+                </span>
+              </span>
+              <Chip tone={RESIDENCY_META[t.delivery].tone}>{RESIDENCY_META[t.delivery].label}</Chip>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Step 2: flavor pick — subscription (managed/host-login) or Bedrock's four lanes ----
+
+function FlavorPanel({
+  type,
   status,
-  onCancelAll,
+  onBack,
+  onContinue,
 }: {
-  provider: "anthropic" | "aws";
+  type: IntegrationTypeMeta;
   status: SetupStatus;
-  onCancelAll: () => void;
+  onBack: () => void;
+  onContinue: (hostCli?: boolean, bedrockLane?: BedrockLane) => void;
 }) {
+  const [subLane, setSubLane] = React.useState<SubscriptionLane>("managed");
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const [bedrockLane, setBedrockLane] = React.useState<BedrockLane>("bearer");
+  // Sealed control plane (wardynd itself runs in a container): the host-CLI
+  // subscription lane can never be satisfied here.
+  const sealed = status.deployment?.host_like === false;
+
+  if (type.apiType === "bedrock") {
+    return (
+      <>
+        <div className="space-y-1.5">
+          {(["bearer", "sso", "aws_dir", "static"] as const).map((lane) => {
+            const meta = BEDROCK_LANE_META[lane];
+            const res = RESIDENCY_META[meta.residency];
+            return (
+              <button
+                key={lane}
+                type="button"
+                onClick={() => setBedrockLane(lane)}
+                className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${
+                  bedrockLane === lane ? "border-primary bg-primary/10" : "border-border hover:border-border-strong"
+                }`}
+              >
+                <span className="text-sm text-foreground">
+                  {meta.title}
+                  {meta.extra && <span className="text-muted-foreground"> · {meta.extra}</span>}
+                </span>
+                <span className="ml-auto">
+                  <Chip tone={res.tone} className="text-[0.6875rem]">
+                    {res.label}
+                  </Chip>
+                </span>
+              </button>
+            );
+          })}
+          <p className="text-[0.6875rem] text-muted-foreground">{T.LANE_SWITCH} Lanes are listed in real precedence order.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onBack}>
+            Back
+          </Button>
+          <Button onClick={() => onContinue(undefined, bedrockLane)}>Continue</Button>
+        </DialogFooter>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="space-y-2">
+        <OptionCard
+          selected={subLane === "managed"}
+          onClick={() => setSubLane("managed")}
+          title={
+            <span className="flex items-center gap-2">
+              {SUBSCRIPTION_LANE_META.managed.title}
+              <Chip tone="primary" className="uppercase tracking-wide">
+                Recommended
+              </Chip>
+            </span>
+          }
+          hint={
+            <>
+              "{T.MANAGED_LINE}" <span className="block">{T.X_SUB_DIRECT}</span>
+            </>
+          }
+        />
+        {advancedOpen ? (
+          <div className="space-y-2">
+            <OptionCard
+              selected={subLane === "resident_host"}
+              onClick={() => setSubLane("resident_host")}
+              title={SUBSCRIPTION_LANE_META.resident_host.title}
+              hint={
+                <>
+                  "{T.HOSTCLI_LINE}" <span className="block">{T.X_SUB_DIRECT}</span>
+                </>
+              }
+            />
+            {sealed && (
+              <div className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2">
+                <p className="text-[0.6875rem] leading-snug text-warning">{T.SEALED_NOTE}</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen(true)}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDown className="size-3.5" /> Advanced
+          </button>
+        )}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button onClick={() => onContinue(subLane === "resident_host")}>Continue</Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+// ---- Step 3: base form — secrets w/ delivery language, egress, config, docs ----
+
+/** The credential cell for a container-login lane (Claude subscription
+ *  managed, Bedrock SSO). Three states: the pane itself, captured-just-now,
+ *  and already-connected-from-an-earlier-capture. */
+function LoginCredentialCell({ provider, status }: { provider: "anthropic" | "aws"; status: SetupStatus }) {
   const [open, setOpen] = React.useState(true);
   const [freshCapture, setFreshCapture] = React.useState(false);
   const existing = status.harness?.find((h) => h.provider === provider && h.captured);
@@ -454,10 +494,7 @@ function LoginCredentialCell({
           setOpen(false);
           setFreshCapture(true);
         }}
-        // Backing out of a RE-login keeps the credential you already have;
-        // only a first-ever login has nothing to fall back to, so only that
-        // cancel leaves the panel.
-        onCancel={freshCapture || existing ? () => setOpen(false) : onCancelAll}
+        onCancel={() => setOpen(false)}
       />
     );
   }
@@ -473,10 +510,7 @@ function LoginCredentialCell({
   return (
     <div className="space-y-2">
       {line ? (
-        <p
-          className={`flex items-start gap-2 text-xs leading-snug ${freshCapture ? "text-success" : "text-muted-foreground"}`}
-          data-testid="login-captured-line"
-        >
+        <p className={`flex items-start gap-2 text-xs leading-snug ${freshCapture ? "text-success" : "text-muted-foreground"}`}>
           <ShieldCheck className="mt-px size-3.5 shrink-0" /> <span className="min-w-0">{line}</span>
         </p>
       ) : (
@@ -489,246 +523,342 @@ function LoginCredentialCell({
   );
 }
 
-const AGENT_SLOT = /Claude Code|Codex/;
-const FEATURES_SLOT = /^Wardyn features/;
-
-function ConnectReviewPanel({
-  type,
-  hostCli,
-  bedrockLane,
-  existingAiRows,
-  secretNames,
-  status,
-  onBack,
-  onDone,
+/** One "Required secret" row: an editable, prefilled secret NAME plus an
+ *  "Enter value" button that opens AddSecretDialog — the base model's own
+ *  "Wardyn stores this — it doesn't dial the system to check it" contract. */
+function SecretRow({
+  label,
+  name,
+  onChange,
+  onEnterValue,
+  deliveryNote,
 }: {
-  type: AiType;
-  hostCli?: boolean;
-  bedrockLane?: BedrockLane;
-  existingAiRows: IntegrationRow[];
-  secretNames: string[];
-  status: SetupStatus;
-  onBack: () => void;
-  onDone: () => void;
+  label: string;
+  name: string;
+  onChange: (v: string) => void;
+  onEnterValue: () => void;
+  /** Never-resident / resident language for THIS secret's delivery. */
+  deliveryNote: string;
 }) {
-  // UI-WS-2: the Name field used to be an editable Input that nothing ever
-  // read back — deriveAiRows always renders aiRowName() for these four types
-  // regardless of what's stored, so a typed rename silently vanished on Add.
-  // A fact, not a control, closes the gap honestly instead of wiring a write
-  // path deriveAiRows would still ignore.
-  const name = aiRowName(type, hostCli);
-  const capRows = AI_TYPES[type].capabilityPreview(hostCli);
-  const residency = aiResidency(type, hostCli, bedrockLane);
-  const resMeta = RESIDENCY_META[residency];
-
-  const canAgent = capRows.some((r) => !r.fact && r.on && AGENT_SLOT.test(r.label));
-  const canFeat = capRows.some((r) => !r.fact && r.on && FEATURES_SLOT.test(r.label));
-  // Auto-check whenever the type can hold the slot at all (matches AddKey,
-  // AddAzure, AddOpenAI's own fixtures) — with ONE deliberate exception: a
-  // Claude subscription is a personal credential, so it opts OUT of silently
-  // becoming Wardyn's own AI-features backend even though the capability
-  // itself is on (AddManaged's fixture leaves this box unchecked).
-  const [checkedAgent, setCheckedAgent] = React.useState(canAgent);
-  const [checkedFeat, setCheckedFeat] = React.useState(canFeat && type !== "anthropic_subscription");
-  const replacesAgent = checkedAgent ? defaultHolder(existingAiRows, AGENT_SLOT) : undefined;
-  const replacesFeat = checkedFeat ? defaultHolder(existingAiRows, FEATURES_SLOT) : undefined;
-  const [submitting, setSubmitting] = React.useState(false);
-
-  const [secretDialogName, setSecretDialogName] = React.useState<string | null>(null);
-
-  const keySecretName =
-    type === "anthropic_api_key"
-      ? "anthropic-api-key"
-      : type === "openai_api_key"
-        ? "openai-api-key"
-        : type === "azure_openai"
-          ? "azure-openai-key"
-          : type === "bedrock" && bedrockLane === "bearer"
-            ? "bedrock-api-key"
-            : undefined;
-
-  // UI-WS-2: persist the two DefaultFor checkboxes — Add used to patch only
-  // local state, so a pre-checked "replaces X" note never actually replaced
-  // anything. `status` (this dialog's own prop) is a snapshot from BEFORE the
-  // credential above was saved, so it re-GETs rather than trusting it — the
-  // same staleness discipline reloadSiteConfig uses for site config.
-  const handleAdd = async () => {
-    const marks: [DefaultForMark, boolean][] = [];
-    if (canAgent) marks.push(["agent_runs", checkedAgent]);
-    if (canFeat) marks.push(["wardyn_features", checkedFeat]);
-    const serverId = aiServerId(type, hostCli);
-    if (serverId && marks.length) {
-      setSubmitting(true);
-      try {
-        const fresh = await setupApi.getSetupStatus();
-        let wire: WireIntegration | undefined = fresh.integrations?.find((w) => w.id === serverId);
-        // Nothing to adopt/PUT yet (e.g. the operator never entered the
-        // credential) — the defaults simply don't persist; Add still succeeds.
-        if (wire) {
-          for (const [mark, on] of marks) {
-            if (on === !!wire.default_for?.includes(mark)) continue;
-            await setDefaultFor(wire, mark, on);
-            // setDefaultFor's own PUT is a full replace of whatever `wire` it's
-            // handed — advance the local copy so a SECOND mark in this same
-            // loop doesn't PUT a stale default_for and clobber the first.
-            const df: string[] = wire.default_for ?? [];
-            wire = { ...wire, source: "stored", default_for: on ? [...df, mark] : df.filter((m: string) => m !== mark) };
-          }
-        }
-      } catch (e) {
-        toast.error("Couldn't set the default", { description: getErrorMessage(e) });
-      } finally {
-        setSubmitting(false);
-      }
-    }
-    onDone();
-  };
-
   return (
-    <Dialog open onOpenChange={(o) => !o && onBack()}>
-      {/* This is the one dialog that can host a terminal, so its sizing is
-          pinned INLINE — beyond any stylesheet cascade — and horizontal
-          overflow is structurally impossible: overflowX hidden here, min-w-0
-          on every grid child so no leaf's min-content can widen them, and the
-          terminal scrolls inside its own container. */}
-      <DialogContent
-        className="scroll-thin"
-        style={{ maxWidth: "min(52rem, calc(100vw - 2rem))", maxHeight: "calc(100vh - 96px)", overflowY: "auto", overflowX: "hidden" }}
-      >
-        <DialogHeader className="min-w-0">
-          <DialogTitle>Add integration — {AI_TYPES[type].title}</DialogTitle>
-          <DialogDescription>Connect &amp; review — what&apos;s stored, what it powers, where it lives.</DialogDescription>
-        </DialogHeader>
-
-        <div className="min-w-0 space-y-4 py-1">
-          <Field label="Name" hint="How this row reads in lists and pickers.">
-            <p className="text-sm text-foreground">{name}</p>
-          </Field>
-
-          <div className="space-y-2 rounded-xl border border-border p-3.5">
-            <SectionLabel>Credential</SectionLabel>
-            {keySecretName ? (
-              <CredentialKeyRow name={keySecretName} onOpen={() => setSecretDialogName(keySecretName)} />
-            ) : type === "anthropic_subscription" && hostCli ? (
-              <p className="text-xs leading-snug text-muted-foreground">
-                {T.HOSTCLI_LINE} Wardyn detects it automatically once you&apos;ve logged in with the Claude CLI on
-                this host — there&apos;s nothing to capture here.
-              </p>
-            ) : type === "anthropic_subscription" ? (
-              <LoginCredentialCell provider="anthropic" status={status} onCancelAll={onBack} />
-            ) : type === "bedrock" && bedrockLane === "sso" ? (
-              <LoginCredentialCell provider="aws" status={status} onCancelAll={onBack} />
-            ) : type === "bedrock" && bedrockLane === "static" ? (
-              <div className="space-y-2">
-                {["aws-access-key-id", "aws-secret-access-key", "aws-session-token"].map((n) => (
-                  <CredentialKeyRow key={n} name={n} onOpen={() => setSecretDialogName(n)} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs leading-snug text-muted-foreground">
-                Boot-time config — set on wardynd (region/model, or the ~/.aws mount), not stored here.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2 rounded-xl border border-border p-3.5">
-            <SectionLabel>What this powers</SectionLabel>
-            <CapabilityTable rows={capRows} />
-          </div>
-
-          <div className="space-y-2 rounded-xl border border-border p-3.5">
-            <SectionLabel>Residency</SectionLabel>
-            <div className="flex items-start gap-2.5">
-              <Chip tone={resMeta.tone}>{resMeta.label}</Chip>
-              <p className="flex-1 text-xs leading-snug text-muted-foreground">{resMeta.tooltip}</p>
-            </div>
-          </div>
-
-          {(canAgent || canFeat) && (
-            <div className="space-y-3 rounded-xl border border-border p-3.5">
-              <SectionLabel>Defaults</SectionLabel>
-              {canAgent && (
-                <DefaultCheckbox
-                  id="def-agent"
-                  label="Default for agent runs"
-                  checked={checkedAgent}
-                  onCheckedChange={setCheckedAgent}
-                  replaces={replacesAgent?.name}
-                />
-              )}
-              {canFeat && (
-                <DefaultCheckbox
-                  id="def-features"
-                  label="Default for Wardyn features"
-                  checked={checkedFeat}
-                  onCheckedChange={setCheckedFeat}
-                  replaces={replacesFeat?.name}
-                />
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="min-w-0 flex flex-col gap-2">
-          <p className="text-right text-[0.6875rem] text-muted-foreground">{T.STORE_NOTE}</p>
-          <DialogFooter>
-            <Button variant="outline" onClick={onBack} disabled={submitting}>
-              Back
-            </Button>
-            <Button onClick={() => void handleAdd()} disabled={submitting}>
-              {submitting ? "Adding…" : "Add integration"}
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-
-      <AddSecretDialog
-        open={!!secretDialogName}
-        onOpenChange={(o) => !o && setSecretDialogName(null)}
-        lockName
-        initialName={secretDialogName ?? ""}
-        existingNames={secretNames}
-        onSaved={() => setSecretDialogName(null)}
-      />
-    </Dialog>
-  );
-}
-
-function CredentialKeyRow({ name, onOpen }: { name: string; onOpen: () => void }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <Mono className="text-foreground">{name}</Mono>
-      <Button size="sm" variant="outline" onClick={onOpen}>
-        <KeyRound className="size-3.5" /> Enter value
-      </Button>
+    <div className="space-y-1">
+      <Label className="text-xs">{label}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input value={name} onChange={(e) => onChange(e.target.value)} className="max-w-[260px]" />
+        <Button size="sm" variant="outline" onClick={onEnterValue}>
+          <KeyRound className="size-3.5" /> Enter value
+        </Button>
+      </div>
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">{deliveryNote}</p>
     </div>
   );
 }
 
-function DefaultCheckbox({
-  id,
-  label,
-  checked,
-  onCheckedChange,
-  replaces,
+function BaseForm({
+  type,
+  hostCli,
+  bedrockLane,
+  status,
+  secretNames,
+  existingRows,
+  onBack,
+  onSaved,
 }: {
-  id: string;
-  label: string;
-  checked: boolean;
-  onCheckedChange: (v: boolean) => void;
-  replaces?: string;
+  type: IntegrationTypeMeta;
+  hostCli?: boolean;
+  bedrockLane?: BedrockLane;
+  status: SetupStatus;
+  secretNames: string[];
+  existingRows: ExistingIntegrationRef[];
+  onBack: () => void;
+  onSaved: (id: string, name: string) => void;
 }) {
+  const isSubscription = type.apiType === "anthropic_subscription";
+  const isBedrock = type.apiType === "bedrock";
+  const isGithubApp = type.apiType === "github_app";
+  const isGitHost = type.apiType === "git_host";
+  const isAi = !!type.apiType && AI_KINDS.has(type.apiType);
+
+  const defaultName =
+    isSubscription ? `Claude subscription (${hostCli ? "host CLI" : "managed"})`
+    : isBedrock ? `AWS Bedrock (${BEDROCK_LANE_META[bedrockLane ?? "bearer"].title})`
+    : type.label;
+  const [name, setName] = React.useState(defaultName);
+  // Azure's only "host" is the "<resource>.openai.azure.com" TEMPLATE, not a
+  // real value — prefilling it as the value means an un-edited save 400s on the
+  // literal "<resource>". Start empty and show the template as the placeholder.
+  // (ponytail: scoped to the named azure nit; jira/codeartifact carry the same
+  // "<…>" template shape but are out of B3 scope — flagged as a follow-up.)
+  const azureTemplatedHost = type.apiType === "azure_openai";
+  const [hosts, setHosts] = React.useState(azureTemplatedHost ? "" : type.hosts.join("\n"));
+  const [docs, setDocs] = React.useState("");
+  const [region, setRegion] = React.useState("");
+  const [model, setModel] = React.useState("");
+  const [defAgent, setDefAgent] = React.useState(false);
+  const [defFeat, setDefFeat] = React.useState(false);
+  const [secretDialog, setSecretDialog] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  // Secret name state, one row per role this kind/flavor needs.
+  const [genericSecret, setGenericSecret] = React.useState(type.secret ?? "");
+  // The bedrock bearer token is read by the bespoke bedrock transport SOLELY by
+  // the name `bedrock-api-key` (runs_bedrock.go bedrockAPIKeySecret) — a
+  // different name is a credential nothing ever reads. "Enter value" stores it
+  // under this name, so it must be exactly that.
+  const [bearerSecret, setBearerSecret] = React.useState("bedrock-api-key");
+  const [awsKeyId, setAwsKeyId] = React.useState("aws-access-key-id");
+  const [awsSecret, setAwsSecret] = React.useState("aws-secret-access-key");
+  const [awsSession, setAwsSession] = React.useState("aws-session-token");
+  const [appIdSecret, setAppIdSecret] = React.useState("github-app-id");
+  const [appKeySecret, setAppKeySecret] = React.useState("github-app-key");
+
+  const hostList = hosts.split("\n").map((h) => h.trim()).filter(Boolean);
+  const takesHeader = !!type.header;
+  const residency =
+    isSubscription ? SUBSCRIPTION_LANE_META[hostCli ? "resident_host" : "managed"].residency
+    : isBedrock ? BEDROCK_LANE_META[bedrockLane ?? "bearer"].residency
+    : type.delivery;
+  const resMeta = RESIDENCY_META[residency];
+
+  const idForSave = () => {
+    if (type.apiType === "anthropic_api_key" || type.apiType === "openai_api_key") return aiServerId(type.apiType as AiType);
+    if (isSubscription) return aiServerId("anthropic_subscription", hostCli);
+    if (isBedrock) return aiServerId("bedrock");
+    if (isGithubApp) return "github_app";
+    if (isGitHost) return `git_host:${hostList[0] ?? slugifyIntegrationId(name)}`;
+    return slugifyIntegrationId(name);
+  };
+  const id = idForSave() ?? slugifyIntegrationId(name);
+  const collision = existingRows.find((r) => r.id === id);
+  // A PUT to an id that exists only as a DERIVATION now 409s server-side —
+  // adoption is explicit, never a side effect of this dialog. Block Save
+  // rather than let the operator hit that wall after filling in the form.
+  const blockedByDerived = !!collision && !collision.stored;
+
+  const canSave =
+    !blockedByDerived &&
+    name.trim().length > 0 &&
+    // A generic/header type needs its host(s) named; the closed kinds either
+    // carry a fixed host (subscription/bedrock) or the operator names their own.
+    (hostList.length > 0 || isSubscription || isBedrock);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      // ONE payload seam (buildIntegrationWrite, above) — shared with the
+      // non-mocked payload test so the shape a real server validates can't
+      // drift from what a mocked put() lets through.
+      await genericIntegrationsApi.put(
+        id,
+        buildIntegrationWrite({
+          type, hostCli, bedrockLane, name, hostList, docs, region, model, defAgent, defFeat,
+          genericSecret, bearerSecret, awsKeyId, awsSecret, awsSession, appIdSecret, appKeySecret,
+        }),
+      );
+      onSaved(id, name.trim());
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="flex items-start gap-2.5">
-      <Checkbox id={id} checked={checked} onCheckedChange={(v) => onCheckedChange(!!v)} className="mt-0.5" />
-      <label htmlFor={id} className="cursor-pointer text-sm text-foreground">
-        {label}
-        {replaces ? (
-          <span className="block text-[0.6875rem] text-warning">replaces {replaces}</span>
+    <div className="min-w-0 space-y-4 py-1">
+      <Field label="Name" hint="How this row reads in lists and pickers.">
+        <Input value={name} onChange={(e) => setName(e.target.value)} />
+        <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+          Stored as <Mono className="text-[0.6875rem]">{id || "—"}</Mono>
+        </p>
+        {blockedByDerived ? (
+          <p className="text-[0.6875rem] leading-snug text-warning">
+            "{collision!.name}" already exists at this id, derived from your current setup — close this dialog and use "Adopt to
+            edit" on that row instead of adding it again.
+          </p>
         ) : (
-          <span className="block text-[0.6875rem] text-muted-foreground">Auto-checked — nothing holds this mark yet.</span>
+          collision && (
+            <p className="text-[0.6875rem] leading-snug text-warning">Replaces the existing "{collision.name}" integration — same stored id.</p>
+          )
         )}
-      </label>
+      </Field>
+
+      <div className="space-y-3 rounded-xl border border-border p-3.5">
+        <SectionLabel>Required secrets</SectionLabel>
+        {isSubscription && hostCli && (
+          <p className="text-xs leading-snug text-muted-foreground">
+            {T.HOSTCLI_LINE} Wardyn detects it automatically once you've logged in with the Claude CLI on this host — there's nothing
+            to capture here.
+          </p>
+        )}
+        {isSubscription && !hostCli && <LoginCredentialCell provider="anthropic" status={status} />}
+        {isBedrock && bedrockLane === "sso" && <LoginCredentialCell provider="aws" status={status} />}
+        {isBedrock && bedrockLane === "aws_dir" && (
+          <p className="text-xs leading-snug text-muted-foreground">Boot-time config — the host's ~/.aws mount, not stored here.</p>
+        )}
+        {isBedrock && bedrockLane === "bearer" && (
+          <SecretRow label="Bearer token" name={bearerSecret} onChange={setBearerSecret} onEnterValue={() => setSecretDialog(bearerSecret)} deliveryNote={SECRET_DELIVERY_NOTE.proxy_header} />
+        )}
+        {isBedrock && bedrockLane === "static" && (
+          <>
+            <SecretRow label="Access key ID" name={awsKeyId} onChange={setAwsKeyId} onEnterValue={() => setSecretDialog(awsKeyId)} deliveryNote={SECRET_DELIVERY_NOTE.resident} />
+            <SecretRow label="Secret access key" name={awsSecret} onChange={setAwsSecret} onEnterValue={() => setSecretDialog(awsSecret)} deliveryNote={SECRET_DELIVERY_NOTE.resident} />
+            <SecretRow label="Session token" name={awsSession} onChange={setAwsSession} onEnterValue={() => setSecretDialog(awsSession)} deliveryNote={SECRET_DELIVERY_NOTE.resident} />
+          </>
+        )}
+        {isGithubApp && (
+          <>
+            <SecretRow label="App ID" name={appIdSecret} onChange={setAppIdSecret} onEnterValue={() => setSecretDialog(appIdSecret)} deliveryNote={SECRET_DELIVERY_NOTE.brokered} />
+            <SecretRow label="Private key (PEM)" name={appKeySecret} onChange={setAppKeySecret} onEnterValue={() => setSecretDialog(appKeySecret)} deliveryNote={SECRET_DELIVERY_NOTE.brokered} />
+          </>
+        )}
+        {isGitHost && (
+          <SecretRow
+            label="Personal access token"
+            name={genericSecret}
+            onChange={setGenericSecret}
+            onEnterValue={() => setSecretDialog(genericSecret)}
+            deliveryNote={`${SECRET_DELIVERY_NOTE.resident} The git credential helper hands it to git inside the sandbox.`}
+          />
+        )}
+        {!isSubscription && !isBedrock && !isGithubApp && !isGitHost && takesHeader && (
+          <SecretRow
+            label={CATALOG_COPY.CRED_HEAD}
+            name={genericSecret}
+            onChange={setGenericSecret}
+            onEnterValue={() => setSecretDialog(genericSecret)}
+            deliveryNote={`Presented as ${type.header}. ${SECRET_DELIVERY_NOTE.proxy_header}`}
+          />
+        )}
+        {!isSubscription && !isBedrock && !isGithubApp && !isGitHost && !takesHeader && (
+          <p className="text-[0.8125rem] leading-snug text-foreground">{resMeta.tooltip}</p>
+        )}
+      </div>
+
+      <div className="space-y-1.5 rounded-xl border border-border p-3.5">
+        <SectionLabel>{CATALOG_COPY.HOSTS_HEAD}</SectionLabel>
+        {isSubscription || isBedrock ? (
+          <p className="text-[0.8125rem] leading-snug text-muted-foreground">
+            <Mono className="text-[0.8125rem]">{type.hosts.join(", ")}</Mono> — fixed for this provider.
+          </p>
+        ) : (
+          <>
+            <Textarea rows={3} value={hosts} placeholder={azureTemplatedHost ? type.hosts[0] : type.hostPlaceholder} onChange={(e) => setHosts(e.target.value)} />
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">{CATALOG_COPY.HOSTS_HINT}</p>
+          </>
+        )}
+      </div>
+
+      {isBedrock && (
+        <div className="space-y-2 rounded-xl border border-border p-3.5">
+          <SectionLabel>Config</SectionLabel>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs">Region</Label>
+              <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-east-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Model</Label>
+              <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="anthropic.claude-3" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1.5 rounded-xl border border-border p-3.5">
+        <Label htmlFor="int-docs" className="text-xs">
+          Docs link
+        </Label>
+        <Input id="int-docs" value={docs} onChange={(e) => setDocs(e.target.value)} />
+        <p className="text-[0.6875rem] text-muted-foreground">{CATALOG_COPY.DOCS_HINT}</p>
+      </div>
+
+      <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5">
+        <Chip tone={resMeta.tone}>{resMeta.label}</Chip>
+        <p className="min-w-0 flex-1 text-[0.6875rem] leading-snug text-muted-foreground">{CATALOG_COPY.DELIV_STATED}</p>
+      </div>
+
+      {isAi && (
+        <div className="space-y-2 rounded-xl border border-border p-3.5">
+          <SectionLabel>Defaults</SectionLabel>
+          <div className="flex items-start gap-2.5">
+            <Checkbox id="def-agent" checked={defAgent} onCheckedChange={(v) => setDefAgent(!!v)} className="mt-0.5" />
+            <label htmlFor="def-agent" className="cursor-pointer text-sm text-foreground">
+              Default for agent runs
+            </label>
+          </div>
+          <div className="flex items-start gap-2.5">
+            <Checkbox id="def-features" checked={defFeat} onCheckedChange={(v) => setDefFeat(!!v)} className="mt-0.5" />
+            <label htmlFor="def-features" className="cursor-pointer text-sm text-foreground">
+              Default for Wardyn features
+            </label>
+          </div>
+        </div>
+      )}
+
+      <p className="text-right text-[0.6875rem] text-muted-foreground">{CATALOG_COPY.STORE_NOTE}</p>
+      {error && <p className="text-[0.8125rem] leading-snug text-danger">{error}</p>}
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onBack} disabled={saving}>
+          Back
+        </Button>
+        <Button onClick={() => void save()} disabled={saving || !canSave}>
+          {saving ? "Adding…" : "Add integration"}
+        </Button>
+      </DialogFooter>
+
+      <AddSecretDialog
+        open={!!secretDialog}
+        onOpenChange={(o) => !o && setSecretDialog(null)}
+        lockName
+        initialName={secretDialog ?? ""}
+        existingNames={secretNames}
+        onSaved={() => setSecretDialog(null)}
+      />
+    </div>
+  );
+}
+
+// ---- Step 4: post-save — Test, then done ----
+
+function DonePanel({ id, onDone }: { id: string; onDone: () => void }) {
+  const [testing, setTesting] = React.useState(false);
+  const [probeStatus, setProbeStatus] = React.useState<WireIntegrationProbeStatus | undefined>(undefined);
+  const [testError, setTestError] = React.useState<string | null>(null);
+
+  // A 2xx response from POST /test means the probe RAN, not that it passed —
+  // handleTestIntegration's response body IS the fresh probe_status, so read
+  // the verdict straight off it rather than inferring pass/fail from the
+  // request merely succeeding.
+  const runTest = async () => {
+    setTesting(true);
+    setTestError(null);
+    try {
+      setProbeStatus(await genericIntegrationsApi.test(id));
+    } catch (e) {
+      setTestError(getErrorMessage(e));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const chip = probeChip(probeStatus);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Chip tone={chip.tone}>{chip.label}</Chip>
+        {chip.detail && <span className="text-xs text-muted-foreground">{chip.detail}</span>}
+      </div>
+      {testError && <p className="text-[0.8125rem] leading-snug text-danger">{testError}</p>}
+      <DialogFooter>
+        <Button variant="outline" onClick={() => void runTest()} disabled={testing}>
+          {testing ? "Testing…" : "Test connection"}
+        </Button>
+        <Button onClick={onDone}>Done</Button>
+      </DialogFooter>
     </div>
   );
 }

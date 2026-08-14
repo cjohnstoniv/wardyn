@@ -216,6 +216,7 @@ type probeStore struct {
 	mu     sync.Mutex
 	runs   map[uuid.UUID]types.AgentRun
 	events []types.AuditEvent
+	grants []types.CredentialGrant
 	cfg    types.SiteConfig
 }
 
@@ -264,6 +265,21 @@ func (s *probeStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID s
 	r.AgentExecID = execID
 	s.runs[id] = r
 	return nil
+}
+
+// CreateGrant records the eligibility rows an integration probe persists so
+// its credential can be resolved proxy-side (probeInjections) — the same write
+// a real run's persistRunGrants makes.
+func (s *probeStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grants = append(s.grants, g)
+	return g, nil
+}
+func (s *probeStore) grantSpecs() []types.CredentialGrant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.grants)
 }
 func (s *probeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()

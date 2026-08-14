@@ -215,9 +215,9 @@ type Workspace struct {
 	//	                  whose Path equals /host/path and Writable=true
 	//	integration:ID    the named Integration (SiteConfig.Integrations[i].ID)
 	//	                  must be granted — its hosts opened and its credential
-	//	                  (if any) presented, e.g. "integration:artifact_mirror:
-	//	                  artifactory.corp" (ID itself may contain colons; see
-	//	                  the split rule below)
+	//	                  (if any) presented, e.g. "integration:git_host:
+	//	                  github.com" (ID itself may contain colons; see the
+	//	                  split rule below)
 	//
 	// The map key is exactly "<type>:<key>", type and key joined by ONE colon.
 	// A key parser MUST split on the FIRST colon only (never the last): the
@@ -477,10 +477,12 @@ type Integration struct {
 // lane the runtime treats differently ("api_key", "pat", "ssh_key").
 const IntegrationCredentialToken = "token"
 
-// CredentialsMap flattens Secrets into the pre-base-component role →
-// secret_name map shape.
-// track-b: B1 shim for consumers not yet reading Secrets rows directly;
-// removed in B2/B3.
+// CredentialsMap flattens Secrets into a role → secret_name map. ONE consumer
+// left, and it wants exactly this shape: the integration.delete audit payload,
+// recording which credential REFS a deleted row named (the operator's secrets
+// themselves are not deleted). Never a read path — anything that ACTS on a
+// secret reads the Secrets rows, because only they carry the delivery that
+// says how it reaches a run.
 func (in Integration) CredentialsMap() map[string]string {
 	if len(in.Secrets) == 0 {
 		return nil

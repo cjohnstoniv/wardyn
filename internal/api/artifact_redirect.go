@@ -278,6 +278,13 @@ func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirec
 		// empty stored format already materialized as "%s" (the raw secret IS
 		// the header value; injectionRuleFromScope reads "" as "Bearer %s",
 		// which would be wrong here).
+		//
+		// ROLE-AGNOSTIC, DELIBERATELY (base-component model, same rule as
+		// applyIntegrationInjection): whatever role the row calls its secret,
+		// its proxy_header delivery is what makes it a presentable credential —
+		// so a row an operator points a redirect at with token_integration_ref
+		// hands over that credential, full stop. The operator authored both
+		// halves; the audit line below names the integration and the secret.
 		secretName, header, format, ok := integ.HeaderSecret()
 		if !ok {
 			return redirectToken{}, "the integration named by token_integration_ref delivers no header credential"

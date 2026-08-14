@@ -18,34 +18,14 @@ import (
 
 // setup_integrations.go wires the Integrations entity (integrations.go) into
 // the live server and the first-run setup surface:
-//   - toIntegrationView/liveCapEnv adapt the real store-backed data
-//     (integrationRow, Server config/secrets) into the pure capability
-//     matrix's input shapes (integrationView/capEnv, defined in
-//     integrations.go) WITHOUT changing that file, per its own doc comment.
+//   - liveCapEnv folds the Server's config/secret store into the capability
+//     matrix's external-signal input (capEnv, defined in integrations.go);
+//     the row itself goes to capabilitiesFor unchanged.
 //   - SetupIntegration is the wire shape GET /integrations and
 //     SetupStatus.Integrations both return: an effective row (stored or
 //     legacy-derived) plus its live capabilities.
 //   - SetupHarnessTool/setupHarnessTools project the static coding-agent
 //     harness catalog (harnessCatalog, harness.go) for SetupStatus.Harnesses.
-
-// toIntegrationView adapts an integrationRow into the shape capabilitiesFor
-// consumes: Type carries the row's Kind, Header the proxy_header-delivered
-// secret's header, and Credentials the flattened role → secret_name map.
-// track-b: B1 shim mapping — B2 re-keys capabilitiesFor on the base-component
-// shape directly.
-func toIntegrationView(row integrationRow) integrationView {
-	_, header, _, _ := row.HeaderSecret()
-	return integrationView{
-		ID:           row.ID,
-		Type:         row.Kind,
-		Disabled:     row.Disabled,
-		Header:       header,
-		Hosts:        row.Egress,
-		Credentials:  row.CredentialsMap(),
-		Config:       row.Config,
-		DisabledCaps: row.DisabledCapabilities,
-	}
-}
 
 // liveCapEnv builds a capEnv from the server's actual live config/secret
 // store — the readiness signals capabilitiesFor cannot derive from an
@@ -124,7 +104,7 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 	env := s.liveCapEnv(ctx, present, providers)
 	out := make([]SetupIntegration, len(rows))
 	for i, row := range rows {
-		out[i] = SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), env)}
+		out[i] = SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, env)}
 	}
 	return out
 }
@@ -151,10 +131,11 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		if in.ID != id {
 			continue
 		}
+		in.ProbeStatus = s.probeStatus(in.ID)
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
 		providers, _ := s.setupProviders()
-		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), s.liveCapEnv(ctx, present, providers))}
+		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers))}
 	}
 	return SetupIntegration{}
 }
@@ -185,6 +166,14 @@ type putIntegrationRequest struct {
 // (integrations.go) before anything is read/written. DefaultFor uses RADIO
 // semantics: naming a mark here CLEARS it from every OTHER stored row in the
 // SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
+//
+// ADOPTION IS EXPLICIT (approved mock): a PUT whose id names a row that exists
+// only as a DERIVATION 409s instead of quietly persisting one. Before this, any
+// write to a derived id — the default-for checkbox being the one every operator
+// hit — silently adopted it, so a row the operator only meant to MARK became a
+// frozen stored copy of a live derivation: the underlying secret/config could
+// then change with the surface still showing the adopted snapshot. POST
+// {id}/adopt is the one promotion path, and it says what it is.
 //
 // integrationIDParam reads the {id} route param UNESCAPED: chi hands handlers
 // the raw path segment, and adopted legacy ids legitimately contain colons
@@ -233,6 +222,12 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		in.CreatedAt, in.UpdatedAt = rows[idx].CreatedAt, now
 		rows[idx] = in
 	} else {
+		if s.derivedIntegrationExists(ctx, sc, id) {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"integration %q exists only as a derived row; POST /integrations/%s/adopt first (adoption is explicit — "+
+					"a write here would silently freeze a copy of live config)", id, id))
+			return
+		}
 		in.CreatedAt, in.UpdatedAt = now, now
 		rows = append(rows, in)
 	}
@@ -255,6 +250,21 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 			"egress": in.Egress, "header": auditHeader,
 		})))
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
+}
+
+// derivedIntegrationExists reports whether id names a row that exists only as
+// a DERIVATION right now (legacyIntegrations) — the "adopt first" gate above.
+// sc is the caller's already-read SiteConfig; stored ids are excluded by
+// legacyIntegrations' own stored-wins rule, so a true here always means
+// "derived and not stored".
+func (s *Server) derivedIntegrationExists(ctx context.Context, sc types.SiteConfig, id string) bool {
+	stored := make(map[string]bool, len(sc.Integrations))
+	for _, in := range sc.Integrations {
+		stored[in.ID] = true
+	}
+	present := s.presentSecretNames(ctx)
+	return slices.ContainsFunc(s.legacyIntegrations(ctx, sc, stored, present, s.setupBedrock(ctx, present)),
+		func(row integrationRow) bool { return row.ID == id })
 }
 
 // handleDeleteIntegration removes a STORED Integration. 404 when id names no

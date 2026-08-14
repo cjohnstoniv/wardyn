@@ -24,7 +24,7 @@
 // per-integration "default" persistence, an Azure endpoint URL, workspace
 // pin-counts for the blast radius).
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
-import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
+import { AI_TYPES, BEDROCK_LANE_META, RESIDENCY_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
@@ -34,7 +34,7 @@ import {
   type IntegrationGroup,
   type IntegrationTypeMeta,
 } from "../integration-catalog";
-import type { WireIntegration, WireIntegrationProbe, WireIntegrationSecret } from "../types/setup";
+import type { WireIntegration, WireIntegrationProbe, WireIntegrationProbeStatus, WireIntegrationSecret } from "../types/setup";
 import { HttpError, wfetch, errText } from "./core";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
@@ -585,14 +585,14 @@ export interface GenericIntegrationRow {
 /** id -> group, so a derived section id finds its group object. */
 const GROUP_BY_ID = new Map(INTEGRATION_GROUPS.map((g) => [g.id, g]));
 
-// track-b: B1 shim, removed in B3 — the stored category died with the
-// base-component fold (one `kind` field), so the section a wire row belongs in
-// DERIVES from kind: the AI set -> model, github_app/git_host -> scm, a
-// catalog-known slug -> its catalog group, anything else -> the catch-all.
-// The two legacy topology slugs get NO section here (Corporate network owns
-// them; the server only ever derives them read-only).
-const AI_KINDS = new Set(["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"]);
-function groupForKind(kind: string): IntegrationGroup | undefined {
+// The section a wire row belongs in DERIVES from kind alone — there is no
+// stored category any more (the base-component fold left one `kind` field):
+// the AI set -> model, github_app/git_host -> scm, a catalog-known slug -> its
+// catalog group, anything else -> the catch-all. The two legacy topology
+// slugs get NO section here (Corporate network owns them; the server only
+// ever derives them read-only).
+export const AI_KINDS = new Set(["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"]);
+export function groupForKind(kind: string): IntegrationGroup | undefined {
   if (kind === "artifact_mirror" || kind === "host_proxy") return undefined;
   if (AI_KINDS.has(kind)) return GROUP_BY_ID.get("model");
   if (kind === "github_app" || kind === "git_host") return GROUP_BY_ID.get("scm");
@@ -606,14 +606,32 @@ export function proxyHeaderSecret(wire: WireIntegration) {
   return wire.secrets?.find((s) => s.delivery?.mode === "proxy_header");
 }
 
+// Closed kinds whose secrets carry no `delivery` field at all — a bespoke
+// transport (broker-minted, credential-helper-read, container-login), not the
+// generic proxy_header/resident_file/resident_env system. The catalog's own
+// `meta` lookup can't find these by wire.kind (a catalog id like "github" or
+// "anthropic" differs from the kind string the wire actually carries, and
+// several catalog ids share one kind — gitlab/bitbucket/ado/gitssh are all
+// "git_host"), so state the fact directly instead of falling through to the
+// dishonest "notbuilt" ("no lane exists") for a row that works today.
+const BESPOKE_KIND_DELIVERY: Partial<Record<string, ResidencyKind>> = {
+  github_app: "brokered_mint",
+  git_host: "resident_mount",
+  anthropic_subscription: "varies",
+  bedrock: "varies",
+  azure_openai: "control_plane",
+};
+
 // deliveryForRow states how THIS row's credential reaches a request, from the
 // row itself rather than from its type: a proxy_header-delivered secret is
 // proxy-injected, and anything else honestly has no lane. The catalog's own
-// delivery is the fallback for the types with bespoke lanes (varies, brokered)
-// that a generic row never has.
+// delivery is the fallback for a generic type with bespoke lanes (varies,
+// brokered) that a plain header+secret row never has; BESPOKE_KIND_DELIVERY
+// is the same fallback for a closed kind the catalog can't look up by kind.
 function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): ResidencyKind {
   if (proxyHeaderSecret(wire)?.secret_name) return "proxy_injected";
   if (meta && meta.delivery !== "proxy_injected") return meta.delivery;
+  if (!meta && BESPOKE_KIND_DELIVERY[wire.kind]) return BESPOKE_KIND_DELIVERY[wire.kind]!;
   return "notbuilt";
 }
 
@@ -634,20 +652,64 @@ function isLegacyClaimedId(id: string): boolean {
   return LEGACY_AI_IDS.has(id) || id === "github_app" || id.startsWith("git_host:");
 }
 
-// genericIntegrations selects the rows belonging to the eight generic categories
-// and pairs each with its section and catalog entry. A wire row under a legacy
-// id is left out deliberately — it is rendered from the derivation above,
-// which knows about lanes, posture and capability chips a generic row simply
-// doesn't have; every OTHER model/scm row (a hand-named id the legacy
-// derivation doesn't recognize) renders here instead of vanishing.
-export function genericIntegrations(status: SetupStatus): GenericIntegrationRow[] {
-  const rows: GenericIntegrationRow[] = [];
-  for (const wire of status.integrations ?? []) {
+// Delivery language for a single secret row — shared by the Add dialog's
+// "Required secrets" section and the Detail page's "Secrets" section so the
+// never-resident/resident/brokered claim can't read differently in the two
+// places an operator sees the same fact.
+export const SECRET_DELIVERY_NOTE = {
+  proxy_header: "Never resident — held by Wardyn's store; the egress proxy injects it into outbound calls.",
+  resident: "Resident — read by the credential helper inside the sandbox.",
+  brokered: "Brokered — never a long-lived credential itself; a short-lived scoped token is minted per run from it.",
+} as const;
+
+// ---- Probe (verification) — Coder 3-state honesty: verified / not tested /
+// failed, never a silent pass. `not_tested` is the default for a row with no
+// probe_status at all (never probed since boot, or a fresh row) — the same
+// state a real "not_tested" reads as, so a caller doesn't need to special-case
+// "absent" from "explicitly not tested".
+export interface ProbeChip {
+  label: "verified" | "failed" | "not tested";
+  tone: "success" | "danger" | "neutral";
+  /** probe_status.detail, when the server gave one (e.g. why a probe failed). */
+  detail?: string;
+}
+
+export function probeChip(status?: WireIntegrationProbeStatus): ProbeChip {
+  if (status?.state === "passed") return { label: "verified", tone: "success", detail: status.detail };
+  if (status?.state === "failed") return { label: "failed", tone: "danger", detail: status.detail };
+  return { label: "not tested", tone: "neutral", detail: status?.detail };
+}
+
+// The list's base-summary line: "N secret(s) · N host(s) · <delivery>" — the
+// three base slots that exist for every kind, generic or closed, stated
+// verbatim rather than the row's own capability-specific facts (there are
+// none left to state — see the base model's own "generic kinds are BASE-ONLY"
+// framing).
+export function baseSummary(wire: WireIntegration, delivery: ResidencyKind): string {
+  const secrets = wire.secrets?.length ?? 0;
+  const hosts = wire.egress?.length ?? 0;
+  const secretPart = secrets === 0 ? "no secret" : secrets === 1 ? "1 secret" : `${secrets} secrets`;
+  const hostPart = hosts === 0 ? "no egress" : hosts === 1 ? "1 host" : `${hosts} hosts`;
+  return `${secretPart} · ${hostPart} · ${RESIDENCY_META[delivery].label}`;
+}
+
+// genericIntegrations pairs each wire row with its section and catalog entry.
+// By default it selects only the eight generic categories: a wire row under a
+// legacy AI/SCM id is left out, because the workspace wizard's integration
+// picker (the one other caller of this function) renders those from the
+// richer derivation above instead — lanes, posture and capability chips a
+// generic row simply doesn't have. `allKinds: true` (the Integrations list's
+// own reading, B3) drops that exclusion: the base-component list has no
+// second, richer rendering for an AI/SCM row any more, so it needs every kind
+// back, model and scm sections included.
+export function genericIntegrations(rows: WireIntegration[], opts: { allKinds?: boolean } = {}): GenericIntegrationRow[] {
+  const out: GenericIntegrationRow[] = [];
+  for (const wire of rows) {
     const group = groupForKind(wire.kind);
     if (!group) continue;
-    if ((group.id === "model" || group.id === "scm") && isLegacyClaimedId(wire.id)) continue;
+    if (!opts.allKinds && (group.id === "model" || group.id === "scm") && isLegacyClaimedId(wire.id)) continue;
     const meta = integrationTypeById(wire.kind);
-    rows.push({
+    out.push({
       wire,
       group,
       meta,
@@ -656,7 +718,31 @@ export function genericIntegrations(status: SetupStatus): GenericIntegrationRow[
       delivery: deliveryForRow(wire, meta),
     });
   }
-  return rows;
+  return out;
+}
+
+// The base-component confirm-dialog copy — shared by the list and the detail
+// screen so "delete this integration" reads the same real consequences
+// wherever it's triggered (same discipline the legacy blastRadius above keeps
+// for its own two categories). isDefaultAgent/isDefaultFeatures come from the
+// row's own default_for — never guessed.
+export function baseBlastRadius(row: GenericIntegrationRow, opts: { isDefaultAgent?: boolean; isDefaultFeatures?: boolean } = {}): string[] {
+  const lines: string[] = [];
+  if (opts.isDefaultAgent) lines.push("Agent runs that resolve the server default lose model access — their first model call fails.");
+  if (opts.isDefaultFeatures) lines.push("Wardyn's Composer loses its backend — 'Describe your task' disappears from New Run.");
+  lines.push(
+    row.hosts.length > 0
+      ? `Runs granted this integration stop reaching ${row.hosts.join(", ")}.`
+      : "This integration opens no egress allowlist entries, so nothing loses reach that way.",
+  );
+  lines.push("Any workspace requirement naming it opens nothing until it is re-added.");
+  const secret = proxyHeaderSecret(row.wire)?.secret_name ?? row.wire.secrets?.[0]?.secret_name;
+  lines.push(
+    secret
+      ? `The stored secret ${secret} is not deleted — remove it under Secrets.`
+      : "No credential is stored, so nothing leaves the secret store.",
+  );
+  return lines;
 }
 
 /** Rows grouped into their sections, in the catalog's own order, empties dropped. */
@@ -697,6 +783,30 @@ export interface IntegrationWrite {
 }
 
 export const genericIntegrationsApi = {
+  // GET /api/v1/integrations — the base-component list DIRECTLY off the wire,
+  // with no client-side re-derivation: the server already folds stored ∪
+  // legacy-derived rows into one WireIntegration[] (B1's read-time fold +
+  // B2's re-derivation), so this is the whole read. Wrapped in {integrations}
+  // server-side (handleListIntegrations), unwrapped here.
+  async list(): Promise<WireIntegration[]> {
+    const res = await wfetch("/integrations");
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    const body = (await res.json()) as { integrations?: WireIntegration[] };
+    return body.integrations ?? [];
+  },
+  // POST /api/v1/integrations/{id}/test — runs the stored probe through the
+  // same egress+injection path a run uses and returns the fresh verdict
+  // directly (handleTestIntegration's response body IS the new
+  // probe_status — no second round-trip needed to read it back). A 4xx here
+  // is a REFUSAL about the stored row (no probe configured, disabled, probe
+  // host outside egress) — distinct from a 200 carrying state:"failed"
+  // (the probe ran and didn't pass) or state:"no_runner" (honest, non-error:
+  // nothing to launch a probe with in this deployment).
+  async test(id: string): Promise<WireIntegrationProbeStatus> {
+    const res = await wfetch(`/integrations/${encodeURIComponent(id)}/test`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return (await res.json()) as WireIntegrationProbeStatus;
+  },
   // PUT /api/v1/integrations/{id} — create or REPLACE (no partial merge).
   // Throws HttpError, not a bare Error (UI-LIB-6) — same status-preserving
   // contract as every other write below and elsewhere in lib/api/.

@@ -341,7 +341,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // configuration under two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
   const integrationsCount =
-    integrationsData.ai.length + integrationsData.scm.length + genericIntegrations(status).length;
+    integrationsData.ai.length + integrationsData.scm.length + genericIntegrations(status.integrations ?? []).length;
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {

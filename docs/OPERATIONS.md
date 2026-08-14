@@ -421,40 +421,59 @@ provenance rule above).
 
 ## Integrations
 
-An integration is any named external system Wardyn talks to on a run's
-behalf — not only a model provider or a git host. `types.Integration`
-(`internal/types/workspace.go`) is one row that answers four questions about
-one system: where it lives (`Hosts`), what credential it takes, how that
-credential reaches the request (`Header`/`Format`, resolved through the same
-proxy-side injection every other `api_key` grant uses), and what it powers.
-`Category` is closed to a fixed set of twelve: `ai_provider` · `scm_host` ·
-`package_feed` · `container_registry` · `cloud_provider` · `data_store` ·
-`mcp_server` · `work_tracking` · `observability` · `other_service` (the
-catch-all for anything else) — plus two more the next paragraph excludes
-from this page's picker: `artifact_mirror` and `host_proxy` (network
-topology, not a named account). For `ai_provider` and `scm_host`, `Type` is
-closed too — `anthropic_api_key`, `anthropic_subscription`, `bedrock`,
-`openai_api_key`, `azure_openai` for the former; `github_app`, `git_host`
-for the latter — `capabilitiesFor` switches on it, so a new one is a code
-change. `artifact_mirror` and `host_proxy` are closed too, each to its
-own single fixed type (`"artifact_mirror"`, `"host_proxy"`) — a write
-naming anything else 400s. For the eight generic categories (`package_feed`
-through `other_service`), `Type` is an open slug (`"jira"`, `"pagerduty"`,
-…) validated for shape only — a provider Wardyn has never heard of
-is just a new string, no schema change.
+An integration is a **connection** — secrets plus egress — to any named
+external system Wardyn talks to on a run's behalf, and never an installer
+(what a run has installed is what its image carries). `types.Integration`
+(`internal/types/workspace.go`) is ONE base shape extended by `kind`:
 
-The Integrations page (`/integrations`) is the one surface for these — rows
-are DERIVED from what already exists (stored secret names, site config,
-setup status), so an operator who never opens the page keeps identical run
-behavior, and one who does can adopt a row to edit it. Host proxy and Egress
-redirection are deliberately not on this page: the two topology categories
-above surface only as read-only derived rows (no Wardyn surface authors one —
-the API will still accept a hand-written row),
-and their configuration lives under **Corporate network** (below), on the
-same `SiteConfig` document but its own step and its own tabs, so there is
-exactly one place to configure network topology instead of two. A **Tools**
-tab on the same page names the other half of the distinction: a tool is
-what the image carries, an integration is what it connects through.
+- `secrets[]` — each a role, a store REF (a name, never a value), and its
+  **delivery**: `proxy_header` (the header + format the proxy presents on the
+  wire, so the sandbox never holds the credential). A secret on a closed kind
+  may declare NO delivery, which means that kind's own hand-written transport
+  carries it (`github_app`'s brokered halves, `git_host`'s clone credentials,
+  Bedrock's AWS env). Those hand-written resident lanes are why the type also
+  models `resident_file`/`resident_env` — but an operator may not DECLARE one:
+  there is no generic lane that materializes a named secret into a sandbox
+  path or env var, so a write naming one is refused rather than stored as a
+  promise nothing keeps. At most one `proxy_header` secret per row: the proxy
+  injects one credential header per host, and every such secret targets the
+  row's whole egress list.
+- `egress[]` — where the system lives. This is the reason a host is reachable
+  for a granted run, instead of being hand-listed in every workspace.
+- `config{}` — non-secret knobs, key-validated per closed kind (bedrock ⇒
+  `region`/`model`/`auth_lane`, `github_app` ⇒ `app_id`/`installation_id`/
+  `host`, `anthropic_subscription` ⇒ `lane`); an unknown key on a closed kind
+  400s by name. A generic kind takes any string keys.
+- `probe` — an optional method+URL behind the row's **Test** action.
+
+`kind` is the ONE field that says what this connects to. The closed set —
+`anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`,
+`azure_openai`, `github_app`, `git_host` — has behavior in code
+(`capabilitiesFor`), so a new one there is a code change. **Anything else is
+a generic connection**: an open slug (`"jira"`, `"artifactory"`, …) validated
+for shape only, whose row IS its whole contract. The page groups by kind
+alone — AI providers, source control, and one flat Connections set.
+
+The Integrations page (`/integrations`) is the one surface for these. Rows are
+also DERIVED from what already exists (stored secret names, site config, setup
+status), so an operator who never opens the page keeps identical run behavior;
+adopting a derived row is what makes it editable, and it is EXPLICIT — a write
+to a derived id answers 409 and points at the adopt action, rather than
+silently freezing a snapshot of live configuration. Host proxy and Egress
+redirection are deliberately NOT here: that is network topology, its
+configuration lives under **Corporate network** (below) on the same
+`SiteConfig` document, and this surface neither derives nor displays it.
+
+### Test is a real probe, not a green tick
+
+`POST /api/v1/integrations/{id}/test` (admin) launches a throwaway confined
+sandbox and curls the row's own `probe` URL through the row's own egress
+allowlist and proxy-side credential injection — the same fold a granted run
+gets (`internal/api/integration_probe.go`, reusing the site-config probe
+machinery). A probe URL outside the row's own egress is refused rather than
+quietly allowed: a run granted this integration could not reach it either.
+The verdict is cached IN MEMORY and served as `probe_status`, so after a
+restart a row honestly reads "not tested" rather than showing a stale pass.
 
 ### Nothing is ambient
 
@@ -471,7 +490,7 @@ injection path. An operator with fifty integrations configured and a
 workspace that names none of them gets a run whose spec is byte-identical to
 having none at all — true for this `integration:<id>` fold, but not for
 **model access** specifically: absent a more specific binding, an
-`ai_provider` integration marked `DefaultFor: agent_runs` still folds into
+AI-provider integration marked `DefaultFor: agent_runs` still folds into
 the run — even one with no workspace at all (`resolveRunIntegration`,
 `internal/api/llmcred.go`; see "Model access resolves" below).
 
@@ -487,9 +506,9 @@ requirements are never rowed there — only what a run cannot avoid needing.
 
 ### A header credential needs a bare exact host
 
-An integration's `Hosts` entries may carry a leading `*.` wildcard or a
-`:port` qualifier UNLESS the integration also sets `Header` (delivers a
-credential proxy-side). Write-time validation (`validateIntegrationHosts`,
+An integration's `egress` entries may carry a leading `*.` wildcard or a
+`:port` qualifier UNLESS one of its secrets delivers `proxy_header` (a
+credential presented proxy-side). Write-time validation (`validateIntegrationHosts`,
 `internal/api/integrations_write.go`) then requires every host to be a bare
 exact hostname, because proxy-side injection resolves through
 `Policy.AllowedExactHost`, which consults the exact-host set only. A
@@ -497,7 +516,7 @@ wildcard would open the path and silently never present the credential; a
 port-qualified host is worse — the injector refuses to build a rule for it,
 which is a hard proxy startup failure. Both are rejected at write time, by
 name, before either can happen. Neither restriction applies to an
-integration that delivers no header (a data store reachable on
+integration that delivers no credential header (a data store reachable on
 `db.corp.internal:5432`, egress only, is exactly the shape this is for).
 
 ### Model access resolves — it does not default to none
@@ -509,7 +528,7 @@ A Claude run's model access is not configured per run. It resolves, in order
 2. else the primary workspace's `LLMCred.IntegrationRef` binding;
 3. else the operator's `DefaultFor: agent_runs` integration — the one
    stored integration marked as the site-wide default for agent runs, of
-   any `ai_provider` type.
+   any AI-provider kind.
 
 A workspace binding that names something — even something stale or
 miscategorized — is the operator's SPECIFIC choice and does not cascade to
@@ -593,10 +612,12 @@ genuinely both a system you authenticate to and sometimes the destination a
 public endpoint reroutes to, and this is the seam that keeps the two from
 duplicating each other: the integration owns the system and its credential,
 the redirect owns rerouting a public endpoint to it. Pointing at an
-integration carries more than its secret name — its `Header` and `Format`
-come with it, so a feed authenticating with something other than
-`Authorization: Bearer` (the bare-secret path's hardcoded shape) finally
-can. There is no UI control for picking an integration here yet; the seam
+integration carries more than its secret name — the header and format of that
+row's `proxy_header` delivery come with it, so a feed authenticating with
+something other than `Authorization: Bearer` (the bare-secret path's hardcoded
+shape) finally can. Which secret that is follows the delivery, not the role
+name: whatever the row calls it, its `proxy_header` secret is the credential
+this redirect presents. There is no UI control for picking an integration here yet; the seam
 is usable today via `PUT /site-config` and `wardyn site-config apply`.
 
 What you get depends on whether `ecosystem` is set:

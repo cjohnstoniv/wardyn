@@ -12,38 +12,21 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // integrations.go computes the Integrations screen's capability matrix: for
 // one named connection to a system outside Wardyn (an "integration"), what it
 // powers, whether that's ON / OFF / NEEDS_SETUP / an impossible protocol fact
 // right now, why, and where the credential lives when it IS wired. It is a
-// PURE function over a snapshot (capabilitiesFor) — no storage, no HTTP, no
-// wiring — so the real store-backed type (types.Integration, a later wave)
-// can be adapted into integrationView without this file changing.
+// PURE function over the stored row (capabilitiesFor) — no storage, no HTTP,
+// no wiring: capEnv carries every external fact it needs.
 //
-// integrationView/capEnv are PROVISIONAL, package-local stand-ins for that
-// later wave's real types; capabilitiesFor is the part meant to survive.
-
-// integrationView is the read-only shape capabilitiesFor needs from a stored
-// integration. Credentials/Config use generic string keys (documented per
-// case in capabilitiesFor) rather than a typed field per credential.
-// track-b: B1 shim shape — Type carries the row's Kind and Header/Credentials
-// flatten the Secrets rows (toIntegrationView); B2 re-keys capabilitiesFor on
-// the base-component shape directly.
-type integrationView struct {
-	ID, Type     string
-	Disabled     bool
-	Header       string            // HTTP field the proxy presents this integration's credential in ("" = no proxy_header-delivered secret)
-	Hosts        []string          // where the system lives; empty means this row opens nothing
-	Credentials  map[string]string // credential-slot name -> stored secret ref (e.g. "api_key" -> "anthropic-api-key")
-	Config       map[string]any    // kind-specific knobs (e.g. "lane", "ecosystems")
-	DisabledCaps []string          // capability IDs the operator turned off individually
-}
+// It reads the base-component shape (types.Integration) DIRECTLY: kind routes,
+// the row's own secret rows carry their delivery, and Egress says where the
+// system lives. The pre-base-component shim view is gone.
 
 // capEnv carries the external readiness signals capabilitiesFor cannot derive
-// from an integrationView alone: secret-store presence, host detection, and
+// from the stored row alone: secret-store presence, host detection, and
 // managed/resident subscription liveness.
 //
 // ponytail: the original sketch for this struct also carried a
@@ -102,69 +85,59 @@ const (
 
 // capabilitiesFor computes the full capability matrix for one integration.
 // Pure: no storage, no HTTP, no wiring — env carries every external fact it
-// needs. Unknown v.Type reads as "no capabilities" (nil), the same honest
-// default an unrecognized harness id gets in harness.go.
-func capabilitiesFor(v integrationView, env capEnv) []Capability {
-	// A GENERIC-kind row's behavior is fully described by its own hosts/
-	// header (genericCaps), never by code — checked FIRST; the closed kinds
-	// (and the two legacy-derived topology slugs, until B2 deletes their
-	// derivation) fall through to the bespoke matrices below.
-	if genericIntegrationKind(v.Type) {
-		caps := genericCaps(v, env)
-		applyDisabled(caps, v)
+// needs. Routing is on KIND alone: any slug outside the closed set is a
+// GENERIC connection whose behavior is fully described by its own row.
+func capabilitiesFor(in types.Integration, env capEnv) []Capability {
+	// A GENERIC-kind row's behavior is fully described by its own egress +
+	// secret delivery (genericCaps), never by code — checked FIRST; the closed
+	// kinds fall through to the bespoke matrices below.
+	if genericIntegrationKind(in.Kind) {
+		caps := genericCaps(in, env)
+		applyDisabled(caps, in)
 		return caps
 	}
 	var caps []Capability
-	switch v.Type {
-	case "anthropic_api_key":
-		caps = directKeyCaps(v, env, "claude-code", "codex-cli")
-	case "anthropic_subscription":
-		caps = subscriptionCaps(v, env)
-	case "bedrock":
-		caps = bedrockCaps(v, env)
-	case "openai_api_key":
-		caps = directKeyCaps(v, env, "codex-cli", "claude-code")
-	case "azure_openai":
+	switch in.Kind {
+	case types.IntegrationKindAnthropicAPIKey:
+		caps = directKeyCaps(in, env, "claude-code", "codex-cli")
+	case types.IntegrationKindAnthropicSubscription:
+		caps = subscriptionCaps(in, env)
+	case types.IntegrationKindBedrock:
+		caps = bedrockCaps(in, env)
+	case types.IntegrationKindOpenAIAPIKey:
+		caps = directKeyCaps(in, env, "codex-cli", "claude-code")
+	case types.IntegrationKindAzureOpenAI:
 		caps = []Capability{
 			{ID: "model_api", State: CapImpossible, Reason: reasonXAzureDirect},
-			{ID: "tool:claude-code", State: CapImpossible, Reason: harnessProviderReason("claude-code", v.Type)},
-			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+			{ID: "tool:claude-code", State: CapImpossible, Reason: harnessProviderReason("claude-code", in.Kind)},
+			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
 			{ID: "wardyn_features", State: CapAvailable, Residency: "control_plane"},
 		}
-	case "github_app":
-		caps = githubAppCaps(v, env)
-	case "git_host":
+	case types.IntegrationKindGitHubApp:
+		caps = githubAppCaps(in, env)
+	case types.IntegrationKindGitHost:
 		caps = []Capability{
-			gatedCap("clone:pat", v.Credentials["pat"], env, "resident_env"),
-			gatedCap("clone:ssh", v.Credentials["ssh_key"], env, "resident_env"),
+			gatedCap("clone:pat", in.RoleSecret("pat"), env, "resident_env"),
+			gatedCap("clone:ssh", in.RoleSecret("ssh_key"), env, "resident_env"),
 			{ID: "egress_host", State: CapAvailable},
 		}
-	case "artifact_mirror":
-		caps = artifactMirrorCaps(v, env)
-	case "host_proxy":
-		caps = []Capability{gatedCap("egress_upstream", v.Credentials["secret"], env, "proxy_injected")}
-	default:
-		// A generic-category row never reaches here (handled above). An
-		// unrecognized Type in a TYPED category reads as "no capabilities"
-		// (nil) — the same honest default an unrecognized harness id gets —
-		// since that row's behavior was supposed to come from code that
-		// doesn't exist.
 	}
-	applyDisabled(caps, v)
+	applyDisabled(caps, in)
 	return caps
 }
 
-// reasonNoDeliveryLane is the honest line for a generic integration that names
-// no header: Wardyn opens the path, and that is genuinely the difference
-// between a run reaching the system and not reaching it at all — but the
-// resident and brokered lanes are hand-written per provider (see
-// types.Integration.Header), so nothing here can deliver a credential.
+// reasonNoDeliveryLane is the honest line for a generic integration whose
+// secrets declare no proxy_header delivery: Wardyn opens the path, and that is
+// genuinely the difference between a run reaching the system and not reaching
+// it at all — but the resident and brokered lanes are hand-written per provider
+// (see residentDeliveryRefusal, integrations_write.go), so nothing here can
+// deliver a credential.
 const reasonNoDeliveryLane = "Wardyn can open the path to these hosts. Delivering this system's credential into the sandbox isn't built — the resident and brokered lanes are hand-written per provider."
 
-// genericCaps is the matrix for a GENERIC-category integration (see
-// types.IntegrationCategory): one whose behavior is fully described by its own
-// hosts and header rather than by a type this file switches on. Two honest
-// cells, both derived from the stored row:
+// genericCaps is the matrix for a GENERIC-kind integration: one whose behavior
+// is fully described by its own egress and secret delivery rather than by a
+// kind this file switches on. Two honest cells, both derived from the stored
+// row:
 //
 //   - egress_host — the hosts become reachable for a run granted this row.
 //     needs_setup while the row names none: an integration with no hosts opens
@@ -178,15 +151,19 @@ const reasonNoDeliveryLane = "Wardyn can open the path to these hosts. Deliverin
 //     needs_setup with the SAME no-hosts reason as egress_host rather than
 //     the header-alone "available" — the identical lie egress_host above
 //     already refuses to tell.
-func genericCaps(v integrationView, env capEnv) []Capability {
-	noHosts := len(v.Hosts) == 0
+func genericCaps(in types.Integration, env capEnv) []Capability {
+	noHosts := len(in.Egress) == 0
 	reach := Capability{ID: "egress_host", State: CapAvailable}
 	if noHosts {
 		reach = Capability{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."}
 	}
 	cred := Capability{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane}
-	if v.Header != "" {
-		cred = gatedCap("credential", v.Credentials[types.IntegrationCredentialToken], env, "proxy_injected")
+	// ROLE-AGNOSTIC (base-component model): the row's proxy_header-delivered
+	// secret IS its credential, whatever role name it carries — delivery is the
+	// contract, the role is a label. Same rule the two runtime seams follow
+	// (applyIntegrationInjection, resolveRedirectToken).
+	if secret, _, _, ok := in.HeaderSecret(); ok {
+		cred = gatedCap("credential", secret, env, "proxy_injected")
 		if noHosts {
 			cred = Capability{ID: "credential", State: CapNeedsSetup, Reason: reach.Reason}
 		}
@@ -200,13 +177,13 @@ func genericCaps(v integrationView, env capEnv) []Capability {
 // when it's missing; the OTHER tool is an unconditional protocol-fact
 // impossibility sourced from the harness catalog (harness.go) — it speaks a
 // different API, no setup state changes that.
-func directKeyCaps(v integrationView, env capEnv, drivenHarness, otherHarness string) []Capability {
-	ref := v.Credentials["api_key"]
+func directKeyCaps(in types.Integration, env capEnv, drivenHarness, otherHarness string) []Capability {
+	ref := in.RoleSecret("api_key")
 	const residency = "proxy_injected"
 	return []Capability{
 		gatedCap("model_api", ref, env, residency),
 		gatedCap("tool:"+drivenHarness, ref, env, residency),
-		{ID: "tool:" + otherHarness, State: CapImpossible, Reason: harnessProviderReason(otherHarness, v.Type)},
+		{ID: "tool:" + otherHarness, State: CapImpossible, Reason: harnessProviderReason(otherHarness, in.Kind)},
 		gatedCap("wardyn_features", ref, env, residency),
 	}
 }
@@ -218,8 +195,8 @@ func directKeyCaps(v integrationView, env capEnv, drivenHarness, otherHarness st
 // is only accepted for Claude-Code-shaped requests); wardyn_features is
 // unconditionally available regardless of lane — an operator opts it off
 // per-integration via DisabledCaps; capabilitiesFor doesn't need to know why.
-func subscriptionCaps(v integrationView, env capEnv) []Capability {
-	lane, _ := v.Config["lane"].(string)
+func subscriptionCaps(in types.Integration, env capEnv) []Capability {
+	lane, _ := in.Config["lane"].(string)
 	claudeState, claudeReason, residency := CapAvailable, "", "proxy_injected"
 	if lane == "resident_host" {
 		residency = "resident_mount"
@@ -252,7 +229,7 @@ func subscriptionCaps(v integrationView, env capEnv) []Capability {
 	return []Capability{
 		{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
 		{ID: "tool:claude-code", State: claudeState, Reason: claudeReason, Residency: residency},
-		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
 		features,
 	}
 }
@@ -272,29 +249,41 @@ func residentHostReason(env capEnv) string {
 // resolveBedrockAuth resolves: one account, one region, one model, an ordered
 // credential fallback. Residency follows the lane (bearer is injected on the
 // wire; every other lane puts AWS credentials inside the sandbox).
-func bedrockCaps(v integrationView, env capEnv) []Capability {
-	lane, _ := v.Config["auth_lane"].(string)
+//
+// Region/model are read from THE INTEGRATION FIRST, with the boot flags
+// (env.Bedrock*Set) as the fallback — the same precedence resolveBedrockAuth
+// applies at dispatch (`cmp.Or(ws.Region, s.cfg.BedrockRegion)`, runs_bedrock.go:
+// "a selection wins only the fields it sets"). Reading the boot flags alone is
+// what made a wizard-completed Bedrock integration report needs_setup forever on
+// a deployment that never set WARDYN_BEDROCK_* — while its runs authenticated
+// fine.
+func bedrockCaps(in types.Integration, env capEnv) []Capability {
+	lane, _ := in.Config["auth_lane"].(string)
 	residency := "resident_env"
 	if lane == "bearer" {
 		residency = "proxy_injected"
 	}
+	region, _ := in.Config["region"].(string)
+	model, _ := in.Config["model"].(string)
+	regionSet := strings.TrimSpace(region) != "" || env.BedrockRegionSet
+	modelSet := strings.TrimSpace(model) != "" || env.BedrockModelSet
 	// Region+model gate EVERY Bedrock cell, not just Wardyn's own features:
 	// resolveBedrockAuth (runs_bedrock.go) returns an unready bedrockAuth when
 	// either is empty, and dispatch then falls silently to the api-key lane. A
 	// cell that reads "available" while the run it describes cannot reach
 	// Bedrock at all is exactly the drift this matrix exists to prevent.
-	if !env.BedrockRegionSet || !env.BedrockModelSet {
+	if !regionSet || !modelSet {
 		return []Capability{
 			{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
-			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
 			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 		}
 	}
 	return []Capability{
 		{ID: "model_api", State: CapAvailable, Residency: residency},
 		{ID: "tool:claude-code", State: CapAvailable, Residency: residency},
-		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
 		{ID: "wardyn_features", State: CapAvailable, Residency: residency, Reason: reasonBedrockFeatures},
 	}
 }
@@ -303,32 +292,14 @@ func bedrockCaps(v integrationView, env capEnv) []Capability {
 // capability that needs BOTH credentials (an installation token minted from
 // only one half is not a thing GitHub offers); egress_host is unconditional
 // (naming the host in the allowlist needs no credential).
-func githubAppCaps(v integrationView, env capEnv) []Capability {
-	okID, _ := secretGate(v.Credentials["app_id"], env)
-	okKey, _ := secretGate(v.Credentials["app_key"], env)
+func githubAppCaps(in types.Integration, env capEnv) []Capability {
+	okID, _ := secretGate(in.RoleSecret("app_id"), env)
+	okKey, _ := secretGate(in.RoleSecret("app_key"), env)
 	clone := Capability{ID: "clone:app", State: CapAvailable, Residency: "brokered"}
 	if !okID || !okKey {
 		clone = Capability{ID: "clone:app", State: CapNeedsSetup, Reason: "needs both app_id and app_key credentials"}
 	}
 	return []Capability{clone, {ID: "egress_host", State: CapAvailable}}
-}
-
-// artifactMirrorCaps builds one redirect:<ecosystem> capability per
-// Config["ecosystems"] entry. The token is optional: an anonymous-read corp
-// registry works with the URL redirect alone, so a missing/dangling token
-// ref never needs_setup — it degrades to a config-only redirect (mirroring
-// planArtifactRedirect's real dispatch-time behavior in artifact_redirect.go)
-// and that degrade is reflected in Residency and Reason, not in State.
-func artifactMirrorCaps(v integrationView, env capEnv) []Capability {
-	residency, reason := "config_only", "no token configured — URL-only redirect (anonymous read)"
-	if envSecretPresent(env, v.Credentials["token"]) {
-		residency, reason = "proxy_injected", ""
-	}
-	var caps []Capability
-	for _, eco := range stringSlice(v.Config["ecosystems"]) {
-		caps = append(caps, Capability{ID: "redirect:" + eco, State: CapAvailable, Residency: residency, Reason: reason})
-	}
-	return caps
 }
 
 // applyDisabled mutates caps in place (slices share their backing array, so
@@ -338,18 +309,18 @@ func artifactMirrorCaps(v integrationView, env capEnv) []Capability {
 // cell off"). Absent that, a capability named in DisabledCaps is forced off
 // individually. Both overrides clear Residency: nothing is actually wired
 // while off.
-func applyDisabled(caps []Capability, v integrationView) {
-	if v.Disabled {
+func applyDisabled(caps []Capability, in types.Integration) {
+	if in.Disabled {
 		for i := range caps {
 			caps[i] = Capability{ID: caps[i].ID, State: CapOff, Reason: "integration disabled"}
 		}
 		return
 	}
-	if len(v.DisabledCaps) == 0 {
+	if len(in.DisabledCapabilities) == 0 {
 		return
 	}
-	disabled := make(map[string]bool, len(v.DisabledCaps))
-	for _, id := range v.DisabledCaps {
+	disabled := make(map[string]bool, len(in.DisabledCapabilities))
+	for _, id := range in.DisabledCapabilities {
 		disabled[id] = true
 	}
 	for i := range caps {
@@ -391,27 +362,6 @@ func gatedCap(id, ref string, env capEnv, residency string) Capability {
 		return Capability{ID: id, State: CapNeedsSetup, Reason: reason}
 	}
 	return Capability{ID: id, State: CapAvailable, Residency: residency}
-}
-
-// stringSlice reads a []string out of a Config value shaped like []any (the
-// shape map[string]any takes after a JSON round-trip) or a bare []string (the
-// shape a directly-constructed Config carries, e.g. artifactMirrorRows'
-// derived ecosystems). Any other shape reads as nil rather than panicking.
-func stringSlice(v any) []string {
-	switch vv := v.(type) {
-	case []string:
-		return vv
-	case []any:
-		out := make([]string, 0, len(vv))
-		for _, e := range vv {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 // ─── effectiveIntegrations: stored ∪ derived legacy rows ────────────────────
@@ -481,15 +431,31 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 	}
 	rows = append(rows, s.legacyIntegrations(ctx, sc, stored, present, bedrock)...)
 	slices.SortFunc(rows, func(a, b integrationRow) int {
-		// track-b: B1 shim sort key — reproduces the pre-base-component
-		// category grouping (AI first, topology and SCM where they were) from
-		// kind alone; B2 re-derives the surface's own ordering.
-		if c := cmp.Compare(legacySortCategory(a.Kind), legacySortCategory(b.Kind)); c != 0 {
+		if c := cmp.Compare(integrationGroup(a.Kind), integrationGroup(b.Kind)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
+	for i := range rows {
+		rows[i].ProbeStatus = s.probeStatus(rows[i].ID)
+	}
 	return rows
+}
+
+// integrationGroup is the surface's own grouping, DERIVED from kind (the
+// stored category is gone by design): the AI provider flavors first, then
+// source control, then everything else as one flat "Connections" set. The
+// returned rank doubles as the sort key above, so the API response and the
+// three groups the screen renders can never disagree about what goes where.
+func integrationGroup(kind string) int {
+	switch {
+	case types.AIProviderKind(kind):
+		return 0
+	case kind == types.IntegrationKindGitHubApp || kind == types.IntegrationKindGitHost:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // legacyIntegrations derives one row per pre-existing source of truth a
@@ -580,18 +546,12 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 	// stored-wins gate per row.
 	rows = append(rows, gitHostRows(present, sc.ScmHosts, stored)...)
 
-	// artifact_mirror: one row per corp mirror host.
-	rows = append(rows, artifactMirrorRows(sc, stored)...)
-
-	// host_proxy: the corporate upstream proxy. The secret rides the proxy's
-	// own upstream-CONNECT lane, so it declares no delivery.
-	if sc.UpstreamProxySecretRef != "" {
-		add("host_proxy", types.Integration{
-			Name: "Corporate upstream proxy", Kind: "host_proxy",
-			Secrets: []types.IntegrationSecret{{Role: "secret", SecretName: sc.UpstreamProxySecretRef}},
-		})
-	}
-
+	// NOT DERIVED (deliberate): artifact_mirror + host_proxy. Both are network
+	// TOPOLOGY, not connections — their config already lives, and stays, under
+	// Corporate network (SiteConfig.EgressRedirects / UpstreamProxy*), and the
+	// read-time fold drops legacy-stored rows of those two categories from this
+	// surface too (types.IntegrationList). Deriving them here duplicated a
+	// surface that owns them.
 	return rows
 }
 
@@ -716,66 +676,6 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 		rows = append(rows, integrationRow{Integration: types.Integration{
 			ID: id, Name: host, Kind: types.IntegrationKindGitHost,
 			Secrets: c.secretRows(),
-		}, Source: "legacy"})
-	}
-	return rows
-}
-
-// artifactMirrorRows derives one artifact_mirror row per corp mirror/relay HOST
-// (several redirects — ecosystem-scoped or network-only alike — commonly share
-// one destination), mirroring planArtifactRedirect's dedupe-by-host shape
-// (artifact_redirect.go). A row's token credential is the first NON-EMPTY
-// TokenSecretRef seen for that host in EgressRedirects' stored order (a host
-// whose FIRST-stored redirect carries none is not reported credential-less
-// just because it wasn't the one holding the token) — the common case is one
-// token per host; a host with genuinely divergent per-redirect tokens still
-// redirects every one of them (Config carries every ecosystem it touches), it
-// just reports one representative credential. Ecosystems is empty for a purely
-// network-only host (no package-manager config file, egress substitution only).
-//
-// A redirect whose token comes from an INTEGRATION (TokenIntegrationRef) reports
-// no representative credential here, deliberately: that integration is already
-// its own row on the surface, carrying the credential, and resolving it a second
-// time into this derived topology row would show the same credential twice.
-func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrationRow {
-	type hostEcos struct {
-		ecosystems []string
-		token      string
-	}
-	byHost := map[string]*hostEcos{}
-	for _, r := range sc.EgressRedirects {
-		host := strings.ToLower(workspacescan.HostOf(r.To))
-		if host == "" {
-			continue
-		}
-		he, ok := byHost[host]
-		if !ok {
-			he = &hostEcos{}
-			byHost[host] = he
-		}
-		if he.token == "" {
-			he.token = r.TokenSecretRef
-		}
-		if r.Ecosystem != "" {
-			he.ecosystems = append(he.ecosystems, r.Ecosystem)
-		}
-	}
-	var rows []integrationRow
-	for host, he := range byHost {
-		id := "artifact_mirror:" + host
-		if stored[id] {
-			continue
-		}
-		var secrets []types.IntegrationSecret
-		if he.token != "" {
-			// No delivery: the redirect machinery (planArtifactRedirect) owns
-			// how this token is presented.
-			secrets = []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: he.token}}
-		}
-		rows = append(rows, integrationRow{Integration: types.Integration{
-			ID: id, Name: host, Kind: "artifact_mirror",
-			Secrets: secrets,
-			Config:  map[string]any{"ecosystems": he.ecosystems},
 		}, Source: "legacy"})
 	}
 	return rows

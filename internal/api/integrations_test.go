@@ -24,6 +24,20 @@ func secretSet(names ...string) func(string) bool {
 	return func(n string) bool { return set[n] }
 }
 
+// secretRow is one role→secret pair with NO declared delivery — a closed
+// kind's own bespoke transport carries it (the github_app halves, git_host's
+// clone credentials, an AI provider's conventional api_key).
+func secretRow(role, name string) types.IntegrationSecret {
+	return types.IntegrationSecret{Role: role, SecretName: name}
+}
+
+// headerSecretRow is one proxy_header-delivered secret: a generic connection's
+// whole credential contract, and the only delivery an operator may declare.
+func headerSecretRow(role, name, header string) types.IntegrationSecret {
+	return types.IntegrationSecret{Role: role, SecretName: name,
+		Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: header}}
+}
+
 // TestReasonCanonMatchesMock hardcodes the eight distinct verbatim reason
 // strings capabilitiesFor (and, via harnessProviderReason, harness.go) surface,
 // copied byte-for-byte from the Integrations screen mock (scratchpad
@@ -62,14 +76,14 @@ func TestReasonCanonMatchesMock(t *testing.T) {
 func TestCapabilitiesFor(t *testing.T) {
 	tests := []struct {
 		name string
-		v    integrationView
+		in   types.Integration
 		env  capEnv
 		want []Capability
 	}{
 		// ---------------- anthropic_api_key ----------------
 		{
 			name: "anthropic_api_key: credential stored",
-			v:    integrationView{Type: "anthropic_api_key", Credentials: map[string]string{"api_key": "anthropic-api-key"}},
+			in:   types.Integration{Kind: "anthropic_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")}},
 			env:  capEnv{SecretPresent: secretSet("anthropic-api-key")},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
@@ -80,7 +94,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "anthropic_api_key: credential never configured",
-			v:    integrationView{Type: "anthropic_api_key"},
+			in:   types.Integration{Kind: "anthropic_api_key"},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: "no credential configured"},
@@ -91,7 +105,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "anthropic_api_key: credential ref configured but dangling",
-			v:    integrationView{Type: "anthropic_api_key", Credentials: map[string]string{"api_key": "anthropic-api-key"}},
+			in:   types.Integration{Kind: "anthropic_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")}},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: `secret "anthropic-api-key" not stored`},
@@ -104,7 +118,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- openai_api_key (mirror of anthropic_api_key) ----------------
 		{
 			name: "openai_api_key: credential stored",
-			v:    integrationView{Type: "openai_api_key", Credentials: map[string]string{"api_key": "openai-api-key"}},
+			in:   types.Integration{Kind: "openai_api_key", Secrets: []types.IntegrationSecret{secretRow("api_key", "openai-api-key")}},
 			env:  capEnv{SecretPresent: secretSet("openai-api-key")},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
@@ -115,7 +129,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "openai_api_key: credential absent",
-			v:    integrationView{Type: "openai_api_key"},
+			in:   types.Integration{Kind: "openai_api_key"},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: "no credential configured"},
@@ -128,7 +142,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- anthropic_subscription ----------------
 		{
 			name: "subscription: managed lane, blob present",
-			v:    integrationView{Type: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
+			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
 			env:  capEnv{ManagedBlobPresent: func(p string) bool { return p == "anthropic" }},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -143,7 +157,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			// exactly this cell, and the sibling tool:claude-code cell right
 			// above already reports the identical gap.
 			name: "subscription: managed lane, no blob connected",
-			v:    integrationView{Type: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
+			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
 			env:  capEnv{ManagedBlobPresent: func(string) bool { return false }},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -154,7 +168,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "subscription: unset lane defaults to managed",
-			v:    integrationView{Type: "anthropic_subscription"},
+			in:   types.Integration{Kind: "anthropic_subscription"},
 			env:  capEnv{ManagedBlobPresent: func(p string) bool { return p == "anthropic" }},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -165,7 +179,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "subscription: resident_host lane, session live",
-			v:    integrationView{Type: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
+			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
 			env:  capEnv{ResidentSubscriptionLive: true, HostLike: true},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -176,7 +190,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "subscription: resident_host lane, host-like but no live session",
-			v:    integrationView{Type: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
+			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
 			env:  capEnv{ResidentSubscriptionLive: false, HostLike: true},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -187,7 +201,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "subscription: resident_host lane, sealed container (not host-like)",
-			v:    integrationView{Type: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
+			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "resident_host"}},
 			env:  capEnv{ResidentSubscriptionLive: false, HostLike: false},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
@@ -200,7 +214,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- bedrock ----------------
 		{
 			name: "bedrock: bearer lane, region+model set",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "bearer"}},
+			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "bearer"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
@@ -211,7 +225,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "bedrock: auto lane (resident, not bearer), region+model set",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "auto"}},
+			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "auto"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
@@ -221,8 +235,39 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
+			// THE INTEGRATION IS READ FIRST (the wizard-completes-but-needs_setup
+			// bug): resolveBedrockAuth resolves the row's own region/model over
+			// the boot config, so a deployment that never set WARDYN_BEDROCK_*
+			// must NOT report needs_setup for a row that carries both.
+			name: "bedrock: region+model on the INTEGRATION, boot flags unset",
+			in: types.Integration{Kind: "bedrock", Config: map[string]any{
+				"auth_lane": "bearer", "region": "us-east-1", "model": "us.anthropic.claude-x"}},
+			env: capEnv{BedrockRegionSet: false, BedrockModelSet: false},
+			want: []Capability{
+				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
+				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
+				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
+				{ID: "wardyn_features", State: CapAvailable, Residency: "proxy_injected", Reason: reasonBedrockFeatures},
+			},
+		},
+		{
+			// The other half of the same precedence: the boot config is the
+			// FALLBACK for whatever the row leaves unset ("a selection wins only
+			// the fields it sets" — runs_bedrock.go).
+			name: "bedrock: region on the integration, model from the boot fallback",
+			in: types.Integration{Kind: "bedrock", Config: map[string]any{
+				"auth_lane": "auto", "region": "eu-west-1"}},
+			env: capEnv{BedrockRegionSet: false, BedrockModelSet: true},
+			want: []Capability{
+				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
+				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
+				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
+				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_env", Reason: reasonBedrockFeatures},
+			},
+		},
+		{
 			name: "bedrock: region unset — every cell needs setup (resolveBedrockAuth is unready)",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "sso"}},
+			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "sso"}},
 			env:  capEnv{BedrockRegionSet: false, BedrockModelSet: true},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
@@ -233,7 +278,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "bedrock: model unset — same, either unset takes the whole integration out",
-			v:    integrationView{Type: "bedrock", Config: map[string]any{"auth_lane": "static"}},
+			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: false},
 			want: []Capability{
 				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
@@ -246,7 +291,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- azure_openai (no gating — a flat protocol/control-plane fact) ----------------
 		{
 			name: "azure_openai: unconditional regardless of credentials",
-			v:    integrationView{Type: "azure_openai"},
+			in:   types.Integration{Kind: "azure_openai"},
 			env:  capEnv{},
 			want: []Capability{
 				{ID: "model_api", State: CapImpossible, Reason: reasonXAzureDirect},
@@ -259,10 +304,8 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- scm: github_app ----------------
 		{
 			name: "github_app: both credentials stored",
-			v: integrationView{Type: "github_app", Credentials: map[string]string{
-				"app_id": "github-app-id", "app_key": "github-app-key",
-			}},
-			env: capEnv{SecretPresent: secretSet("github-app-id", "github-app-key")},
+			in:   types.Integration{Kind: "github_app", Secrets: []types.IntegrationSecret{secretRow("app_id", "github-app-id"), secretRow("app_key", "github-app-key")}},
+			env:  capEnv{SecretPresent: secretSet("github-app-id", "github-app-key")},
 			want: []Capability{
 				{ID: "clone:app", State: CapAvailable, Residency: "brokered"},
 				{ID: "egress_host", State: CapAvailable},
@@ -270,10 +313,8 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "github_app: app_id missing",
-			v: integrationView{Type: "github_app", Credentials: map[string]string{
-				"app_key": "github-app-key",
-			}},
-			env: capEnv{SecretPresent: secretSet("github-app-key")},
+			in:   types.Integration{Kind: "github_app", Secrets: []types.IntegrationSecret{secretRow("app_key", "github-app-key")}},
+			env:  capEnv{SecretPresent: secretSet("github-app-key")},
 			want: []Capability{
 				{ID: "clone:app", State: CapNeedsSetup, Reason: "needs both app_id and app_key credentials"},
 				{ID: "egress_host", State: CapAvailable},
@@ -281,7 +322,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "github_app: neither credential stored",
-			v:    integrationView{Type: "github_app"},
+			in:   types.Integration{Kind: "github_app"},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
 				{ID: "clone:app", State: CapNeedsSetup, Reason: "needs both app_id and app_key credentials"},
@@ -292,7 +333,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- scm: git_host ----------------
 		{
 			name: "git_host: pat only",
-			v:    integrationView{Type: "git_host", Credentials: map[string]string{"pat": "git-pat-github-com"}},
+			in:   types.Integration{Kind: "git_host", Secrets: []types.IntegrationSecret{secretRow("pat", "git-pat-github-com")}},
 			env:  capEnv{SecretPresent: secretSet("git-pat-github-com")},
 			want: []Capability{
 				{ID: "clone:pat", State: CapAvailable, Residency: "resident_env"},
@@ -302,7 +343,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "git_host: ssh only",
-			v:    integrationView{Type: "git_host", Credentials: map[string]string{"ssh_key": "ssh-key-github-com"}},
+			in:   types.Integration{Kind: "git_host", Secrets: []types.IntegrationSecret{secretRow("ssh_key", "ssh-key-github-com")}},
 			env:  capEnv{SecretPresent: secretSet("ssh-key-github-com")},
 			want: []Capability{
 				{ID: "clone:pat", State: CapNeedsSetup, Reason: "no credential configured"},
@@ -312,10 +353,8 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "git_host: both lanes present",
-			v: integrationView{Type: "git_host", Credentials: map[string]string{
-				"pat": "git-pat-github-com", "ssh_key": "ssh-key-github-com",
-			}},
-			env: capEnv{SecretPresent: secretSet("git-pat-github-com", "ssh-key-github-com")},
+			in:   types.Integration{Kind: "git_host", Secrets: []types.IntegrationSecret{secretRow("pat", "git-pat-github-com"), secretRow("ssh_key", "ssh-key-github-com")}},
+			env:  capEnv{SecretPresent: secretSet("git-pat-github-com", "ssh-key-github-com")},
 			want: []Capability{
 				{ID: "clone:pat", State: CapAvailable, Residency: "resident_env"},
 				{ID: "clone:ssh", State: CapAvailable, Residency: "resident_env"},
@@ -324,7 +363,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "git_host: neither lane configured",
-			v:    integrationView{Type: "git_host"},
+			in:   types.Integration{Kind: "git_host"},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
 				{ID: "clone:pat", State: CapNeedsSetup, Reason: "no credential configured"},
@@ -333,71 +372,11 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 
-		// ---------------- artifact_mirror ----------------
-		{
-			name: "artifact_mirror: token present, two ecosystems",
-			v: integrationView{Type: "artifact_mirror",
-				Credentials: map[string]string{"token": "artifactory-token"},
-				Config:      map[string]any{"ecosystems": []any{"npm", "pip"}},
-			},
-			env: capEnv{SecretPresent: secretSet("artifactory-token")},
-			want: []Capability{
-				{ID: "redirect:npm", State: CapAvailable, Residency: "proxy_injected"},
-				{ID: "redirect:pip", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "artifact_mirror: no token — degrades to config-only, never needs_setup",
-			v: integrationView{Type: "artifact_mirror",
-				Config: map[string]any{"ecosystems": []any{"npm"}},
-			},
-			env: capEnv{SecretPresent: secretSet()},
-			want: []Capability{
-				{ID: "redirect:npm", State: CapAvailable, Residency: "config_only", Reason: "no token configured — URL-only redirect (anonymous read)"},
-			},
-		},
-		{
-			name: "artifact_mirror: ecosystems came through a JSON round-trip ([]any)",
-			v: integrationView{Type: "artifact_mirror",
-				Credentials: map[string]string{"token": "artifactory-token"},
-				Config:      map[string]any{"ecosystems": []any{"go"}},
-			},
-			env: capEnv{SecretPresent: secretSet("artifactory-token")},
-			want: []Capability{
-				{ID: "redirect:go", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "artifact_mirror: no ecosystems configured — no capabilities at all",
-			v:    integrationView{Type: "artifact_mirror"},
-			env:  capEnv{},
-			want: nil,
-		},
-
-		// ---------------- host_proxy ----------------
-		{
-			name: "host_proxy: secret present",
-			v:    integrationView{Type: "host_proxy", Credentials: map[string]string{"secret": "host-proxy-token"}},
-			env:  capEnv{SecretPresent: secretSet("host-proxy-token")},
-			want: []Capability{
-				{ID: "egress_upstream", State: CapAvailable, Residency: "proxy_injected"},
-			},
-		},
-		{
-			name: "host_proxy: secret absent",
-			v:    integrationView{Type: "host_proxy"},
-			env:  capEnv{SecretPresent: secretSet()},
-			want: []Capability{
-				{ID: "egress_upstream", State: CapNeedsSetup, Reason: "no credential configured"},
-			},
-		},
-
 		// ---------------- generic kinds ----------------
 		{
 			name: "generic kind: header + stored secret but NO hosts — credential still needs_setup",
-			v: integrationView{Type: "acme_feed",
-				Header:      "x-api-key",
-				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
+			in: types.Integration{Kind: "acme_feed",
+				Secrets: []types.IntegrationSecret{headerSecretRow(types.IntegrationCredentialToken, "feed-token", "x-api-key")},
 			},
 			env: capEnv{SecretPresent: secretSet("feed-token")},
 			want: []Capability{
@@ -407,9 +386,9 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "generic kind: hosts present — credential gates on the stored secret as before",
-			v: integrationView{Type: "acme_feed",
-				Header: "x-api-key", Hosts: []string{"feed.corp.example"},
-				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
+			in: types.Integration{Kind: "acme_feed",
+				Egress:  []string{"feed.corp.example"},
+				Secrets: []types.IntegrationSecret{headerSecretRow(types.IntegrationCredentialToken, "feed-token", "x-api-key")},
 			},
 			env: capEnv{SecretPresent: secretSet("feed-token")},
 			want: []Capability{
@@ -418,14 +397,13 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			// The pre-fold shape could carry a generic-category row whose open
-			// Type collided with a typed name ("host_proxy"); with the category
-			// gone, kind alone routes — a generic slug is anything outside the
-			// closed set and the two legacy topology slugs. This pins the
-			// generic route for an ordinary open slug with no credential lane.
+			// Kind alone routes: a generic slug is anything outside the closed
+			// set — including "host_proxy"/"artifact_mirror" as a NEW-shape kind,
+			// which no longer gets a bespoke matrix. This pins the generic route
+			// for an ordinary open slug with no credential lane.
 			name: "generic kind with no header: egress-only, credential honestly impossible",
-			v: integrationView{Type: "corp_tool",
-				Hosts: []string{"tool.internal"},
+			in: types.Integration{Kind: "corp_tool",
+				Egress: []string{"tool.internal"},
 			},
 			env: capEnv{},
 			want: []Capability{
@@ -437,9 +415,9 @@ func TestCapabilitiesFor(t *testing.T) {
 		// ---------------- DisabledCaps / Disabled overrides ----------------
 		{
 			name: "DisabledCaps turns off one cell and leaves the rest alone",
-			v: integrationView{Type: "anthropic_api_key",
-				Credentials:  map[string]string{"api_key": "anthropic-api-key"},
-				DisabledCaps: []string{"wardyn_features"},
+			in: types.Integration{Kind: "anthropic_api_key",
+				Secrets:              []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")},
+				DisabledCapabilities: []string{"wardyn_features"},
 			},
 			env: capEnv{SecretPresent: secretSet("anthropic-api-key")},
 			want: []Capability{
@@ -451,9 +429,9 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			name: "Disabled integration forces EVERY cell off, including a protocol impossibility",
-			v: integrationView{Type: "anthropic_api_key",
-				Credentials: map[string]string{"api_key": "anthropic-api-key"},
-				Disabled:    true,
+			in: types.Integration{Kind: "anthropic_api_key",
+				Secrets:  []types.IntegrationSecret{secretRow("api_key", "anthropic-api-key")},
+				Disabled: true,
 			},
 			env: capEnv{SecretPresent: secretSet("anthropic-api-key")},
 			want: []Capability{
@@ -471,7 +449,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			// slug outside the closed set IS a generic connection, and gets the
 			// generic row's two honest cells.
 			name: "unrecognized kind is a generic connection",
-			v:    integrationView{Type: "something-a-future-wave-invented"},
+			in:   types.Integration{Kind: "something-a-future-wave-invented"},
 			env:  capEnv{},
 			want: []Capability{
 				{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."},
@@ -482,9 +460,9 @@ func TestCapabilitiesFor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := capabilitiesFor(tc.v, tc.env)
+			got := capabilitiesFor(tc.in, tc.env)
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("capabilitiesFor(%+v, env) =\n  %#v\nwant\n  %#v", tc.v, got, tc.want)
+				t.Errorf("capabilitiesFor(%+v, env) =\n  %#v\nwant\n  %#v", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -732,59 +710,6 @@ func TestEffectiveIntegrations_ScmHostsHyphenatedHostMergesForward(t *testing.T)
 	}
 }
 
-func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
-	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
-		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
-		{From: "https://pypi.org/simple/", To: "https://artifactory.corp/api/pip/pip-remote/", Ecosystem: "pip"},
-	}}
-	srv := New(integrationsTestConfig(t, sc, nil))
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "artifact_mirror:artifactory.corp")
-	if !ok {
-		t.Fatal("expected one artifact_mirror row for the shared host")
-	}
-	if row.Kind != "artifact_mirror" {
-		t.Errorf("row = %+v", row)
-	}
-	if row.RoleSecret("token") != "npm-token" {
-		t.Errorf("secrets = %+v, want the npm token (first ecosystem alphabetically)", row.Secrets)
-	}
-	if ecos := stringSlice(row.Config["ecosystems"]); len(ecos) != 2 {
-		t.Errorf("ecosystems = %+v, want both npm and pip on the one shared-host row", ecos)
-	}
-}
-
-// A host's FIRST-STORED redirect having no token must not permanently mark the
-// derived row credential-less: the fix takes the first NON-EMPTY
-// TokenSecretRef seen for the host, not just the literal first redirect.
-func TestEffectiveIntegrations_ArtifactMirrorTokenFromLaterRedirect(t *testing.T) {
-	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
-		{From: "https://pypi.org/simple/", To: "https://artifactory.corp/api/pip/pip-remote/", Ecosystem: "pip"},
-		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
-	}}
-	srv := New(integrationsTestConfig(t, sc, nil))
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "artifact_mirror:artifactory.corp")
-	if !ok {
-		t.Fatal("expected one artifact_mirror row for the shared host")
-	}
-	if row.RoleSecret("token") != "npm-token" {
-		t.Errorf("secrets = %+v, want the npm token even though the FIRST-stored redirect for this host carried none", row.Secrets)
-	}
-}
-
-func TestEffectiveIntegrations_HostProxy(t *testing.T) {
-	srv := New(integrationsTestConfig(t, types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}, nil))
-	row, ok := findRow(effectiveIntegrationsFor(srv, context.Background()), "host_proxy")
-	if !ok {
-		t.Fatal("expected a host_proxy row")
-	}
-	if row.Kind != "host_proxy" {
-		t.Errorf("row = %+v", row)
-	}
-	if row.RoleSecret("secret") != "corp-proxy-url" {
-		t.Errorf("secrets = %+v", row.Secrets)
-	}
-}
-
 // A stored integration under an id a legacy rule would also synthesize wins
 // (the legacy duplicate is suppressed); a stored row under any OTHER id
 // coexists alongside the unrelated legacy rows untouched.
@@ -795,7 +720,7 @@ func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
 		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key",
 			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
 	}
-	sc := types.SiteConfig{Integrations: []types.Integration{stored}, UpstreamProxySecretRef: "corp-proxy-url"}
+	sc := types.SiteConfig{Integrations: []types.Integration{stored}, ScmHosts: []string{"ghes.corp.example"}}
 	srv := New(integrationsTestConfig(t, sc, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
 	rows := effectiveIntegrationsFor(srv, context.Background())
 
@@ -812,18 +737,17 @@ func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
 		t.Errorf("row = %+v, want the STORED row to win", anthropicRows[0])
 	}
 
-	if _, ok := findRow(rows, "host_proxy"); !ok {
-		t.Error("expected the unrelated host_proxy legacy row to coexist alongside the stored row")
+	if _, ok := findRow(rows, "git_host:ghes.corp.example"); !ok {
+		t.Error("expected the unrelated git_host legacy row to coexist alongside the stored row")
 	}
 }
 
-// The response must be deterministically ordered (legacy sort-category from
-// kind, then id) across repeated calls, regardless of map iteration order
-// upstream.
+// The response must be deterministically ordered (derived group from kind,
+// then id) across repeated calls, regardless of map iteration order upstream.
 func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 	sc := types.SiteConfig{
-		UpstreamProxySecretRef: "corp-proxy-url",
-		ScmHosts:               []string{"github.com"},
+		Integrations: []types.Integration{{ID: "acme-feed", Kind: "artifactory", Egress: []string{"feed.corp.example"}}},
+		ScmHosts:     []string{"github.com"},
 	}
 	srv := New(integrationsTestConfig(t, sc, map[string][]byte{
 		"openai-api-key":    []byte("x"),
@@ -845,9 +769,14 @@ func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
 			}
 		}
 	}
+	// AI providers, then source control, then the flat Connections set — the
+	// three groups the screen renders, derived from kind alone.
 	for i := 1; i < len(first); i++ {
-		if legacySortCategory(first[i-1].Kind) > legacySortCategory(first[i].Kind) {
-			t.Errorf("not sorted by category group: %q before %q", first[i-1].Kind, first[i].Kind)
+		if integrationGroup(first[i-1].Kind) > integrationGroup(first[i].Kind) {
+			t.Errorf("not sorted by derived group: %q before %q", first[i-1].Kind, first[i].Kind)
 		}
+	}
+	if integrationGroup(first[len(first)-1].Kind) != 2 {
+		t.Errorf("the generic connection must sort last, got %q", first[len(first)-1].Kind)
 	}
 }

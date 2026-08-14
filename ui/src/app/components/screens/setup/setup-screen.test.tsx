@@ -71,6 +71,17 @@ vi.mock("../../../lib/api/runs", () => ({
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
   runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
+// The embedded IntegrationsScreen (B3) reads GET /integrations directly now,
+// independent of SetupStatus.integrations — mock it alongside setup/health so
+// the step body doesn't fall through to a real, unmocked wfetch call.
+const listIntegrationsMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return {
+    ...actual,
+    genericIntegrationsApi: { ...actual.genericIntegrationsApi, list: (...a: unknown[]) => listIntegrationsMock(...a) },
+  };
+});
 // The Demos step embeds AttachTerminal (xterm) + LiveApprovals; neither renders in
 // jsdom. Stub them to trivial nodes so the step's body mounts without a real PTY.
 vi.mock("../../attach-terminal", () => ({
@@ -140,6 +151,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // independent one both GET on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    // Default: nothing connected. Individual tests override to match whatever
+    // they pass to getSetupStatusMock's own `integrations`/`secrets` fixture.
+    listIntegrationsMock.mockReset().mockResolvedValue([]);
     // no_runner (this suite mocks no real sandbox runner) is the honest,
     // non-blocking default — see clearCorpNetworkGate for why that's the
     // right fixture for walkthroughs that aren't testing the gate itself.
@@ -424,6 +438,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
     );
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    // The rail badge counts off status.integrations (setup-screen.tsx's own
+    // integrationsCount); the embedded IntegrationsScreen renders off its own
+    // independent GET /integrations read — give both the same one row so the
+    // two agree, exactly as the real server-derived set would.
+    listIntegrationsMock.mockResolvedValue([
+      { id: "anthropic_api_key", kind: "anthropic_api_key", name: "Anthropic API key", source: "legacy", secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }] },
+    ]);
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 

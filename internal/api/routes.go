@@ -277,6 +277,12 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Put("/integrations/{id}", s.handlePutIntegration)
 			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
 			operatorOnly.Post("/integrations/{id}/adopt", s.handleAdoptIntegration)
+			// "Test": launch a throwaway confined sandbox and actually traverse
+			// THIS integration's own egress + credential injection
+			// (integration_probe.go) — the same real-probe honesty as the two
+			// site-config probes above, and the same operatorOnly posture (it
+			// spends a sandbox and presents the operator's credential).
+			operatorOnly.Post("/integrations/{id}/test", s.handleTestIntegration)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
 			// (item 4): recordingAuthorizer is the SAME ownership rule

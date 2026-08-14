@@ -114,10 +114,8 @@ export const INTEGRATION_GROUPS: readonly IntegrationGroup[] = [
  *                    hosts and header are the whole contract.
  *  - "ai" / "scm"  — the two TYPED backend categories, which have their own
  *                    established flows and legacy-derived rows.
- *  - "unsupported" — listed because it is real and people look for it, but it
- *                    has no home yet. Say so; never offer a broken Add.
  */
-export type AddLane = "generic" | "ai" | "scm" | "unsupported";
+export type AddLane = "generic" | "ai" | "scm";
 
 export interface IntegrationTypeMeta {
   id: string;
@@ -212,20 +210,6 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "ai",
     apiType: "azure_openai",
     powers: "Wardyn's own AI features only — neither agent tool can be pointed at an Azure deployment.",
-  },
-  {
-    id: "compat",
-    group: "model",
-    label: "Self-hosted or OpenAI-compatible endpoint",
-    hosts: [],
-    hostPlaceholder: "ollama.corp.internal:11434",
-    header: "Authorization",
-    format: "Bearer %s",
-    secret: "llm-endpoint-token",
-    delivery: "proxy_injected",
-    addLane: "unsupported",
-    powers: "Anything that speaks the OpenAI API — Ollama, vLLM, a gateway you run.",
-    note: "New: a self-hosted endpoint has no home in Wardyn today.",
   },
   {
     id: "github",
@@ -404,107 +388,6 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     powers: "Pulls and pushes against your Harbor project.",
   },
   {
-    id: "ecr",
-    group: "registry",
-    label: "Amazon ECR",
-    hosts: ["<acct>.dkr.ecr.us-east-1.amazonaws.com"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "ecr",
-    powers:
-      "Reaching ECR at all. Its login token is minted through the AWS chain, so delivering it is the same gap the cloud providers have.",
-  },
-  {
-    id: "gar",
-    group: "registry",
-    label: "Google Artifact Registry",
-    hosts: ["us-docker.pkg.dev"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "gar",
-    powers: "Reaching Artifact Registry at all; its token comes from a Google OAuth chain.",
-  },
-  {
-    id: "aws",
-    group: "cloud",
-    label: "Amazon Web Services",
-    hosts: ["s3.us-east-1.amazonaws.com", "sts.amazonaws.com"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "aws",
-    powers: "Reaching AWS endpoints from a run. SigV4 signing means the proxy can't add a header on the run's behalf.",
-  },
-  {
-    id: "gcp",
-    group: "cloud",
-    label: "Google Cloud",
-    hosts: ["storage.googleapis.com", "oauth2.googleapis.com"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "gcp",
-    powers: "Reaching Google Cloud endpoints from a run.",
-  },
-  {
-    id: "azurecloud",
-    group: "cloud",
-    label: "Microsoft Azure",
-    hosts: ["management.azure.com", "<account>.blob.core.windows.net"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "azurecloud",
-    powers: "Reaching Azure endpoints from a run.",
-  },
-  {
-    id: "postgres",
-    group: "data",
-    label: "PostgreSQL",
-    hosts: ["db.corp.internal:5432"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "postgres",
-    powers: "Reaching the database host and port from a run.",
-  },
-  {
-    id: "mysql",
-    group: "data",
-    label: "MySQL",
-    hosts: ["mysql.corp.internal:3306"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "mysql",
-    powers: "Reaching the database host and port from a run.",
-  },
-  {
-    id: "redis",
-    group: "data",
-    label: "Redis",
-    hosts: ["cache.corp.internal:6379"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "redis",
-    powers: "Reaching the cache host and port from a run.",
-  },
-  {
-    id: "mongo",
-    group: "data",
-    label: "MongoDB",
-    hosts: ["mongo.corp.internal:27017"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "mongo",
-    powers: "Reaching the database host and port from a run.",
-  },
-  {
-    id: "s3compat",
-    group: "data",
-    label: "S3-compatible object storage",
-    hosts: ["minio.corp.internal:9000"],
-    delivery: "notbuilt",
-    addLane: "generic",
-    apiType: "s3compat",
-    powers: "Reaching the endpoint from a run; SigV4 signing is the same gap AWS has.",
-  },
-  {
     id: "mcp",
     group: "mcp",
     label: "MCP server over HTTP",
@@ -654,7 +537,6 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
 
 /** Extra search terms per type — what someone types when they don't know the product name. */
 const SEARCH_ALIAS: Readonly<Record<string, string>> = {
-  compat: "ollama vllm llama.cpp gateway litellm openai-compatible self-hosted local model",
   artifactory: "jfrog maven npm registry feed proxy repo",
   nexus: "sonatype maven npm feed repo",
   npmscope: "npm yarn pnpm registry",
@@ -663,16 +545,6 @@ const SEARCH_ALIAS: Readonly<Record<string, string>> = {
   ghcr: "docker image container github",
   dockerhub: "docker image container",
   harbor: "docker image container",
-  ecr: "aws docker image container",
-  gar: "gcp google docker image container",
-  aws: "amazon s3 bucket sts lambda",
-  gcp: "google gcs bucket",
-  azurecloud: "blob storage microsoft",
-  postgres: "postgresql psql database sql",
-  mysql: "mariadb database sql",
-  redis: "cache valkey",
-  mongo: "mongodb database",
-  s3compat: "minio ceph object storage bucket",
   mcp: "model context protocol agent tools server",
   jira: "atlassian ticket issue",
   linear: "issue ticket",
@@ -703,10 +575,6 @@ export const CATALOG_COPY = {
   STORE_NOTE: "Wardyn stores this — it doesn't dial the system to check it.",
   EMPTY_BODY:
     "A run reaches nothing outside Wardyn until you name what it may reach. Governed commands, interactive runs and terminal recordings need none of this — add an integration when a run, an agent, or a Wardyn feature needs one.",
-  NOTBUILT_CLOUD:
-    "AWS, GCP and Azure authenticate by signing the request or through an SDK chain — not with a header the proxy can add. Only the bespoke Bedrock lanes exist today.",
-  NOTBUILT_DATA:
-    "Postgres, MySQL, Redis and Mongo speak their own wire protocols, not HTTP, so the proxy has nothing to inject.",
   ADD_DESC:
     "Type what you're connecting, or browse the categories. Every category is optional — Wardyn runs with none of them.",
   SEARCH_PH: "Artifactory, ghcr.io, Postgres, an MCP server…",
@@ -725,31 +593,6 @@ export const CATALOG_COPY = {
 
 export function integrationGroup(id: IntegrationGroupId): IntegrationGroup {
   return INTEGRATION_GROUPS.find((g) => g.id === id) ?? INTEGRATION_GROUPS[INTEGRATION_GROUPS.length - 1];
-}
-
-// Registry, cloud and data-store types all land on "notbuilt" for one of two
-// reasons — a signed-request/SDK auth chain (registry + cloud), or a non-HTTP
-// wire protocol (data) — so the reason is a fact about the GROUP, not
-// something each of the 10 affected types needs to restate identically.
-const NOTBUILT_WHY: Partial<Record<IntegrationGroupId, string>> = {
-  registry: CATALOG_COPY.NOTBUILT_CLOUD,
-  cloud: CATALOG_COPY.NOTBUILT_CLOUD,
-  data: CATALOG_COPY.NOTBUILT_DATA,
-};
-
-// s3compat lives in the "data" group (it sits alongside Postgres/MySQL/Redis/
-// Mongo in the mock's own section), but its gap is the CLOUD one — SigV4
-// signing, not a non-HTTP wire protocol — exactly what its own `powers` line
-// says. A per-id override, not a new group, since it's the one type whose
-// true reason disagrees with its section.
-const NOTBUILT_WHY_BY_ID: Partial<Record<string, string>> = {
-  s3compat: CATALOG_COPY.NOTBUILT_CLOUD,
-};
-
-/** Why a "notbuilt" type has no credential lane yet — stated per group, with
- *  a per-id override for the rare type whose section doesn't match its cause. */
-export function notbuiltWhy(type: Pick<IntegrationTypeMeta, "id" | "group">): string | undefined {
-  return NOTBUILT_WHY_BY_ID[type.id] ?? NOTBUILT_WHY[type.group];
 }
 
 export function integrationTypeById(id: string): IntegrationTypeMeta | undefined {

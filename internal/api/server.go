@@ -464,6 +464,14 @@ type Server struct {
 	// promote to a PG advisory lock (gt_rotator.go's pattern) if
 	// allowMultiReplica ever becomes real.
 	siteConfigMu sync.Mutex
+	// probeStatusCache holds the last integration-probe result per integration
+	// id (POST /integrations/{id}/test — integration_probe.go). In-memory ONLY
+	// and deliberately so: a probe result is a claim about the network a moment
+	// ago, so "not tested" after a restart is the honest state, not a lost
+	// fact. Same single-replica assumption as siteConfigMu above. Zero value is
+	// ready to use.
+	probeStatusMu    sync.Mutex
+	probeStatusCache map[string]types.IntegrationProbeStatus
 }
 
 // New constructs a Server and builds its router. It does not start listening.

@@ -98,6 +98,31 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 // hosts it granted. Empty (and a no-op) for a row that delivers no header, which
 // is the honest state for every system that authenticates outside HTTP.
 //
+// ROLE-AGNOSTIC, DELIBERATELY (base-component model): the row's
+// proxy_header-delivered secret is its credential whatever ROLE it carries —
+// "token", "pat", "api_key" alike. Delivery is the contract; the role is a
+// label for humans. So an AI-provider row that also names egress injects its
+// key there too, which is the model's own promise: a connection's secrets and
+// egress apply wherever the row is NAMED. Naming is the whole consent —
+// nothing is ambient, a configured integration grants nothing until a
+// workspace requires it (or a redirect points at it, resolveRedirectToken).
+// A secret with NO declared delivery is still never matched: that is a closed
+// kind's bespoke transport (the github_app halves, git_host's clone
+// credentials), which this generic lane must not second-guess. At most ONE
+// proxy_header secret can exist per row (validateIntegrationWrite), so
+// HeaderSecret's "first match" IS every match.
+//
+// HONEST CEILING (pre-existing, not introduced here): the proxy injects a
+// header on a plain-HTTP forward, or inside a TLS-MITM'd tunnel — and dispatch
+// populates ProxyConfig.MITMHosts from the artifact-redirect plan and the
+// Bedrock bearer host ONLY (runs_dispatch.go), never from an integration's
+// egress. So on an https:// host this grant is authored, persisted and
+// resolvable, but the CONNECT stays opaque and nothing is added to the wire.
+// Widening MITM is a deliberate trust decision (see isCorpMITMHost's TRUST
+// BOUNDARY note), not a side effect of folding an integration, so it is left
+// to whoever makes it: the fix is to add these hosts to that same tightly
+// scoped, injection-paired set.
+//
 // Three guards, each of which drops a host rather than failing the run:
 //
 //   - the named secret must actually be stored. An injection grant with no

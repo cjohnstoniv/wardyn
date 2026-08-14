@@ -127,6 +127,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/integrations/{id}":                             {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}":                          {class: classAdmin},
 	"POST /api/v1/integrations/{id}/adopt":                      {class: classAdmin},
+	"POST /api/v1/integrations/{id}/test":                       {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──

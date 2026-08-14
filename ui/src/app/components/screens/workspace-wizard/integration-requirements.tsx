@@ -49,7 +49,7 @@ export function IntegrationRequirements({
   namedOnly?: boolean;
 }) {
   const available = React.useMemo(
-    () => (status && !namedOnly ? genericIntegrations(status) : []),
+    () => (status && !namedOnly ? genericIntegrations(status.integrations ?? []) : []),
     [status, namedOnly],
   );
   const named = namedIntegrationIds(requirements);
