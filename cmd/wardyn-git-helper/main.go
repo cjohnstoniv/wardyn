@@ -67,15 +67,26 @@
 //	    deployment that has not wired the gate), the helper preserves the legacy
 //	    behaviour and mints, so legitimate git is never blocked.
 //
-//	RESIDUAL (documented honestly): this raises the bar from "any in-sandbox
-//	process" to "code executing AS the agent uid". A process running as the agent
-//	user can still read the 0400 secret file (or read WARDYN_GIT_HELPER_SECRET
-//	from a descendant's /proc/<pid>/environ, or simply be a descendant of
-//	agent-run) and thereby obtain the token. Closing that gap requires
-//	per-process credentials (e.g. SPIFFE-attested mint, or a per-invocation
-//	nonce), which is future work. Interactive runs are likewise not gated by this
-//	mechanism (no agent-run to provision the secret) and rely on the human
-//	attach principal being authorised.
+//	RESIDUAL (documented honestly): this secret binds a caller going through
+//	THIS BINARY — it stops a caller that speaks git's credential protocol
+//	(a sub-process, a snooping attach shell) by routing through
+//	wardyn-git-helper itself. It does NOT bind the credential at its source:
+//	the proxy's local mint route (POST /wardyn/v1/credentials/mint) is itself
+//	unauthenticated — like every other /wardyn/... local route, it trusts
+//	anything that can reach it as "the sandbox" — so a caller willing to skip
+//	this binary, read the grant id straight out of the container-wide
+//	WARDYN_GIT_PAT_GRANTS env (unlike WARDYN_GIT_HELPER_SECRET, that one is
+//	NOT process-scoped), and POST the route directly is not bound at all.
+//	Within the "goes through this binary" set, the secret further raises the
+//	bar from "any in-sandbox process" to "code executing AS the agent uid": a
+//	process running as the agent user can still read the 0400 secret file (or
+//	read WARDYN_GIT_HELPER_SECRET from a descendant's /proc/<pid>/environ, or
+//	simply be a descendant of agent-run) and thereby obtain the token via the
+//	binary too. Closing either gap requires authenticating the CALLER at the
+//	proxy's mint route itself (e.g. SPIFFE-attested mint, or a per-invocation
+//	nonce), which is future work. Interactive runs are likewise not gated by
+//	this mechanism (no agent-run to provision the secret) and rely on the
+//	human attach principal being authorised.
 //
 //	The secret is never logged.
 //

@@ -10,16 +10,19 @@ import (
 	"testing"
 )
 
-// TestResidualDoc_MintRouteHonesty guards against W19-W19a-5 regressing: the
-// package doc's "Caller authentication" RESIDUAL paragraph, and
-// THREAT-MODEL.md's git_pat row, must both say plainly that the per-run
-// caller-auth secret only binds a caller going through THIS BINARY, and that
-// the proxy's local mint route (POST /wardyn/v1/credentials/mint) is itself
-// unauthenticated — so a caller that reads the grant id straight out of the
-// container-wide sandbox env and POSTs the route directly is not bound at
-// all. Losing either mention re-opens the "claims a bar it doesn't raise"
-// gap this test exists to catch.
-func TestResidualDoc_MintRouteHonesty(t *testing.T) {
+// TestResidualDoc_MintRouteHonesty_GoDoc guards against W19-W19a-5
+// regressing on the CODE side: the package doc's "Caller authentication"
+// RESIDUAL paragraph must say plainly that the per-run caller-auth secret
+// only binds a caller going through THIS BINARY, and that the proxy's local
+// mint route (POST
+// /wardyn/v1/credentials/mint) is itself unauthenticated — so a caller that
+// reads the grant id straight out of the container-wide sandbox env and
+// POSTs the route directly is not bound at all. Losing this mention re-opens
+// the "claims a bar it doesn't raise" gap this test exists to catch. (Split
+// from the THREAT-MODEL.md half below — that file's git_pat row makes the
+// identical claim and is a separate doc-ownership concern; see
+// TestResidualDoc_MintRouteHonesty_ThreatModel.)
+func TestResidualDoc_MintRouteHonesty_GoDoc(t *testing.T) {
 	root := repoRootForTest(t)
 
 	src, err := os.ReadFile(filepath.Join(root, "cmd", "wardyn-git-helper", "main.go"))
@@ -31,6 +34,14 @@ func TestResidualDoc_MintRouteHonesty(t *testing.T) {
 		"/wardyn/v1/credentials/mint",
 		"not bound",
 	)
+}
+
+// TestResidualDoc_MintRouteHonesty_ThreatModel is the THREAT-MODEL.md half of
+// W19-W19a-5: §5.1a's git_pat row must carry the same honesty clause as the
+// Go doc above (TestResidualDoc_MintRouteHonesty_GoDoc), so the two can't
+// drift — a reader of either one gets the true picture.
+func TestResidualDoc_MintRouteHonesty_ThreatModel(t *testing.T) {
+	root := repoRootForTest(t)
 
 	tm, err := os.ReadFile(filepath.Join(root, "threatmodel", "THREAT-MODEL.md"))
 	if err != nil {
