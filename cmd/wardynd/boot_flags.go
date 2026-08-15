@@ -22,6 +22,7 @@ import (
 type bootFlags struct {
 	dsn                  *string
 	migrateDSN           *string
+	migrateTimeout       *time.Duration
 	listen               *string
 	tlsCert              *string
 	tlsKey               *string
@@ -107,12 +108,13 @@ type bootFlags struct {
 // carry the operator-facing documentation for each knob.
 func parseBootFlags() *bootFlags {
 	f := &bootFlags{
-		dsn:           flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres DSN (required)"),
-		migrateDSN:    flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "OPTIONAL Postgres DSN for an owner/migrator role that runs migrations; when set, WARDYN_PG_DSN is used ONLY for the least-privilege runtime app pool (enables audit_events DDL protection). Empty = single-DSN mode (no DDL protection, unchanged behavior)."),
-		listen:        flagEnv("listen", "WARDYN_LISTEN", ":8080", "HTTP listen address"),
-		tlsCert:       flagEnv("tls-cert", "WARDYN_TLS_CERT", "", "path to the TLS certificate (PEM); enables built-in TLS when set together with -tls-key"),
-		tlsKey:        flagEnv("tls-key", "WARDYN_TLS_KEY", "", "path to the TLS private key (PEM); enables built-in TLS when set together with -tls-cert"),
-		tlsTerminated: flagBool("tls-terminated", "WARDYN_TLS_TERMINATED", false, "set when TLS terminates at an upstream reverse proxy; marks session cookies Secure even though wardynd itself serves plain HTTP"),
+		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres DSN (required)"),
+		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "OPTIONAL Postgres DSN for an owner/migrator role that runs migrations; when set, WARDYN_PG_DSN is used ONLY for the least-privilege runtime app pool (enables audit_events DDL protection). Empty = single-DSN mode (no DDL protection, unchanged behavior)."),
+		migrateTimeout: flagDuration("migrate-timeout", "WARDYN_MIGRATE_TIMEOUT", 5*time.Minute, "how long db.Migrate may run before boot fails closed — separate from the fixed 30s connect budget so a slow migration on a large table (e.g. a new index) doesn't crash-loop the upgrade"),
+		listen:         flagEnv("listen", "WARDYN_LISTEN", ":8080", "HTTP listen address"),
+		tlsCert:        flagEnv("tls-cert", "WARDYN_TLS_CERT", "", "path to the TLS certificate (PEM); enables built-in TLS when set together with -tls-key"),
+		tlsKey:         flagEnv("tls-key", "WARDYN_TLS_KEY", "", "path to the TLS private key (PEM); enables built-in TLS when set together with -tls-cert"),
+		tlsTerminated:  flagBool("tls-terminated", "WARDYN_TLS_TERMINATED", false, "set when TLS terminates at an upstream reverse proxy; marks session cookies Secure even though wardynd itself serves plain HTTP"),
 		// Refused by default (validateConfig) when NO TLS posture is configured and
 		// the bind is a specific non-loopback interface — see listenBindsSpecificRoutable.
 		// Loopback and the unspecified bind (":8080", the compose topology) are

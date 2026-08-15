@@ -126,14 +126,21 @@ func run() error {
 	defer stop()
 
 	// Connect + migrate (Postgres is the only required dependency). See
-	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection).
-	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-	pool, err := connectAndMigrate(bootCtx, *f.dsn, *f.migrateDSN)
+	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection)
+	// and the separate connect/migrate timeout budgets (W28-S1-4) — a fixed 30s
+	// bounds the connect, -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m)
+	// bounds db.Migrate so a slow migration doesn't crash-loop the upgrade.
+	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
+
+	// bootCtx bounds the REST of the boot sequence (signing-key load, optional
+	// features) — unrelated to the connect/migrate split above, which now runs
+	// under its own two budgets rather than sharing this one.
+	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
 
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
@@ -370,14 +377,22 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 // No OIDC => nothing to decide: the admin token and local mode are a single
 // shared credential with no human identity to key a role off, so they are always
 // operators and this rule never fires.
-func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allowNoOperatorList bool) error {
-	if !oidcConfigured || len(operatorEmails) > 0 || allowNoOperatorList {
+//
+// hasRoleMap also satisfies the rule: WARDYN_OIDC_ROLE_MAP switches deriveRole
+// (internal/auth/oidc) to claim-based admin/member derivation that no longer
+// depends on the operator allowlist at all (an unmatched claim falls through to
+// WARDYN_OIDC_DEFAULT_ROLE or is denied) — so a role-map-only deployment, the
+// recipe .claude/skills/wardyn-k8s-setup/SKILL.md documents, is not the
+// every-human-is-admin ambiguity this refusal exists to catch.
+func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allowNoOperatorList bool, hasRoleMap bool) error {
+	if !oidcConfigured || len(operatorEmails) > 0 || allowNoOperatorList || hasRoleMap {
 		return nil
 	}
 	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
 		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
-		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox); " +
+		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox) — absent a role map — " +
 		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
+		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
 		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
 }
 

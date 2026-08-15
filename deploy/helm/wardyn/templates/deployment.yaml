@@ -219,13 +219,19 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           startupProbe:
-            # Generous startup budget so a slow first DB connect (migrations)
-            # does not trip the liveness probe and crash-loop the pod.
+            # Generous startup budget covering wardynd's OWN connect (fixed 30s)
+            # + migrate (WARDYN_MIGRATE_TIMEOUT, default 5m) budgets — /healthz
+            # doesn't bind until both finish, so this window must stay >= their
+            # sum or the probe kills the pod mid-migration instead of protecting
+            # it (W28-S1-4: before the migrate timeout existed, wardynd itself
+            # hard-exited at 30s regardless of this probe's allowance, so the
+            # "generous startup budget" this comment promised was never the
+            # thing actually bounding a slow migration).
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 5
-            failureThreshold: 30
+            failureThreshold: 90
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

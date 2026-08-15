@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -126,9 +127,11 @@ func TestScanWorkspace_RepoPlusDir_ScansEverySource(t *testing.T) {
 	}
 }
 
-// The wizard's BUILD step endpoints: an explicit image pick has nothing to
-// build (boots verbatim), and a host without a builder answers an honest
-// "none" with the stock-agent-image detail instead of an error.
+// The wizard's BUILD step endpoints: an explicit image pick boots verbatim
+// ONLY once an image builder is wired to wrap it (W7-S1-2 — this test's
+// harness has none), so it must answer the SAME honest "none" a
+// recommended/custom workspace gets, never the false "nothing_to_build ...
+// boots as-is" a builder-less host cannot actually deliver.
 func TestWorkspaceBuild_ExplicitImageAndNoBuilder(t *testing.T) {
 	srv, _ := pgHarnessWithRunner(t, &fakeRunner{})
 
@@ -147,16 +150,18 @@ func TestWorkspaceBuild_ExplicitImageAndNoBuilder(t *testing.T) {
 		t.Fatalf("get build: %d %s", w.Code, w.Body.String())
 	}
 	var view struct {
-		State string `json:"state"`
-		Image string `json:"image"`
+		State  string `json:"state"`
+		Image  string `json:"image"`
+		Detail string `json:"detail"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode view: %v", err)
 	}
-	if view.State != "nothing_to_build" || view.Image != "golang:1.26" {
-		t.Fatalf("byo view = %+v, want nothing_to_build/golang:1.26", view)
+	if view.State != "none" || view.Image != "golang:1.26" || !strings.Contains(view.Detail, "REFUSED") {
+		t.Fatalf("byo view (no builder) = %+v, want state=none/image=golang:1.26/detail mentioning the run is REFUSED", view)
 	}
-	// POST is a no-op 200 for an explicit image — never a build, never an error.
+	// POST is a no-op 200 for an explicit image with no builder — an honest
+	// report, never a build attempt, never an error.
 	if w = do(t, srv, http.MethodPost, "/api/v1/workspaces/"+ws.ID.String()+"/build", adminToken, ""); w.Code != http.StatusOK {
 		t.Fatalf("post build (byo): %d %s", w.Code, w.Body.String())
 	}

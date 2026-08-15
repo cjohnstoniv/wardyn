@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestBuildTracker_LogRingBounded pins maxBuildLogLines: a build that logs
@@ -136,6 +138,41 @@ func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
 	}
 	if len(got[0]) != maxBuildLogLineLen {
 		t.Fatalf("stored line length = %d, want clamped to %d", len(got[0]), maxBuildLogLineLen)
+	}
+}
+
+// TestResolveBuildView_ExplicitImageNeedsBuilder is the W7-S1-2 regression: a
+// registry/byo base image is NOT "boots as-is" on a builder-less host —
+// resolveWorkspaceImage wraps it with the agent runtime via FinalizeBase, the
+// same wrap a devcontainer build needs, and runs_create.go's wsRefs door
+// REFUSES the run outright when no builder is wired (never silently
+// substitutes the convention image). Pre-fix, resolveBuildView reported
+// "nothing_to_build ... boots as-is — no build involved" regardless of
+// whether a builder existed — false on every bare-binary default and every
+// Helm/k8s install that doesn't set WARDYN_ENVBUILD.
+func TestResolveBuildView_ExplicitImageNeedsBuilder(t *testing.T) {
+	ws := types.Workspace{BaseImage: &types.WorkspaceBaseImage{Kind: "byo", Image: "golang:1.26"}}
+
+	// No builder wired: the honest "none" report, not the false "nothing_to_build".
+	noBuilder := &Server{}
+	view := noBuilder.resolveBuildView(ws)
+	if view.State != "none" {
+		t.Fatalf("state = %q, want %q (no builder wired — the base image is refused at run creation, not verbatim)", view.State, "none")
+	}
+	if !strings.Contains(view.Detail, "REFUSED") {
+		t.Fatalf("detail = %q, want it to name that the run is REFUSED without a builder", view.Detail)
+	}
+	if view.Image != "golang:1.26" {
+		t.Fatalf("image = %q, want the chosen base image surfaced even in the warning", view.Image)
+	}
+
+	// A wired builder DOES make it verbatim — additive: the wired case is
+	// unaffected by the builder-less fix above.
+	wired := &Server{}
+	wired.cfg.ImageBuilder = fakeImageBuilder{}
+	view = wired.resolveBuildView(ws)
+	if view.State != "nothing_to_build" || view.Image != "golang:1.26" {
+		t.Fatalf("wired-builder view = %+v, want nothing_to_build/golang:1.26", view)
 	}
 }
 

@@ -45,3 +45,28 @@ func TestSubstrateRegistry_K8sResolvesUnderK8sTag(t *testing.T) {
 		t.Fatalf("substrate.New(k8s) returned a registry-miss error — \"k8s\" is not actually wired: %v", err)
 	}
 }
+
+// TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled is the W27-S1-3
+// regression: a REGISTERED substrate (k8s) that fails to CONSTRUCT — the
+// canary's flagship refuse-to-construct chief among such failures — must not
+// be printed under the "unknown -runner ... requires -tags docker" headline
+// meant for a typo'd or not-compiled-in -runner; that headline sent every k8s
+// boot refusal down the wrong troubleshooting path. Empty ProxyImage forces
+// newWithClient's errProxyImageUnset before any cluster I/O (the same
+// zero-live-cluster-risk trick the test above uses directly on substrate.New),
+// a real construction failure this unit test can trigger safely.
+func TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled(t *testing.T) {
+	sel, cmap, img := "k8s", "", ""
+	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img}
+
+	_, _, err := buildRunnerFromFlags(f, nil)
+	if err == nil {
+		t.Fatal("buildRunnerFromFlags(k8s) with no ProxyImage: want an error, got nil")
+	}
+	if strings.Contains(err.Error(), "-tags docker") || strings.Contains(err.Error(), "unknown -runner") {
+		t.Fatalf("k8s construct failure printed under the not-compiled-in/unknown-runner headline: %v", err)
+	}
+	if !strings.Contains(err.Error(), `-runner "k8s" failed to start`) {
+		t.Fatalf("error = %q, want it discriminated as a construct failure (registered, but failed to start), not a registry miss", err.Error())
+	}
+}

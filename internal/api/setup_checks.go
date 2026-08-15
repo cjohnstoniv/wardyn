@@ -71,8 +71,10 @@ func envBuilderCheck(wired bool) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "env_builder", Label: "Sandbox image builder", Status: "info",
-		Detail: "The per-run image builder is off (the default on the bare binary; the compose stack enables it): a --image " +
-			"(bring-your-own-image) run is rejected, and a devcontainer_repo run silently falls back to the convention image instead of building.",
+		Detail: "The per-run image builder is off (the default on the bare binary AND every Helm/k8s install unless set): a --image " +
+			"(bring-your-own-image) run is rejected, a devcontainer_repo run silently falls back to the convention image instead of building, " +
+			"and a workspace with a registry/byo/custom base image chosen in the catalog REFUSES every run that uses it (the image can't be " +
+			"wrapped with the agent runtime).",
 		Fix: "Set WARDYN_ENVBUILD=true on a wardynd built with -tags docker, or use the compose stack (it enables the builder).",
 	}
 }

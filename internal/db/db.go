@@ -9,8 +9,10 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -203,9 +205,15 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}
 
+		// W28-S1-4: log elapsed time per applied migration so a slow one (e.g. an
+		// index build on an unbounded table) is VISIBLE in the boot log before its
+		// caller's timeout turns it fatal, rather than the boot just going silent
+		// for however long the timeout allows.
+		start := time.Now()
 		if err := applyMigration(ctx, db, name, string(data)); err != nil {
 			return err
 		}
+		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
 	}
 	return nil
 }
