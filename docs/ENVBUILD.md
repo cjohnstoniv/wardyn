@@ -13,14 +13,23 @@ The server must be started with an image builder wired (`-tags docker` +
 
 ```sh
 wardyn run --agent claude-code --task "…" \
-  --devcontainer-repo org/env-repo --devcontainer-ref main
+  --devcontainer-repo https://github.com/org/env-repo --devcontainer-ref main
 ```
 
 The equivalent API body (POST `/api/v1/runs`):
 
 ```json
-{"agent":"claude-code","devcontainer_repo":"org/env-repo","devcontainer_ref":"main"}
+{"agent":"claude-code","devcontainer_repo":"https://github.com/org/env-repo","devcontainer_ref":"main"}
 ```
+
+**Unlike `--repo`, `--devcontainer-repo` takes a full clone URL verbatim — it
+does NOT expand a bare `<org>/<repo>` slug.** `req.DevcontainerRepo` reaches
+`BuildDevcontainer` unmodified (`internal/api/runs_create.go`), and
+`validateBuildInput` (`internal/envbuild/builder.go`) then rejects anything
+that does not start with `https://` or `git://` (see "Build sandbox" below) —
+so a bare slug like `org/env-repo` fails at build time with "RepoURL scheme
+not allowed", not a silent fallback. This is a real gap from `--repo`'s own
+slug-expansion (`repoCloneURL`); pass the full URL until it closes.
 
 `--devcontainer-repo` is mutually exclusive with `--image` (BYOI), which the
 server enforces with a 400. **With NO builder wired the run does not fail — it
