@@ -561,6 +561,16 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// fold verbatim (not a second, egress-only reimplementation) is what makes them
 	// agree.
 	wsRefs := s.referencedWorkspaces(ctx, clamped)
+	// W15-S1-3: widen the spec's egress from onboarded-workspace registries +
+	// clone hosts the SAME way launch-time unionRunEgress does (runs.go) and
+	// preflight now does — side-effect-free, discarded like every other fold
+	// on this preview pipeline — so this proposal's graded/checklisted
+	// envelope matches what launch will actually enforce, rather than a
+	// narrower one launch then silently widens past.
+	unionWorkspaceEgress(&clamped, wsRefs)
+	for _, ws := range wsRefs {
+		unionAllowedDomains(&clamped, workspaceCloneEgress(ws))
+	}
 	_ = s.applyWorkspaceRequirements(ctx, &clamped, run.Agent, wsRefs, selectionsByWorkspaceID(req.WorkspaceSelections))
 
 	// Deterministic BLAST-RADIUS floor: a run holding POWERFUL credentials (write-

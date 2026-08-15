@@ -268,8 +268,21 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	// A stale active_run_id (its run failed to upload, was killed, or idle-reaped)
 	// must not permanently 409-brick recording: only block on a genuinely live run.
+	// W20-W20-capture-store-5: ws.ActiveRunID is CAS'd onto the workspace by
+	// ClaimWorkspaceActiveRun BEFORE Store.CreateRun persists the run row
+	// (workspaceSourceGrants needs the run row to exist first for its FK) — so
+	// a run that just claimed the slot but hasn't been CreateRun'd yet reads
+	// GetRun => ErrNotFound RIGHT NOW, not "run confirmed terminal". The old
+	// `gerr == nil && !isTerminalRunState(...)` treated that indeterminate
+	// window as "not busy" and let a SECOND concurrent record request jump the
+	// serial import-step gate into it — two open-egress sandboxes for one
+	// workspace. Only a GetRun that SUCCEEDS and proves the run definitively
+	// terminal may pass; any error (including ErrNotFound) is treated as busy.
+	// This is a pre-flight convenience check only — claimImportStep's CAS
+	// below remains the actual correctness guard.
 	if ws.ActiveRunID != nil {
-		if active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID); gerr == nil && !isTerminalRunState(active.State) {
+		active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID)
+		if gerr != nil || !isTerminalRunState(active.State) {
 			writeError(w, http.StatusConflict, "an import step is already running for this workspace")
 			return
 		}

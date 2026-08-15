@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -225,6 +226,62 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 	}
 }
 
+// TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess is
+// W20-W20-capture-store-4: a record run whose SandboxRef is EMPTY never
+// reached CreateSandbox at all — it failed on the dispatch side (image build,
+// resource limits, a concurrent kill racing dispatch), never got a chance to
+// observe egress. Blaming the operator's proxy/WSL2 networking
+// (recordEmptyCaptureHint) sends them on a wasted mirrored-networking detour
+// for a session that never even tried to reach the control plane; the hint
+// must instead name the actual dispatch-side failure.
+func TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunFailed}, // SandboxRef: "" (never dispatched)
+		events: []types.AuditEvent{
+			{RunID: &runID, Action: "run.dispatch", Outcome: "failure",
+				Data: mustJSON(map[string]any{"error": "resolve workspace image: build timed out"})},
+		},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	if res.Status != recordStatusFailed {
+		t.Fatalf("status = %q, want record_failed", res.Status)
+	}
+	if res.FailureHint == recordEmptyCaptureHint {
+		t.Fatalf("a run that never started got the networking-guess hint instead of the dispatch failure reason: %q", res.FailureHint)
+	}
+	if !strings.Contains(res.FailureHint, "build timed out") {
+		t.Errorf("failure_hint = %q, want it to name the audited dispatch failure (%q)", res.FailureHint, "build timed out")
+	}
+}
+
+// TestReconcileRecordRun_ReachedRunningKeepsNetworkingHint is the
+// counterpart: a run that actually got a sandbox (SandboxRef set) and STILL
+// captured zero egress evidence keeps the networking-reachability hint — that
+// guess is honest for a run that reached RUNNING.
+func TestReconcileRecordRun_ReachedRunningKeepsNetworkingHint(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted, SandboxRef: "agent-run-abc"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	if res.FailureHint != recordEmptyCaptureHint {
+		t.Errorf("failure_hint = %q, want the networking-reachability hint for a run that reached RUNNING", res.FailureHint)
+	}
+}
+
 func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID, grantID := uuid.New(), uuid.New(), uuid.New()
@@ -316,6 +373,37 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	// silently breaking the confined-verify path.
 	if w := do(t, srv, http.MethodPost, url, adminToken, `{"name":"verify build & test","confined":true}`); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("confined request: code = %d, want 503 (parsed, no runner); body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy is W20-W20-capture-
+// store-5: ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace
+// BEFORE Store.CreateRun persists the claiming run's own row (the clone-grant
+// FK needs the run row first). A second record request landing in that
+// window used to see GetRun(ActiveRunID) => ErrNotFound and read the old
+// `gerr == nil && !isTerminalRunState(...)` busy-check as "not busy" — an
+// indeterminate GetRun error must be treated as busy (only a CONFIRMED
+// terminal run may proceed), or the serial import-step gate is jumped into
+// two concurrent open-egress sandboxes.
+func TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy(t *testing.T) {
+	wsID, claimingRunID := uuid.New(), uuid.New()
+	ws := types.Workspace{
+		ID:          wsID,
+		Sources:     []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:      types.WorkspaceScanned,
+		ActiveRunID: &claimingRunID, // claimed, but its run row doesn't exist yet
+	}
+	// fake.run stays the zero value: GetRun(claimingRunID) => ErrNotFound,
+	// exactly the "claimed but not yet CreateRun'd" window.
+	fake := &recordStore{importStateFake: importStateFake{ws: ws}}
+	srv := newTestSrv(t, fake)
+	srv.cfg.Runner = &fakeRunner{} // reach the busy-check, not the no-runner 503
+	url := "/api/v1/workspaces/" + wsID.String() + "/record"
+
+	w := do(t, srv, http.MethodPost, url, adminToken, `{"name":"second session"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second request against a claimed-but-not-yet-created run: code = %d, want 409 (busy) — "+
+			"an indeterminate GetRun must not read as 'not busy'; body=%s", w.Code, w.Body.String())
 	}
 }
 

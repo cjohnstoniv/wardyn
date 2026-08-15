@@ -181,6 +181,59 @@ func TestGroundAPIKeySecretNames(t *testing.T) {
 	}
 }
 
+// TestGroundAPIKeySecretNames_StampsProviderHeaderWhenAbsent is
+// W15-W15b-composer-pipeline-2: mapProposedGrant (schema.go) builds an
+// api_key grant's scope from ONLY {host, secret_name} — a composer proposal's
+// grant NEVER carries header/format. injectionRuleFromScope then defaults an
+// empty header/format to "Authorization"/"Bearer %s" — correct for OpenAI,
+// WRONG for Anthropic (x-api-key, bare key). Grounding must stamp the known
+// provider's own header+format so the proxy injects what Anthropic's API
+// actually accepts, not the generic Bearer default.
+func TestGroundAPIKeySecretNames_StampsProviderHeaderWhenAbsent(t *testing.T) {
+	headerFormatOf := func(t *testing.T, g types.GrantSpec) (header, format string) {
+		t.Helper()
+		var scope map[string]any
+		if err := json.Unmarshal(g.Scope, &scope); err != nil {
+			t.Fatalf("decode scope: %v", err)
+		}
+		h, _ := scope["header"].(string)
+		f, _ := scope["format"].(string)
+		return h, f
+	}
+	// Exactly the shape mapProposedGrant actually produces: no header/format.
+	bareAPIKey := func(host, secret string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{
+			"host": host, "secret_name": secret})}
+	}
+	spec := &types.RunPolicySpec{
+		EligibleGrants: []types.GrantSpec{
+			bareAPIKey("api.anthropic.com", "anthropic-api-key"), // known LLM host, no header -> stamped
+			bareAPIKey("api.openai.com", "openai-api-key"),       // known LLM host, no header -> stamped
+			bareAPIKey("api.example.com", "custom-key"),          // unknown host -> left to the generic default
+		},
+	}
+	warns := groundAPIKeySecretNames(spec)
+
+	if h, f := headerFormatOf(t, spec.EligibleGrants[0]); h != "x-api-key" || f != "%s" {
+		t.Errorf("anthropic grant header/format = %q/%q, want x-api-key/%%s (a Bearer default 401s against api.anthropic.com)", h, f)
+	}
+	if h, f := headerFormatOf(t, spec.EligibleGrants[1]); h != "Authorization" || f != "Bearer %s" {
+		t.Errorf("openai grant header/format = %q/%q, want Authorization/Bearer %%s", h, f)
+	}
+	if h, f := headerFormatOf(t, spec.EligibleGrants[2]); h != "" || f != "" {
+		t.Errorf("unknown-host grant header/format = %q/%q, want left empty (unknown provider, no canonical answer)", h, f)
+	}
+	foundWarn := false
+	for _, w := range warns {
+		if strings.Contains(w, "carried no header/format") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected a header/format grounding warning, got %v", warns)
+	}
+}
+
 // TestBrokeredRunWithholdsGitPATGrantEnv is the git_pat half of "brokered means
 // single-lane", the sibling of TestBrokeredRunWithholdsSSHGrantEnv. It exists
 // because git_pat used to be exempt from all three seams on the reasoning that

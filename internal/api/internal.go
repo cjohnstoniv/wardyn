@@ -552,18 +552,41 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 	return "", "", false
 }
 
+// Mint 409-conflict "code" values (W19-W19a-2) — the machine-readable
+// discriminator between the four distinct fail-closed conditions that all
+// share HTTP 409, so a caller (cmd/wardyn-git-helper's callMint) can name the
+// real cause instead of guessing from which optional fields happen to be
+// present.
+const (
+	mintConflictPending       = "pending"
+	mintConflictDenied        = "denied"
+	mintConflictScopeMismatch = "scope_mismatch"
+	mintConflictAlreadyMinted = "already_minted"
+)
+
 // writeMintError maps broker errors to the documented fail-closed HTTP shape.
+//
+// W19-W19a-2: every 409 here now carries an explicit "code" field
+// (mintConflictCode*) alongside the historical shape (approval_id/denied/
+// reason kept for the two callers that already read them) — pending,
+// denied, scope_mismatch, and already_minted used to share the bare 409
+// status with no way to tell them apart. cmd/wardyn-git-helper's callMint
+// decoded EVERY one of them as pendingResponse and treated a missing
+// approval_id as "mint returned 409 without approval_id", so the SECOND git
+// operation of an approval-gated run (which legitimately 409s with
+// ErrAlreadyMinted, docs/adoption/corp-network-onboarding-findings.md B2)
+// surfaced that confusing message instead of naming single-use as the cause.
 func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	var pending broker.ErrApprovalPending
 	if errors.As(err, &pending) {
 		// Approval still open: 409 with the approval id so the caller can poll.
-		writeJSON(w, http.StatusConflict, map[string]any{"approval_id": pending.ApprovalID})
+		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictPending, "approval_id": pending.ApprovalID})
 		return
 	}
 	var denied broker.ErrApprovalDenied
 	if errors.As(err, &denied) {
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"approval_id": denied.ApprovalID, "denied": true, "reason": denied.Reason,
+			"code": mintConflictDenied, "approval_id": denied.ApprovalID, "denied": true, "reason": denied.Reason,
 		})
 		return
 	}
@@ -575,9 +598,9 @@ func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	case errors.Is(err, broker.ErrRequiresSPIRE):
 		writeError(w, http.StatusUnprocessableEntity, "grant requires the spire identity provider")
 	case errors.Is(err, broker.ErrScopeMismatch):
-		writeError(w, http.StatusConflict, "requested scope does not match grant (no-widening)")
+		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictScopeMismatch, "error": "requested scope does not match grant (no-widening)"})
 	case errors.Is(err, broker.ErrAlreadyMinted):
-		writeError(w, http.StatusConflict, "credential already minted (single-use)")
+		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
 	default:
 		writeError(w, http.StatusInternalServerError, "mint: "+err.Error())
 	}

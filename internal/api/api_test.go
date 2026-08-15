@@ -393,6 +393,9 @@ func TestInternalMintApprovalPending(t *testing.T) {
 	if resp["approval_id"] != apID.String() {
 		t.Errorf("approval_id = %v, want %s", resp["approval_id"], apID)
 	}
+	if resp["code"] != mintConflictPending {
+		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], mintConflictPending)
+	}
 }
 
 func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
@@ -403,6 +406,37 @@ func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, body)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("scope mismatch code = %d, want 409", w.Code)
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["code"] != mintConflictScopeMismatch {
+		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], mintConflictScopeMismatch)
+	}
+}
+
+// TestInternalMintAlreadyMintedCarriesDiscriminatingCode is W19-W19a-2: three
+// distinct fail-closed conditions used to share the bare 409 status with no
+// discriminator — the "already minted" (single-use) case decoded in
+// cmd/wardyn-git-helper's callMint as an approval-pending 409 with no
+// approval_id, surfacing "mint returned 409 without approval_id" for the
+// second git operation of an approval-gated run instead of naming single-use
+// as the real cause. A "code" field now distinguishes it.
+func TestInternalMintAlreadyMintedCarriesDiscriminatingCode(t *testing.T) {
+	h := newHarness(t)
+	tok := h.mintRunToken(t, uuid.New())
+	h.broker.mintErr = broker.ErrAlreadyMinted
+	body := `{"grant_id":"` + uuid.New().String() + `"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("already-minted code = %d, want 409", w.Code)
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["code"] != mintConflictAlreadyMinted {
+		t.Errorf("code = %v, want %q — the git helper cannot otherwise tell this apart from a pending/denied 409", resp["code"], mintConflictAlreadyMinted)
+	}
+	if _, hasApprovalID := resp["approval_id"]; hasApprovalID {
+		t.Errorf("already-minted response carries approval_id = %v, want none (this is not an approval-flow condition)", resp["approval_id"])
 	}
 }
 

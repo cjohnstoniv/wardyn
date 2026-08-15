@@ -128,6 +128,20 @@ func (o *Orchestrator) Name() string {
 	return "orchestrator"
 }
 
+// ImagePresent implements runner.ImageChecker (W20-W20-record-image-5) by
+// delegating to the first wired substrate that implements it — the docker
+// substrate does; a substrate with no local image cache (k8s) does not, and
+// is simply skipped. Callers treat the "none support it" error the same as
+// any other check failure: unknown, trust the cache (fail-open).
+func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, error) {
+	for _, s := range o.substrates {
+		if ic, ok := s.(runner.ImageChecker); ok {
+			return ic.ImagePresent(ctx, ref)
+		}
+	}
+	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
+}
+
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.

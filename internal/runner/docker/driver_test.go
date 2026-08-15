@@ -417,6 +417,56 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 	}
 }
 
+// TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork is
+// W15-W15c-terminal-lifecycle-2: when the agent container is ALREADY GONE
+// (crashed, OOM-killed, or a concurrent teardown beat this one to it),
+// ContainerInspect returns not-found and the label/name recovery on the
+// err==nil branch never runs at all — teardown used to report success
+// without ever trying to resolve the run id, leaking the sibling proxy
+// sidecar (still holding the run's credentials) and the per-run network.
+// The exec-less (krun/CC3) ref IS the deterministic agent name
+// (agentContainerName(runID)), so teardown must recover the run id from the
+// ref itself and still sweep the proxy + network.
+func TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun") // CC3 via krun: ref == agentContainerName(runID)
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", Record: true})
+
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
+		t.Fatalf("Exec (main process): %v", err)
+	}
+	runID := spec.RunID
+	if _, ok := f.containers[proxyContainerName(runID)]; !ok {
+		t.Fatal("proxy sidecar must exist before teardown")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; !ok {
+		t.Fatal("per-run network must exist before teardown")
+	}
+
+	// The agent container is ALREADY GONE — ContainerInspect(sb.Ref) 404s,
+	// exactly like a host-level crash/OOM-kill outside teardown's control.
+	f.containers[sb.Ref].removed = true
+
+	if err := d.teardown(ctx, sb.Ref); err != nil {
+		t.Fatalf("teardown must recover the run id from the ref itself, got %v", err)
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+		t.Errorf("proxy sidecar must be torn down (removed=%v) — it must not be orphaned", p != nil && p.removed)
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("per-run network must be removed — it must not be orphaned")
+	}
+}
+
 func TestStatus_Mapping(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -202,9 +203,27 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
 	// Resources: cap each set field at the ceiling's, when the ceiling sets one.
-	// An unset ceiling opines nothing — skip entirely (matches the majority of
-	// existing policies, which never touch this field).
-	if ceiling.Resources != nil {
+	// W14-S1-3: an UNSET ceiling used to opine nothing at all — skipped
+	// entirely — which left a proposal's own CPU/memory/pids request
+	// completely uncapped under the shipped default.json ceiling (it sets no
+	// Resources block). Clamp is the operator-ceiling authority for every
+	// caller that reaches it (a member's inline_policy, any compose/profile
+	// proposal); it must never hand back an unbounded sandbox just because
+	// the operator never bothered to opine. Fall back to the same
+	// conservative platform defaults CreateSandbox itself applies when a
+	// Resources field is zero (runner.Default{CPUMillis,MemoryMiB,PidsLimit})
+	// — the ceiling, and this clamp, then agree with what the sandbox would
+	// enforce anyway. DiskMiB has no platform default (CreateSandbox leaves
+	// it opt-in), so it stays skip-when-both-unset exactly as before.
+	effCeilingResources := ceiling.Resources
+	if effCeilingResources == nil {
+		effCeilingResources = &types.ResourceLimits{
+			CPUMillis: int(runner.DefaultCPUMillis),
+			MemoryMiB: int(runner.DefaultMemoryMiB),
+			PidsLimit: int(runner.DefaultPidsLimit),
+		}
+	}
+	{
 		before := out.Resources
 		cr := types.ResourceLimits{}
 		if before != nil {
@@ -215,10 +234,10 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 				*proposed = ceil
 			}
 		}
-		capField(&cr.CPUMillis, ceiling.Resources.CPUMillis)
-		capField(&cr.MemoryMiB, ceiling.Resources.MemoryMiB)
-		capField(&cr.PidsLimit, ceiling.Resources.PidsLimit)
-		capField(&cr.DiskMiB, ceiling.Resources.DiskMiB)
+		capField(&cr.CPUMillis, effCeilingResources.CPUMillis)
+		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB)
+		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
+		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
 		if before == nil || cr != *before {
 			warns = append(warns, "resources capped to operator maximum")
 			out.Resources = &cr
@@ -233,6 +252,14 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	if ceiling.AutoStopAfterSec > 0 && (out.AutoStopAfterSec <= 0 || out.AutoStopAfterSec > ceiling.AutoStopAfterSec) {
 		warns = append(warns, fmt.Sprintf("auto_stop_after_sec capped to operator maximum %ds", ceiling.AutoStopAfterSec))
 		out.AutoStopAfterSec = ceiling.AutoStopAfterSec
+	} else if ceiling.AutoStopAfterSec <= 0 && out.AutoStopAfterSec < 0 {
+		// W14-S1-3: the ceiling sets no real cap, but a proposal choosing a
+		// NEGATIVE auto_stop is asking for "never reap" — the single most
+		// permissive value there is, strictly worse than simply inheriting
+		// the platform default (0, filled in later). A member/proposal may
+		// not opt a run OUT of the reaper entirely; clamp to 0.
+		warns = append(warns, "auto_stop_after_sec: negative (never reap) is not allowed; reset to the platform default")
+		out.AutoStopAfterSec = 0
 	}
 
 	// Workspace mounts: NEVER composer-introduced. Operators author mounts on a

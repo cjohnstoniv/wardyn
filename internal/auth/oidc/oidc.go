@@ -253,6 +253,17 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 //     Config.RoleMap / deriveRole); denies the login if nothing matches and no
 //     DefaultRole is configured.
 //  6. Creates a signed Wardyn session cookie.
+//
+// W31-S1-5: the USER-actionable denials (5's role-denied, 4's domain/
+// unverified-email) redirect to "/?auth_error=<code>" (302) instead of a
+// bare http.Error text page — a login failure otherwise dead-ended the
+// browser on plain text with no way back to the console, and no chance for
+// the sign-in screen to explain what to do next (ask the operator to map a
+// role, use a corp email, etc). The state/nonce/PKCE branches in (1)-(3) stay
+// http.Error: those are ATTACK-shaped (a forged/replayed/mismatched
+// callback), not a real user hitting a real policy denial, and a redirect
+// there would be a worse UX for a case an operator needs to see failed
+// loudly, not routed back into a retry loop.
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	// (1) CSRF: compare state parameter to cookie.
 	stateParam := r.URL.Query().Get("state")
@@ -353,12 +364,12 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		if !claims.EmailVerified {
 			clearCookie(w, sessionCookieName)
-			http.Error(w, "email not verified by IdP", http.StatusForbidden)
+			redirectAuthError(w, r, authErrorEmailUnverified)
 			return
 		}
 		if !emailDomainAllowed(claims.Email, a.cfg.AllowedEmailDomains) {
 			clearCookie(w, sessionCookieName)
-			http.Error(w, "email domain not permitted", http.StatusForbidden)
+			redirectAuthError(w, r, authErrorEmailDomain)
 			return
 		}
 	}
@@ -372,7 +383,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.
 		clearCookie(w, sessionCookieName)
-		http.Error(w, "no Wardyn role assigned; ask your operator to map you via WARDYN_OIDC_ROLE_MAP", http.StatusForbidden)
+		redirectAuthError(w, r, authErrorNoRole)
 		return
 	}
 
@@ -757,6 +768,22 @@ func clearCookie(w http.ResponseWriter, name string) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// Auth-error codes carried on the "/?auth_error=<code>" redirect
+// (W31-S1-5) — stable, machine-readable strings a sign-in screen maps to a
+// human message; never the raw internal error text.
+const (
+	authErrorEmailUnverified = "email_unverified"
+	authErrorEmailDomain     = "email_domain"
+	authErrorNoRole          = "no_role"
+)
+
+// redirectAuthError sends the browser back to "/" with ?auth_error=<code> —
+// a real page it can act on (retry, sign out, ask an operator), rather than
+// a bare http.Error text response with no way back to the console.
+func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
 // contextWithPrincipal stores the verified session's sub, email, and role on

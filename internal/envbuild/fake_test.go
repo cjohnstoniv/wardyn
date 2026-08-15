@@ -101,6 +101,10 @@ type fakeEnvbuilderDocker struct {
 	lastListAll     bool
 	// removedIDs records every container ID passed to ContainerRemove, in order.
 	removedIDs []string
+
+	// lastImageListHadDeadline records whether the LAST ImageList call's ctx
+	// carried a deadline (see ImageList below).
+	lastImageListHadDeadline bool
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -121,9 +125,14 @@ func (f *fakeEnvbuilderDocker) pulled(ref string) bool {
 	return false
 }
 
-func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
+func (f *fakeEnvbuilderDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// lastImageListHadDeadline records whether the ctx ensureImage called us
+	// with carried a deadline — a test's way of observing that a build path
+	// (e.g. FinalizeBase) applied its own timeout bound rather than passing
+	// the caller's ctx through unbounded.
+	_, f.lastImageListHadDeadline = ctx.Deadline()
 	var out []image.Summary
 	for ref, present := range f.imagesPresent {
 		if !present {

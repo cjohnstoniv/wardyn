@@ -449,11 +449,25 @@ type mintResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// pendingResponse is the broker's 409 shape when an approval is pending.
+// mint 409-conflict "code" values — mirrors internal/api/internal.go's
+// mintConflict* constants (the ONE place both sides of this wire contract
+// must agree, W19-W19a-2).
+const (
+	mintConflictPending       = "pending"
+	mintConflictDenied        = "denied"
+	mintConflictScopeMismatch = "scope_mismatch"
+	mintConflictAlreadyMinted = "already_minted"
+)
+
+// pendingResponse is the broker's 409 shape — covers all four conflict
+// conditions (Code discriminates which; ApprovalID/Denied/Reason are
+// populated only for the two approval-flow codes).
 type pendingResponse struct {
+	Code       string `json:"code"`
 	ApprovalID string `json:"approval_id"`
 	Denied     bool   `json:"denied"`
 	Reason     string `json:"reason"`
+	Error      string `json:"error"`
 }
 
 // approvalResponse is the poll shape for GET /wardyn/v1/approvals/{id}.
@@ -570,14 +584,36 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 		if err := json.Unmarshal(respBody, &pr); err != nil {
 			return "", "", "", fmt.Errorf("decode 409 response: %w", err)
 		}
-		if pr.Denied {
+		// W19-W19a-2: the four 409 conditions share the status but carry a
+		// "code" discriminator — name the real cause instead of falling
+		// through to the generic missing-approval_id guess (mintWithApproval)
+		// for a condition that was never approval-pending at all.
+		switch pr.Code {
+		case mintConflictDenied:
 			reason := pr.Reason
 			if reason == "" {
 				reason = "no reason given"
 			}
 			return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+		case mintConflictAlreadyMinted:
+			return "", "", "", fmt.Errorf("credential already minted (single-use) — a prior mint for this grant already succeeded; " +
+				"see docs/adoption/corp-network-onboarding-findings.md B2 for the standing-lease gap this hits on a second git op")
+		case mintConflictScopeMismatch:
+			return "", "", "", fmt.Errorf("requested scope does not match the grant (no-widening)")
+		case mintConflictPending:
+			return "", "", pr.ApprovalID, nil
+		default:
+			// Pre-code broker (or the legacy shape before W19-W19a-2): fall
+			// back to the field-presence heuristic exactly as before.
+			if pr.Denied {
+				reason := pr.Reason
+				if reason == "" {
+					reason = "no reason given"
+				}
+				return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+			}
+			return "", "", pr.ApprovalID, nil
 		}
-		return "", "", pr.ApprovalID, nil
 
 	case http.StatusUnprocessableEntity:
 		return "", "", "", fmt.Errorf("credential grant requires SPIRE identity provider (not available in this deployment)")

@@ -142,7 +142,7 @@ func run() error {
 		// size. Runs in its own goroutine so this initial beat never blocks
 		// startup on a control-plane POST.
 		beat := func() {
-			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount()))
+			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount(), sink.observedByKindSnapshot()))
 		}
 		beat()
 		every(ctx, heartbeatIval, beat)
@@ -332,10 +332,14 @@ func processLine(line []byte, mapper mapLiner, sink *eventSink) {
 		// Unrecorded kind or filtered (non-sensitive) write: not an error.
 		return
 	}
-	// Count real kernel ground-truth mapped off the tail. /healthz keys the
-	// ebpf_groundtruth state off this (carried on the heartbeat): a live
-	// heartbeat with observed==0 means the sensor is blind, not healthy.
-	sink.markObserved()
+	// Count real kernel ground-truth mapped off the tail, both in aggregate and
+	// per-kind (ev.Action: kernel.process.exec / kernel.network.connect /
+	// kernel.file.write). /healthz keys the ebpf_groundtruth state off this
+	// (carried on the heartbeat): a live heartbeat with observed==0 means the
+	// sensor is blind, not healthy — and per-kind means a sensor blind to only
+	// ONE event class (e.g. a mis-scoped TracingPolicy that never sees
+	// network.connect) is visible too, not folded into the aggregate.
+	sink.markObserved(ev.Action)
 	sink.emit(ev)
 }
 

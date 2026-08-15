@@ -63,6 +63,39 @@ func TestClaude_Assist_NoSchema(t *testing.T) {
 	}
 }
 
+// TestClaude_Assist_AllowsEmptyPromptAndWorkspace is
+// W15-W15b-composer-pipeline-3: Assist is advisory + escalation-only — it can
+// be asked from the clarify/review steps where the UI has not (re)sent
+// prompt/workspace (compose_assist.go's handler deliberately skips
+// composer.ValidateRequest for exactly this reason). The cli backend's own
+// Assist used to re-impose that same strict validation, so a clarify/review
+// Ask call with an empty ComposeRequest failed ValidateRequest's "a prompt or
+// at least one attachment is required" and 502'd at the handler.
+func TestClaude_Assist_AllowsEmptyPromptAndWorkspace(t *testing.T) {
+	const answer = "Yes, this sandbox can reach github.com."
+	fake := writeFakeCLI(t, "claude",
+		`printf '%s' '{"type":"result","is_error":false,"result":"`+answer+`"}'`)
+
+	c, err := NewComposer(Config{Tool: ToolClaude, Model: "claude-sonnet-4-5", BinPath: fake.bin})
+	if err != nil {
+		t.Fatalf("NewComposer: %v", err)
+	}
+	as, ok := c.(composer.Assister)
+	if !ok {
+		t.Fatal("cli backend must implement composer.Assister")
+	}
+
+	// Empty request: no Prompt, no Workspace — exactly what the clarify/review
+	// steps send (the UI hasn't resubmitted them at that point).
+	got, err := as.Assist(context.Background(), composer.ComposeRequest{}, "Can the agent reach GitHub?")
+	if err != nil {
+		t.Fatalf("Assist with an empty prompt/workspace must succeed (advisory-only, not a create-run validation): %v", err)
+	}
+	if got != answer {
+		t.Errorf("Assist answer = %q, want %q", got, answer)
+	}
+}
+
 // TestCodex_Assist_NoSchema asserts the codex Assist path reads the -o file as
 // plain text AND passes NO --output-schema flag.
 func TestCodex_Assist_NoSchema(t *testing.T) {

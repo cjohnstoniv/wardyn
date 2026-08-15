@@ -158,6 +158,55 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 }
 
+// TestPreflight_AlreadyReflectsWorkspaceScannedEgress is W15-S1-3: launch-time
+// unionRunEgress (runs.go) widens the enforced spec's egress from a
+// referenced workspace's scanned-profile hosts, but preflight used to grade
+// and checklist the UN-widened spec — a NARROWER envelope than the run would
+// actually launch with. The "egress:workspace" informational row already
+// re-computes what launch would add (setupEgressWorkspaceItem), so once
+// preflight widens the spec FIRST (matching launch), that row must read
+// "no additional egress needed" — proving Review already shows the real,
+// post-launch envelope instead of being blind to a widening launch performs
+// silently after the fact.
+func TestPreflight_AlreadyReflectsWorkspaceScannedEgress(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	profile, err := json.Marshal(map[string]any{
+		"egress_domains": []string{"registry.npmjs.org"}, "confidence": "high",
+	})
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	h.srv.cfg.Store = &workspaceStoreFake{
+		Store: h.srv.cfg.Store,
+		ws: types.Workspace{
+			ID:      wsID,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/app"}},
+			Status:  types.WorkspaceScanned,
+			Profile: profile,
+		},
+	}
+	body := `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
+		`"inline_policy":{"min_confinement_class":"CC1"}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	it, ok := findItem(resp.SetupItems, "egress:workspace")
+	if !ok {
+		t.Fatalf("setup items = %+v, want an egress:workspace row", resp.SetupItems)
+	}
+	if !strings.Contains(it.Detail, "no additional egress needed") {
+		t.Errorf("egress:workspace Detail = %q, want \"no additional egress needed\" — "+
+			"the workspace's scanned host must already be IN the graded/checklisted spec, "+
+			"not a widening launch would still perform silently after preflight", it.Detail)
+	}
+}
+
 // TestPreflight_BlastRadiusRaisesToCC3 asserts the enforced class mirrors
 // handleCreateRun's deterministic blast-radius floor: a write-capable github_token
 // grant raises the run to Vault (CC3) even though the operator requested CC2 and

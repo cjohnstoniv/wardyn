@@ -371,20 +371,33 @@ func detectContent(rel, name, path string, st *collectState) {
 		if st.yamlFiles < maxYAMLFilesScanned {
 			st.yamlFiles++
 			detectSecretRef(path, facts)
+		} else {
+			// W9-S1-4: past the per-scan YAML budget, this file is silently
+			// skipped — confidence must reflect that the scan is incomplete,
+			// not report "high" over a tree it never fully walked.
+			facts.Truncated = true
 		}
 	}
 
 	// Source-code env-access grep (bounded by a per-scan file budget).
-	if _, ok := sourceExts[ext(name)]; ok && st.sourceFiles < maxSourceFilesScanned {
-		st.sourceFiles++
-		detectEnvAccess(path, facts)
+	if _, ok := sourceExts[ext(name)]; ok {
+		if st.sourceFiles < maxSourceFilesScanned {
+			st.sourceFiles++
+			detectEnvAccess(path, facts)
+		} else {
+			facts.Truncated = true
+		}
 	}
 
 	// Leaked-value scan over readable text files (source/config), never over a
 	// real .env (returned above). Bounded by a per-scan file budget.
-	if leakScannable(name) && st.leakFiles < maxLeakFilesScanned {
-		st.leakFiles++
-		detectLeaks(rel, path, facts)
+	if leakScannable(name) {
+		if st.leakFiles < maxLeakFilesScanned {
+			st.leakFiles++
+			detectLeaks(rel, path, facts)
+		} else {
+			facts.Truncated = true
+		}
 	}
 }
 
@@ -491,6 +504,14 @@ func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
 			facts.Truncated = true
 			return
 		}
+	}
+	// W9-S1-4: a line over Buffer's 64 KiB cap makes Scan() stop with
+	// bufio.ErrTooLong — silently, same as a normal EOF, unless the caller
+	// checks Err(). Stamp Truncated so a file with one absurd line (a
+	// minified bundle, a base64 blob) doesn't scan as complete when a
+	// secret-shaped token past the cutoff was never seen.
+	if sc.Err() != nil {
+		facts.Truncated = true
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -562,13 +563,18 @@ func TestClamp_Resources(t *testing.T) {
 		t.Errorf("MemoryMiB = %d, want the proposal's own 1024 (already under the cap)", got.Resources.MemoryMiB)
 	}
 
-	// No ceiling opinion: proposal (including nil) is left alone.
+	// No ceiling opinion (W14-S1-3): falls back to the platform defaults —
+	// the SAME conservative caps CreateSandbox itself applies when a
+	// Resources field is zero — never left uncapped.
 	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t))
-	if got.Resources != nil {
-		t.Errorf("resources = %+v, want nil (no ceiling opinion)", got.Resources)
+	if got.Resources == nil ||
+		got.Resources.CPUMillis != int(runner.DefaultCPUMillis) ||
+		got.Resources.MemoryMiB != int(runner.DefaultMemoryMiB) ||
+		got.Resources.PidsLimit != int(runner.DefaultPidsLimit) {
+		t.Errorf("resources = %+v, want the platform defaults (no ceiling opinion must not mean uncapped)", got.Resources)
 	}
-	if hasWarn(warns, "resources") {
-		t.Errorf("unexpected resources warning with no ceiling opinion: %v", warns)
+	if !hasWarn(warns, "resources capped") {
+		t.Errorf("expected a resources warning falling back to platform defaults, got %v", warns)
 	}
 }
 
@@ -602,13 +608,25 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 			}
 		})
 	}
-	// No ceiling opinion (0): proposal is left alone, including -1 (never reap).
-	got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: -1}, operatorCeiling(t))
-	if got.AutoStopAfterSec != -1 {
-		t.Errorf("auto_stop_after_sec = %d, want -1 preserved (no ceiling opinion)", got.AutoStopAfterSec)
+	// No ceiling opinion (0): a POSITIVE proposal is left alone (nothing to
+	// cap it against).
+	got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: 1800}, operatorCeiling(t))
+	if got.AutoStopAfterSec != 1800 {
+		t.Errorf("auto_stop_after_sec = %d, want 1800 preserved (no ceiling opinion)", got.AutoStopAfterSec)
 	}
 	if hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
+	}
+	// W14-S1-3: -1 (never reap) is the single most permissive value there is —
+	// a proposal may not opt OUT of the reaper just because the ceiling
+	// itself opines nothing. Clamped to 0 (the platform default), not left
+	// alone.
+	got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: -1}, operatorCeiling(t))
+	if got.AutoStopAfterSec != 0 {
+		t.Errorf("auto_stop_after_sec = %d, want 0 (never-reap must not survive an unopinionated ceiling)", got.AutoStopAfterSec)
+	}
+	if !hasWarn(warns, "auto_stop_after_sec") {
+		t.Errorf("expected an auto_stop_after_sec warning clamping never-reap, got %v", warns)
 	}
 }
 

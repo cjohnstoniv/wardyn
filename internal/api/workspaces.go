@@ -518,6 +518,27 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	type body struct {
 		Domains []string `json:"domains"`
 	}
+	// W19-W19b-3: a host the git broker (or the control plane itself) already
+	// owns is DEAD BY CONSTRUCTION as a direct ApprovedEgress entry — dispatch
+	// routes github.com/api.github.com/codeload.github.com/*.githubusercontent.com
+	// and every SSH-over-443 forge host through the broker/proxy specially
+	// (runs_dispatch_gitbroker.go), never as a plain allowlist host, so
+	// "approving" one here writes a row a real run's proxy will never consult.
+	// This is the SAME static skip-set promoteSkipHosts applies to the bulk
+	// promote-egress writer (record.go) plus the control-plane's own host
+	// (handlePromoteRecordEgress's selfHost) — this is the LAST writer of
+	// ApprovedEgress that did not share it; reject with the same honest 4xx
+	// the shape validator already uses instead of a silent-toast no-op.
+	deadHosts := map[string]struct{}{}
+	for _, h := range gitBrokerManagedHosts {
+		deadHosts[strings.ToLower(h)] = struct{}{}
+	}
+	for _, h := range gitBrokerSSHHosts() {
+		deadHosts[strings.ToLower(h)] = struct{}{}
+	}
+	if selfHost := controlPlaneHost(s.cfg.ControlPlaneURL); selfHost != "" {
+		deadHosts[selfHost] = struct{}{}
+	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
 		func(req body) ([]string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -528,6 +549,9 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !workspacescan.ValidApprovedHost(d) {
 					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+				}
+				if _, dead := deadHosts[d]; dead {
+					return nil, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
 				set[d] = struct{}{}
 			}

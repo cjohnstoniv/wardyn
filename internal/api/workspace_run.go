@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -89,6 +91,82 @@ func workspaceProfile(ws types.Workspace) (workspacescan.WorkspaceProfile, bool)
 	return p, true
 }
 
+// byoiCacheKey and repoDevcontainerCacheKey namespace the SAME shared
+// ImageRef/BuiltProfileHash cache columns the generated-devcontainer lane
+// uses (WorkspaceProfile.CacheKey) so all three build lanes can share one
+// per-workspace cache slot without colliding: switching a workspace between
+// a byoi base image, a repo's own devcontainer, and the generated toolchain
+// image always busts the cache (the hash's own lane prefix differs), rather
+// than one lane reading a stale image built by a different lane.
+
+// byoiCacheKey keys the FinalizeBase wrap on (kind, base ref) — W20-W20-record-image-3.
+func byoiCacheKey(kind, image string) string {
+	sum := sha256.Sum256([]byte("byoi|" + kind + "|" + image))
+	return hex.EncodeToString(sum[:])
+}
+
+// repoDevcontainerCacheKey keys a repo's own devcontainer build on (clone URL,
+// ref) — W20-W20-record-image-3. Like the generated-devcontainer lane, this
+// does not detect the repo's CONTENT changing at a fixed ref (a branch head
+// moving) — the same honesty ceiling profile-hash caching already accepts.
+func repoDevcontainerCacheKey(url, ref string) string {
+	sum := sha256.Sum256([]byte("repo-devcontainer|" + url + "|" + ref))
+	return hex.EncodeToString(sum[:])
+}
+
+// repoDevcontainerImageCaveats is W20-W20-record-image-6: when the session's
+// image comes from the repo's OWN devcontainer (resolveWorkspaceImage's
+// repo-own-devcontainer lane, source="repo-devcontainer"), that image was
+// built AS-IS from the repo's devcontainer file — it never bakes claude-code
+// (resolveWorkspaceImage's own doc comment: "deliberate, not an oversight").
+// The Record pane tells the operator to drive the agent in this sandbox and
+// wires model credentials for it regardless, so a silent absence reads as a
+// broken session rather than an image that legitimately doesn't carry the
+// CLI. Uses the SAME predicate resolveWorkspaceImage's repo-devcontainer
+// branch gates on (repoOwnDevcontainerURL), so the caveat fires exactly when
+// that lane will actually be selected.
+func repoDevcontainerImageCaveats(ws types.Workspace) []string {
+	// An explicit BaseImage choice takes precedence over this lane in
+	// resolveWorkspaceImage (checked first) — mirror that here so the caveat
+	// never fires for a session that will actually run the operator's chosen
+	// base image instead.
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
+		return nil
+	}
+	p, ok := workspaceProfile(ws)
+	if !ok || repoOwnDevcontainerURL(ws, p) == "" {
+		return nil
+	}
+	return []string{
+		"This workspace's image is built from the repo's OWN devcontainer, not Wardyn's generated one — " +
+			"claude-code is present only if the repo's devcontainer installs it itself.",
+	}
+}
+
+// cachedImageStillPresent guards every cache-hit branch below
+// (W20-W20-record-image-5): a cached image_ref the daemon no longer actually
+// has (pruned, host replaced, a different daemon this control plane now
+// talks to) used to be a PERMANENT dead end — every launch "hit" the cache,
+// dispatched the missing ref, and failed at "no such image" with no
+// automatic recovery; the only reset was clearing the row by hand. When the
+// wired Runner can answer (runner.ImageChecker — the docker substrate),
+// consult it and treat "not present" as a cache MISS so resolveWorkspaceImage
+// falls through to a rebuild. A Runner that cannot answer (unwired, or a
+// substrate with no local cache notion) is the SAME "unknown" this function
+// already treated as true before this fix existed — fail-open, matching
+// resolveWorkspaceImage's posture everywhere else.
+func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
+	ic, ok := s.cfg.Runner.(runner.ImageChecker)
+	if !ok {
+		return true
+	}
+	present, err := ic.ImagePresent(ctx, ref)
+	if err != nil {
+		return true
+	}
+	return present
+}
+
 // resolveWorkspaceImage returns the sandbox image for a run driven by its PRIMARY
 // onboarded workspace, or ok=false to fall through to the convention image.
 // Order (all fail-OPEN — any failure returns ok=false + convention image, never
@@ -130,6 +208,20 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			})
 			return "", false
 		}
+		// Cache the wrap PER (workspace, base ref) — W20-W20-record-image-3: a
+		// record/replay session used to re-wrap the SAME base image on every
+		// single session launch (the old tag embedded runID, guaranteeing a
+		// cache miss even when nothing about the base image changed), turning
+		// every record/verify click into a multi-minute rebuild. byoiCacheKey
+		// namespaces the shared ImageRef/BuiltProfileHash cache columns so a
+		// workspace switching FROM a byoi/repo-devcontainer/generated lane (or
+		// to a different base ref) always busts the cache instead of reading a
+		// stale image built for a different source.
+		byoiHash := byoiCacheKey(b.Kind, b.Image)
+		if primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+			buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": primary.ImageRef, "cache_hit": true})
+			return primary.ImageRef, true
+		}
 		// Wrap the operator's base image the SAME way the workspace_id door does
 		// (PARITY-4): FinalizeBase copies the runner tools + agent-run in and tags it
 		// wardyn-byoi/<runid>, which ALSO arms dispatch's fail-closed harness selftest
@@ -143,6 +235,13 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
 			return "", false
+		}
+		if s.cfg.Store != nil {
+			if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, byoiHash); uerr != nil {
+				// Non-fatal: the image built and is usable now; caching just missed.
+				buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built, "cache_warn": uerr.Error()})
+				return built, true
+			}
 		}
 		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built})
 		return built, true
@@ -176,8 +275,23 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// happens to install it — deliberate, not an oversight.
 	if url := repoOwnDevcontainerURL(primary, p); url != "" {
 		repoSrc := primary.Sources[0]
+		// Cache per (repo URL, ref) — the same W20-W20-record-image-3 fix as the
+		// byoi branch above: this lane used to rebuild the repo's OWN devcontainer
+		// on every session (a fixed tag, but no cache-hit check before building
+		// it), even though nothing about the repo ref had changed between sessions.
+		repoHash := repoDevcontainerCacheKey(url, repoSrc.Ref)
+		if primary.ImageRef != "" && primary.BuiltProfileHash == repoHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": primary.ImageRef, "cache_hit": true})
+			return primary.ImageRef, true
+		}
 		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
 		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
+			if s.cfg.Store != nil {
+				if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, repoHash); uerr != nil {
+					buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built, "cache_warn": uerr.Error()})
+					return built, true
+				}
+			}
 			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
 			return built, true
 		} else {
@@ -193,7 +307,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 
 	hash := p.CacheKey()
 	// Reuse a cached generated image when the profile is unchanged.
-	if primary.ImageRef != "" && primary.BuiltProfileHash == hash {
+	if primary.ImageRef != "" && primary.BuiltProfileHash == hash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
 		return primary.ImageRef, true
 	}
 
@@ -308,7 +422,15 @@ func (s *Server) defaultFloorClass() types.ConfinementClass {
 // workspace's BUILT devcontainer image (built now if needed), falling back to
 // the convention agent image when no builder is configured.
 func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
-	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws, nil); ok {
+	// W20-W20-record-image-4: bound the build the same way the other three
+	// doors do (runs_create.go) — the record/verify launch callers detach
+	// from request cancellation before reaching here (context.WithoutCancel),
+	// so without its OWN deadline this build could run indefinitely, holding
+	// the workspace's serial import-step claim well past the reaper's grace
+	// (undispatchedGrace = 2*imageBuildTimeout).
+	buildCtx, cancel := context.WithTimeout(ctx, imageBuildTimeout)
+	defer cancel()
+	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil); ok {
 		return built
 	}
 	return agentImage("claude-code", s.cfg.AgentImages)
@@ -529,16 +651,15 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// every one of them a second time.
 	llmGrantsBefore := len(policy.EligibleGrants)
 
-	var integKind string
-	var bedrockRef *types.WorkspaceBedrockRef
-	// Only when the workspace carries its OWN binding: the record session honors the
-	// workspace's pinned integration, but does NOT reach for the operator's
-	// site-wide default here (that tier stays a real run's concern) — which also
-	// keeps foldRunIntegration off defaultAgentRunsIntegration's site-config read on
-	// the record path.
-	if ws.LLMCred != nil && ws.LLMCred.IntegrationRef != "" {
-		_, integKind, bedrockRef = s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
-	}
+	// Unconditional, same as launch/preflight for a real run (W20-W20-llm-transport-matrix-1):
+	// foldRunIntegration already resolves the workspace's OWN binding first and only
+	// falls through to the operator's site-wide DefaultFor:agent_runs integration when
+	// the workspace names nothing — it returns kind=="" when neither resolves, so the
+	// ceiling/convention fallback below stays the last resort exactly as before. Gating
+	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
+	// site-wide default) for every unbound workspace's record/replay session, silently
+	// diverging from "Model access resolves" (docs/OPERATIONS.md).
+	_, integKind, bedrockRef := s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
 	subMounted := specHasMountTarget(&policy, claudeCredTarget)
 	if integKind == "" && !subMounted {
 		// No workspace/operator integration bound: fall back to the operator
@@ -580,6 +701,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
 		LLMMode: llmMode, Model: s.cfg.AgentAnthropicModel,
+		Caveats: repoDevcontainerImageCaveats(ws),
 	}, recordStatusRecording)
 
 	// Sessions are interactive (the operator drives the activity in the attach
@@ -618,6 +740,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 			Status: recordStatusRecording, StartedAt: startedAt,
 			LLMMode: "subscription", Model: s.cfg.AgentAnthropicModel,
+			Caveats: repoDevcontainerImageCaveats(ws),
 		}, recordStatusRecording)
 	}
 	return result, weakCC, nil
@@ -908,6 +1031,39 @@ const maxCaptureAuditEvents = 100000
 const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the derived observations/profile " +
 	"may be incomplete for an exceptionally long run"
 
+// dispatchFailureReason scans a run's already-fetched audit events for the
+// LAST failed run.create/run.dispatch entry and returns its error/note field
+// — the honest "why the sandbox never started" for a record run whose
+// SandboxRef is empty (W20-W20-capture-store-4). "" when no such event is
+// found (a truncated capture, or a failure mode that never audited a reason).
+func dispatchFailureReason(events []types.AuditEvent) string {
+	reason := ""
+	for _, ev := range events {
+		if ev.Outcome != "failure" || (ev.Action != "run.create" && ev.Action != "run.dispatch") {
+			continue
+		}
+		var data struct {
+			Error string `json:"error"`
+			Note  string `json:"note"`
+		}
+		if len(ev.Data) > 0 {
+			_ = json.Unmarshal(ev.Data, &data)
+		}
+		switch {
+		case data.Error != "":
+			reason = data.Error
+		case data.Note != "":
+			reason = data.Note
+		default:
+			continue
+		}
+	}
+	if reason == "" {
+		return "no dispatch-failure reason was audited"
+	}
+	return reason
+}
+
 // reconcileRecordRun captures a record run's evidence when it reaches a
 // terminal state — for ANY reason: auto completion, the operator's "Done
 // recording" kill, or a boot reconcile. Capture is server-side and pure
@@ -942,7 +1098,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if err != nil {
 		return // transient store failure: leave `recording`; a later reconcile retries
 	}
-	obs := recordmode.Capture(events)
+	obs := recordmode.Capture(events, res.Confined)
 	now := s.cfg.Now().UTC()
 	res.FinishedAt = &now
 	res.Observations = &obs
@@ -953,7 +1109,20 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	}
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
-		res.FailureHint = recordEmptyCaptureHint
+		// W20-W20-capture-store-4: recordEmptyCaptureHint blames the operator's
+		// proxy/WSL2 networking — a fair guess for a run that actually reached
+		// RUNNING and then observed nothing. A run whose sandbox never came up
+		// AT ALL (SandboxRef is set only once CreateSandbox succeeds —
+		// runs_dispatch.go) failed for a DIFFERENT, dispatch-side reason (image
+		// build, resource limits, a concurrent kill racing dispatch); naming
+		// that instead of the networking guess spares the operator a wasted
+		// WSL2-mirrored-networking detour on a session that never even tried
+		// to reach the control plane.
+		if run.SandboxRef == "" {
+			res.FailureHint = "the sandbox never started: " + dispatchFailureReason(events)
+		} else {
+			res.FailureHint = recordEmptyCaptureHint
+		}
 	} else {
 		res.Status = recordStatusRecorded
 		res.SecretNamesMinted = s.mintedSecretNames(ctx, runID, obs.MintedGrantIDs)

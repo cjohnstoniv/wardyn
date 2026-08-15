@@ -49,6 +49,13 @@ func TestSetApprovedEgressValidation(t *testing.T) {
 		{"wildcard", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["*.ghcr.io"]}`},
 		{"bare word (no dot)", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["postgres"]}`},
 		{"path", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["ghcr.io/acme"]}`},
+		// W19-W19b-3: a git-broker-managed forge host, an SSH-over-443
+		// forge host, and the control plane's own host are all routed
+		// SPECIALLY at dispatch — never as a plain ApprovedEgress entry — so
+		// approving one here would succeed with a toast and be dead by
+		// construction on every future run. Reject it explicitly instead.
+		{"git-broker-managed host", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["github.com"]}`},
+		{"git-broker-managed host (api)", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["api.github.com"]}`},
 	}
 	for _, c := range cases {
 		if w := do(t, h.srv, http.MethodPut, c.path, adminToken, c.body); w.Code != http.StatusBadRequest {

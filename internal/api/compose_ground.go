@@ -193,6 +193,18 @@ func synthGitHubRepos(spec types.RunPolicySpec) []string {
 // source of truth as agentLLMProvider), else a mechanical sanitize. Names the
 // store accepts are left alone — the model's valid choice stands. Mirrors the
 // deterministic-grounding rule: the model never invents unusable refs.
+//
+// W15-W15b-composer-pipeline-2: also stamps the provider's canonical
+// header+format onto any api_key grant whose host is a known LLM provider
+// and whose scope carries neither — mapProposedGrant (schema.go) builds an
+// api_key grant's scope from ONLY {host, secret_name}, so a composer
+// proposal's grant NEVER carries header/format at all. injectionRuleFromScope
+// (runs_scm.go) then defaults an empty header/format to "Authorization" /
+// "Bearer %s" — correct for OpenAI, WRONG for Anthropic, which requires
+// "x-api-key: <key>" (a bare key, no Bearer prefix). The proxy would inject a
+// header Anthropic's API rejects while the checklist reports model access
+// "satisfied" — a run that provisions cleanly and then 401s on its first
+// model call.
 func groundAPIKeySecretNames(spec *types.RunPolicySpec) []string {
 	var warns []string
 	for i, g := range spec.EligibleGrants {
@@ -205,25 +217,56 @@ func groundAPIKeySecretNames(spec *types.RunPolicySpec) []string {
 		}
 		name, _ := scope["secret_name"].(string)
 		host, _ := scope["host"].(string)
-		if name == "" || secretNameRE.MatchString(name) {
+		changed := false
+
+		if name != "" && !secretNameRE.MatchString(name) {
+			fixed, ok := canonicalSecretForHost(host)
+			if !ok {
+				fixed = sanitizeSecretName(name)
+			}
+			if fixed != "" && fixed != name {
+				scope["secret_name"] = fixed
+				warns = append(warns, fmt.Sprintf("normalized api_key secret name %q to storable %q (host %s)", name, fixed, host))
+				changed = true
+			}
+		}
+
+		headerEmpty := scope["header"] == nil || scope["header"] == ""
+		formatEmpty := scope["format"] == nil || scope["format"] == ""
+		if headerEmpty && formatEmpty {
+			if header, format, ok := canonicalHeaderForHost(host); ok {
+				scope["header"] = header
+				scope["format"] = format
+				warns = append(warns, fmt.Sprintf("api_key grant for %s carried no header/format — stamped the provider's own (%s), not the injector's generic Bearer default", host, header))
+				changed = true
+			}
+		}
+
+		if !changed {
 			continue
 		}
-		fixed, ok := canonicalSecretForHost(host)
-		if !ok {
-			fixed = sanitizeSecretName(name)
-		}
-		if fixed == "" || fixed == name {
-			continue
-		}
-		scope["secret_name"] = fixed
 		raw, err := json.Marshal(scope)
 		if err != nil {
 			continue
 		}
 		spec.EligibleGrants[i].Scope = raw
-		warns = append(warns, fmt.Sprintf("normalized api_key secret name %q to storable %q (host %s)", name, fixed, host))
 	}
 	return warns
+}
+
+// canonicalHeaderForHost returns the header+format a known LLM provider host
+// authenticates with (agentLLMProvider's own convention — the SAME table
+// canonicalSecretForHost reads), ok=false for an unknown host (a proposal
+// naming a third-party api_key host is left to injectionRuleFromScope's
+// generic Bearer default, which is honest for a host this table knows
+// nothing about).
+func canonicalHeaderForHost(host string) (header, format string, ok bool) {
+	for _, agent := range []string{"claude-code", "codex-cli"} {
+		if p, pok := agentLLMProvider(agent); pok && p.host == host {
+			return p.header, p.format, true
+		}
+	}
+	return "", "", false
 }
 
 // canonicalSecretForHost maps a known LLM provider host to its canonical secret

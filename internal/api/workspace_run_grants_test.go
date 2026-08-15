@@ -46,6 +46,14 @@ func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, r
 	ws.ActiveRunID = &runID
 	return ws, true, nil
 }
+
+// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
+// access unconditionally (W20-W20-llm-transport-matrix-1), reaching
+// defaultAgentRunsIntegration's GetSiteConfig read on every call — the
+// embedded nil store.Store would otherwise panic here.
+func (s *fkGrantStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
 func (s *fkGrantStore) ClearWorkspaceActiveRun(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return true, nil
 }

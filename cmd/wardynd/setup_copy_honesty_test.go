@@ -50,3 +50,33 @@ func TestSetupScriptTeamModeCopyIsHonest(t *testing.T) {
 		}
 	}
 }
+
+// TestMaskRegistryFailOpenDocsNameSingleReplicaRestart guards against
+// docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md bounding the
+// secretmask.Registry fail-open (buildMaskingBody / liveMaskWriter passing an
+// upload through unmasked when Snapshot(runID) is empty) to a multi-replica
+// risk only. The registry is wiped by ANY process restart, so a single
+// `replicas: 1` wardynd that restarts mid-run (upgrade, crash) reproduces the
+// identical empty-snapshot fail-open — the docs must say so, not imply
+// `replicas: 1` alone makes the gap inert. Regression for W21-S1-2.
+func TestMaskRegistryFailOpenDocsNameSingleReplicaRestart(t *testing.T) {
+	root := repoRoot(t)
+
+	for _, tc := range []struct {
+		rel  string
+		want string
+	}{
+		{filepath.Join("docs", "OPERATIONS.md"), "not bounded to two replicas"},
+		{filepath.Join("threatmodel", "THREAT-MODEL.md"), "single-process case is not inert"},
+	} {
+		body, err := os.ReadFile(filepath.Join(root, tc.rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.rel, err)
+		}
+		if !strings.Contains(string(body), tc.want) {
+			t.Errorf("%s: mask-registry fail-open discussion must name the single-replica "+
+				"restart case (a wardynd restart wipes the in-memory registry the same way "+
+				"a second replica does), not bound the risk to replicas>1 — missing %q", tc.rel, tc.want)
+		}
+	}
+}

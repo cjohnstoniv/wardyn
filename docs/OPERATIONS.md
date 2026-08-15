@@ -989,6 +989,12 @@ rather than a preference:
   cleartext — with a `success` audit event, because nothing in the path can tell
   "no secrets for this run" from "not my run". There is no cross-replica fix
   short of moving the registry into shared storage, which has not been built.
+  **This is not bounded to two replicas either.** A single `wardynd` process
+  restarting mid-run (upgrade, crash-restart, OOM) wipes the same in-memory
+  map, so a run whose secrets were registered before the restart and whose
+  cast uploads after it hits the identical empty-snapshot fail-open — with
+  `replicas: 1` throughout. The pin removes the *cross-replica* case; it does
+  not remove this one.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: it is the fallback
   for a failed Postgres write, and each pod drains its own back into the

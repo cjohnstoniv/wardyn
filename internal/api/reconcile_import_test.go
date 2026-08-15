@@ -178,6 +178,15 @@ func (s *recordAbortStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUI
 	return true, nil
 }
 
+// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
+// access unconditionally (W20-W20-llm-transport-matrix-1, foldRunIntegration
+// always runs, not just when the workspace carries its own LLMCred binding),
+// which reaches defaultAgentRunsIntegration's GetSiteConfig read on every
+// call — the embedded nil store.Store would otherwise panic here.
+func (s *recordAbortStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // TestLaunchRecordRun_CreateGrantFailureFinalizesRun is the regression: when
 // CreateGrant fails AFTER CreateRun, the persisted RunPending run must be
 // finalized RunFailed and the revoke cascade must run (broker revocation of the

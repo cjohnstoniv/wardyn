@@ -359,3 +359,21 @@ type Runner interface {
 	// plane cascades identity + credential revocation around this call.
 	KillSandbox(ctx context.Context, ref string) error
 }
+
+// ImageChecker is an OPTIONAL Runner capability (W20-W20-record-image-5): a
+// substrate whose local image cache can go stale out from under a workspace's
+// cached image_ref (the docker driver — a pruned/removed local image; the
+// daemon that built it is gone) implements this so a stale cache can be
+// detected and fallen through to a rebuild, instead of the cached ref being
+// trusted forever and every launch failing at "no such image" until an
+// operator finds and clears the row by hand. A substrate that pulls fresh per
+// launch (k8s: the kubelet pulls, there is no local cache to go stale) has
+// nothing to report and simply doesn't implement this — callers type-assert
+// and treat "doesn't implement" the same as a check error: unknown, so trust
+// the cache (fail-open, the same posture resolveWorkspaceImage already takes
+// everywhere else).
+type ImageChecker interface {
+	// ImagePresent reports whether ref is present in the substrate's local
+	// image store right now.
+	ImagePresent(ctx context.Context, ref string) (bool, error)
+}

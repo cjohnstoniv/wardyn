@@ -73,9 +73,10 @@ func (s *Server) routes() chi.Router {
 			// this line must stay immediately after the group's last r.Use, or a
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
-			// mountLibraryRoutes' own 6, rather than trusting this comment — it
-			// has gone stale before): 24 direct registrations below +
-			// mountLibraryRoutes' 6 (sources.go) = 30. NOT the whole admin
+			// mountLibraryRoutes' own 5, rather than trusting this comment — it
+			// has gone stale before, W7-S1-1): 26 direct registrations below +
+			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
+			// DEADCODE-1) = 31. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group

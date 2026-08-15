@@ -423,14 +423,16 @@ func TestCallbackRoleNoMatchNoDefaultDenied(t *testing.T) {
 	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "dave@corp.example", nil, nil)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusForbidden, w.Body.String())
+	// W31-S1-5: redirects to "/?auth_error=no_role" (302) instead of a bare
+	// http.Error text page.
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
 	if sess.Role != "" {
 		t.Errorf("role = %q, want no session issued", sess.Role)
 	}
-	if !strings.Contains(w.Body.String(), "no Wardyn role assigned") {
-		t.Errorf("body = %q, want the no-role-assigned message naming WARDYN_OIDC_ROLE_MAP", w.Body.String())
+	if loc := w.Result().Header.Get("Location"); !strings.Contains(loc, "auth_error=no_role") {
+		t.Errorf("Location = %q, want the no_role auth_error code", loc)
 	}
 	// L6: a denied login must clear any pre-existing wardyn_session cookie —
 	// otherwise a browser that already held a valid session from a PRIOR
@@ -583,8 +585,10 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 
 	env.buildIDTokenRawClaim(t, "sub-scalar2", "scalar2@corp.example", "groups", "not-an-array")
 	w, sess := doCallback(t, auth)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d (malformed claim decodes to nothing, so nothing matches; deny, not a fatal 401/500): body: %s", w.Code, http.StatusForbidden, w.Body.String())
+	// W31-S1-5: redirects (302) rather than a fatal 401/500 or a bare
+	// http.Error text page.
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (malformed claim decodes to nothing, so nothing matches; deny via redirect, not a fatal 401/500): body: %s", w.Code, http.StatusFound, w.Body.String())
 	}
 	if sess.Role != "" {
 		t.Errorf("role = %q, want no session (the scalar claim's raw string must not match the role-map entry)", sess.Role)
@@ -1053,9 +1057,15 @@ func checkDomainFilter(t *testing.T, email string, allowedDomains []string, want
 				email, resp.StatusCode, http.StatusFound, w.Body.String())
 		}
 	} else {
-		if resp.StatusCode != http.StatusForbidden {
+		// W31-S1-5: a domain-check denial redirects to "/?auth_error=..."
+		// (302) rather than a bare http.Error text page — a real page the
+		// browser can act on instead of a dead end with no way back.
+		if resp.StatusCode != http.StatusFound {
 			t.Errorf("email %q (denied): status = %d, want %d (body: %s)",
-				email, resp.StatusCode, http.StatusForbidden, w.Body.String())
+				email, resp.StatusCode, http.StatusFound, w.Body.String())
+		}
+		if loc := resp.Header.Get("Location"); !strings.Contains(loc, "auth_error=") {
+			t.Errorf("email %q (denied): Location = %q, want an auth_error redirect", email, loc)
 		}
 		// L6: the domain-check deny paths must also clear any pre-existing
 		// session cookie, same as the no-role deny path.
