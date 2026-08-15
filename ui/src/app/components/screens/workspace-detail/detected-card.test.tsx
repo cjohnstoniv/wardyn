@@ -146,7 +146,7 @@ describe("DetectedCard — code/CI names promote directly (no egress confirm)", 
     expect(screen.queryByText(/untrusted content/i)).not.toBeInTheDocument();
   });
 
-  it("a name with nothing storable (storableSecretName -> '') is skipped, not offered to promote", () => {
+  it("a name with nothing storable (storableSecretName -> '') is skipped, not offered to promote", async () => {
     render(
       <DetectedCard
         ws={ws({ required_secrets: [{ name: "___", kind: "code" }] })}
@@ -154,7 +154,7 @@ describe("DetectedCard — code/CI names promote directly (no egress confirm)", 
       />,
     );
     expect(screen.queryByTestId("detected-code-refs")).not.toBeInTheDocument();
-    expect(screen.getByTestId("detected-empty")).toBeInTheDocument();
+    expect(await screen.findByTestId("detected-empty")).toBeInTheDocument();
   });
 
   // UI-WS-6: a secret already required via the fold (a shared source's own
@@ -175,5 +175,29 @@ describe("DetectedCard — empty state", () => {
   it("shows the nothing-pending line when the scan found nothing to promote", async () => {
     render(<DetectedCard ws={ws({})} onWorkspaceUpdated={vi.fn()} />);
     expect(await screen.findByTestId("detected-empty")).toBeInTheDocument();
+  });
+
+  // ui-wsDetail-1: while the observed-egress GET is in flight, `observed` is
+  // still null and must not be read as "no denied hosts" — a neutral
+  // "checking" state renders instead of the completeness claim.
+  it("does not claim 'nothing pending' while the observed-egress fetch is still in flight", async () => {
+    let resolveFetch!: (v: { denied: string[]; runs_examined: number }) => void;
+    getObservedEgressMock.mockReturnValue(new Promise((resolve) => (resolveFetch = resolve)));
+    render(<DetectedCard ws={ws({})} onWorkspaceUpdated={vi.fn()} />);
+
+    expect(screen.getByTestId("detected-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("detected-empty")).not.toBeInTheDocument();
+
+    resolveFetch({ denied: [], runs_examined: 0 });
+    expect(await screen.findByTestId("detected-empty")).toBeInTheDocument();
+  });
+
+  // ui-wsDetail-1: an unscanned workspace hasn't finished looking, so it
+  // must not assert completeness either, even once the (necessarily empty)
+  // observed-egress fetch settles.
+  it("does not claim 'nothing pending' for a never-scanned workspace", async () => {
+    render(<DetectedCard ws={ws({}, { status: "pending_scan" })} onWorkspaceUpdated={vi.fn()} />);
+    expect(await screen.findByTestId("detected-unscanned")).toBeInTheDocument();
+    expect(screen.queryByTestId("detected-empty")).not.toBeInTheDocument();
   });
 });

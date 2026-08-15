@@ -46,14 +46,27 @@ export function DetectedCard({
   const profile = (ws.profile ?? {}) as WorkspaceProfile;
 
   // Auto-loaded on mount — the task's explicit departure from the older
-  // needs-panel's lazy "Check run history" button.
+  // needs-panel's lazy "Check run history" button. `observedLoading` guards
+  // the "Nothing pending" claim below from firing during the round-trip,
+  // when `observed` is still null and `observedDenied` reads as an empty
+  // (misleadingly complete-looking) array.
   const [observed, setObserved] = React.useState<{ denied: string[]; runs_examined: number } | null>(null);
+  const [observedLoading, setObservedLoading] = React.useState(true);
   React.useEffect(() => {
     let live = true;
+    setObservedLoading(true);
     workspacesApi
       .getObservedEgress(ws.id)
-      .then((r) => live && setObserved(r))
-      .catch(() => live && setObserved({ denied: [], runs_examined: 0 }));
+      .then((r) => {
+        if (!live) return;
+        setObserved(r);
+        setObservedLoading(false);
+      })
+      .catch(() => {
+        if (!live) return;
+        setObserved({ denied: [], runs_examined: 0 });
+        setObservedLoading(false);
+      });
     return () => {
       live = false;
     };
@@ -87,7 +100,13 @@ export function DetectedCard({
     .map((s) => ({ name: s.name, storable: storableSecretName(s.name) }))
     .filter((s) => s.storable && !(`secret:${s.storable}` in effective));
   const leaks = profile.leak_findings ?? [];
-  const nothingPending = leaks.length === 0 && suggested.length === 0 && observedDenied.length === 0 && codeRefs.length === 0;
+  const nothingPending =
+    !observedLoading &&
+    ws.status === "scanned" &&
+    leaks.length === 0 &&
+    suggested.length === 0 &&
+    observedDenied.length === 0 &&
+    codeRefs.length === 0;
 
   const [confirmHost, setConfirmHost] = React.useState<{ host: string; level: RequirementLevel } | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -173,11 +192,21 @@ export function DetectedCard({
         </div>
       )}
 
-      {nothingPending && (
-        <p className="text-xs text-muted-foreground" data-testid="detected-empty">
-          Nothing pending — every host and secret the scan found is either required, optional, or dismissed
-          by you.
+      {observedLoading ? (
+        <p className="text-xs text-muted-foreground" data-testid="detected-loading">
+          Checking for observed-but-denied hosts…
         </p>
+      ) : ws.status !== "scanned" ? (
+        <p className="text-xs text-muted-foreground" data-testid="detected-unscanned">
+          This workspace hasn&apos;t finished scanning yet — more pending items may still turn up.
+        </p>
+      ) : (
+        nothingPending && (
+          <p className="text-xs text-muted-foreground" data-testid="detected-empty">
+            Nothing pending — every host and secret the scan found is either required, optional, or dismissed
+            by you.
+          </p>
+        )
       )}
 
       <ConfirmEgressDialog

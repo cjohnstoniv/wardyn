@@ -239,6 +239,18 @@ describe("WorkspaceDetailScreen — all four cards for a non-container workspace
     expect(screen.getByText("Sessions")).toBeInTheDocument();
     expect(screen.getByText("Env as code")).toBeInTheDocument();
   });
+
+  // ui-wsDetail-4: the header's source-path CopyButton must say what it
+  // copies, matching the convention every other CopyButton/CopyPill call
+  // site in this codebase follows — a bare "Copy" accessible name doesn't
+  // tell a screen-reader user what's on their clipboard.
+  it("the source-path CopyButton's accessible name says what it copies", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    await screen.findByText("Requirements");
+    expect(screen.getByRole("button", { name: "Copy source path" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^copy$/i })).not.toBeInTheDocument();
+  });
 });
 
 // Ported from the retired import-panel.test.tsx's "egress approvals confirm

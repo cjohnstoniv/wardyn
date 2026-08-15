@@ -3,10 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The one card shell every workspace detail section uses — same rounded-card
-// idiom run-detail.tsx's own (local) SectionCard uses, pulled into its own
-// tiny file here since FOUR sibling cards need it (avoids either duplicating
-// it four times or a circular import with the main screen file).
+// The one card shell every workspace detail section uses — pulled into its
+// own tiny file here since FOUR sibling cards need it (avoids either
+// duplicating it four times or a circular import with the main screen
+// file). Deliberately its own, larger style: run-detail.tsx actually
+// imports wardyn/primitives.tsx's SectionCard (p-4, small-caps uppercase
+// eyebrow title, no subtitle) — this one uses p-5, a bold sentence-case
+// title, and a `subtitle` line every one of this screen's four sections
+// relies on. Don't collapse the two without adding subtitle support there.
 import type * as React from "react";
 
 export function SectionCard({

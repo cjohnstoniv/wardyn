@@ -36,6 +36,16 @@ import {
 import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { CopyButton } from "../../wardyn/copy-button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import {
   recordResult,
   recordSessions,
   orphanedVerifySessions,
@@ -360,6 +370,12 @@ function SessionCard({
   const stage = sessionStage(ws, sessionKey);
   const openRR = recordResult(ws, sessionKey);
   const confinedRR = recordResult(ws, verifyKeyOf(sessionKey));
+  // ui-wsDetail-3: both buttons below fire the launch immediately on click;
+  // the settled review they're sitting next to (RecordReviewCard /
+  // ConfinedReviewCard) gets replaced by the live attach terminal on the
+  // next poll with no chance to back out. Route through the same
+  // AlertDialog idiom workspace-detail.tsx's own Rescan confirm uses.
+  const [confirmKind, setConfirmKind] = React.useState<"record" | "replay" | null>(null);
 
   return (
     <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
@@ -385,7 +401,7 @@ function SessionCard({
         <div className="mt-3 space-y-3">
           <RecordReviewCard ws={ws} sessionKey={sessionKey} rr={openRR} onPromoteEgress={onPromoteEgress} onOpenProfile={onOpenProfile} />
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => onRecord(label)} disabled={busyOpen}>
+            <Button size="sm" variant="outline" onClick={() => setConfirmKind("record")} disabled={busyOpen}>
               {busyOpen ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
               Re-record
             </Button>
@@ -424,12 +440,38 @@ function SessionCard({
       {(stage === "replayed" || stage === "replay_failed") && confinedRR && (
         <div className="mt-3 space-y-3">
           <ConfinedReviewCard ws={ws} rr={confinedRR} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
-          <Button size="sm" variant="outline" onClick={() => onReplayConfined(label)} disabled={busyConfined}>
+          <Button size="sm" variant="outline" onClick={() => setConfirmKind("replay")} disabled={busyConfined}>
             {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
             Replay again
           </Button>
         </div>
       )}
+
+      <AlertDialog open={confirmKind !== null} onOpenChange={(o) => !o && setConfirmKind(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmKind === "record" ? "Re-record" : "Replay"} &quot;{label}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmKind === "record"
+                ? "The current recorded review for this session will be replaced once the new recording settles."
+                : "The current confined-replay review for this session will be replaced once the new replay settles."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const kind = confirmKind;
+                setConfirmKind(null);
+                if (kind === "record") onRecord(label);
+                else if (kind === "replay") onReplayConfined(label);
+              }}
+            >
+              {confirmKind === "record" ? "Re-record" : "Replay again"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
