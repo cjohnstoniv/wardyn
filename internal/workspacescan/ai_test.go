@@ -58,8 +58,11 @@ func TestAdviseProfile_MergeOnlyFillsEmptyNeverOverrides(t *testing.T) {
 	if !reflect.DeepEqual(got.Tools, []string{"zig"}) {
 		t.Errorf("Tools gap-fill: got %v, want [zig]", got.Tools)
 	}
-	if !reflect.DeepEqual(got.EgressDomains, []string{"ziglang.org"}) {
-		t.Errorf("EgressDomains gap-fill: got %v, want [ziglang.org]", got.EgressDomains)
+	if !reflect.DeepEqual(got.SuggestedEgress, []string{"ziglang.org"}) {
+		t.Errorf("SuggestedEgress gap-fill: got %v, want [ziglang.org]", got.SuggestedEgress)
+	}
+	if len(got.EgressDomains) != 0 {
+		t.Errorf("W6-S1-3: AI must never write EgressDomains (the sole auto-granted-host field): got %v", got.EgressDomains)
 	}
 	if got.Source != SourceAIAssisted {
 		t.Errorf("Source: got %q, want %q", got.Source, SourceAIAssisted)
@@ -71,8 +74,14 @@ func TestAdviseProfile_MergeOnlyFillsEmptyNeverOverrides(t *testing.T) {
 }
 
 func TestAdviseProfile_AIEgressForcesReview(t *testing.T) {
-	// A base with egress empty and NeedsReview FALSE: an AI-suggested host must
-	// flip NeedsReview true (never silently trusted).
+	// W6-S1-3 regression: an AI-suggested host must flip NeedsReview true (never
+	// silently trusted) and must land ONLY in SuggestedEgress — NEVER in
+	// EgressDomains, the sole field seedSourceRequirements/
+	// applyWorkspaceRequirements treat as an auto-granted, auto-unioned contract
+	// row. Before the fix, mergeAdvice gap-filled EgressDomains directly, so an
+	// AI guess rode the exact same auto-union privilege as a real filename-keyed
+	// marker-table hit, silently widening a run's allowlist with no operator
+	// approval — defeating the NeedsReview promise this test's name describes.
 	base := WorkspaceProfile{
 		Languages:   []string{"Ada"},
 		Confidence:  ConfidenceMedium,
@@ -86,8 +95,11 @@ func TestAdviseProfile_AIEgressForcesReview(t *testing.T) {
 	if !got.NeedsReview {
 		t.Error("AI-suggested egress must force NeedsReview=true")
 	}
-	if !reflect.DeepEqual(got.EgressDomains, []string{"evil.example.com"}) {
-		t.Errorf("egress gap-fill: got %v", got.EgressDomains)
+	if len(got.EgressDomains) != 0 {
+		t.Errorf("W6-S1-3: AI-suggested host must NEVER land in EgressDomains (auto-unioned into a run's allowlist with no operator approval): got %v", got.EgressDomains)
+	}
+	if !reflect.DeepEqual(got.SuggestedEgress, []string{"evil.example.com"}) {
+		t.Errorf("AI-suggested host must land in SuggestedEgress (advisory, never auto-unioned — workspace_egress.go's unionWorkspaceEgress): got %v", got.SuggestedEgress)
 	}
 }
 
@@ -130,11 +142,15 @@ func TestAdviseProfile_HighConfidenceUnchangedWhenNothingAdded(t *testing.T) {
 		NeedsReview:     false,
 		Source:          SourceDeterministic,
 	}
-	adv := wrapper(`{"languages":["Zig"],"package_managers":["zig"],"tools":[],"egress_domains":["ziglang.org"],"needs_review":false,"notes":""}`)
+	// egress_domains empty: SuggestedEgress unions whatever the AI proposes
+	// regardless of EgressDomains' own fill state (a DIFFERENT field, W6-S1-3),
+	// so this profile stays a fair "AI has nothing new to say" fixture only if
+	// the AI's own advice is empty here too.
+	adv := wrapper(`{"languages":["Zig"],"package_managers":["zig"],"tools":[],"egress_domains":[],"needs_review":false,"notes":""}`)
 	bin := fakeCLI(t, adv, 0)
 
 	got := AdviseProfile(context.Background(), ScanFacts{}, base, AIOptions{Bin: bin})
-	// All base fields are populated → nothing gap-fills → unchanged.
+	// All base fields are populated and the AI proposes nothing new → unchanged.
 	if !reflect.DeepEqual(got, base) {
 		t.Errorf("high-confidence complete profile must be unchanged: got %+v, want %+v", got, base)
 	}

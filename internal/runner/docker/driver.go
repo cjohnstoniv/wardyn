@@ -886,13 +886,25 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 	return statusFromInspect(res.Container), nil
 }
 
+// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists for
+// an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error because
+// the workload runs as the container's own main process, not a separate
+// exec — see runAsMainProcess). Duplicated here (same literal) rather than
+// imported: internal/api sits above this concrete substrate and must stay
+// target-agnostic, so it cannot import internal/runner/docker. MUST match the
+// literal in runs_dispatch.go — see that constant's doc comment (W15-c) for
+// why a bare "" can no longer double for this case.
+const mainProcessExecID = "main-process"
+
 // AgentStatus reports the agent's liveness in a restart-safe way. For an
-// exec-based ref (agentExecID != "") it inspects that exec: Running => alive
-// (RUNNING); exited => terminal with the real exit code, EVEN while the idle
-// sandbox container is still up — the case container Status cannot detect after a
-// restart dropped the in-memory exec map. When agentExecID is "" (exec-less/
+// exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel) it
+// inspects that exec: Running => alive (RUNNING); exited => terminal with the
+// real exit code, EVEN while the idle sandbox container is still up — the case
+// container Status cannot detect after a restart dropped the in-memory exec
+// map. When agentExecID is "" OR the mainProcessExecID sentinel (exec-less/
 // main-process, or Exec never ran) the container IS the agent, so fall back to
-// Status.
+// Status — "main-process" was never actually passed to ExecCreate, so probing
+// it as a real exec id would only ever produce the ambiguous-404 error below.
 //
 // AMBIGUOUS exec-404 (GAP-RECONCILE-1): docker keeps exec records in daemon
 // MEMORY only, so a daemon restart under live-restore erases them while the
@@ -903,7 +915,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // healthy live-restore run — the reconciler's own comment (:928) used to assume
 // the opposite, mass-failing every in-flight exec run on a routine daemon restart.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
-	if agentExecID == "" {
+	if agentExecID == "" || agentExecID == mainProcessExecID {
 		return d.Status(ctx, ref)
 	}
 	insp, err := d.cli.ExecInspect(ctx, agentExecID, client.ExecInspectOptions{})

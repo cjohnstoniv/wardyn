@@ -169,6 +169,7 @@ pointed at `/data/audit/audit.log`.
 | `WARDYN_GROUNDTRUTH_BATCH` | int | `64` | max events per POST batch (flag `-batch`) |
 | `WARDYN_GROUNDTRUTH_BUFFER` | int | `4096` | event buffer before backpressure drops (flag `-buffer`) |
 | `WARDYN_GROUNDTRUTH_BLIND_RUNS` | CSV | (unset) | run ids the host sensor is blind to, CC3/Kata (flag `-blind-runs`) |
+| `WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS` | bool | `false` | opt-in: forward kernel exec/connect/write events the host sensor could not correlate to a Wardyn-managed run (other containers, the bare host) to the audit sink/SIEM; OFF by default so the undeletable audit log stays sandbox-scoped (flag `-forward-unmapped-host-events`) |
 
 ## `wardyn` (CLI)
 

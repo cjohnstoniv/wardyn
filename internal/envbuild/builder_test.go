@@ -115,6 +115,137 @@ func TestBuildEnv_NoCacheVarsWhenCacheRepoEmpty(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// pushedBaseRef / newPushRef: per-build push-ref composition (W20-record-image-2)
+// ---------------------------------------------------------------------------
+
+func TestPushedBaseRef_NoOverrideUsesCacheRepoPlusTag(t *testing.T) {
+	b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", "registry.example.com/wardyn-cache")
+	t.Setenv(envPushedRef, "")
+
+	got := b.pushedBaseRef("deadbeef")
+	want := "registry.example.com/wardyn-cache:deadbeef"
+	if got != want {
+		t.Errorf("pushedBaseRef(%q) = %q, want %q", "deadbeef", got, want)
+	}
+}
+
+// The override names a REPOSITORY ADDRESS (e.g. compose's host-loopback path
+// to the same registry the build container reaches by service name), not a
+// fixed ref — the per-build tag must still compose on top, or every build
+// would collapse back onto the override's one shared ref (W20-record-image-2
+// again, just relocated to the override instead of CacheRepo).
+func TestPushedBaseRef_EnvOverrideComposesWithPerBuildTag(t *testing.T) {
+	b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", "registry.example.com/wardyn-cache")
+	t.Setenv(envPushedRef, "127.0.0.1:5010/wardyn/devcontainers")
+
+	got := b.pushedBaseRef("deadbeef")
+	want := "127.0.0.1:5010/wardyn/devcontainers:deadbeef"
+	if got != want {
+		t.Errorf("pushedBaseRef(%q) = %q, want %q (override must compose with the per-build tag, not replace it)", "deadbeef", got, want)
+	}
+}
+
+func TestNewPushRef_EmptyCacheRepoReturnsEmpty(t *testing.T) {
+	b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", "")
+	pushRepo, tag := b.newPushRef()
+	if pushRepo != "" || tag != "" {
+		t.Errorf("newPushRef() with empty CacheRepo = (%q, %q), want (\"\", \"\")", pushRepo, tag)
+	}
+}
+
+// TestBuild_ConcurrentBuildsUsePerBuildPushRef pins W20-record-image-2 (HIGH,
+// confinement bypass): two builds sharing a Builder — and therefore its one
+// CacheRepo — must never resolve the SAME registry ref for envbuilder's push
+// and finalize's pull-back. Before the fix, pushedBaseRef() was a pure
+// function of b.CacheRepo alone, identical on every call regardless of which
+// build made it, so a workspace-B push landing between workspace A's
+// envbuilder-push and finalize-pull would get silently pulled and permanently
+// tagged as workspace A's image (finalizeImage's pullBase=true pull is
+// unconditional "pull fresh", so there is no re-validation step to catch it).
+//
+// This test needs no real goroutines to expose the bug: the OLD code computed
+// the identical ref on every call regardless of timing, so two SEQUENTIAL
+// builds already reproduce it deterministically — this FAILS against base
+// 6d76911 (both builds' push/pull refs compare equal) and PASSES after the
+// fix (each build gets its own random-tagged ref).
+func TestBuild_ConcurrentBuildsUsePerBuildPushRef(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newPushBuilder(t, f)
+	t.Setenv(envPushedRef, "") // isolate from any host-set override
+
+	specA := BuildSpec{RepoURL: "https://github.com/example/workspace-a", OutputImageTag: "wardyn-ws:a"}
+	if _, err := b.Build(t.Context(), specA); err != nil {
+		t.Fatalf("Build A: %v", err)
+	}
+	envA := append([]string(nil), f.lastEnv...)
+	pulledA := append([]string(nil), f.pulledRefs...)
+
+	specB := BuildSpec{RepoURL: "https://github.com/example/workspace-b", OutputImageTag: "wardyn-ws:b"}
+	if _, err := b.Build(t.Context(), specB); err != nil {
+		t.Fatalf("Build B: %v", err)
+	}
+	envB := f.lastEnv
+	pulledB := f.pulledRefs
+
+	pushRefA := envValue(envA, "ENVBUILDER_CACHE_REPO")
+	pushRefB := envValue(envB, "ENVBUILDER_CACHE_REPO")
+	if pushRefA == "" || pushRefB == "" {
+		t.Fatalf("ENVBUILDER_CACHE_REPO missing: A=%q B=%q", pushRefA, pushRefB)
+	}
+	if pushRefA == pushRefB {
+		t.Fatalf("workspace A and B pushed to the SAME ref %q: concurrent builds share one mutable FROM ref (W20-record-image-2)", pushRefA)
+	}
+	const wantPrefix = "registry.example.com/wardyn-cache"
+	if !strings.HasPrefix(pushRefA, wantPrefix) || !strings.HasPrefix(pushRefB, wantPrefix) {
+		t.Fatalf("push refs must still target CacheRepo %q: A=%q B=%q", wantPrefix, pushRefA, pushRefB)
+	}
+
+	// finalizeImage's pullBase=true path (pull the freshly-pushed base before
+	// wrapping) must pull the SAME per-build ref THIS build was just told to
+	// push to — never the other workspace's ref, and never a bare/shared one.
+	lastPulledA := pulledA[len(pulledA)-1]
+	lastPulledB := pulledB[len(pulledB)-1]
+	if lastPulledA != pushRefA {
+		t.Errorf("workspace A finalize pulled %q, want its own push ref %q", lastPulledA, pushRefA)
+	}
+	if lastPulledB != pushRefB {
+		t.Errorf("workspace B finalize pulled %q, want its own push ref %q", lastPulledB, pushRefB)
+	}
+	if lastPulledA == lastPulledB {
+		t.Fatalf("workspace B finalize pulled the SAME ref as workspace A (%q): B's image could be built from A's push (or vice versa)", lastPulledA)
+	}
+}
+
+// BuildFromDevcontainerFiles (the git-free generated-context path) shares
+// runBuildAndFinalize with Build, so it must get the same per-build isolation
+// — this pins that it does not, say, fall back to a bare/shared CacheRepo of
+// its own.
+func TestBuildFromDevcontainerFiles_ConcurrentBuildsUsePerBuildPushRef(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newPushBuilder(t, f)
+	t.Setenv(envPushedRef, "")
+
+	filesA := map[string]string{".devcontainer/devcontainer.json": `{"image":"golang:1.22"}`}
+	if _, err := b.BuildFromDevcontainerFiles(t.Context(), filesA, "wardyn-ws:gen-a", nil); err != nil {
+		t.Fatalf("BuildFromDevcontainerFiles A: %v", err)
+	}
+	pushRefA := envValue(f.lastEnv, "ENVBUILDER_CACHE_REPO")
+
+	filesB := map[string]string{".devcontainer/devcontainer.json": `{"image":"golang:1.23"}`}
+	if _, err := b.BuildFromDevcontainerFiles(t.Context(), filesB, "wardyn-ws:gen-b", nil); err != nil {
+		t.Fatalf("BuildFromDevcontainerFiles B: %v", err)
+	}
+	pushRefB := envValue(f.lastEnv, "ENVBUILDER_CACHE_REPO")
+
+	if pushRefA == "" || pushRefB == "" {
+		t.Fatalf("ENVBUILDER_CACHE_REPO missing: A=%q B=%q", pushRefA, pushRefB)
+	}
+	if pushRefA == pushRefB {
+		t.Fatalf("two BuildFromDevcontainerFiles calls pushed to the SAME ref %q (W20-record-image-2)", pushRefA)
+	}
+}
+
 func TestBuildEnv_ValuesDontContainExtraEquals(t *testing.T) {
 	// Verify that a value containing "=" is not mangled.
 	spec := BuildSpec{

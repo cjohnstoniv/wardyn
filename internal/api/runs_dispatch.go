@@ -467,6 +467,28 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 // wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
 // image tag so convention/devcontainer runs are unaffected. Extracted verbatim
 // from dispatchWithVerify.
+//
+// mainProcessExecID is the agent_exec_id persisted when Runner.Exec succeeds
+// with an EMPTY id ("", nil) — an EXEC-LESS substrate (krun runtime; see
+// runtimeSupportsExec in the docker driver, which krun-vs-kata backs on
+// EITHER a CC2 or CC3 confinement class depending on the host/operator
+// pin, so this can never be inferred from run.ConfinementClass): the
+// workload runs as the container's own main process, so container Status is
+// already authoritative and there is no separate exec to track.
+//
+// W15-c: a bare "" used to be persisted for this case, but reconcile.go's
+// watcher-sweep strand guard also reads "" as "never exec'd, no agent will
+// ever run" — one crash-recovery signal doing two jobs — so it finalized
+// FAILED and tore down healthy exec-less runs the moment their watcher lease
+// went stale. The sentinel gives each meaning its own value: "" now means
+// ONLY "SetRunAgentExecID was never called" (genuinely stranded); this
+// constant means "called, deliberately empty". The docker driver's
+// AgentStatus (internal/runner/docker/driver.go) maps the sentinel back onto
+// container Status exactly like "" always has — duplicated there (same
+// literal) rather than imported, because internal/api sits above the
+// concrete runner substrate and must stay target-agnostic.
+const mainProcessExecID = "main-process"
+
 func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
@@ -506,15 +528,26 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
 		// (ExecInspect) across a wardynd restart: an idle-container exec run whose
 		// agent already exited must finalize + revoke, not strand RUNNING.
-		// Best-effort like SetSandboxRef; "" for exec-less substrates (container==agent).
-		_ = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, execID)
+		// Best-effort like SetSandboxRef. execID=="" (no error) is the exec-less
+		// substrate (container==agent) — persist the mainProcessExecID sentinel
+		// instead of the bare "" reconcile.go's strand guard reserves for a run
+		// that never got this far (see mainProcessExecID's doc comment, W15-c).
+		persistExecID := execID
+		if persistExecID == "" {
+			persistExecID = mainProcessExecID
+		}
+		_ = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 			run.ID.String(), "success", mustJSON(map[string]any{"argv": argv})))
 
 		// Completion tracking: watch the agent process to exit and propagate its
 		// outcome. The watcher runs on a DETACHED context (NOT ctx — that is the
 		// request context, cancelled when the create-run handler returns, which
-		// would kill the watcher immediately). See startCompletionWatcher.
+		// would kill the watcher immediately). See startCompletionWatcher. Passed
+		// the RAW execID, not the sentinel: this local value only ever reaches
+		// AgentStatus via reconcileWatch's Wait-error fallback (runs_lifecycle.go),
+		// where "" already means "use container Status" — the sentinel only
+		// matters for a value that gets persisted and re-read after a restart.
 		s.startCompletionWatcher(run.ID, ref, execID)
 	}
 }

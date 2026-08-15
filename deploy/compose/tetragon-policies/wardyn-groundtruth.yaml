@@ -17,6 +17,21 @@
 # (the "Ona Veto" lesson); Wardyn flags loaders (data.loader=true) rather than
 # claiming to prevent them. The real boundary is structural (L0 no-route +
 # no-resident-credentials), enforced out of band.
+#
+# SCOPE (W24-S1-1, residual, disclosed): these kprobes have NO matchNamespaces /
+# matchBinaries / container selector, so the sensor hooks them HOST-WIDE — every
+# process on the box, not only Wardyn's. This is a plain `docker compose`
+# deployment: Wardyn's sandbox containers are created dynamically at run time
+# by the docker runner, so there is no stable namespace/cgroup/binary identity
+# a STATIC TracingPolicy file could select on ahead of time (unlike a k8s
+# podSelector against a known label). Scoping is therefore enforced
+# DOWNSTREAM, in the ingest sidecar: cmd/wardyn-tetragon-ingest's gatedMapper
+# (correlator.go) drops any exec/connect/write event that does not correlate
+# to a wardyn.managed=true agent container BEFORE it reaches the control
+# plane's audit log / SIEM fanout, unless an operator explicitly opts into
+# full-host coverage (WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS=true).
+# Tetragon itself still OBSERVES every host process; only the forwarding step
+# is scoped.
 apiVersion: cilium.io/v1alpha1
 kind: TracingPolicy
 metadata:

@@ -6,6 +6,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -226,6 +227,147 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 	}
 }
 
+// TestMITMCorpHost_DialsConfiguredPort is the W13-S1-5 regression. A corp
+// artifact MITM host is matched by HOSTNAME (mitmHosts), so before this fix
+// serveMITMRequest hardcoded the dial target to port 443 regardless of which
+// port the sandbox actually CONNECTed to. An operator's mirror living on a
+// non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") would
+// still get its tunnel TLS-terminated (hostname matched) and its registry
+// token injected — then FORWARDED to port 443 of that same host, presenting
+// the token to whatever answers there instead of the configured mirror. This
+// test fails on base 6d76911 (captures a dial to port 443) and passes once
+// the real CONNECT port is threaded through mitmConnect/serveMITMRequest.
+func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
+	cu := captureUpstream(t, true, "mirror-ok")
+
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+
+	var gotDial string
+	p := newProxy(Options{
+		RunID:  uuid.New(),
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
+		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		CA:     ca,
+		// Bare host: the historical, still-supported format (mitmPorts defaults
+		// to "any port" for it), so the MITM-ELIGIBILITY gate alone can't be
+		// what makes this test pass — only fixing the DIAL inside
+		// serveMITMRequest does, which is what this test isolates.
+		MITMHosts:       []string{"mirror.corp"},
+		Resolver:        publicResolver{},
+		TLSClientConfig: testInsecureTLSConfig,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			gotDial = addr
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, upstreamAddr(cu.srv))
+		},
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	// Agent CONNECTs to the mirror's REAL, non-443 port.
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "CONNECT mirror.corp:5000 HTTP/1.1\r\nHost: mirror.corp:5000\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status = %d, want 200 (mirror.corp is policy-allowed on any port)", resp.StatusCode)
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("failed to add Wardyn CA to agent trust pool")
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: "mirror.corp", RootCAs: pool})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("agent TLS handshake (must trust the Wardyn CA leaf): %v", err)
+	}
+	defer tlsConn.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, "https://mirror.corp/api/npm/some-pkg", nil)
+	req.Header.Set("Authorization", "Bearer OPERATOR-REGISTRY-TOKEN")
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatal(err)
+	}
+	getResp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatalf("read MITM response: %v", err)
+	}
+	rb, _ := io.ReadAll(getResp.Body)
+	if getResp.StatusCode != http.StatusOK || string(rb) != "mirror-ok" {
+		t.Fatalf("mirror request must forward, got %d %q", getResp.StatusCode, rb)
+	}
+
+	if gotDial == "" {
+		t.Fatal("proxy never dialed an upstream")
+	}
+	_, gotPort, err := net.SplitHostPort(gotDial)
+	if err != nil {
+		t.Fatalf("dial target %q: %v", gotDial, err)
+	}
+	if gotPort != "5000" {
+		t.Fatalf("proxy dialed port %q, want 5000 (the CONNECT's real port). Dialing 443 instead "+
+			"presents the operator's registry token to whatever answers on port 443 of mirror.corp, "+
+			"not the configured mirror (W13-S1-5)", gotPort)
+	}
+}
+
+// TestMITMCorpHost_PortMismatchFallsThroughOpaque is W13-S1-5's other half:
+// an EXPLICITLY port-scoped mitmHosts entry ("host:port", what
+// planArtifactRedirect now authors) is MITM/injection-eligible ONLY at that
+// port. A CONNECT to the same host on a DIFFERENT, unconfigured port must NOT
+// be TLS-terminated — it falls through to an ordinary opaque tunnel, so the
+// operator's token is never even offered to a service the redirect never
+// named. This pins isMITMHost's "EXACT-hostname allowlist" doc claim now
+// covering port too.
+func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+
+	p := newProxy(Options{
+		RunID:     uuid.New(),
+		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		CA:        ca,
+		MITMHosts: []string{"mirror.corp:5000"}, // scoped to :5000 only
+		Resolver:  publicResolver{},
+		Dial:      redirectDial(startEcho(t)), // opaque-tunnel stand-in
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	// CONNECT to the SAME host on a DIFFERENT (unconfigured) port.
+	conn, status := connectThrough(t, proxySrv.URL, "mirror.corp:9999")
+	defer conn.Close()
+	if !strings.Contains(status, "200") {
+		t.Fatalf("policy-allowed host (any port) must still tunnel: %q", status)
+	}
+	// A MITM'd connection would have the proxy attempt its own TLS server
+	// handshake here instead of piping raw bytes; sending plaintext and getting
+	// it echoed back verbatim proves this is an OPAQUE tunnel, not TLS-terminated.
+	_, _ = io.WriteString(conn, "ping")
+	buf := make([]byte, 4)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := conn.Read(buf)
+	if err != nil || string(buf[:n]) != "ping" {
+		t.Fatalf("expected an opaque passthrough echo of %q, got %q err=%v", "ping", buf[:n], err)
+	}
+}
+
 // A credential refresh that fails must fail CLOSED and must not relay the
 // control plane's response text verbatim: the error is written into the SANDBOX,
 // so any registered secret it carries is masked (httpError) before it leaves.
@@ -248,7 +390,7 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	p, _ := newLocalRouteProxy(t, cp.URL, "RUNTOK", upstreamAddr(cp), inj, nil)
 
 	rec := httptest.NewRecorder()
-	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://api.test/v1/messages", nil), "api.test")
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://api.test/v1/messages", nil), "api.test", 443)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (fail closed on refresh failure)", rec.Code)

@@ -278,6 +278,11 @@ services:
       # key. Never bake a real key into a committed file.
       WARDYN_AGE_KEY: "${WARDYN_AGE_KEY:-}"
       WARDYN_AUDIT_SINKS: '${WARDYN_AUDIT_SINKS:-{"file":{"path":"/data/audit/audit.log","max_bytes":10485760,"keep":3}}}'
+      # Audit fallback spool (C1): a Postgres write that fails is fsync'd here
+      # instead of silently lost (internal/api/auditspool.go). Lands in the
+      # same `audit` volume the file sink above uses (mounted at /data/audit
+      # below), so it survives a container restart same as that sink does.
+      WARDYN_AUDIT_SPOOL: "/data/audit/audit-spool.jsonl"
       # Human SSO via Dex. PUBLIC issuer (browser-facing, published on the host)
       # is localhost:5556; wardynd reaches Dex server-side at the internal docker
       # hostname dex:5556 and rewrites localhost:5556 -> dex:5556 for
@@ -459,10 +464,15 @@ services:
   # TOKEN SEEDING (host-sensor auth): the ingest sidecar authenticates with a
   # token whose audience is "wardyn-groundtruth" (audit-write-only; it can never
   # mint or approve). Obtain one from the running control plane and export it
-  # before starting this tier:
+  # before starting this tier. No -age-key on the command line: `exec` runs
+  # inside the ALREADY-RUNNING wardynd container, which already has
+  # WARDYN_AGE_KEY in its own environment (this service's `environment` block
+  # above) — the exec'd process inherits it, so passing it again as a flag
+  # would only put the master key on an argv any `ps`/`/proc` reader on the
+  # host can see for no benefit.
   #   export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
   #     /usr/local/bin/wardynd -print-groundtruth-token \
-  #     -dsn "$WARDYN_PG_DSN" -age-key "$WARDYN_AGE_KEY")
+  #     -dsn "$WARDYN_PG_DSN")
   # (The token has the provider's 1h TTL; re-mint on rotation. The wardynd image
   # bundles the wardynd binary, so the same image mints it.)
   # ───────────────────────────────────────────────────────────────────────────

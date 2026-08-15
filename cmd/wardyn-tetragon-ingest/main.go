@@ -19,10 +19,19 @@
 // with no new module dependencies (see correlator.go).
 //
 // HONESTY: this is DETECTION, not prevention. It is a HOST sensor that sees ALL
-// containers on the host; it keeps only wardyn-managed AGENT containers and
-// drops the rest. Events it cannot correlate to a run are sent with run_id NULL
-// + correlation="unmapped" — never silently dropped, because blindness must be
-// visible. It emits a periodic kernel.sensor.heartbeat (run_id NULL) so
+// containers on the host — not just Wardyn's. The container->run correlation
+// index (correlator.go) only ever admits wardyn-managed AGENT containers, but
+// on its own that does NOT stop a kernel event from a container/process
+// OUTSIDE that index from being observed and mapped: Tetragon still emits it.
+// By DEFAULT this sidecar now DROPS such host-wide, correlation="unmapped"
+// exec/connect/write events (gatedMapper, correlator.go) before they reach the
+// control plane's audit log / SIEM fanout — forwarding them was a secret/PII
+// leak of workloads Wardyn does not own (W24-S1-1). Set
+// -forward-unmapped-host-events / WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS=true
+// to opt a deployment back into full-host coverage: such events are then sent
+// with run_id NULL + correlation="unmapped", visible rather than silently
+// dropped. Events that DO correlate to a Wardyn run are NEVER gated — always
+// forwarded. It emits a periodic kernel.sensor.heartbeat (run_id NULL) so
 // /healthz can report ebpf_groundtruth=healthy ONLY while events are arriving.
 // Host eBPF is blind inside CC3/Kata guests; for such runs a one-time
 // kernel.sensor.blind event is emitted (data.reason=cc3-kata-host-ebpf-blind).
@@ -57,15 +66,16 @@ func main() {
 
 func run() error {
 	var (
-		exportPath    = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
-		controlURL    = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
-		token         = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
-		blindRuns     = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
-		heartbeatFlag = cliutil.FlagDuration("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", 30*time.Second, "sensor heartbeat interval")
-		refreshFlag   = cliutil.FlagDuration("refresh", "WARDYN_GROUNDTRUTH_REFRESH", 15*time.Second, "container->run index refresh interval")
-		statsFlag     = cliutil.FlagDuration("stats", "WARDYN_GROUNDTRUTH_STATS", 60*time.Second, "how often to log throughput/drop stats")
-		bufferSize    = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
-		batchSize     = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
+		exportPath      = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
+		controlURL      = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
+		token           = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
+		blindRuns       = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
+		forwardUnmapped = cliutil.FlagBool("forward-unmapped-host-events", "WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS", false, "opt-in: forward kernel exec/connect/write events this HOST sensor could NOT correlate to a Wardyn-managed run (other containers, the bare host) to the audit sink/SIEM; OFF by default (W24-S1-1, see gatedMapper in correlator.go)")
+		heartbeatFlag   = cliutil.FlagDuration("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", 30*time.Second, "sensor heartbeat interval")
+		refreshFlag     = cliutil.FlagDuration("refresh", "WARDYN_GROUNDTRUTH_REFRESH", 15*time.Second, "container->run index refresh interval")
+		statsFlag       = cliutil.FlagDuration("stats", "WARDYN_GROUNDTRUTH_STATS", 60*time.Second, "how often to log throughput/drop stats")
+		bufferSize      = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
+		batchSize       = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
 	)
 	flag.Parse()
 
@@ -102,7 +112,11 @@ func run() error {
 			slog.Any("err", err),
 		)
 	}
-	mapper := groundtruth.NewMapper(corr)
+	// gatedMapper (correlator.go) drops correlation=unmapped exec/connect/write
+	// events by default (W24-S1-1) — see the package doc above and the type's
+	// own doc for why. *forwardUnmapped opts a deployment back into forwarding
+	// them (run_id NULL, visible) instead of dropping them before the sink.
+	mapper := &gatedMapper{inner: groundtruth.NewMapper(corr), allowUnmapped: *forwardUnmapped}
 
 	// One-time blindness events for CC3/Kata runs the host sensor cannot see.
 	for _, rs := range splitCSV(*blindRuns) {
@@ -186,7 +200,7 @@ func checkBootTokenSource(flagToken string) error {
 // tailExport follows the JSONL export file, mapping each line and emitting the
 // mapped events. It re-opens the file on truncation/rotation and waits for it to
 // appear if it does not exist yet (Tetragon may start after this sidecar).
-func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, sink *eventSink) {
+func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSink) {
 	var (
 		f      *os.File
 		reader *bufio.Reader
@@ -303,9 +317,12 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 	}
 }
 
-// processLine maps one export line and emits the result. Unmapped events are
-// still emitted (run_id NULL) — visible blindness.
-func processLine(line []byte, mapper *groundtruth.Mapper, sink *eventSink) {
+// processLine maps one export line and emits the result. processLine itself
+// has no correlation policy of its own — whether a run-mapped event, an
+// unmapped one, or neither gets to sink.emit is entirely up to mapper
+// (production always passes a gatedMapper; see run()'s W24-S1-1 comment and
+// correlator.go).
+func processLine(line []byte, mapper mapLiner, sink *eventSink) {
 	line = []byte(strings.TrimSpace(string(line)))
 	if len(line) == 0 {
 		return

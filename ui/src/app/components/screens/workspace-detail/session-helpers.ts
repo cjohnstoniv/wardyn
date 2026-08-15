@@ -117,9 +117,21 @@ export function sessionStage(ws: Workspace, key: string): SessionStage {
   const open = recordResult(ws, key);
   const confined = recordResult(ws, verifyKeyOf(key));
   if (open?.status === "recording") return "recording";
-  if (confined?.status === "recording") return "replaying";
-  if (confined?.status === "recorded") return "replayed";
-  if (confined?.status === "record_failed") return "replay_failed";
+  // A confined verdict only speaks for the CURRENT open capture if it was
+  // started at/after that capture began. No cross-run id links them —
+  // launchRecordRun (internal/api/workspace_run.go) stamps a confined entry
+  // with its OWN run id, never the open run it replayed — so started_at is
+  // the one real, server-stamped signal available to pair them (the same
+  // field recordSessions above already orders by). A re-record stamps `open`
+  // a fresh, later started_at while the stale verify:<key> entry from the
+  // PRIOR capture keeps its older one — W20-capture-store-1: without this
+  // gate that stale entry outranks the fresh, unverified open result below.
+  const openStarted = open?.started_at;
+  const confinedStarted = confined?.started_at;
+  const confinedCurrent = !confined || !openStarted || !confinedStarted || confinedStarted >= openStarted;
+  if (confinedCurrent && confined?.status === "recording") return "replaying";
+  if (confinedCurrent && confined?.status === "recorded") return "replayed";
+  if (confinedCurrent && confined?.status === "record_failed") return "replay_failed";
   if (open?.status === "record_failed") return "record_failed";
   return "recorded";
 }

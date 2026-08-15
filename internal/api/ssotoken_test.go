@@ -108,6 +108,62 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	}
 }
 
+// TestUploadSSOToken_MaliciousStartURLRejected is a W15-d defense-in-depth
+// regression: before the fix, only blob.valid()'s non-empty check ran on
+// start_url, so a newline-bearing value would later be baked VERBATIM, with no
+// escaping, into every subsequent Bedrock run's ~/.aws/config INI
+// (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf) — smuggling extra
+// INI keys/sections into a file shared across every run that credential mode
+// serves, since the blob is captured ONCE and reused thereafter. start_url now
+// takes the same https-URL/no-whitespace guard the operator's own pre-login
+// input already takes (validateSSOStartURL, harnesscred.go).
+func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
+	srv, sec, tok, runID := newSSOUploadSrv(t)
+	malicious := `{
+		"access_token": "aws-sso-access-token-value",
+		"start_url": "https://my-sso.awsapps.com/start\n[profile evil]\nregion=us-east-1",
+		"region": "us-west-2",
+		"expires_at": "2100-01-01T00:00:00Z"
+	}`
+
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, malicious)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("newline in start_url: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+		t.Error("a blob with a control character in start_url must not be stored")
+	}
+}
+
+// TestUploadSSOToken_ControlCharsInAccountOrRoleRejected is the other half of
+// the same W15-d defense-in-depth guard: sso_account_id, sso_role_name, and
+// sso_region ride the identical unescaped INI template near start_url
+// (awsSSOConfigFileContents), so a newline in any is exactly as dangerous
+// and must be rejected the same way (repoFieldSafe — the same control-
+// character guard run.Repo already takes, for the identical reason). The
+// "region" case is the load-bearing one: sso_region is written AFTER
+// sso_start_url, so an injected duplicate sso_start_url via region would win
+// under last-key-wins parsing and silently defeat the StartURL guard.
+func TestUploadSSOToken_ControlCharsInAccountOrRoleRejected(t *testing.T) {
+	cases := map[string]string{
+		"account_id": `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"2100-01-01T00:00:00Z","account_id":"123456789012\n[profile evil]"}`,
+		"role_name":  `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"2100-01-01T00:00:00Z","role_name":"AdminRole\n[profile evil]"}`,
+		"region":     `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2\nsso_start_url = https://attacker.example.com/start","expires_at":"2100-01-01T00:00:00Z"}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, sec, tok, runID := newSSOUploadSrv(t)
+			w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("control char in %s: code = %d, want 400; body=%s", name, w.Code, w.Body.String())
+			}
+			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+				t.Errorf("a blob with a control character in %s must not be stored", name)
+			}
+		})
+	}
+}
+
 // TestUploadSSOToken_NonHarnessLoginRunRejected: the run-kind check is TRUSTED
 // server state (run.Task/run.Agent), not sandbox input. An ordinary run (or a
 // harness-login run for a different provider) has no business posting an AWS

@@ -55,6 +55,20 @@ The same FINALIZE stage is exposed on its own as FinalizeBase — the
 Bring-Your-Own-Image (BYOI) path, which wraps an operator-named base image with
 no envbuilder stage at all.
 
+**Concurrent builds get their own push ref.** CacheRepo is one field on a
+long-lived Builder, shared by every build the process runs. Stage 1 does not
+push to that bare repo (which resolves to the shared `:latest`) — each call to
+Build/BuildFromDevcontainerFiles mints a random per-build tag
+(`Builder.newPushRef`) and tells envbuilder to push there instead
+(`ENVBUILDER_CACHE_REPO=<CacheRepo>:<tag>`), and stage 2 pulls that SAME exact
+tag back (`Builder.pushedBaseRef`). Two workspaces building at once therefore
+never resolve each other's push: without this, a workspace-B push landing
+between workspace A's envbuilder push and finalize pull would get silently
+pulled and permanently tagged as workspace A's image (confinement bypass;
+finalizeImage's fetch-fresh pull has no re-validation step to catch the swap).
+No serialization is needed — each build's destination is unambiguous by
+construction — so this preserves full build concurrency.
+
 ## Wrap-only (why FINALIZE can run unsandboxed)
 
 FINALIZE runs on the host daemon, outside the untrusted-build sandbox and
@@ -89,8 +103,10 @@ run's confinement tier. See threatmodel/THREAT-MODEL.md §5 (residual 13).
   (optional, default: .devcontainer/devcontainer.json)
 - ENVBUILDER_WORKSPACE_FOLDER — build-context folder (local-context path:
   the bind-mounted generated files)
-- ENVBUILDER_CACHE_REPO  — OCI registry repository to push the built image to
-  (required; delivery is via this push)
+- ENVBUILDER_CACHE_REPO  — OCI registry ref to push the built image to
+  (required; delivery is via this push). Set to Builder.CacheRepo PLUS a
+  random per-build tag (`<CacheRepo>:<uuid>`), never the bare repo — see
+  "Concurrent builds get their own push ref" above
 - ENVBUILDER_PUSH_IMAGE  — "true"; make envbuilder push the built image to
   ENVBUILDER_CACHE_REPO
 - ENVBUILDER_INIT_SCRIPT — "exit 0"; make the post-build exec return so the
@@ -175,11 +191,17 @@ of the residual.
   pushes the built image there and the finalize stage layers Wardyn's runner
   tools on top; with no registry there is no delivery path and Build fails
   closed. There is no local-daemon-commit path.
-- The exact tag envbuilder pushes is content-addressed and not known
-  host-side before the build; the finalize stage assumes it is resolvable at
-  the plain CacheRepo ref and exposes WARDYN_ENVBUILD_PUSHED_REF to override.
-  See Builder.pushedBaseRef. A real-registry TestBuild_SmokeDockerd validates
-  the exact ref.
+- The FINAL image ref envbuilder pushes to is under Wardyn's control (a
+  random per-build tag on CacheRepo — see "Concurrent builds get their own
+  push ref" above), but envbuilder's own kaniko-style LAYER cache within that
+  same repo is content-addressed and outside Wardyn's naming. If a registry
+  ever fails to expose the final push at the exact ref Wardyn told envbuilder
+  to use, WARDYN_ENVBUILD_PUSHED_REF overrides the REPOSITORY ADDRESS the
+  finalize stage pulls from (e.g. a host-loopback path to a registry the build
+  container reaches by service name — the compose stack's own use); the
+  per-build tag is still appended on top of that override, so it never
+  reintroduces one shared ref across builds. See Builder.pushedBaseRef. A
+  real-registry TestBuild_SmokeDockerd validates the exact ref.
 - Build logs are streamed to the io.Writer supplied in BuildSpec.LogSink.
   If LogSink is nil, build output is discarded.
 - The build container itself is always removed on completion or timeout,

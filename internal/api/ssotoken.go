@@ -63,6 +63,35 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sso token blob is missing required fields (access_token/start_url/region/expires_at)")
 		return
 	}
+	// Defense in depth (W15-d): this blob is persisted once and then baked
+	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
+	// (awsSSOConfigFileContents, runs_bedrock.go) — a single bad capture would
+	// poison every subsequent run that credential mode serves, not just this
+	// one. StartURL gets the same https-URL-no-whitespace guard the operator's
+	// own pre-login input takes (validateSSOStartURL, harnesscred.go); the INI
+	// template's other three interpolated fields (sso_account_id/sso_role_name/
+	// sso_region) get the same control-character guard run.Repo already takes for
+	// the identical reason (repoFieldSafe, runs_scm.go) — a newline in any could
+	// otherwise smuggle extra keys/sections into the generated file. Region is
+	// especially load-bearing: sso_region is written AFTER sso_start_url in the
+	// [sso-session] block, so an injected duplicate sso_start_url via Region would
+	// win under last-key-wins parsing and defeat the StartURL guard above.
+	if verr := validateSSOStartURL(blob.StartURL); verr != nil {
+		writeError(w, http.StatusBadRequest, "invalid sso token: "+verr.Error())
+		return
+	}
+	if !repoFieldSafe(blob.AccountID) {
+		writeError(w, http.StatusBadRequest, "invalid sso token: account_id contains control characters or whitespace")
+		return
+	}
+	if !repoFieldSafe(blob.RoleName) {
+		writeError(w, http.StatusBadRequest, "invalid sso token: role_name contains control characters or whitespace")
+		return
+	}
+	if !repoFieldSafe(blob.Region) {
+		writeError(w, http.StatusBadRequest, "invalid sso token: region contains control characters or whitespace")
+		return
+	}
 	// Provenance is SERVER-set, never trusted from the client.
 	blob.CapturedAt = s.cfg.Now().UTC()
 	blob.SourceRunID = claims.RunID.String()

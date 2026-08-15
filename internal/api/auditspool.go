@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -35,7 +36,16 @@ type AuditSpool struct {
 }
 
 // NewAuditSpool opens (creating if needed) an append-only JSONL spool at path.
+// The parent directory is created too (MkdirAll, so an already-existing one is
+// a no-op): the flag's own default is the RELATIVE "./data/audit-spool.jsonl"
+// (cmd/wardynd/boot_flags.go), and a fresh working directory or mount with no
+// "data" subdirectory yet would otherwise fail this open outright, silently
+// disabling the C1 fallback spool exactly when a deploy's own defaults haven't
+// pre-created the path for it.
 func NewAuditSpool(path string) (*AuditSpool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err

@@ -103,6 +103,19 @@ func (s *bootReconcileStore) GetRun(_ context.Context, id uuid.UUID) (types.Agen
 	}
 	return types.AgentRun{}, store.ErrNotFound
 }
+
+// SetRunAgentExecID models the real scoped-write dispatch does mid-launch
+// (store.go) so a test can drive startAgentOrIdle and then sweepRunWatchers
+// against the SAME persisted value, rather than hand-setting AgentExecID and
+// only ever exercising the guard's condition in isolation.
+func (s *bootReconcileStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id == s.run.ID {
+		s.run.AgentExecID = execID
+	}
+	return nil
+}
 func (s *bootReconcileStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, _, to types.RunState) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,8 +426,78 @@ func TestSweepRunWatchers_NeverExecdRunFinalizesWithoutAgeGate(t *testing.T) {
 	}
 }
 
+// mainProcessRunner models a healthy EXEC-LESS (krun) launch: Exec succeeds
+// but returns "" — there is no separate exec, the workload IS the container's
+// main process — and AgentStatus reports the container's real liveness
+// regardless of which exec id it is asked about, mirroring the docker
+// driver's fallback to Status for "" or the mainProcessExecID sentinel
+// (driver.go). probed records every execID AgentStatus was called with, so a
+// test can prove the guard actually consulted the runner instead of
+// short-circuiting to a kill.
+type mainProcessRunner struct {
+	*fakeRunner
+	probed chan string
+}
+
+func (r *mainProcessRunner) Exec(context.Context, string, []string) (string, error) {
+	return "", nil
+}
+
+func (r *mainProcessRunner) AgentStatus(_ context.Context, _, execID string) (runner.Status, error) {
+	select {
+	case r.probed <- execID:
+	default:
+	}
+	return runner.Status{State: types.RunRunning}, nil
+}
+
+// TestSweepRunWatchers_ExecLessRunNotFinalized is the W15-c regression: a
+// healthy EXEC-LESS (krun/CC3) launch has Runner.Exec return "" with NO
+// error — dispatch must not let that collide with the strand guard's "never
+// exec'd" signal. This drives the REAL path end to end — startAgentOrIdle
+// persists whatever dispatch decides via SetRunAgentExecID, then
+// sweepRunWatchers reads that SAME persisted value back — rather than
+// hand-setting AgentExecID, so it actually exercises the value the fix
+// changed (runs_dispatch.go's mainProcessExecID sentinel), not merely the
+// guard's "== \"\"" condition in isolation.
+//
+// Counterfactual (base 6d76911): startAgentOrIdle persists the bare "" Exec
+// returned, and the strand guard finalizes FAILED + tears down ANY
+// non-interactive task run with AgentExecID=="" without ever probing the
+// runner — killing this healthy run outright (transitioned=true,
+// to=FAILED), which is exactly what this test must catch red.
+func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
+	h := newHarness(t)
+	run := execRun(t, "") // overwritten by startAgentOrIdle below, as in real dispatch
+	run.Task = "do the thing"
+	rn := &mainProcessRunner{fakeRunner: &fakeRunner{}, probed: make(chan string, 4)}
+	fake := &bootReconcileStore{run: run}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = rn
+	cfg.Broker = h.broker
+	cfg.BaseCtx = bootTestCtx(t)
+	srv := New(cfg)
+
+	// The dispatch phase under test: persists the real post-Exec value for an
+	// exec-less launch, exactly as it does mid-dispatchRun.
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+
+	if err := srv.sweepRunWatchers(context.Background()); err != nil {
+		t.Fatalf("sweepRunWatchers: %v", err)
+	}
+	if to, got := fake.finalTransition(); got {
+		t.Fatalf("a healthy exec-less run must not be finalized; finalized=%v to=%q — the strand guard treated a legitimate exec-less launch as never-exec'd", got, to)
+	}
+	select {
+	case <-rn.probed:
+	default:
+		t.Error("the guard must fall through to an AgentStatus probe for an exec-less run's persisted value, not short-circuit straight to a kill")
+	}
+}
+
 var _ runner.Runner = (*execExitRunner)(nil)
 var _ runner.Runner = (*errProbeRunner)(nil)
+var _ runner.Runner = (*mainProcessRunner)(nil)
 
 // sweepableImageBuilder implements both ImageBuilder and the optional
 // ImageBuildSweeper capability, so ReconcileOnBoot's type assertion finds it

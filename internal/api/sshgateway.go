@@ -54,12 +54,14 @@ const (
 	// accepts before dispatch (shell/exec/subsystem) — an unbounded client
 	// could otherwise grow the env slice forever pre-dispatch.
 	sshMaxEnvVars = 32
-	// sshAuthTimeout bounds sshAuth's own store lookups + synchronous audit
-	// write. The pre-auth handshake deadline (sshHandshakeTimeout) cannot
-	// interrupt a blocked call INSIDE PublicKeyCallback — NewServerConn is
-	// what owns the deadline, not the callback — so a slow/blocked backend
-	// call here would otherwise let an unauthenticated client park a
-	// connection slot indefinitely.
+	// sshAuthTimeout bounds sshAuth's store lookups AND sshVerifiedAuth's
+	// synchronous audit write — both run as ssh.ServerConfig callbacks
+	// (PublicKeyCallback / VerifiedPublicKeyCallback respectively). The
+	// pre-auth handshake deadline (sshHandshakeTimeout) cannot interrupt a
+	// blocked call INSIDE either callback — NewServerConn is what owns the
+	// deadline, not the callback — so a slow/blocked backend call in either
+	// one would otherwise let an unauthenticated client park a connection
+	// slot indefinitely.
 	sshAuthTimeout = 5 * time.Second
 )
 
@@ -146,7 +148,11 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 	cfg := &ssh.ServerConfig{
 		PublicKeyCallback: s.sshAuth,
-		MaxAuthTries:      sshMaxAuthTries,
+		// VerifiedPublicKeyCallback runs ONLY after golang.org/x/crypto/ssh has
+		// verified a real signature over the offered key (see sshVerifiedAuth's
+		// doc) — this is where ssh.auth success is now audited, not sshAuth.
+		VerifiedPublicKeyCallback: s.sshVerifiedAuth,
+		MaxAuthTries:              sshMaxAuthTries,
 	}
 	cfg.AddHostKey(signer)
 	return cfg
@@ -170,7 +176,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 	}
 }
 
-// sshAuth is the gateway's ENTIRE auth+authz decision (ServerConfig's
+// sshAuth is the gateway's auth+authz DECISION (ServerConfig's
 // PublicKeyCallback): registered public keys only, OWNER-ONLY authorization
 // (run.CreatedBy == the key's principal). Username = the target run's UUID
 // (conn.User()) — SSH has no cookie, so the run id IS the addressing the
@@ -182,8 +188,19 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // until then an admin uses the web terminal (GET /runs/{id}/attach) for
 // someone else's run, exactly like a viewer must.
 //
-// Every rejection is audited under ssh.auth — including an unknown key or an
-// unparseable/unknown run id — so a scan against the gateway leaves a trail.
+// Every REJECTION is audited under ssh.auth right here — including an
+// unknown key or an unparseable/unknown run id — so a scan against the
+// gateway leaves a trail. SUCCESS is deliberately NOT audited here (W25.4-1):
+// golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
+// every pubkey auth attempt opens with (RFC 4252 §7), and even for a direct
+// signed attempt this callback still runs BEFORE the signature is verified —
+// so a caller who merely KNOWS a victim's registered public key (never the
+// matching private key) could reach this function, get approved, and —
+// before this fix — walk away with a forged ssh.auth success row attributed
+// to that victim, having proven nothing. The *ssh.Permissions returned on
+// approval here are therefore PROVISIONAL; sshVerifiedAuth
+// (VerifiedPublicKeyCallback) records the success audit, and the ssh package
+// guarantees it runs ONLY after a real signature over this exact key verifies.
 //
 // sshAuthTimeout-bounded: this runs INSIDE ssh.NewServerConn's handshake,
 // which has no deadline of its own over callback-internal work — the
@@ -230,9 +247,10 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		return nil, errors.New("ssh: not authorized for this run")
 	}
 
-	successEv := s.auditEvent(&runID, types.ActorHuman, rec.Principal, "ssh.auth", fp, "success", nil)
-	successEv.SourceIP = conn.RemoteAddr().String()
-	s.recordAudit(ctx, successEv)
+	// Provisional approval ONLY — no success audit here, see the function doc:
+	// the client has not yet proven it holds the private key for this offer.
+	// sshVerifiedAuth records ssh.auth success, and only after
+	// ssh.ServerConfig has verified a real signature over this key.
 	return &ssh.Permissions{Extensions: map[string]string{
 		"principal": rec.Principal,
 		"run_id":    runID.String(),
@@ -244,6 +262,34 @@ func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata,
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
+}
+
+// sshVerifiedAuth is ServerConfig's VerifiedPublicKeyCallback (W25.4-1's fix):
+// golang.org/x/crypto/ssh calls it ONLY after verifying the client's
+// signature over this exact key — i.e. only once the client has actually
+// proven it holds the matching private key, which sshAuth's own invocation
+// (PublicKeyCallback) cannot guarantee (see its doc). perms is the SAME
+// *ssh.Permissions object sshAuth returned for this key, ownership
+// transferred to this callback per the ssh package's contract — principal and
+// run_id are already resolved in its Extensions, so no store lookups are
+// needed here, only the audit write sshAuth used to do prematurely.
+//
+// sshAuthTimeout-bounded for the same reason sshAuth is: this also runs
+// inside ssh.NewServerConn's handshake, uninterruptible by the pre-auth
+// net.Conn deadline (sshHandshakeTimeout).
+func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms *ssh.Permissions, _ string) (*ssh.Permissions, error) {
+	ctx, cancel := context.WithTimeout(s.cfg.BaseCtx, sshAuthTimeout)
+	defer cancel()
+	runID, err := uuid.Parse(perms.Extensions["run_id"])
+	if err != nil {
+		// Unreachable in practice: sshAuth only ever returns Permissions with
+		// a well-formed run_id already in Extensions.
+		return nil, errors.New("ssh: internal: missing run id in verified permissions")
+	}
+	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.auth", ssh.FingerprintSHA256(key), "success", nil)
+	ev.SourceIP = conn.RemoteAddr().String()
+	s.recordAudit(ctx, ev)
+	return perms, nil
 }
 
 // handleSSHConn completes the handshake (bounded by sshHandshakeTimeout, then
