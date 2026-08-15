@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { AuditEvent } from "../../lib/types";
+import type { AgentRun, AuditEvent } from "../../lib/types";
 
 // MEDIUM fixes pinned here:
 //  - run_id filter must query the SERVER with run_id (api.listAudit(runId)),
@@ -97,6 +97,73 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     fireEvent.click(drill);
 
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+  });
+
+  // ui-auditRec-2 regression: the drill banner's "Open run" used to link to the
+  // bare /runs list — it must deep-link to this specific run.
+  it("deep-links 'Open run' to /runs/<runId>, not the bare /runs list", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderScreen();
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+
+    const link = await screen.findByRole("link", { name: /open run/i });
+    expect(link).toHaveAttribute("href", "/runs/run_111");
+  });
+
+  // ui-auditRec-3: getRun resolving undefined is a real 404 (see
+  // runs.getRun in lib/api/runs.ts) — the ONLY case that means "gone". The
+  // drill banner must keep saying so, and must NOT offer a Retry for it (a
+  // deleted run isn't coming back).
+  it("shows the archived/deleted copy — and no Retry — for a true 404 (getRun resolves undefined)", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    getRunMock.mockResolvedValue(undefined);
+    renderScreen();
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+
+    expect(await screen.findByText(/archived or deleted/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn't load this run/i)).not.toBeInTheDocument();
+  });
+
+  // ui-auditRec-3: a REJECTED getRun (500 / network / 403) is a transient
+  // failure, not a deletion — it must render distinctly from the 404 case and
+  // offer a Retry that re-fetches and can recover to the normal success view.
+  it("shows a distinct failure message + Retry for a getRun rejection, and Retry recovers", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    const runRecord: AgentRun = {
+      id: "run_111",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      created_by: "me",
+      agent: "claude-code",
+      repo: "acme/widgets",
+      task: "Fix flaky auth tests",
+      confinement_class: "CC2",
+      state: "RUNNING",
+      spiffe_id: "spiffe://x",
+      runner_target: "docker",
+    };
+    getRunMock.mockRejectedValueOnce(new Error("500")).mockResolvedValueOnce(runRecord);
+
+    renderScreen();
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+
+    expect(await screen.findByText(/couldn't load this run/i)).toBeInTheDocument();
+    expect(screen.queryByText(/archived or deleted/i)).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: /^retry$/i });
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't load this run/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
+    expect(getRunMock).toHaveBeenCalledTimes(2);
   });
 
   it("preserves the server append order (does not re-sort by wall-clock time)", async () => {

@@ -245,6 +245,11 @@ export function AuditScreen() {
   // don't carry them.
   const [drillRun, setDrillRun] = React.useState<AgentRun | undefined>(undefined);
   const [drillLoading, setDrillLoading] = React.useState(false);
+  // ui-auditRec-3: a true 404 (getRun resolves undefined) is a PERMANENT
+  // "archived or deleted" — a REJECTED fetch (500/network/403) is a transient
+  // failure the operator can retry. Collapsing both into one message told an
+  // operator their run was gone when the control plane had just hiccuped.
+  const [drillError, setDrillError] = React.useState<"not-found" | "failed" | null>(null);
 
   // MEDIUM fix: when a run_id filter is set, query the SERVER with run_id so we
   // get that run's authoritative, complete per-run trail (not a client filter
@@ -279,31 +284,42 @@ export function AuditScreen() {
   }, [fetchEvents]);
   usePoll(tick, AUDIT_POLL_MS, status !== "ready");
 
-  React.useEffect(() => {
-    if (!runFilter) {
-      setDrillRun(undefined);
-      return;
-    }
-    let active = true;
+  // Monotonic guard: the runFilter effect below and a manual Retry can each
+  // start a fetch, and either can still be in flight when the other starts
+  // (or when runFilter changes/clears again) — only the LATEST request's
+  // resolution is allowed to write state, so a stale response can never
+  // clobber a newer one.
+  const drillRequestId = React.useRef(0);
+
+  const fetchDrillRun = React.useCallback((id: string) => {
+    const requestId = ++drillRequestId.current;
     setDrillLoading(true);
     runsApi
-      .getRun(runFilter)
+      .getRun(id)
       .then((r) => {
-        if (active) {
-          setDrillRun(r);
-          setDrillLoading(false);
-        }
+        if (drillRequestId.current !== requestId) return;
+        setDrillLoading(false);
+        setDrillRun(r);
+        setDrillError(r ? null : "not-found");
       })
       .catch(() => {
-        if (active) {
-          setDrillRun(undefined);
-          setDrillLoading(false);
-        }
+        if (drillRequestId.current !== requestId) return;
+        setDrillLoading(false);
+        setDrillRun(undefined);
+        setDrillError("failed");
       });
-    return () => {
-      active = false;
-    };
-  }, [runFilter]);
+  }, []);
+
+  React.useEffect(() => {
+    if (!runFilter) {
+      drillRequestId.current++; // invalidate any request still in flight
+      setDrillRun(undefined);
+      setDrillError(null);
+      setDrillLoading(false);
+      return;
+    }
+    fetchDrillRun(runFilter);
+  }, [runFilter, fetchDrillRun]);
 
   // Which event-kind facets actually have data in the loaded window — an "only
   // include facets that exist" rule so an operator never sees a dead filter for
@@ -402,6 +418,8 @@ export function AuditScreen() {
           runId={runFilter}
           run={drillRun}
           loading={drillLoading}
+          error={drillError}
+          onRetry={() => fetchDrillRun(runFilter)}
           onClear={() => setRunFilter("")}
         />
       )}
@@ -483,18 +501,24 @@ export function AuditScreen() {
 }
 
 // Per-run drill banner: real run fields only (id / agent / task / repo / the
-// metals ConfinementChip). There is no per-run detail ROUTE in this console yet
-// (RunDetail opens as a panel from local state on the Runs screen) — "Open run"
-// honestly points at /runs rather than inventing a /runs/:id deep link.
+// metals ConfinementChip). "Open run" deep-links to /runs/:id (ui-auditRec-2).
+// A true 404 (getRun resolved undefined) reads as "archived or deleted"; a
+// REJECTED fetch (500/network/403) is a distinct, transient failure with its
+// own message + Retry — collapsing the two told an operator their run was
+// gone when the control plane had just hiccuped (ui-auditRec-3).
 function DrillBanner({
   runId,
   run,
   loading,
+  error,
+  onRetry,
   onClear,
 }: {
   runId: string;
   run: AgentRun | undefined;
   loading: boolean;
+  error: "not-found" | "failed" | null;
+  onRetry: () => void;
   onClear: () => void;
 }) {
   return (
@@ -512,6 +536,13 @@ function DrillBanner({
           </span>
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />
+        </>
+      ) : error === "failed" ? (
+        <>
+          <span className="text-xs text-muted-foreground">Couldn&apos;t load this run.</span>
+          <button onClick={onRetry} className="text-xs font-medium text-primary hover:underline">
+            Retry
+          </button>
         </>
       ) : (
         <span className="text-xs text-muted-foreground">Run not found — it may have been archived or deleted.</span>
