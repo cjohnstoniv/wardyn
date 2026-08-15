@@ -183,9 +183,10 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # the release gate. It PUSHES NOTHING and TAGS NOTHING.
 #
 # WARDYN_TEST_PG adds the Postgres lane (CI always runs it; local runs say so
-# loudly when it is skipped). Still not a full CI replica: the three jobs that
-# need a live daemon or service — conformance, envbuild-integration and the
-# Playwright ui-e2e — are CI-only. See RELEASING.md.
+# loudly when it is skipped). Still not a full CI replica: five jobs need a
+# live daemon or service — conformance, conformance-k8s, envbuild-integration,
+# helm-install-test, and the Playwright ui-e2e — and are CI-only. See
+# RELEASING.md.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
@@ -194,10 +195,11 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
 	fi
 	@echo ""
-	@echo "release-check PASSED. NOT covered here: conformance, envbuild-integration,"
-	@echo "the Playwright ui-e2e, and screenshot freshness (ci.yml's screenshots-fresh"
-	@echo "job owns that — a local commit-timestamp test cannot be cleared once the"
-	@echo "PNGs re-render byte-identical) — confirm CI is green on the commit before tagging."
+	@echo "release-check PASSED. NOT covered here: conformance, conformance-k8s,"
+	@echo "envbuild-integration, helm-install-test, the Playwright ui-e2e, and"
+	@echo "screenshot freshness (ci.yml's screenshots-fresh job owns that — a local"
+	@echo "commit-timestamp test cannot be cleared once the PNGs re-render"
+	@echo "byte-identical) — confirm CI is green on the commit before tagging."
 
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."

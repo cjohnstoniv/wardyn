@@ -352,8 +352,9 @@ type KillRunResponse struct {
 	State types.RunState `json:"state"`
 }
 
-// KillRun initiates the kill sequence for a run: sandbox teardown, identity
-// revocation, credential revocation, then state transition to KILLED.
+// KillRun initiates the kill sequence for a run: durable state transition
+// (compare-and-swap to KILLED) first, then sandbox teardown, identity
+// revocation, and credential revocation.
 // Returns 202/Accepted with the final state on success.
 // Returns 404/APIError when the run does not exist.
 func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, error) {

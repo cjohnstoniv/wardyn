@@ -4,7 +4,7 @@ The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 `wardyn setup status` says what model access is still missing. Easiest first: a
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
-key), **record → replay confined** to onboard your own work, and the **AI
+key), **record, then replay confined** to onboard your own work, and the **AI
 Composer**.
 
 The Getting-started page detects this host's real capabilities — which confinement
@@ -201,16 +201,16 @@ opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 
 ### Model auth: three ways to give Claude Code its LLM access
 
-Wardyn credentials a Claude run one of three ways. Real precedence:
-host-staged subscription mount (host mode's resident `~/.claude`) > managed
-subscription > Bedrock > api-key — **except** that an `api_key` grant the
-run's policy already brokers for `api.anthropic.com` is treated as an
-explicit operator opt-in and suppresses the managed-subscription fallback:
-`wardyn subscription connect` fills in only for a run that has neither a
-resident mount nor that grant, it never silently overrides a run you gave
-its own key (`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`). All
-three keep the real credential out of the sandbox *except* the Bedrock
-access-key path (see below):
+Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
+subscription mount (host mode's resident `~/.claude`) > managed subscription >
+Bedrock > api-key — **except** that an `api_key` grant the run's policy
+already brokers for `api.anthropic.com` is treated as an explicit operator
+opt-in and suppresses the managed-subscription fallback: `wardyn subscription
+connect` fills in only for a run that has neither a resident mount nor that
+grant, it never silently overrides a run you gave its own key
+(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`). All three keep
+the real credential out of the sandbox *except* the Bedrock access-key path
+(see below):
 
 - **API key** (Level 2 above) — `wardyn secret set anthropic-api-key`. The proxy
   injects `x-api-key` at startup; **never resident**.

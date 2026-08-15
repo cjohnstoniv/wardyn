@@ -129,8 +129,9 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
   `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag push, cosign-signs each
   keylessly (Fulcio/Rekor via the Actions OIDC token — no long-lived signing
-  key to manage), and attaches a CycloneDX SBOM release asset (`make sbom`).
-  linux/amd64 only today.
+  key to manage), and publishes a CycloneDX SBOM (`make sbom`) as a
+  downloadable workflow artifact (deliberately not auto-attached to the
+  GitHub Release — attach it by hand if wanted). linux/amd64 only today.
 
 ## Planned
 
