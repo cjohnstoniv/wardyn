@@ -7,6 +7,8 @@ package docker
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -672,5 +674,35 @@ func TestHardenedHostConfig_NeverCarriesKataAnnotations(t *testing.T) {
 		if len(hc.Annotations) != 0 {
 			t.Errorf("runtime %q: HostConfig.Annotations = %v, want empty (Wardyn has no annotation pass-through)", rt, hc.Annotations)
 		}
+	}
+}
+
+// TestCC3_KataFloorIsInstallTimeOnly_DocumentedResidual pins two things
+// together: (1) pickRuntime grants CC3 to ANY registered kata*-prefixed
+// runtime on name alone, with no version probe — so a sub-v3.31.0 kata runtime
+// that reached the host by a path other than `wardyn setup vault` (a
+// pre-existing install, a manual downgrade, a golden image cut before the
+// floor shipped) still passes classToRuntime/pickRuntime and is advertised as
+// CC3 — and (2) THREAT-MODEL.md honestly discloses that gap under CC3's "What
+// it does not stop" instead of presenting the install floor as a property of
+// the tier itself (W4-S1-4). If a future version probe closes the code gap,
+// update both halves together rather than letting the doc go stale again.
+func TestCC3_KataFloorIsInstallTimeOnly_DocumentedResidual(t *testing.T) {
+	// (1) Code behavior: a kata runtime is accepted purely by name prefix.
+	info := infoWithRuntimes("kata-qemu")
+	rt, needs, err := classToRuntime(types.CC3, info)
+	if err != nil || !needs || rt != "kata-qemu" {
+		t.Fatalf("classToRuntime(CC3) with a bare kata-qemu runtime = (%q, %v, %v), want (\"kata-qemu\", true, nil) — no version is consulted", rt, needs, err)
+	}
+
+	// (2) Doc behavior: the residual must be disclosed, not silently assumed.
+	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "threatmodel", "THREAT-MODEL.md"))
+	if err != nil {
+		t.Fatalf("reading THREAT-MODEL.md: %v", err)
+	}
+	normalized := strings.Join(strings.Fields(string(doc)), " ")
+	const wantSubstr = "there is no running-daemon version probe"
+	if !strings.Contains(normalized, wantSubstr) {
+		t.Errorf("THREAT-MODEL.md CC3 section must disclose that the Kata version floor is install-time only (no running-daemon version probe); the doc still presents the floor as if it were a property of the tier")
 	}
 }

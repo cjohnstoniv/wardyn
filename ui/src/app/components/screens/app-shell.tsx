@@ -11,6 +11,7 @@ import {
   Cable,
   ChevronsUpDown,
   Fingerprint,
+  FlaskConical,
   FolderOpen,
   KeyRound,
   Lock,
@@ -123,6 +124,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
       { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+      { to: "/demos", label: "Demos", icon: FlaskConical },
     ],
   },
   {

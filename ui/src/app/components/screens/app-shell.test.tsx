@@ -188,7 +188,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -228,7 +228,7 @@ describe("SidebarNav (member role — B3)", () => {
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });

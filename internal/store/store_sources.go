@@ -335,6 +335,15 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // identity (kind, image, steps) — the identity index is the dedupe rule. The
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
+//
+// An identity hit also APPLIES b.Name (W7-S1-3): without this, re-POSTing an
+// existing identity through the Add dialog silently discarded whatever the
+// operator typed as the entry's name, and there was no other route (UI, API,
+// CLI, SDK) to rename a catalog row at all. Safe on the common no-rename call
+// too — image is itself part of the conflict key, so a caller that never
+// supplies a name (handleCreateBaseImage defaults it to lastPathSegment(image))
+// resolves to the SAME default on every call for that identity, an idempotent
+// no-op unless the caller actually typed a different name.
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -343,7 +352,8 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 	q := `
 		INSERT INTO base_images (` + baseImageCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb))) DO UPDATE SET updated_at = now()
+		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb)))
+		DO UPDATE SET name = EXCLUDED.name, updated_at = now()
 		RETURNING ` + baseImageCols
 	return scanBaseImage(s.Pool.QueryRow(ctx, q,
 		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt))

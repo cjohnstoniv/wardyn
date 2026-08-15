@@ -20,24 +20,41 @@ git, and satisfies neither §4 nor §6 (its `--selftest` checks only `sh`, `curl
 
 ### 1. No ENTRYPOINT
 
-The image must declare **no ENTRYPOINT**.  The Wardyn docker driver sets only
-the container *Cmd* to `["sleep", "infinity"]` at create time so the sandbox
-stays alive while the driver calls `Exec` to launch the agent process.  An
-ENTRYPOINT would wrap the driver-supplied Cmd (making it an argument to the
-entrypoint), and if that entrypoint exits it tears the sandbox down immediately.
+The image must declare **no ENTRYPOINT**.  The Wardyn drivers (docker and k8s)
+set only the container/pod *Cmd* at create time so the sandbox stays alive
+while the driver calls `Exec` to launch the agent process — for a
+NON-interactive run that Cmd is `sh -c "$AgentIdleScript"` (the MITM-CA install
+idle script, `internal/runner/sandbox.go`), and for an INTERACTIVE run it is
+`agent-run --idle` (mode 3 below).  Neither is literally `sleep infinity`; both
+share the same contract this section states.  An ENTRYPOINT would wrap the
+driver-supplied Cmd (making it an argument to the entrypoint), and if that
+entrypoint exits it tears the sandbox down immediately.
 
 ### 2. `/usr/local/bin/agent-run "<task>"`
 
 Every image ships an executable shell script at this path.  The driver (or an
-operator) calls it to run one task non-interactively:
+operator) calls it to run one task, in one of three modes:
 
 ```
-agent-run "<task text>"   # run one task; exit with the CLI's code
-agent-run --selftest      # verify binaries + env wiring; no API key needed
+agent-run "<task text>"   # mode 1: run one task; exit with the CLI's code
+agent-run --selftest      # mode 2: verify binaries + env wiring; no API key needed
+agent-run --idle          # mode 3: interactive runs only — see step 3
 ```
 
 `--selftest` is used by e2e validation to confirm the image contract before a
 live task is scheduled.
+
+**Mode 3, `--idle`, is REQUIRED, not optional.** Both drivers (`internal/
+runner/docker/driver.go`, `internal/runner/k8s/sandbox.go`) launch `agent-run
+--idle` as the ENTIRE main container/pod process for every INTERACTIVE run —
+never Exec'ing a task into it, unlike the non-interactive path in step 1. It
+must therefore hold the process open (prepare the workspace, then idle/exec
+into a long-running process) rather than exit: an image whose `agent-run`
+lacks this branch treats `--idle` as an unrecognized/missing task, exits
+immediately, and the run strands RUNNING with a dead main process and no
+attach target. `deploy/images/oracle/agent-run` is the minimal reference
+implementation of this branch (idle only — it skips the workspace prep the
+real harness images perform, since oracle brokers neither git nor a model).
 
 When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see
 `docs/CI.md`), `agent-run` runs the task as a plain shell command

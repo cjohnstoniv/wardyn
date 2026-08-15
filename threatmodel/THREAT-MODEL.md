@@ -931,6 +931,15 @@ multi-tenant deployment.
 **What it does not stop:**
 - A hypervisor 0-day / VM-escape (rare; hardware-virt boundary is historically
   the most stable boundary in the stack, but not absolute).
+- The Kata v3.31.0 install floor above is enforced install-time only, by
+  `wardyn setup vault`'s installer. Once a `kata*` runtime is registered with
+  the Docker daemon, `pickRuntime` grants CC3 to it on name alone — there is no
+  running-daemon version probe, so a `kata*` runtime that reached the host by
+  any OTHER path (a pre-existing install, a manual downgrade, a golden image
+  built before v3.31.0) is granted CC3 with the CVE-2026-44210/-47243 gap
+  still open. The floor is a property of how Vault was installed, not a
+  property of the tier itself; a version probe in the runtime-selection path
+  is the closing fix (tracked, not yet built).
 - Host eBPF is blind to in-guest syscalls. Wardyn's eBPF/Tetragon
   ground-truth audit stream **[shipped]** is a HOST sensor; for CC3/Kata
   workloads it cannot see inside the guest and `wardyn-tetragon-ingest` emits a

@@ -547,6 +547,52 @@ func TestPG_DeleteBaseImageInUse(t *testing.T) {
 	}
 }
 
+// TestPG_UpsertBaseImage_IdentityHitAppliesName pins W7-S1-3: re-upserting an
+// EXISTING catalog identity (kind, image, steps) with a NEW name must apply
+// it, not silently discard it — the only route (UI, API, CLI, SDK) to rename
+// a catalog row runs through this identity-hit path. Also pins the safety
+// property the fix leans on: image is itself part of the conflict key, so a
+// caller that never supplies a name (the API defaults to
+// lastPathSegment(image)) resolves to the SAME default on every call and is
+// an idempotent no-op, never an accidental rename.
+func TestPG_UpsertBaseImage_IdentityHitAppliesName(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+
+	first, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "original-name", Image: "ubuntu:24.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image (create): %v", err)
+	}
+
+	// Same identity (kind, image, steps), a DIFFERENT id and name — the Add
+	// dialog re-POST shape. Must return the SAME row, renamed.
+	renamed, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "renamed", Image: "ubuntu:24.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image (identity hit): %v", err)
+	}
+	if renamed.ID != first.ID {
+		t.Fatalf("identity hit returned a different row: got %s, want the original %s", renamed.ID, first.ID)
+	}
+	if renamed.Name != "renamed" {
+		t.Errorf("identity-hit Name = %q, want %q — the Add dialog's name must not be silently discarded", renamed.Name, "renamed")
+	}
+
+	// Confirm the write actually landed (not just the RETURNING row).
+	reread, err := s.GetBaseImage(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get base image: %v", err)
+	}
+	if reread.Name != "renamed" {
+		t.Errorf("reread Name = %q, want %q", reread.Name, "renamed")
+	}
+}
+
 // A genuinely-absent id must read as NotFound, not Conflict — the base-image
 // twin of TestPG_DeleteSourceUnknownIDIs404.
 func TestPG_DeleteBaseImageUnknownIDIs404(t *testing.T) {

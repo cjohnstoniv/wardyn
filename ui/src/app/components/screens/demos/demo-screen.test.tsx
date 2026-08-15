@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -38,10 +38,13 @@ vi.mock("../../../lib/api/audit", () => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
 }));
+const toastErrorMock = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(...a) } }));
 
 import { DemoScreen } from "./demo-screen";
 import { DEMOS } from "./demo-catalog";
 import { baseStatus } from "../setup/test-fixtures";
+import { HttpError } from "../../../lib/api/core";
 
 function renderScreen() {
   return render(
@@ -60,6 +63,48 @@ describe("DemoScreen", () => {
     getRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
     killRunMock.mockReset().mockResolvedValue(undefined);
     listAuditMock.mockReset().mockResolvedValue([]);
+    toastErrorMock.mockReset();
+  });
+
+  // W3-S1-5: a kill that LOSES the server's "state changed concurrently" race
+  // does not tear the sandbox down — the run is still live server-side. End
+  // demo must not treat that 409 like a clean stop: it must surface the
+  // failure and keep tracking the run (UI + localStorage), or the operator is
+  // told "ended" while a sandbox keeps running unattended.
+  it("a losing-race 409 on End demo keeps the run tracked and toasts an error, instead of orphaning it", async () => {
+    renderScreen();
+    const startBtn = (await screen.findAllByRole("button", { name: /start demo/i }))[0];
+    await user.click(startBtn);
+    await screen.findByTestId("attach-terminal");
+    expect(JSON.parse(localStorage.getItem("wardyn-demo-runs")!)).toEqual({ [DEMOS[0].id]: "demo-run-1" });
+
+    killRunMock.mockRejectedValueOnce(
+      new HttpError(409, "run state changed concurrently; not overwriting with KILLED"),
+    );
+    await user.click(screen.getByRole("button", { name: /end demo/i }));
+
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    // Still tracked: the terminal stays mounted and localStorage still holds
+    // the run, so a reload re-attaches instead of losing the only handle to it.
+    expect(screen.getByTestId("attach-terminal")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("wardyn-demo-runs")!)).toEqual({ [DEMOS[0].id]: "demo-run-1" });
+  });
+
+  // The OTHER 409 shape ("already terminal") means the run genuinely ended on
+  // its own — that race is benign and End demo must still clean up quietly,
+  // exactly as it did before this distinction existed.
+  it("an already-terminal 409 on End demo still forgets the run quietly (no toast)", async () => {
+    renderScreen();
+    const startBtn = (await screen.findAllByRole("button", { name: /start demo/i }))[0];
+    await user.click(startBtn);
+    await screen.findByTestId("attach-terminal");
+
+    killRunMock.mockRejectedValueOnce(new HttpError(409, "run is already terminal (state=FAILED); not re-killing"));
+    await user.click(screen.getByRole("button", { name: /end demo/i }));
+
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId("attach-terminal")).not.toBeInTheDocument());
+    expect(localStorage.getItem("wardyn-demo-runs")).toBeNull();
   });
 
   it("renders the four keyless demo cards, and hides the harness demo without a model", async () => {
