@@ -193,6 +193,26 @@ describe("AddIntegrationDialog — base form and save", () => {
     expect(putIntegrationMock).not.toHaveBeenCalled();
   });
 
+  // Bug report 2026-08-15: a managed subscription that is already CAPTURED exists
+  // only as a derived row projected from harness state — never listed in
+  // /integrations, so the existingRows collision check can't see it. Add stayed
+  // enabled, the PUT 409'd, and the raw server error was dumped. A captured
+  // harness credential must block Save the same as any other derived-row.
+  it("blocks Save for an already-captured managed subscription (harness-derived, not in existingRows)", async () => {
+    const user = userEvent.setup();
+    getSetupStatusMock.mockResolvedValue(baseStatus({ harness: [{ provider: "anthropic", captured: true }] }));
+    renderDialog(); // no existingRows — the derived row is knowable ONLY via harness state
+    await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "subscription");
+    await user.click(await screen.findByText("Claude subscription"));
+    // flavor panel, managed lane is the default — Continue to the base form
+    await screen.findByText(SUBSCRIPTION_LANE_META.managed.title);
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    expect(await screen.findByText(/Adopt to edit/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeDisabled();
+    expect(putIntegrationMock).not.toHaveBeenCalled();
+  });
+
   // ui-integrations-7: canSave used to check only name/hostList/isSubscription/
   // isBedrock — none of the per-kind required secret-name fields. Clearing a
   // prefilled required secret left Save clickable; the empty secret_name was

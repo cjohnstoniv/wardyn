@@ -650,10 +650,21 @@ function BaseForm({
   };
   const id = idForSave() ?? slugifyIntegrationId(name);
   const collision = existingRows.find((r) => r.id === id);
+  // A harness-backed flavor (managed subscription, Bedrock SSO) whose credential
+  // is already captured ALSO exists as a derived row the server refuses a PUT to —
+  // but that row is projected from harness state, never listed in /integrations, so
+  // the `collision` check above can't see it. The credential's lifecycle is the
+  // Log-in cell, not a PUT here. Treat a captured harness credential as the same
+  // derived-row block, so the operator gets the Adopt/refresh pointer instead of
+  // filling in the form and hitting a raw 409 on Save.
+  const harnessProvider =
+    isSubscription && !hostCli ? "anthropic" : isBedrock && (bedrockLane ?? "bearer") === "sso" ? "aws" : null;
+  const harnessDerived =
+    harnessProvider != null && !!status.harness?.find((h) => h.provider === harnessProvider && h.captured);
   // A PUT to an id that exists only as a DERIVATION now 409s server-side —
   // adoption is explicit, never a side effect of this dialog. Block Save
   // rather than let the operator hit that wall after filling in the form.
-  const blockedByDerived = !!collision && !collision.stored;
+  const blockedByDerived = (!!collision && !collision.stored) || harnessDerived;
 
   // Mirrors buildIntegrationWrite's own branching: the four lanes that ALWAYS
   // push a secret row regardless of whether the field is empty (bedrock
@@ -708,8 +719,9 @@ function BaseForm({
         </p>
         {blockedByDerived ? (
           <p className="text-[0.6875rem] leading-snug text-warning">
-            "{collision!.name}" already exists at this id, derived from your current setup — close this dialog and use "Adopt to
-            edit" on that row instead of adding it again.
+            {collision
+              ? `"${collision.name}" already exists at this id, derived from your current setup — close this dialog and use "Adopt to edit" on that row instead of adding it again.`
+              : `This is already connected — use "Log in again" above to refresh the credential. It exists as a derived row, so close this dialog and use "Adopt to edit" from the Integrations list to set its defaults, rather than adding it again.`}
           </p>
         ) : (
           collision && (
