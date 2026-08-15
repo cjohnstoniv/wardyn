@@ -200,10 +200,10 @@ describe("AddIntegrationDialog — base form and save", () => {
   // done in the pane never refreshes it — so a just-logged-in subscription
   // (status snapshot still empty) slipped through and 409'd. The block must fire
   // for the lane UNCONDITIONALLY, even with an empty harness in status.
-  it("blocks Save for a managed subscription even when status shows nothing captured (stale-snapshot / just-logged-in case)", async () => {
+  it("managed subscription shows an enabled Done (never Add) that closes the dialog without a PUT — even with nothing captured in status", async () => {
     const user = userEvent.setup();
     getSetupStatusMock.mockResolvedValue(baseStatus()); // no captured harness — the exact stale-status bug
-    renderDialog();
+    const { onOpenChange, onSaved } = renderDialog();
     await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "subscription");
     await user.click(await screen.findByText("Claude subscription"));
     // flavor panel, managed lane is the default — Continue to the base form
@@ -211,7 +211,14 @@ describe("AddIntegrationDialog — base form and save", () => {
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     expect(await screen.findByText(/logging in above/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /add integration/i })).toBeDisabled();
+    // No Add button at all on a derived lane — the primary action is an enabled Done
+    expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
+    const done = screen.getByRole("button", { name: /^done$/i });
+    expect(done).toBeEnabled();
+    await user.click(done);
+    // Done closes + reloads the list (finish) with no doomed PUT and no "Saved" step
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onSaved).toHaveBeenCalled();
     expect(putIntegrationMock).not.toHaveBeenCalled();
   });
 

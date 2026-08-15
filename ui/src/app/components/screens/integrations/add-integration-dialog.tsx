@@ -281,6 +281,7 @@ export function AddIntegrationDialog({
             existingRows={existingRows}
             onBack={() => (step.type.apiType === "anthropic_subscription" || step.type.apiType === "bedrock" ? setStep({ s: "flavor", type: step.type }) : setStep({ s: "pick" }))}
             onSaved={(id, name) => setStep({ s: "done", id, name })}
+            onFinish={finish}
           />
         </DialogContent>
       </Dialog>
@@ -582,6 +583,7 @@ function BaseForm({
   existingRows,
   onBack,
   onSaved,
+  onFinish,
 }: {
   type: IntegrationTypeMeta;
   hostCli?: boolean;
@@ -591,6 +593,9 @@ function BaseForm({
   existingRows: ExistingIntegrationRef[];
   onBack: () => void;
   onSaved: (id: string, name: string) => void;
+  /** Close + reload directly, skipping the "Saved" step — the derived-lane Done
+   *  (nothing was stored, so "is stored" copy and the probe Test don't apply). */
+  onFinish: () => void;
 }) {
   const isSubscription = type.apiType === "anthropic_subscription";
   const isBedrock = type.apiType === "bedrock";
@@ -727,7 +732,7 @@ function BaseForm({
           <p className="text-[0.6875rem] leading-snug text-warning">
             {collision
               ? `"${collision.name}" already exists at this id, derived from your current setup — close this dialog and use "Adopt to edit" on that row instead of adding it again.`
-              : `Connect this by logging in above — Wardyn derives the integration from your login, it is never added here. Once you've logged in, just close this dialog; set its defaults later with "Adopt to edit" in the Integrations list.`}
+              : `Connect this by logging in above — Wardyn derives the integration from your login, there is nothing separate to add. Log in, hit Done, and set its defaults later with "Adopt to edit" in the Integrations list.`}
           </p>
         ) : (
           collision && (
@@ -856,9 +861,19 @@ function BaseForm({
         <Button variant="outline" onClick={onBack} disabled={saving}>
           Back
         </Button>
-        <Button onClick={() => void save()} disabled={saving || !canSave}>
-          {saving ? "Adding…" : "Add integration"}
-        </Button>
+        {derivedOnlyLane ? (
+          // Nothing to Add on a derived lane — the login above IS the connection.
+          // A disabled Add here after a successful login is a dead end (the
+          // reported bug); Done completes the flow and reloads the list so the
+          // derived row (and its Adopt action) is right there. Straight to
+          // finish — the "Saved" step's copy ("is stored") and probe Test don't
+          // apply to a derived row.
+          <Button onClick={onFinish}>Done</Button>
+        ) : (
+          <Button onClick={() => void save()} disabled={saving || !canSave}>
+            {saving ? "Adding…" : "Add integration"}
+          </Button>
+        )}
       </DialogFooter>
 
       <AddSecretDialog
