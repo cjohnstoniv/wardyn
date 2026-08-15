@@ -499,7 +499,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	return runner.Sandbox{
-		Ref:           agentResp.ID,
+		// The deterministic name, not agentResp.ID: Docker's API accepts either
+		// for every call this driver makes on Ref (name and ID are
+		// interchangeable path params), but teardown's not-found fallback
+		// (runIDFromAgentName) can only recover a run id from THIS form — a raw
+		// daemon-assigned ID carries no run id at all, so that fallback silently
+		// no-op'd for every exec-capable (runc/gVisor) runtime — the common
+		// case — leaking the proxy sidecar + per-run network whenever the agent
+		// container was already gone at teardown (W15-W15c-terminal-lifecycle-2).
+		Ref:           agentContainerName(spec.RunID),
 		Driver:        driverName,
 		EnforcedClass: enforced,
 	}, nil
@@ -1016,11 +1024,13 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		// id stayed uuid.Nil and this used to report success without EVER
 		// trying to resolve the run id, leaking the sibling proxy sidecar
 		// (still holding the run's credentials) and the per-run network.
-		// agentRef itself IS the deterministic agent name for the exec-less
-		// (krun) substrate (agentContainerName(runID) — see Exec), so try it
-		// before giving up; an exec-based ref (a raw container ID) simply
-		// fails this parse and falls through to the prior idempotent-success
-		// behavior unchanged.
+		// agentRef itself IS the deterministic agent name on BOTH substrates
+		// now — the exec-less (krun) path always used it (see Exec), and
+		// CreateSandbox's exec-based (runc/gVisor) return now names it too
+		// instead of the daemon's opaque agentResp.ID — so try it before
+		// giving up; a ref this parse still can't recognize (e.g. an older
+		// persisted ref from before this fix) falls through to the prior
+		// idempotent-success behavior unchanged.
 		if nid, nerr := runIDFromAgentName(agentRef); nerr == nil {
 			id = nid
 		} else {

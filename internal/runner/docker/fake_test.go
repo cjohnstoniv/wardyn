@@ -78,6 +78,12 @@ type fakeDocker struct {
 	failCreateContainer string   // name prefix that should fail on create
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
 	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
+	// createIDOverride, when set, is returned as ContainerCreate's ID instead of
+	// echoing Name — a real daemon's ID is an opaque hash unrelated to the name
+	// (this fake's default "id == name" is a simplification real Docker does not
+	// share). The container stays looked-up-able under BOTH keys, matching a
+	// real daemon accepting either as the "{id}" path param.
+	createIDOverride string
 	// onCreate, when set, runs INSIDE ContainerCreate (before the container is
 	// recorded) so a test can interleave another driver call with an in-flight
 	// create. Called without f.mu held.
@@ -197,16 +203,22 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
-	f.containers[name] = &createdContainer{
+	c := &createdContainer{
 		name:  name,
 		cfg:   opts.Config,
 		host:  opts.HostConfig,
 		net:   opts.NetworkingConfig,
 		state: &container.State{Status: "created"},
 	}
+	f.containers[name] = c
+	id := name
+	if f.createIDOverride != "" {
+		id = f.createIDOverride
+		f.containers[id] = c // alias: a real daemon accepts either as the "{id}" path param
+	}
 	// createWarnings simulates a daemon that discarded a requested limit (e.g. a
 	// cgroup-v1-rootless host) — surfaced in the create response like real Moby.
-	return client.ContainerCreateResult{ID: name, Warnings: f.createWarnings}, nil
+	return client.ContainerCreateResult{ID: id, Warnings: f.createWarnings}, nil
 }
 
 func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

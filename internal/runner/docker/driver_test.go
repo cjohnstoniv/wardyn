@@ -424,46 +424,93 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 // err==nil branch never runs at all — teardown used to report success
 // without ever trying to resolve the run id, leaking the sibling proxy
 // sidecar (still holding the run's credentials) and the per-run network.
-// The exec-less (krun/CC3) ref IS the deterministic agent name
-// (agentContainerName(runID)), so teardown must recover the run id from the
-// ref itself and still sweep the proxy + network.
+// Ref must recover via runIDFromAgentName(ref) on BOTH substrates:
+//   - krun (exec-less/CC3): ref was already the deterministic agent name
+//     (agentContainerName(runID)) even before this fix.
+//   - runc/gVisor (exec-based, the DEFAULT/common substrate): CreateSandbox
+//     used to return the daemon's own opaque agentResp.ID as Ref instead —
+//     unrelated to the run id — so this fallback silently no-op'd for every
+//     ordinary run. createIDOverride makes the fake hand back an ID that
+//     actually diverges from the name (fakeDocker's default id==name
+//     simplification would otherwise mask this exact regression).
 func TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork(t *testing.T) {
+	cases := []struct {
+		name     string
+		runtime  string
+		cc       types.ConfinementClass
+		daemonID string // non-empty => fake hands back an opaque ID, distinct from the deterministic name, like a real daemon does
+	}{
+		{name: "krun (exec-less)", runtime: "krun", cc: types.CC3},
+		{name: "runc (exec-based, default)", runtime: "", cc: types.CC1, daemonID: "sha256:realdaemonopaqueid0123456789abcdef"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			if tc.runtime != "" {
+				f.info = infoWithRuntimes(tc.runtime)
+			}
+			f.createIDOverride = tc.daemonID
+			f.images["busybox:latest"] = true
+			d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", Record: true})
+
+			spec := testSpec()
+			spec.ConfinementClass = tc.cc
+			ctx := context.Background()
+
+			sb, err := d.CreateSandbox(ctx, spec)
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			if tc.runtime == "krun" {
+				// Exec-less: the container isn't created until Exec runs.
+				if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
+					t.Fatalf("Exec (main process): %v", err)
+				}
+			}
+			runID := spec.RunID
+			if _, ok := f.containers[proxyContainerName(runID)]; !ok {
+				t.Fatal("proxy sidecar must exist before teardown")
+			}
+			if _, ok := f.networks[internalNetName(runID)]; !ok {
+				t.Fatal("per-run network must exist before teardown")
+			}
+
+			// The agent container is ALREADY GONE — ContainerInspect(sb.Ref) 404s,
+			// exactly like a host-level crash/OOM-kill outside teardown's control.
+			f.containers[sb.Ref].removed = true
+
+			if err := d.teardown(ctx, sb.Ref); err != nil {
+				t.Fatalf("teardown must recover the run id from the ref itself, got %v", err)
+			}
+			if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+				t.Errorf("proxy sidecar must be torn down (removed=%v) — it must not be orphaned", p != nil && p.removed)
+			}
+			if _, ok := f.networks[internalNetName(runID)]; ok {
+				t.Error("per-run network must be removed — it must not be orphaned")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_RefIsDeterministicNameNotDaemonID is a narrower, more
+// direct lock on the same defect: assert the STRUCTURAL property teardown's
+// fallback depends on — Ref must literally be agentContainerName(spec.RunID)
+// — for the default (exec-based) runtime, independent of whatever teardown
+// itself does with it.
+func TestCreateSandbox_RefIsDeterministicNameNotDaemonID(t *testing.T) {
 	f := newFakeDocker()
-	f.info = infoWithRuntimes("krun") // CC3 via krun: ref == agentContainerName(runID)
+	f.createIDOverride = "sha256:realdaemonopaqueid0123456789abcdef"
 	f.images["busybox:latest"] = true
-	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", Record: true})
+	d := newTestDriver(f)
 
 	spec := testSpec()
-	spec.ConfinementClass = types.CC3
-	ctx := context.Background()
-
-	sb, err := d.CreateSandbox(ctx, spec)
+	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
-		t.Fatalf("Exec (main process): %v", err)
-	}
-	runID := spec.RunID
-	if _, ok := f.containers[proxyContainerName(runID)]; !ok {
-		t.Fatal("proxy sidecar must exist before teardown")
-	}
-	if _, ok := f.networks[internalNetName(runID)]; !ok {
-		t.Fatal("per-run network must exist before teardown")
-	}
-
-	// The agent container is ALREADY GONE — ContainerInspect(sb.Ref) 404s,
-	// exactly like a host-level crash/OOM-kill outside teardown's control.
-	f.containers[sb.Ref].removed = true
-
-	if err := d.teardown(ctx, sb.Ref); err != nil {
-		t.Fatalf("teardown must recover the run id from the ref itself, got %v", err)
-	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
-		t.Errorf("proxy sidecar must be torn down (removed=%v) — it must not be orphaned", p != nil && p.removed)
-	}
-	if _, ok := f.networks[internalNetName(runID)]; ok {
-		t.Error("per-run network must be removed — it must not be orphaned")
+	want := agentContainerName(spec.RunID)
+	if sb.Ref != want {
+		t.Fatalf("Ref = %q, want the deterministic agent name %q — teardown's not-found fallback (runIDFromAgentName) can only recover a run id from this form", sb.Ref, want)
 	}
 }
 
