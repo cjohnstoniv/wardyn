@@ -218,10 +218,10 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 // only k8s swaps to the Helm-shaped fix.
 func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	cases := []struct {
-		name         string
-		driver       string
-		wantWardyn   bool // fix names the `wardyn setup wall/vault` docker command
-		wantHelm     bool // fix names k8s.runtimeClasses via helm upgrade --set
+		name       string
+		driver     string
+		wantWardyn bool // fix names the `wardyn setup wall/vault` docker command
+		wantHelm   bool // fix names k8s.runtimeClasses via helm upgrade --set
 	}{
 		{"docker driver: the host-side `wardyn setup` command", "docker", true, false},
 		{"k8s driver: the Helm RuntimeClass pin, never the docker command", "k8s", false, true},

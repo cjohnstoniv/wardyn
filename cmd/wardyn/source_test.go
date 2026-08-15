@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
+	"github.com/google/uuid"
 )
 
 // W6-S1-6: --kind and --locator are cobra-required, so a missing one fails

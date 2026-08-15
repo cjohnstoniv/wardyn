@@ -36,9 +36,9 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		for _, directive := range []string{
 			"default-src 'self'",
 			"frame-ancestors 'none'",
-			"font-src 'self' data:",                  // console webfont is a data: URI
-			"connect-src 'self' ws: wss:",            // PTY attach WebSocket
-			"script-src 'self' 'wasm-unsafe-eval'",   // recording replay player instantiates WASM
+			"font-src 'self' data:",                // console webfont is a data: URI
+			"connect-src 'self' ws: wss:",          // PTY attach WebSocket
+			"script-src 'self' 'wasm-unsafe-eval'", // recording replay player instantiates WASM
 		} {
 			if !strings.Contains(csp, directive) {
 				t.Errorf("%s: CSP %q missing %q", path, csp, directive)
