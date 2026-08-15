@@ -763,6 +763,27 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		d.mu.Unlock()
 		return fmt.Errorf("docker: create main-process agent: %w", err)
 	}
+	// Same fail-closed cap-enforcement gate the exec-based path applies at
+	// driver.go:517 — the exec-less container IS the agent (its main process is
+	// the untrusted workload), so it needs the identical guard before ContainerStart.
+	// Applied here rather than after Exec returns because the create-response
+	// Warnings this reads only exist right after ContainerCreate.
+	if capErr := verifyCapsEnforced(created.Warnings); capErr != nil {
+		if d.cfg.AllowUnenforceableCaps {
+			slog.Warn("wardynd: the daemon discarded a resource limit — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
+				slog.String("detail", capErr.Error()))
+		} else {
+			d.mu.Lock()
+			delete(d.creating, ref)
+			d.mu.Unlock()
+			rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+			defer cancel()
+			if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+				return fmt.Errorf("docker: main-process agent failed the cap check and could not be removed: %w (cap error: %v)", rerr, capErr)
+			}
+			return capErr
+		}
+	}
 	_, startErr := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{})
 	// The container now exists on the daemon, so re-check the claim: a teardown
 	// that ran during the create found NO container to remove and reported
