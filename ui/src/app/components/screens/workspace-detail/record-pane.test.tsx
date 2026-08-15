@@ -373,8 +373,15 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(within(panel).getByText("evil.example.com")).toBeInTheDocument();
     expect(within(panel).queryByText("other.com")).not.toBeInTheDocument();
 
+    // Deny is a two-step confirm (LiveApprovals, W20-W20-hold-fsm-6: it
+    // permanently poisons the host, so a click opens a confirm dialog rather
+    // than calling the API directly — see live-approvals.test.tsx's own
+    // "Deny opens a confirm dialog" pin) — click the row's Deny, then the
+    // dialog's own Deny action.
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(within(panel).getByRole("button", { name: /deny/i }));
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^deny$/i }));
     expect(denyMock).toHaveBeenCalledWith("apr1", expect.any(String));
   });
 

@@ -74,7 +74,7 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator } from "../wardyn/operator-context";
+import { useOperator, usePrincipal } from "../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
 import { cn } from "../ui/utils";
 import { ConnectSSHCard } from "./run-detail-ssh";
@@ -380,6 +380,16 @@ export function SummaryHeader({
   onKill: () => void;
 }) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
+  // W25-1: claim "attachable" only under the SAME owner-or-admin predicate
+  // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
+  // && !owned`) — otherwise a member sees this chip promise attachability and
+  // then gets a red "requires the operator role" error the instant they open
+  // the terminal below it (OverviewTab renders <AttachTerminal> whenever
+  // `attachable`).
+  const operator = useOperator();
+  const principal = usePrincipal();
+  const owned = !!run.created_by && run.created_by === principal;
+  const canAttach = operator || owned;
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-start gap-4">
@@ -407,7 +417,7 @@ export function SummaryHeader({
             {run.interactive && (
               <Chip tone="info" className="gap-1">
                 <TerminalSquare className="size-3" />
-                {run.state === "RUNNING" ? "Interactive — attachable" : "Interactive"}
+                {run.state === "RUNNING" && canAttach ? "Interactive — attachable" : "Interactive"}
               </Chip>
             )}
           </div>
