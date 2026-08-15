@@ -175,8 +175,11 @@ export function SecretsScreen() {
                 : `Add an API key or access token so runs can reference it by name. ${OPERATOR_ONLY_REASON}`
             }
             action={
+              // ui-secretsPolicies-4: this screen stores any credential, not
+              // just LLM keys — match the header button's "Add secret" copy
+              // instead of narrowing a first-time operator's mental model.
               <Button onClick={() => setAddOpen(true)} disabled={!operator}>
-                <Plus className="size-4" /> Add your first LLM key
+                <Plus className="size-4" /> Add your first secret
               </Button>
             }
           />
@@ -474,6 +477,7 @@ export function AddSecretDialog({
           <Field
             label="Name"
             htmlFor="secret-name"
+            required
             hint={lockName ? lockedNameHint(resolvedLane, !!host) : undefined}
           >
             {/* Suggestions only on a BLANK-name open (a fresh "Add secret", not a
@@ -496,11 +500,13 @@ export function AddSecretDialog({
               autoComplete="off"
               readOnly={lockName}
               aria-readonly={lockName}
+              required
             />
           </Field>
           <Field
             label="Value"
             htmlFor="secret-value"
+            required
             // Locked mode's DialogDescription already states the write-only fact
             // above — repeating "never displayed again" here would say it twice.
             hint={lockName ? undefined : "This field is cleared on save and the value is never displayed again."}
@@ -514,6 +520,7 @@ export function AddSecretDialog({
               spellCheck={false}
               autoComplete="off"
               className="font-mono text-xs"
+              required
             />
           </Field>
           {/* MEDIUM fix: warn when the name already exists so the operator
@@ -527,8 +534,16 @@ export function AddSecretDialog({
               </span>
             </div>
           )}
+          {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
+              plus wiring into the Save button's aria-describedby below —
+              this fires on every rejected save, a far more common path than
+              the operator-reason paragraph, but was previously visual-only. */}
           {error && (
-            <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">
+            <div
+              id="add-secret-error"
+              role="alert"
+              className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"
+            >
               {error}
             </div>
           )}
@@ -546,7 +561,11 @@ export function AddSecretDialog({
           <Button
             onClick={save}
             disabled={!operator || saving || !name.trim() || !value}
-            aria-describedby={operator ? undefined : "add-secret-operator-reason"}
+            aria-describedby={
+              [error ? "add-secret-error" : undefined, !operator ? "add-secret-operator-reason" : undefined]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
             variant={isOverwrite && confirmOverwrite ? "destructive" : "info"}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}

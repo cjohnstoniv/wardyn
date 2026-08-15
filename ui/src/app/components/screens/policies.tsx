@@ -25,7 +25,6 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 import {
   Table,
@@ -57,6 +56,7 @@ import {
   SheetTitle,
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
+import { Field } from "./new-run/step-shell";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -158,20 +158,26 @@ export function PoliciesScreen() {
         its exact settings aren't exposed by this API, so they aren't shown here.
       </p>
 
-      <div className="mb-4 flex items-center gap-3">
-        <Input
-          placeholder="Search policies by name or id…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="max-w-sm"
-        />
-        <span className="ml-auto text-sm text-muted-foreground">
-          {status === "ready" && `${filtered.length} polic${filtered.length === 1 ? "y" : "ies"}`}
-        </span>
-        <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
-          <RotateCw className="size-4" />
-        </Button>
-      </div>
+      {/* ui-secretsPolicies-5: gated the same way secrets.tsx/workspaces.tsx
+          gate their own toolbar — loading and error both fall through to
+          this being absent, so an error state shows ONLY ErrorState's own
+          Retry, not a second, non-functional Refresh floating above it. */}
+      {status === "ready" && policies.length > 0 && (
+        <div className="mb-4 flex items-center gap-3">
+          <Input
+            placeholder="Search policies by name or id…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="max-w-sm"
+          />
+          <span className="ml-auto text-sm text-muted-foreground">
+            {filtered.length} of {policies.length} polic{policies.length === 1 ? "y" : "ies"}
+          </span>
+          <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
+            <RotateCw className="size-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Past the cap the count and search above cover only the fetched window. */}
       <TruncatedNote count={policies.length} cap={LIST_LIMIT} />
@@ -224,7 +230,13 @@ export function PoliciesScreen() {
                 return (
                   <TableRow
                     key={p.id}
-                    role="button"
+                    // ui-secretsPolicies-1: no role="button" override — a <tr>
+                    // inside a real <table> already carries the implicit "row"
+                    // role, which getByRole("row", …)/screen-reader table
+                    // navigation depends on (see workspaces.tsx's own row for
+                    // the same rule). tabIndex + the Enter/Space handler below
+                    // is enough to make the row a real keyboard target without
+                    // giving up its row semantics.
                     tabIndex={0}
                     onClick={() => setSelected(p.id)}
                     onKeyDown={(e) => {
@@ -373,10 +385,10 @@ function PolicyDetail({
         {policy && (
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <Field label="Policy ID" value={<Mono>{policy.id}</Mono>} />
-              <Field label="Barrier" value={<ConfinementChip value={policy.spec.min_confinement_class} />} />
-              <Field label="Created" value={relativeTime(policy.created_at)} />
-              <Field label="Updated" value={relativeTime(policy.updated_at)} />
+              <DetailField label="Policy ID" value={<Mono>{policy.id}</Mono>} />
+              <DetailField label="Barrier" value={<ConfinementChip value={policy.spec.min_confinement_class} />} />
+              <DetailField label="Created" value={relativeTime(policy.created_at)} />
+              <DetailField label="Updated" value={relativeTime(policy.updated_at)} />
             </div>
 
             {/* Policy bodies as humane rows (C7) — the same CAN/CAN'T projection
@@ -396,7 +408,7 @@ function PolicyDetail({
             )}
 
             {(policy.spec.allowed_methods?.length ?? 0) > 0 && (
-              <Field
+              <DetailField
                 label="Allowed methods"
                 value={<Mono>{policy.spec.allowed_methods!.join(", ")}</Mono>}
               />
@@ -424,7 +436,7 @@ function PolicyDetail({
   );
 }
 
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</div>
@@ -510,17 +522,19 @@ function PolicyEditor({
         </DialogHeader>
 
         <div className="space-y-4 py-1">
-          <div className="space-y-2">
-            <Label htmlFor="policy-name">Name</Label>
+          {/* ui-secretsPolicies-3: required Name/Spec, marked via the shared
+              Field's asterisk convention (same as secrets.tsx's AddSecretDialog)
+              instead of a bare Label + Input with no requirement signal. */}
+          <Field label="Name" htmlFor="policy-name" required>
             <Input
               id="policy-name"
               placeholder="payments-strict"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              required
             />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="policy-spec">Spec (JSON)</Label>
+          </Field>
+          <Field label="Spec (JSON)" htmlFor="policy-spec" required>
             <Textarea
               id="policy-spec"
               value={specText}
@@ -528,6 +542,7 @@ function PolicyEditor({
               rows={16}
               spellCheck={false}
               className="font-mono text-xs"
+              required
             />
             <p className="text-[0.6875rem] leading-snug text-muted-foreground">
               Requires <span className="font-mono">min_confinement_class</span> (CC1|CC2|CC3 = the
@@ -535,9 +550,16 @@ function PolicyEditor({
               <span className="font-mono"> allowed_domains</span>, <span className="font-mono">denied_domains</span>,
               <span className="font-mono"> first_use_approval</span>, <span className="font-mono">eligible_grants</span>.
             </p>
-          </div>
+          </Field>
+          {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
+              plus wiring into the Save button's aria-describedby below — a
+              rejected save previously only ever showed visually. */}
           {error && (
-            <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">
+            <div
+              id="policy-editor-error"
+              role="alert"
+              className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"
+            >
               {error}
             </div>
           )}
@@ -555,7 +577,11 @@ function PolicyEditor({
           <Button
             onClick={save}
             disabled={!operator || saving || !name.trim()}
-            aria-describedby={operator ? undefined : "policy-editor-operator-reason"}
+            aria-describedby={
+              [error ? "policy-editor-error" : undefined, !operator ? "policy-editor-operator-reason" : undefined]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
             {isEdit ? "Save changes" : "Create policy"}
