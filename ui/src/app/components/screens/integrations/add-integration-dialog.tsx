@@ -657,14 +657,20 @@ function BaseForm({
   // Log-in cell, not a PUT here. Treat a captured harness credential as the same
   // derived-row block, so the operator gets the Adopt/refresh pointer instead of
   // filling in the form and hitting a raw 409 on Save.
-  const harnessProvider =
-    isSubscription && !hostCli ? "anthropic" : isBedrock && (bedrockLane ?? "bearer") === "sso" ? "aws" : null;
-  const harnessDerived =
-    harnessProvider != null && !!status.harness?.find((h) => h.provider === harnessProvider && h.captured);
+  // A subscription (managed OR resident-host CLI) and a Bedrock-SSO row are
+  // structurally DERIVED, never stored: you connect them by logging in via the
+  // pane above and configure them with "Adopt to edit" — there is no valid PUT
+  // here (the server 409s "exists only as a derived row"). Block UNCONDITIONALLY,
+  // NOT gated on a captured harness in `status`: this dialog reads status once on
+  // open and a login done in the pane below never refreshes it, so gating on the
+  // captured flag missed exactly the just-logged-in case (the reported bug —
+  // "Subscription captured" shows from the pane's own local state while the
+  // dialog's status snapshot still says nothing is connected).
+  const derivedOnlyLane = isSubscription || (isBedrock && (bedrockLane ?? "bearer") === "sso");
   // A PUT to an id that exists only as a DERIVATION now 409s server-side —
   // adoption is explicit, never a side effect of this dialog. Block Save
   // rather than let the operator hit that wall after filling in the form.
-  const blockedByDerived = (!!collision && !collision.stored) || harnessDerived;
+  const blockedByDerived = (!!collision && !collision.stored) || derivedOnlyLane;
 
   // Mirrors buildIntegrationWrite's own branching: the four lanes that ALWAYS
   // push a secret row regardless of whether the field is empty (bedrock
@@ -721,7 +727,7 @@ function BaseForm({
           <p className="text-[0.6875rem] leading-snug text-warning">
             {collision
               ? `"${collision.name}" already exists at this id, derived from your current setup — close this dialog and use "Adopt to edit" on that row instead of adding it again.`
-              : `This is already connected — use "Log in again" above to refresh the credential. It exists as a derived row, so close this dialog and use "Adopt to edit" from the Integrations list to set its defaults, rather than adding it again.`}
+              : `Connect this by logging in above — Wardyn derives the integration from your login, it is never added here. Once you've logged in, just close this dialog; set its defaults later with "Adopt to edit" in the Integrations list.`}
           </p>
         ) : (
           collision && (

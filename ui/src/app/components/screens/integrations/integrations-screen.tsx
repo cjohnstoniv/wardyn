@@ -120,10 +120,16 @@ export function IntegrationsScreen({
   // provider is actually captured, so the resident-host CLI lane and stored rows
   // still take the normal delete path).
   const harnessProviderForDelete = (row: GenericIntegrationRow): string | undefined => {
-    if (row.wire.source === "stored") return undefined;
-    const provider =
-      row.wire.id === "anthropic_subscription:managed" ? "anthropic" : row.wire.kind === "bedrock" ? "aws" : undefined;
-    return provider && status.harness?.some((h) => h.provider === provider && h.captured) ? provider : undefined;
+    if (row.wire.source === "stored") return undefined; // stored rows delete normally
+    // A non-stored row is shown BECAUSE the server derived it — a managed
+    // subscription / Bedrock-SSO row is derived from a captured harness login, so
+    // deleting it must disconnect that login (its real source), else it re-derives
+    // on reload. (resident-host CLI is host-detected, not a Wardyn-captured
+    // credential — its id is :resident_host, excluded here, so it keeps the normal
+    // path and never disconnects the managed login.)
+    if (row.wire.id === "anthropic_subscription:managed") return "anthropic";
+    if (row.wire.kind === "bedrock") return "aws";
+    return undefined;
   };
   const toDeleteHarnessProvider = toDelete ? harnessProviderForDelete(toDelete) : undefined;
 

@@ -266,9 +266,9 @@ describe("IntegrationsScreen — deleting a harness-derived subscription disconn
     removeIntegrationMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("routes a captured managed-subscription delete to harnessDisconnect, not a doomed row delete", async () => {
+  it("routes a managed-subscription delete to harnessDisconnect (by the row's derived nature, not a stale captured flag)", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    getSetupStatusMock.mockResolvedValue(baseStatus({ harness: [{ provider: "anthropic", captured: true }] }));
+    getSetupStatusMock.mockResolvedValue(baseStatus()); // no captured flag in status — the row's non-stored derived nature is what matters
     const managed: WireIntegration = {
       id: "anthropic_subscription:managed",
       name: "Claude subscription (managed)",
