@@ -62,7 +62,14 @@ export function DeleteInUseDialog<T extends { id: string; name: string }>({
       onDeleted();
       onOpenChange(false);
     } catch (e) {
-      if (!force && e instanceof HttpError && e.status === 409) {
+      // A forced (detach-everywhere) attempt can 409 too — deterministically,
+      // when detaching would leave some workspace with zero attachments
+      // (STORE-1) — so this can't be gated on `!force`: without that, the
+      // second failure fell into the generic toast while the dialog kept
+      // showing the FIRST attempt's (now stale) detail and its "Detach
+      // everywhere & delete" button, silently re-offering an action that
+      // deterministically fails again.
+      if (e instanceof HttpError && e.status === 409) {
         setInUseDetail(getErrorMessage(e));
       } else {
         toast.error(`Failed to delete ${errorNoun}`, { description: getErrorMessage(e) });

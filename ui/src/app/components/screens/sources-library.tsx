@@ -15,7 +15,7 @@ import { FolderGit2, FolderOpen, Loader2, MoreHorizontal, Plus, RotateCw, Trash2
 import { toast } from "sonner";
 import { sourcesApi } from "../../lib/api/sources";
 import { getErrorMessage } from "../../lib/format";
-import { statusTone, statusWord } from "../../lib/workspace-status";
+import { isUsable, statusTone, statusWord } from "../../lib/workspace-status";
 import { usePoll } from "../../lib/use-poll";
 import type { Source, Workspace } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -38,7 +38,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Mono } from "../wardyn/code-block";
-import { Chip } from "../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
@@ -61,7 +61,7 @@ export function sourceUsage(workspaces: Workspace[]): Map<string, number> {
 // "2 required · 1 optional" — the source's OWN contract at a glance.
 export function contractSummary(src: Source): string {
   const rows = Object.values(src.requirements ?? {});
-  if (rows.length === 0) return "No contract yet";
+  if (rows.length === 0) return isUsable(src.status) ? "No requirements" : "No contract yet";
   const required = rows.filter((r) => r.level === "required").length;
   const optional = rows.length - required;
   const parts: string[] = [];
@@ -358,6 +358,7 @@ export function SourcesLibrary({
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem disabled={!operator || scanning !== null} onClick={() => void scan(src)}>
                             <RotateCw className="size-3.5" /> Scan
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             disabled={!operator}
@@ -365,6 +366,7 @@ export function SourcesLibrary({
                             className="text-danger focus:text-danger"
                           >
                             <Trash2 className="size-3.5" /> Delete
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -390,7 +392,7 @@ export function SourcesLibrary({
         onOpenChange={(o) => !o && setToDelete(null)}
         onDeleted={load}
         description="Removes the library entry and its contract. Workspaces attaching it keep their own overlays; the shared configuration is what goes."
-        inUseHint="Detaching un-mounts this source from those workspaces — their next runs succeed without it, using whatever sources remain."
+        inUseHint="Detaching un-mounts this source from those workspaces, unless doing so would leave one with no sources left to run — that detach is refused instead."
         onDelete={(src, force) => sourcesApi.deleteSource(src.id, force)}
         removedFrom="the library"
         errorNoun="source"
