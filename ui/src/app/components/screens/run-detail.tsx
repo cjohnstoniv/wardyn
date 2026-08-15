@@ -265,7 +265,7 @@ export function RunDetailScreen() {
           <EmptyState
             icon={ScrollText}
             title="Run not found"
-            description="This run may have been archived or deleted, or the link is stale."
+            description="This run may have been archived or deleted, the link is stale, or you don't have access to it."
             action={
               <Button variant="outline" onClick={() => navigate("/runs")}>
                 Back to Runs
