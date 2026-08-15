@@ -69,7 +69,7 @@ func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
 // TestExecLess_FailsClosedOnUnenforceableCaps is the exec-less (krun/CC3)
 // counterpart of TestCreateSandbox_FailsClosedOnUnenforceableCaps: the
 // exec-based path checks verifyCapsEnforced right after ContainerCreate
-// (driver.go:517), but the exec-less path defers ContainerCreate+Start to
+// (in CreateSandbox), but the exec-less path defers ContainerCreate+Start to
 // runAsMainProcess (invoked from Exec) — which used to skip the check
 // entirely and start the untrusted workload uncapped. Locks in that
 // runAsMainProcess applies the identical fail-closed gate (and honors the

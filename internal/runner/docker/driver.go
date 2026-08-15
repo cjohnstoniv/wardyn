@@ -762,9 +762,10 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		d.mu.Unlock()
 		return fmt.Errorf("docker: create main-process agent: %w", err)
 	}
-	// Same fail-closed cap-enforcement gate the exec-based path applies at
-	// driver.go:517 — the exec-less container IS the agent (its main process is
-	// the untrusted workload), so it needs the identical guard before ContainerStart.
+	// Same fail-closed cap-enforcement gate the exec-based path applies in
+	// CreateSandbox (verifyCapsEnforced) — the exec-less container IS the agent
+	// (its main process is the untrusted workload), so it needs the identical
+	// guard before ContainerStart.
 	// Applied here rather than after Exec returns because the create-response
 	// Warnings this reads only exist right after ContainerCreate.
 	if capErr := verifyCapsEnforced(created.Warnings); capErr != nil {
