@@ -35,6 +35,15 @@ export function StepIndicator<T extends string = WizardStepId>({
       {steps.map((step, i) => {
         const state = i < currentIdx ? "done" : i === currentIdx ? "active" : "todo";
         const clickable = onJump && i <= currentIdx;
+        // ui-newrun-2 / ui-wsWizard-7: state was color-only (no ARIA signal)
+        // and the visible label is `hidden sm:inline` — removed from the
+        // accessibility tree below sm, not just unpainted — with no fallback,
+        // so a screen reader (at any width) or a narrow viewport (any state)
+        // only ever heard/saw a bare ordinal. aria-current names the active
+        // step for landmark/step navigation; aria-label carries the step name
+        // AND state on the button itself, so the accessible name never
+        // depends on the collapsible span at lines below.
+        const stateSuffix = state === "active" ? " — current step" : state === "done" ? " — completed" : "";
         return (
           <React.Fragment key={step.id}>
             <li>
@@ -42,6 +51,8 @@ export function StepIndicator<T extends string = WizardStepId>({
                 type="button"
                 disabled={!clickable}
                 onClick={() => clickable && onJump?.(step.id)}
+                aria-current={state === "active" ? "step" : undefined}
+                aria-label={`${step.label}${stateSuffix}`}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-1.5 py-1 text-xs transition-colors",
                   clickable && "hover:bg-accent",
