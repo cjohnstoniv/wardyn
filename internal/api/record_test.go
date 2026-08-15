@@ -643,6 +643,83 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	}
 }
 
+// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted is W20-S1-1:
+// EgressPromoted used to be an unconditional `true` on every promote-egress
+// call, even one whose entire observed-allowed set is plumbing (never a
+// promotable candidate — see promotableHosts) or already covered, so
+// `promoted` stays empty. The card renders "Promoted" purely off this flag
+// (record-pane.tsx), so that used to claim success for a click that changed
+// nothing.
+func TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	// Every observed+allowed host is either model-provider plumbing or
+	// already approved — promotableHosts excludes the former, the dedup
+	// excludes the latter, so `promoted` is empty either way.
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.anthropic.com", AllowCount: 5},
+		{Host: "already.example.com", AllowCount: 1},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
+		})}}}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.Requirements) != 0 {
+		t.Fatalf("requirements = %v, want none (nothing was actually promotable)", fake.ws.Requirements)
+	}
+	if res := fake.savedResult(t, "build"); res.EgressPromoted {
+		t.Error("egress_promoted marker set on a click that promoted zero rows — the exact false-success this finding closes")
+	}
+}
+
+// TestPromoteRecordEgress_EgressPromotedStaysStickyAcrossANoOpClick pins the
+// OTHER direction of the same fix: EgressPromoted must not FLIP BACK to
+// false on a later no-op click against the same (immutable-once-recorded)
+// observations, once a genuine promotion already landed — it means "this
+// session HAS ever promoted something real", not "this specific click did".
+func TestPromoteRecordEgress_EgressPromotedStaysStickyAcrossANoOpClick(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned,
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
+		})}}}
+	srv := newTestSrv(t, fake)
+	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
+
+	// First click: a genuine promotion.
+	if w := do(t, srv, http.MethodPost, url, adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("first click: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if res := fake.savedResult(t, "build"); !res.EgressPromoted {
+		t.Fatal("first click should have set egress_promoted")
+	}
+
+	// Second click against the SAME (settled) observations: api.stripe.com is
+	// now already in the requirements overlay, so this click's own `promoted`
+	// is empty — but the marker must stay true.
+	if w := do(t, srv, http.MethodPost, url, adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("second click: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if res := fake.savedResult(t, "build"); !res.EgressPromoted {
+		t.Error("egress_promoted must stay true — a later no-op click must not un-promote an earlier real one")
+	}
+}
+
 // TestPromoteRecordEgress_HostSubset is the M3 self-check: an optional
 // {"hosts": [...]} narrows promotion to a validated subset instead of the
 // recording's entire observed-allowed set going in wholesale.

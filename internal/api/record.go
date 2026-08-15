@@ -556,7 +556,16 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// on `recorded`: if a re-record superseded this capture between the
 	// operator's read and the click, the marker (and the response) must not
 	// resurrect the stale entry.
-	res.EgressPromoted = true
+	//
+	// W20-S1-1: this used to be an unconditional `true` — a click whose
+	// entire wantHosts set was already in `existing` (every one deduped away
+	// above, promoted staying empty) still flipped the marker, so the UI
+	// rendered "Promoted" for a click that promoted nothing. OR'd with the
+	// PRIOR value (not overwritten) so a genuine earlier promotion is never
+	// un-set by a later no-op click against the same (immutable-once-
+	// recorded) observations — EgressPromoted means "this session HAS ever
+	// promoted something real", not "this specific click did".
+	res.EgressPromoted = res.EgressPromoted || len(promoted) > 0
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "persist promotion marker: "+perr.Error())

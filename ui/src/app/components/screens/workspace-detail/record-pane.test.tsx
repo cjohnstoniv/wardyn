@@ -238,6 +238,80 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
   });
 
+  // W20-S1-1: an observed-and-allowed host that is platform plumbing (the
+  // model-provider harness host every session needs, or the console's own
+  // origin) must never be offered for approval, and — since nothing needed
+  // approving at all — the pane must NOT claim "already allowed" (that
+  // implies an operator decision that never happened) or "Promoted" (nothing
+  // was ever promoted; egress_promoted stays unset).
+  describe("plumbing hosts are never offered for approval", () => {
+    const plumbingOnly = (over: Partial<RecordResult> = {}): RecordResult => ({
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: obs({
+        domains: [{ host: "api.anthropic.com", allow_count: 5, deny_count: 0, pending_count: 0 }],
+      }),
+      ...over,
+    });
+
+    it("model-provider host: no approve button, honest 'platform plumbing' message, no false 'already allowed'", () => {
+      renderPane({ record_results: { "build-test": plumbingOnly() }, profile });
+      const review = screen.getByTestId("record-review");
+      expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
+      expect(within(review).queryByText(/promoted/i)).not.toBeInTheDocument();
+      expect(within(review).getByText(/platform plumbing/i)).toBeInTheDocument();
+      expect(within(review).queryByText(/already allowed/i)).not.toBeInTheDocument();
+      expect(within(review).queryByLabelText("Already approved")).not.toBeInTheDocument();
+    });
+
+    it("the console's own origin (window.location.hostname) is excluded the same way", () => {
+      renderPane({
+        record_results: {
+          "build-test": plumbingOnly({
+            observations: obs({
+              domains: [{ host: window.location.hostname, allow_count: 2, deny_count: 0, pending_count: 0 }],
+            }),
+          }),
+        },
+        profile,
+      });
+      const review = screen.getByTestId("record-review");
+      expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
+      expect(within(review).getByText(/platform plumbing/i)).toBeInTheDocument();
+    });
+
+    it("a mix of a real host and a plumbing host still offers only the real one, correctly counted", async () => {
+      const onPromoteEgress = vi.fn();
+      renderPane(
+        {
+          record_results: {
+            "build-test": plumbingOnly({
+              observations: obs({
+                domains: [
+                  { host: "api.anthropic.com", allow_count: 5, deny_count: 0, pending_count: 0 },
+                  { host: "registry.npmjs.org", allow_count: 2, deny_count: 0, pending_count: 0 },
+                ],
+              }),
+            }),
+          },
+          profile,
+        },
+        { onPromoteEgress },
+      );
+      const review = screen.getByTestId("record-review");
+      const list = within(review).getByTestId("record-new-hosts");
+      expect(list).toHaveTextContent("registry.npmjs.org");
+      expect(list).not.toHaveTextContent("api.anthropic.com");
+      // The count in the button label must match — the exact "click Approve N
+      // but the server only promotes fewer" mismatch this finding closes.
+      expect(within(review).getByRole("button", { name: /approve 1 observed host/i })).toBeInTheDocument();
+      await userEvent.setup({ pointerEventsCheck: 0 }).click(within(review).getByRole("button", { name: /approve 1 observed host/i }));
+      expect(onPromoteEgress).toHaveBeenCalledWith("build-test");
+    });
+  });
+
   it("chips only the declared secrets that were actually minted (proven used)", () => {
     renderPane({ record_results: { "build-test": recorded() }, profile });
     const chips = screen.getByTestId("record-proven-secrets");

@@ -203,10 +203,15 @@ export function WorkspaceDetailScreen() {
   // "Approve N observed host(s)" count (record-pane.tsx) — reusing it here
   // means the untrusted-content confirm can never list more hosts than the
   // button that opened it offered (it used to subtract only approved_egress,
-  // missing the profile's own auto-allowed set).
+  // missing the profile's own auto-allowed set). W20-S1-1: pass the SAME
+  // selfHost record-pane.tsx does (window.location.hostname), or this dialog
+  // could offer a platform-plumbing host the button itself no longer shows.
   const requestPromoteEgress = (taskKey: string) => {
     if (!ws) return;
-    setPendingConfirm({ hosts: newEgressHosts(ws, taskKey), run: () => void promoteEgress(taskKey) });
+    setPendingConfirm({
+      hosts: newEgressHosts(ws, taskKey, window.location.hostname),
+      run: () => void promoteEgress(taskKey),
+    });
   };
 
   // ---------------- render ----------------

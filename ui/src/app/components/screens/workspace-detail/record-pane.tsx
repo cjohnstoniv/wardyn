@@ -41,7 +41,7 @@ import {
   orphanedVerifySessions,
   isRecording,
   isEmptyCapture,
-  newEgressHosts,
+  egressPromotionDiff,
   policyNameFor,
   sessionStage,
   verifyKeyOf,
@@ -586,11 +586,20 @@ function RecordReviewCard({
     );
   }
 
-  // Egress promotion diff: hosts observed (allow_count>0) that aren't already
-  // allowed → approvable; the rest are shown greyed for context.
-  const newHosts = newEgressHosts(ws, sessionKey);
-  const observed = (rr.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
-  const alreadyApproved = observed.filter((h) => !newHosts.includes(h));
+  // Egress promotion diff: hosts observed (allow_count>0) bucketed into
+  // approvable / already-approved / platform-plumbing (W20-S1-1) — one
+  // function so a host can't land in more than one bucket. selfHost mirrors
+  // the server's own control-plane-host exclusion; the console is always
+  // same-origin with wardynd (lib/api/core.ts's relative BASE), so the
+  // browser's own hostname IS that host.
+  const diff = egressPromotionDiff(ws, sessionKey, window.location.hostname);
+  const newHosts = diff.approvable;
+  const alreadyApproved = diff.alreadyApproved;
+  // Distinct from "nothing NEW because it's already allowed": these hosts
+  // were never approvable at all (harness/control-plane plumbing), so
+  // claiming "already allowed" would misattribute them to an operator
+  // decision that never happened.
+  const onlyPlumbingObserved = newHosts.length === 0 && alreadyApproved.length === 0 && diff.plumbing.length > 0;
 
   // Secrets proven-used = the workspace's DECLARED required-secret names that this
   // run actually minted a grant for. Render-derived intersection — never mutates
@@ -611,7 +620,9 @@ function RecordReviewCard({
           </Chip>
         ) : newHosts.length === 0 ? (
           <p className="text-[0.6875rem] text-muted-foreground">
-            No new hosts to approve — everything this task reached is already allowed.
+            {onlyPlumbingObserved
+              ? "Nothing needed approval — observed hosts were platform plumbing."
+              : "No new hosts to approve — everything this task reached is already allowed."}
           </p>
         ) : (
           <>
