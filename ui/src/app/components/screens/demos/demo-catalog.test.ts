@@ -74,4 +74,22 @@ describe("demo catalog", () => {
     expect(d.policy.allowed_domains.length).toBeGreaterThan(0);
     expect(d.policy.allowed_domains.every((h) => h.includes("anthropic.com"))).toBe(true);
   });
+
+  // Regression: setupUi copy pointed users at a nonexistent "Access → Egress"
+  // subsection (Egress is its own sibling wizard step, not nested under Access).
+  it("setupUi never claims Egress lives under the Access step", () => {
+    for (const d of DEMOS) {
+      for (const line of d.setupUi) {
+        expect(line).not.toMatch(/Access\s*→\s*Egress/);
+      }
+    }
+  });
+
+  // Regression: setupUi quoted "Deny with review", but the real dropdown
+  // option text (step-egress.tsx) is "Deny + review".
+  it("setupUi quotes the real first-use-approval option label verbatim", () => {
+    const withReview = DEMOS.find((d) => d.policy.first_use_approval === "deny_with_review")!;
+    expect(withReview.setupUi.some((line) => line.includes("'Deny + review'"))).toBe(true);
+    expect(withReview.setupUi.some((line) => line.includes("Deny with review"))).toBe(false);
+  });
 });
