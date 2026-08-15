@@ -392,6 +392,58 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 	assertRunObjectsGone(t, cs, spec.RunID)
 }
 
+// TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols is the
+// bug-k8s-1 regression test: CreateSandbox's failure path must share the
+// SAME H3 wait-before-netpol-drop guard as StopSandbox/KillSandbox, not a
+// hand-rolled fire-and-forget rollback list. A rollback that deletes the
+// NetworkPolicies the instant the proxy pod's Delete is ISSUED (not once
+// it's actually gone) hands a still-Terminating proxy pod — one that already
+// holds this run's live MITM CA key and RunToken — default-allow egress for
+// up to its full grace period. Proves the ORDERING via the actual sequence
+// of API calls the rollback issues (pod delete-collection, then a pod list —
+// the wait-for-gone poll — THEN the netpol delete-collection), mirroring
+// TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols in lifecycle_test.go.
+func TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	// Fail the agent pod's readiness wait so rollback fires with BOTH pods
+	// and BOTH netpols already created — the maximal-exposure failure point.
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-agent-") {
+			return false, nil, nil
+		}
+		return true, nil, errors.New("simulated: agent pod's main container never starts")
+	})
+
+	spec := testSandboxSpec()
+	cs.ClearActions()
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil {
+		t.Fatal("CreateSandbox: want an error, got nil")
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+
+	podDeleteIdx, podListIdx, netpolDeleteIdx := -1, -1, -1
+	for i, a := range cs.Actions() {
+		res := a.GetResource().Resource
+		switch {
+		case a.GetVerb() == "delete-collection" && res == "pods" && podDeleteIdx == -1:
+			podDeleteIdx = i
+		case a.GetVerb() == "list" && res == "pods" && podListIdx == -1 && podDeleteIdx != -1:
+			podListIdx = i
+		case a.GetVerb() == "delete-collection" && res == "networkpolicies" && netpolDeleteIdx == -1:
+			netpolDeleteIdx = i
+		}
+	}
+	if podDeleteIdx == -1 || podListIdx == -1 || netpolDeleteIdx == -1 {
+		t.Fatalf("missing expected rollback actions: podDelete=%d podList(wait)=%d netpolDelete=%d", podDeleteIdx, podListIdx, netpolDeleteIdx)
+	}
+	if !(podDeleteIdx < podListIdx && podListIdx < netpolDeleteIdx) {
+		t.Errorf("want pod delete-collection < pod list (wait-for-gone) < netpol delete-collection, got indices %d, %d, %d — NetworkPolicies must not drop before rollback proves the pods are actually gone", podDeleteIdx, podListIdx, netpolDeleteIdx)
+	}
+}
+
 // TestCreateSandbox_AgentContainerTerminated_FailsFast covers M5 (review
 // round 2): a container that crashes before ever reaching Running (a bad
 // image whose entrypoint exits immediately, CrashLoopBackOff's first cycle,

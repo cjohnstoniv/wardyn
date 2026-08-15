@@ -121,11 +121,24 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 	if runIDStr == "" {
 		return fmt.Errorf("k8s: teardown of %q: %w", ref, errTeardownUnresolved)
 	}
-	if _, perr := uuid.Parse(runIDStr); perr != nil {
+	runID, perr := uuid.Parse(runIDStr)
+	if perr != nil {
 		return fmt.Errorf("k8s: teardown of %q (run-id label %q unparseable): %w", ref, runIDStr, errTeardownUnresolved)
 	}
+	return d.teardownByRunID(ctx, runID, gracePeriodSeconds)
+}
 
-	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runIDStr}
+// teardownByRunID is teardown's run-id-keyed core: sweeps every Wardyn-owned
+// object carrying runID's label via three DeleteCollection calls (pods,
+// NetworkPolicies, Secrets), waiting for the pods to actually be gone before
+// touching the NetworkPolicies (see the H3 comment below). Split out from
+// teardown so CreateSandbox's failure-path rollback can share this exact
+// guard: it knows the run id directly (spec.RunID) and must not skip the
+// wait-before-netpol-drop ordering just because no live pod exists yet to
+// resolve a label from.
+func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeriodSeconds *int64) error {
+	ns := d.cfg.Namespace
+	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
 
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete pods: %w", err)
