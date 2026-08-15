@@ -36,7 +36,7 @@ import {
   APPROVAL_KIND_LABEL,
   CAPABILITY,
   OPERATOR_ONLY_REASON,
-  type ApprovalKind as CopyKind,
+  WIRE_TO_COPY,
 } from "../wardyn/copy";
 
 type Filter = "PENDING" | "decided";
@@ -59,12 +59,6 @@ type Scope = Record<string, unknown>;
 // sub-kind from which keys are present — importantly to keep the git_pat nuance
 // (that token is readable by the agent's process, unlike a brokered credential).
 // ============================================================
-
-const WIRE_TO_COPY: Record<string, CopyKind> = {
-  credential: "credential",
-  egress_domain: "egress",
-  tool_call: "tool",
-};
 
 const KIND_ICON: Record<string, React.ElementType> = {
   credential: KeyRound,

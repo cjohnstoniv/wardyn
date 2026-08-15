@@ -6,7 +6,7 @@
 import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
-import { OPERATOR_ONLY_REASON } from "./copy";
+import { APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
 import {
   Archive,
   Bot,
@@ -261,14 +261,20 @@ export function OutcomeBadge({ outcome }: { outcome: Outcome }) {
 }
 
 /* ---------- approval kind / state ---------- */
-const kindMeta: Record<ApprovalKind, { tone: Tone; label: string }> = {
-  credential: { tone: "info", label: "credential" },
-  egress_domain: { tone: "cyan", label: "egress-domain" },
-  tool_call: { tone: "neutral", label: "tool-call" },
+// ui-approvals-2: the label reads APPROVAL_KIND_LABEL (via copy.ts's
+// WIRE_TO_COPY, the SAME wire->copy map approvals.tsx's own kindLabel()
+// uses for the adjacent title/banner) instead of a second, wire-shaped
+// label table — so this chip and the human-language title next to it never
+// disagree. Tone stays a local table (purely visual, no copy vocabulary).
+const kindTone: Record<ApprovalKind, Tone> = {
+  credential: "info",
+  egress_domain: "cyan",
+  tool_call: "neutral",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
-  const m = metaFor(kindMeta, kind as string, { tone: "neutral", label: String(kind) });
-  return <Chip tone={m.tone} mono>{m.label}</Chip>;
+  const tone = metaFor(kindTone, kind as string, "neutral" as Tone);
+  const copyKind = WIRE_TO_COPY[kind];
+  return <Chip tone={tone}>{copyKind ? APPROVAL_KIND_LABEL[copyKind] : String(kind)}</Chip>;
 }
 
 const apprStateMeta: Record<string, Tone> = {

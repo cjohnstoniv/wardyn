@@ -129,3 +129,27 @@ describe("ConfinementChip tooltip honesty", () => {
     expect(screen.getByText(/Fence|Wall|Vault/)).toBeInTheDocument();
   });
 });
+
+// ui-approvals-2: ApprovalKindChip used to keep its OWN wire-shaped label
+// table ("egress-domain", "tool-call") instead of reading copy.ts's
+// APPROVAL_KIND_LABEL (via WIRE_TO_COPY) the way approvals.tsx's adjacent
+// title/banner already does — so the chip and the human-language title next
+// to it disagreed on every row.
+describe("ApprovalKindChip — human copy, not a raw wire token", () => {
+  it("renders the SAME human labels APPROVAL_KIND_LABEL defines, not the wire enum re-punctuated", () => {
+    render(<ApprovalKindChip kind="egress_domain" />);
+    expect(screen.getByText("Network egress")).toBeInTheDocument();
+    expect(screen.queryByText("egress-domain")).not.toBeInTheDocument();
+  });
+
+  it("credential -> 'Credential'", () => {
+    render(<ApprovalKindChip kind="credential" />);
+    expect(screen.getByText("Credential")).toBeInTheDocument();
+  });
+
+  it("tool_call -> 'Tool call', not 'tool-call'", () => {
+    render(<ApprovalKindChip kind="tool_call" />);
+    expect(screen.getByText("Tool call")).toBeInTheDocument();
+    expect(screen.queryByText("tool-call")).not.toBeInTheDocument();
+  });
+});

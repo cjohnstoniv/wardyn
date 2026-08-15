@@ -7,6 +7,7 @@
 // can't drift (D3/D6/D9/D11/B6 + the honesty rules). Barrier metadata and the
 // every-tier note live in cc-meta.ts (CC_META / CONFINEMENT_CONSTANT_NOTE) —
 // import from there, never duplicate them here.
+import type { ApprovalKind as WireApprovalKind } from "../../lib/types";
 
 // The single residual-risk prefix (D11) — everywhere a tier is explained, never
 // dropped or softened. The residual text itself is CC_META[*].doesntProtect.
@@ -132,4 +133,16 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   tool: "Tool call",
   credential: "Credential",
   egress: "Network egress",
+};
+
+// ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")
+// -> this file's copy-vocabulary kind (ApprovalKind above). Hoisted from
+// approvals.tsx (its own kindLabel() reads it via APPROVAL_KIND_LABEL) so
+// ApprovalKindChip (primitives.tsx) renders the SAME human label as every
+// title/banner derived from APPROVAL_KIND_LABEL, instead of keeping a
+// second, wire-shaped label table of its own.
+export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
+  credential: "credential",
+  egress_domain: "egress",
+  tool_call: "tool",
 };
