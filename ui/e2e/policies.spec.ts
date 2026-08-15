@@ -78,9 +78,12 @@ async function createPolicyViaUi(page: Page, name: string, specJson = VALID_SPEC
 
 // A table row scoped by the policy name (Name is the first cell).
 function policyRow(page: Page, name: string) {
-  // Data rows are clickable <TableRow role="button"> (policies.tsx), not
-  // role="row"; match the button carrying the name, scoped to the table.
-  return page.getByRole("table").getByRole("button").filter({ hasText: name });
+  // ui-secretsPolicies-1: data rows are a plain <TableRow tabIndex={0}
+  // onClick=.../> with NO role="button" override (policies.tsx) — a <tr>
+  // inside a real <table> keeps its implicit "row" role instead, which
+  // getByRole("row", …)/screen-reader table navigation depends on. Match the
+  // row carrying the name, scoped to the table.
+  return page.getByRole("table").getByRole("row").filter({ hasText: name });
 }
 
 // Open the row's action dropdown and click a menu item directly.
@@ -136,10 +139,14 @@ test("renders the Policies screen header, description and primary action", async
       "Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created.",
     ),
   ).toBeVisible();
-  // The search box and the create action are always present.
-  await expect(page.getByPlaceholder("Search policies by name or id…")).toBeVisible();
+  // The create action is always present. The search/Refresh toolbar is gated
+  // to status==="ready" && policies.length>0 (ui-secretsPolicies-5, same
+  // pattern as secrets.tsx/workspaces.tsx) — absent here on the fresh,
+  // zero-policy seed; see the round-trip spec below for its populated-state
+  // counterpart.
   await expect(page.getByRole("button", { name: "New policy" }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+  await expect(page.getByPlaceholder("Search policies by name or id…")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
 });
 
 test("shows the empty state when no policies are defined", async ({ page }) => {
@@ -226,11 +233,19 @@ test("round-trip: create a policy, it appears in the list, then delete it", asyn
   // not the raw domain names.
   await expect(row).toContainText("2 domains allowed");
 
-  // Header count reflects the new policy. Serial mode + per-spec cleanup means
-  // the table starts empty, so exactly one policy exists here. Assert the exact
-  // singular text ("1 policy") rather than a loose /\d+ polic(y|ies)/ which would
-  // also pass on the empty "0 policies" state and prove nothing.
-  await expect(page.getByText("1 policy", { exact: true })).toBeVisible();
+  // Header count reflects the new policy as "<filtered> of <total>" (unfiltered
+  // here, so both are 1 — policies.test.tsx's "shows the toolbar with an 'X of
+  // Y policies' total once ready"). Serial mode + per-spec cleanup means the
+  // table starts empty, so exactly one policy exists here. Assert the exact
+  // text rather than a loose /\d+ polic(y|ies)/ which would also pass on the
+  // empty "0 of 0 policies" state and prove nothing.
+  await expect(page.getByText("1 of 1 policy", { exact: true })).toBeVisible();
+
+  // The search/Refresh toolbar only renders once the table is populated
+  // (ui-secretsPolicies-5's status==="ready" && policies.length>0 gate) —
+  // the populated-state counterpart to the header spec's empty-state check.
+  await expect(page.getByPlaceholder("Search policies by name or id…")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
 
   // Clean up so the lane returns to the empty state.
   await deletePolicyViaUi(page, name);
