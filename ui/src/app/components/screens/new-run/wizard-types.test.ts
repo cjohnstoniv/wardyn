@@ -329,6 +329,68 @@ describe("wizardStateFromProposal — hydrates the git_pat grant, not just githu
   });
 });
 
+// W15-W15e-wizard-roundtrip-3 (part 2): the finding also names ssh_key —
+// this wizard has no editable UI for ssh_key/cloud_sts grants at all, so
+// (unlike git_pat, which got dedicated Access fields) they must round-trip
+// through a pass-through bucket instead: hydrated verbatim into
+// WizardState.opaqueGrants and re-emitted unchanged by buildSpec, never
+// silently dropped.
+describe("wizardStateFromProposal + buildSpec — pass through grant kinds this wizard can't edit (ssh_key, cloud_sts)", () => {
+  const run = { agent: "claude-code", repo: "local:corp-app", interactive: true } as ComposeRunProposal;
+
+  it("carries an ssh_key grant through hydration and back out via buildSpec, unchanged (previously silently dropped)", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: ["ssh.dev.azure.com"],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [
+        {
+          kind: "ssh_key",
+          scope: { host: "ssh.dev.azure.com", secret_name: "ado-ssh-key" },
+          requires_approval: false,
+        },
+      ],
+    };
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.opaqueGrants).toEqual(spec.eligible_grants);
+    const { inline_policy } = buildSpec(state);
+    expect(inline_policy.eligible_grants).toEqual(spec.eligible_grants);
+  });
+
+  it("carries a cloud_sts grant through the same way", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [{ kind: "cloud_sts", scope: { role_arn: "arn:aws:iam::123:role/x" }, requires_approval: true }],
+    };
+    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
+    expect(inline_policy.eligible_grants).toEqual(spec.eligible_grants);
+  });
+
+  it("still hydrates git_pat through its own dedicated fields, not the passthrough bucket (no duplicate emission)", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: ["dev.azure.com"],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [
+        { kind: "git_pat", scope: { host: "dev.azure.com", secret_name: "ado-pat" }, requires_approval: false },
+      ],
+    };
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.opaqueGrants).toEqual([]); // git_pat is a KNOWN kind — not opaque
+    expect(state.gitPatEnabled).toBe(true); // hydrated via its own dedicated fields instead
+    const { inline_policy } = buildSpec(state);
+    const gitPatGrants = (inline_policy.eligible_grants ?? []).filter((g) => g.kind === "git_pat");
+    expect(gitPatGrants).toHaveLength(1); // not duplicated by the passthrough bucket
+  });
+
+  it("a fresh wizard state emits no opaque grants", () => {
+    const { inline_policy } = buildSpec(initialWizardState());
+    expect(inline_policy.eligible_grants).toBeUndefined();
+  });
+});
+
 // W15-W15e-wizard-roundtrip-4: the two-state read/read+write toggle must
 // never WIDEN an asymmetric source scope — re-emitting a pull_requests:write
 // grant the recording never had contradicts Record Mode's "reuse can only
@@ -402,6 +464,31 @@ describe("wizardStateFromProposal — an empty allowed_domains (deny-all) round-
       min_confinement_class: "CC2",
     };
     expect(wizardStateFromProposal(run, spec).allowedDomains).toEqual(["github.com"]);
+  });
+
+  // REGRESSION (a prior fix for this same finding wrote dedupe(spec.allowed_
+  // domains) with no null guard, which THROWS on null instead of crashing
+  // gracefully): a genuine deny-all recorded profile serves allowed_domains:
+  // null on the wire — recordmode.Synthesize leaves the allowlist a NIL slice
+  // (`var allowed []string`, never appended to) for a deny-all outcome, and
+  // types.go's AllowedDomains has no `omitempty`, so a nil slice serializes
+  // to JSON `null`, not `[]`. compose-quick-review.tsx:114's own `?? []`
+  // confirms this null shape occurs in practice for the identical field.
+  // dedupe()'s `xs.map(...)` throws TypeError on null — this must not crash
+  // the recorded-profile fast-track, which skips straight to Review with no
+  // screen in between to catch it.
+  it("a null allowed_domains (the real deny-all wire shape) does not throw, and is treated as empty", () => {
+    const spec = {
+      allowed_domains: null,
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+    } as unknown as RunPolicySpec;
+    let state: ReturnType<typeof wizardStateFromProposal> | undefined;
+    expect(() => {
+      state = wizardStateFromProposal(run, spec);
+    }).not.toThrow();
+    expect(state?.allowedDomains).toEqual([]);
+    expect(() => buildSpec(wizardStateFromProposal(run, spec))).not.toThrow();
   });
 });
 

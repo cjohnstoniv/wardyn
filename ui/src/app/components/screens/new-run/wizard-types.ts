@@ -345,6 +345,14 @@ export interface WizardState {
   // wizard's own Launch builds the SAME sandbox "Approve & launch" would have
   // (see wizardStateFromProposal / buildSpec); "" = no devcontainer build.
   devcontainerRepo: string;
+
+  // W15-W15e-wizard-roundtrip-3: grant kinds this wizard has no editable UI
+  // for at all — ssh_key (a resident private key for git's SSH transport) and
+  // cloud_sts — carried verbatim from a hydrated spec's eligible_grants so
+  // buildSpec can re-emit them unchanged instead of silently dropping them
+  // (the git_pat kind above got its own editable Access fields for the same
+  // reason). Never wizard-editable; the wizard just passes these through.
+  opaqueGrants: GrantSpec[];
 }
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
@@ -398,6 +406,7 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
 
     image: "",
     devcontainerRepo: "",
+    opaqueGrants: [],
   };
 }
 
@@ -825,6 +834,12 @@ export function buildSpec(
     });
   }
 
+  // W15-W15e-wizard-roundtrip-3: re-emit any grant kind this wizard has no
+  // editable UI for (ssh_key, cloud_sts) verbatim, unchanged, rather than
+  // silently dropping it — see WizardState.opaqueGrants and
+  // wizardStateFromProposal's collection of it below.
+  grants.push(...state.opaqueGrants);
+
   // --- lifecycle: an interactive run comes up idle, so never-reap (-1) unless
   // the operator explicitly chose an auto-stop window. ---
   let autoStopAfterSec: number | undefined;
@@ -976,13 +991,18 @@ export function wizardStateFromProposal(
   // editable home in WizardState (Access's Git-PAT card), so hydrate it.
   const gitPatGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "git_pat");
   const gitPatScope = (gitPatGrant?.scope ?? {}) as { host?: string; secret_name?: string; username?: string };
-  // ponytail: ssh_key/cloud_sts grants have no editable home in this wizard
-  // at all (no fields anywhere represent them) — they still silently drop
-  // here, same as any workspace_mounts entry this best-effort inverse
-  // doesn't recognize (see the recordedSubscription comment below). Add a
-  // pass-through bucket buildSpec re-emits verbatim, or refuse the
-  // fast-track for these two kinds, if a recorded ssh_key/cloud_sts profile
-  // shows up in practice.
+  // W15-W15e-wizard-roundtrip-3 (part 2, per the finding's own callout):
+  // ssh_key/cloud_sts grants have no editable home in this wizard at all (no
+  // fields anywhere represent them) — they used to silently drop here, same
+  // as any workspace_mounts entry this best-effort inverse doesn't recognize
+  // (see the recordedSubscription comment below), while spec.allowed_domains
+  // still carried their host, the identical shape of bug git_pat had. Keep
+  // every OTHER grant kind verbatim in a pass-through bucket buildSpec
+  // re-emits unchanged (WizardState.opaqueGrants) instead of refusing the
+  // fast-track — this wizard cannot EDIT these, but re-emitting the grant the
+  // recording/proposal already had is not an edit.
+  const KNOWN_GRANT_KINDS = new Set(["github_token", "api_key", "git_pat"]);
+  const opaqueGrants = (spec.eligible_grants ?? []).filter((g) => !KNOWN_GRANT_KINDS.has(g.kind));
 
   // A recorded profile's api_key grant can name the subscription OAuth sentinel
   // instead of a real stored secret (recordings never synthesize a resident
@@ -1042,14 +1062,21 @@ export function wizardStateFromProposal(
     // W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field
     // (RunPolicySpec.allowed_domains string[]) — `[]` is always a real,
     // meaningful value, not "unset". Record Mode's own synthesized profile
-    // (internal/recordmode/recordmode.go) writes exactly `[]` for a
-    // genuinely deny-all outcome ("no allowed egress observed"), and the
-    // recorded-profile fast-track (applyProfileSpecToState) skips straight
-    // to Review — the operator may never see Egress to notice `?.length`
-    // rewrote that deliberate deny-all into api.anthropic.com being allowed.
-    // `spec` always carries a real value here (the type is required), so
-    // there's no legitimate "absent" case this fallback exists for.
-    allowedDomains: dedupe(spec.allowed_domains),
+    // (internal/recordmode/recordmode.go's Synthesize) writes exactly `[]`
+    // — or, for a genuinely deny-all outcome ("no allowed egress observed"),
+    // a NIL slice (`var allowed []string`, never appended to) — for that
+    // deny-all case. types.go's AllowedDomains has no `omitempty`, so a nil
+    // slice still serializes to wire `null`, not `[]` (Go's ordinary
+    // encoding/json behavior); TS's `string[]` type says "always an array"
+    // but does not guard the runtime JSON boundary. dedupe() itself would
+    // THROW (Array.prototype.map on null) on that null, crashing the
+    // recorded-profile fast-track (applyProfileSpecToState skips straight to
+    // Review, so the operator never sees a screen to work around it) for
+    // exactly the deny-all case this file most wants to get right.
+    // compose-quick-review.tsx:114's `p.allowed_domains ?? []` already
+    // guards the identical field for the same reason. `?? []` treats that
+    // wire null the same as an explicit empty array — both mean deny-all.
+    allowedDomains: dedupe(spec.allowed_domains ?? []),
     deniedDomains: dedupe(spec.denied_domains ?? []),
     firstUseApproval: asFirstUseMode(spec.first_use_approval),
     allowAllEgress: spec.allow_all_egress === true,
@@ -1074,6 +1101,7 @@ export function wizardStateFromProposal(
     // launch" (which sends result.proposed.run — devcontainer_repo intact —
     // unchanged) would have built for the identical proposal.
     devcontainerRepo: run.devcontainer_repo ?? "",
+    opaqueGrants,
   };
 }
 
