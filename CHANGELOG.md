@@ -8,6 +8,39 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **Go-live hardening: 29 confirmed ship-blockers closed across two adversarial
+  review waves**, each with a regression test proven to fail on the pre-fix
+  commit. The load-bearing ones: a member's `inline_policy` `llm_inspection`
+  block is now clamped under the default ceiling (its `detector_sidecar_url`
+  could otherwise become an un-allowlisted egress channel), and its secret
+  corpus is referenced by name and resolved only at dispatch — never stored in
+  a policy row, written to the append-only audit log, or copied into a
+  compose/profile proposal; the git-broker's value-returning mint lanes refuse
+  the GitHub App private key and the other reserved platform secrets; a
+  **disabled** integration no longer grants a run model access; an explicit
+  `WARDYN_LOCAL_MODE=true` no longer silently disables a configured OIDC/RBAC
+  deployment (boot refuses the contradiction); a client-settable `run.Task` can
+  no longer forge the operator-reserved harness-login path; SSH `ssh.auth`
+  success is audited only after signature verification, not at key-offer time;
+  an empty-ceiling `github_token` repo list is deny-all for a hand-authored
+  spec; a tokened corp-mirror redirect is dialed to its real port, not always
+  443; the exec-less (krun/CC3) sandbox path now applies the same fail-closed
+  resource-cap gate as the exec path; and the host ground-truth sensor no
+  longer forwards uncorrelated host-wide kernel events to the audit log/SIEM by
+  default.
+
+### Fixed
+
+- **~180 additional go-live findings** across the first-run/setup funnel, the
+  new-run and workspace wizards, integrations, approvals, recordings, and the
+  audit/policy/secrets screens — broken promises, misleading copy, dead ends,
+  and **WCAG 2.1 AA accessibility** gaps (keyboard operability, `aria-current`
+  /`aria-pressed`/`aria-label` on custom controls, theme-invariant contrast on
+  the terminal player, and destructive-action confirmations). Documentation and
+  threat-model claims were reconciled against the shipped code throughout.
+
 ### Changed
 
 - **Integrations are now base components: one `kind` field plus
