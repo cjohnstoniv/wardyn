@@ -43,10 +43,18 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 		}
 	}
 	if !hasCC2Plus {
+		fix := "Unlock the Wall or Vault tier: run `wardyn setup wall` (or `wardyn setup vault`) on the host — it detects your OS/Docker setup and prints the exact steps."
+		// W4-S1-5/W27-S1-4: `wardyn setup wall`/`vault` probe and configure a
+		// DOCKER host — meaningless advice on a k8s runner, where the lever is
+		// pinning a cluster-registered RuntimeClass via Helm (README.md's
+		// k8s.runtimeClasses.CC2/.CC3), not a command wardynd's own host runs.
+		if rnr.Driver == "k8s" {
+			fix = "Unlock the Wall or Vault tier: register a gVisor (or Kata) RuntimeClass in the cluster, then pin it with `helm upgrade --set k8s.runtimeClasses.CC2=<name>` (or `.CC3=<name>`)."
+		}
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "info",
 			Detail: "Only the Fence tier (weakest — a shared-kernel container) is available on this host; runs work but with the lowest isolation.",
-			Fix:    "Unlock the Wall or Vault tier: run `wardyn setup wall` (or `wardyn setup vault`) on the host — it detects your OS/Docker setup and prints the exact steps.",
+			Fix:    fix,
 		}
 	}
 	return SetupCheck{

@@ -209,3 +209,37 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestRunnerCheckCC1OnlyFixIsDriverAware (W4-S1-5/W27-S1-4): a CC1-only host's
+// Fix used to unconditionally read "run `wardyn setup wall` (or `wardyn setup
+// vault`)" — a DOCKER host command that means nothing on a k8s runner, where
+// the actual lever is pinning a cluster-registered RuntimeClass via Helm
+// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps the original command;
+// only k8s swaps to the Helm-shaped fix.
+func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
+	cases := []struct {
+		name         string
+		driver       string
+		wantWardyn   bool // fix names the `wardyn setup wall/vault` docker command
+		wantHelm     bool // fix names k8s.runtimeClasses via helm upgrade --set
+	}{
+		{"docker driver: the host-side `wardyn setup` command", "docker", true, false},
+		{"k8s driver: the Helm RuntimeClass pin, never the docker command", "k8s", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk := runnerCheck(SetupRunner{Driver: tc.driver, ConfinementClasses: []string{"CC1"}})
+			if chk.Status != "info" {
+				t.Fatalf("Status = %q, want %q", chk.Status, "info")
+			}
+			hasWardyn := strings.Contains(chk.Fix, "wardyn setup wall")
+			hasHelm := strings.Contains(chk.Fix, "k8s.runtimeClasses")
+			if hasWardyn != tc.wantWardyn {
+				t.Errorf("fix names `wardyn setup wall` = %v, want %v (fix: %q)", hasWardyn, tc.wantWardyn, chk.Fix)
+			}
+			if hasHelm != tc.wantHelm {
+				t.Errorf("fix names k8s.runtimeClasses = %v, want %v (fix: %q)", hasHelm, tc.wantHelm, chk.Fix)
+			}
+		})
+	}
+}

@@ -34,7 +34,7 @@
 import * as React from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import type { HostProxyDetection, HostProxySetting, SetupStatus, SiteConfig } from "../../../lib/types";
+import type { HostProxyDetection, HostProxySetting, SetupCheck, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi, type ProxyTestResult } from "../../../lib/api/health";
 import { HttpError } from "../../../lib/api/core";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -124,15 +124,49 @@ function BlockLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
 }
 
-function ConfigStatusLine({ tone, children }: { tone: "success" | "neutral"; children: React.ReactNode }) {
+function ConfigStatusLine({ tone, children }: { tone: "success" | "neutral" | "warning"; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2">
-      <span className={cn("size-1.5 shrink-0 rounded-full", tone === "success" ? "bg-success" : "bg-border-strong")} />
-      <span className={cn("text-xs", tone === "success" ? "text-success" : "text-muted-foreground")}>{children}</span>
+      <span
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-border-strong",
+        )}
+      />
+      <span
+        className={cn(
+          "text-xs",
+          tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : "text-muted-foreground",
+        )}
+      >
+        {children}
+      </span>
     </div>
   );
 }
 
+
+// W13-S1-1: the server's own graded verdict on this host's proxy detection
+// (internal/api/setup_checks.go's hostProxyCheck) — same Detail/Fix the
+// Review step's checks list would show, INCLUDING the one line that actually
+// explains an unreachable upstream (a loopback-bound detected proxy) and its
+// fix (`wardyn setup proxy-relay`). Review sits AFTER this mandatory gate, so
+// an operator stuck here on a bad proxy could never reach it — surface the
+// same diagnosis right here instead of only downstream of the gate it causes.
+function HostProxyCheckNote({ check }: { check: SetupCheck }) {
+  const warn = check.status === "warn";
+  return (
+    <div
+      className={cn(
+        "space-y-1 rounded-md border px-2.5 py-2",
+        warn ? "border-warning/30 bg-warning-subtle" : "border-border bg-muted/40",
+      )}
+    >
+      <p className={cn("text-[0.75rem] leading-snug", warn ? "text-warning" : "text-foreground")}>{check.detail}</p>
+      {check.fix && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{check.fix}</p>}
+    </div>
+  );
+}
 
 function EvidenceBlock({
   rows,
@@ -140,12 +174,15 @@ function EvidenceBlock({
   onUse,
   onRecheck,
   operator,
+  hostProxyCheck,
 }: {
   rows: EvidenceRow[];
   showUse: boolean;
   onUse: (value: string) => void;
   onRecheck: () => void;
   operator: boolean;
+  /** The server's graded host_proxy check (see HostProxyCheckNote above) — absent on a fixture-compat older daemon. */
+  hostProxyCheck?: SetupCheck;
 }) {
   return (
     <div className="space-y-3 rounded-xl border border-border bg-card p-3.5">
@@ -158,44 +195,55 @@ function EvidenceBlock({
       </div>
       <p className="max-w-[560px] text-[0.6875rem] leading-snug text-muted-foreground">{T.EVIDENCE_EXPLAIN}</p>
       {rows.length === 0 ? (
-        <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EVIDENCE_NONE}</p>
+        hostProxyCheck?.detail ? (
+          <HostProxyCheckNote check={hostProxyCheck} />
+        ) : (
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EVIDENCE_NONE}</p>
+        )
       ) : (
-        <div className="rounded-lg border border-border">
-          {rows.map((r, i) => (
-            <div
-              key={r.key}
-              className={cn("flex items-start gap-2.5 p-2.5", i > 0 && "border-t border-border")}
-            >
-              <Mono className="w-32 shrink-0 pt-0.5 text-[0.6875rem] text-muted-foreground">{r.key}</Mono>
-              <div className="min-w-0 flex-1 space-y-0.5">
-                <Mono className="block truncate text-xs text-foreground" title={r.value}>
-                  {r.value}
-                </Mono>
-                {r.note && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{r.note}</p>}
-              </div>
-              {r.hasCredentials && (
-                <Chip tone="warning" className="shrink-0 text-[0.625rem]" title="A credential was detected in this value (masked above).">
-                  creds
+        <>
+          <div className="rounded-lg border border-border">
+            {rows.map((r, i) => (
+              <div
+                key={r.key}
+                className={cn("flex items-start gap-2.5 p-2.5", i > 0 && "border-t border-border")}
+              >
+                <Mono className="w-32 shrink-0 pt-0.5 text-[0.6875rem] text-muted-foreground">{r.key}</Mono>
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <Mono className="block truncate text-xs text-foreground" title={r.value}>
+                    {r.value}
+                  </Mono>
+                  {r.note && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{r.note}</p>}
+                </div>
+                {r.hasCredentials && (
+                  <Chip tone="warning" className="shrink-0 text-[0.625rem]" title="A credential was detected in this value (masked above).">
+                    creds
+                  </Chip>
+                )}
+                <Chip tone="neutral" mono className="shrink-0 text-[0.625rem]">
+                  {r.source}
                 </Chip>
-              )}
-              <Chip tone="neutral" mono className="shrink-0 text-[0.625rem]">
-                {r.source}
-              </Chip>
-              {showUse && r.useValue && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={!operator}
-                  title={!operator ? T.VIEWER_HINT : undefined}
-                  onClick={() => onUse(r.useValue!)}
-                >
-                  Use this
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
+                {showUse && r.useValue && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0"
+                    disabled={!operator}
+                    title={!operator ? T.VIEWER_HINT : undefined}
+                    onClick={() => onUse(r.useValue!)}
+                  >
+                    Use this
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* Beside the rows, not instead of them: a loopback-bound row still
+              lists as real evidence, but "Use this" on it produces a proxy a
+              sandbox can never reach — the warn-graded check is the one place
+              that says so and names the fix. */}
+          {hostProxyCheck?.status === "warn" && hostProxyCheck.detail && <HostProxyCheckNote check={hostProxyCheck} />}
+        </>
       )}
     </div>
   );
@@ -401,6 +449,8 @@ export interface ProxyProbeBundle {
 function HostProxyTab({
   siteConfig,
   detection,
+  hostProxyCheck,
+  secretNames,
   mutate,
   saving,
   operator,
@@ -409,6 +459,13 @@ function HostProxyTab({
 }: {
   siteConfig: SiteConfig | null;
   detection: HostProxyDetection | undefined;
+  /** See EvidenceBlock/HostProxyCheckNote (W13-S1-1) — the server's graded verdict on this detection. */
+  hostProxyCheck?: SetupCheck;
+  /** W12-W12-C-3: the store's actual secret names — lets this tab notice when
+   *  a configured upstream_proxy_secret_ref no longer resolves to anything
+   *  (deleted/renamed elsewhere), and gates AddSecretDialog's overwrite warning.
+   *  Undefined (not `[]`) means unknown, not empty — see CorpNetworkStep's doc. */
+  secretNames?: string[];
   mutate: (next: SiteConfig, errorMessage: string) => Promise<boolean>;
   saving: boolean;
   operator: boolean;
@@ -442,12 +499,20 @@ function HostProxyTab({
   const candidates = proxyCandidateValues(detection);
   const configured = isProxyConfigured(siteConfig);
   const showUse = !useSecret && !configured;
+  // W12-W12-C-3: a referenced secret can vanish out from under this config —
+  // deleted or rotated away from the Secrets screen, which has no idea this
+  // ref exists to warn about it — leaving "Chaining through the URL in secret
+  // X" claiming a proxy that no longer resolves to anything. secretNames is
+  // the store's actual list (the orchestrator's own recheck already fetches
+  // it), so this reads as a live presence check, not a second store.
+  const secretRefDangling =
+    !!siteConfig?.upstream_proxy_secret_ref && !!secretNames && !secretNames.includes(siteConfig.upstream_proxy_secret_ref);
 
   const saveUrl = async (value: string) => {
     if (await mutate({ ...(siteConfig ?? {}), upstream_proxy_url: value || undefined, upstream_proxy_secret_ref: undefined }, "Failed to save the upstream proxy")) {
       setUrl(value);
       setUseSecret(false);
-      toast.success("Upstream proxy saved");
+      toast.success(value ? "Upstream proxy saved" : "Upstream proxy removed");
     }
   };
 
@@ -488,6 +553,7 @@ function HostProxyTab({
         onUse={(value) => (hasUserinfo(value) ? setUrl(value) : saveUrl(value))}
         onRecheck={onRecheck}
         operator={operator}
+        hostProxyCheck={hostProxyCheck}
       />
 
       <div className="space-y-3 rounded-xl border border-border bg-card p-3.5">
@@ -496,14 +562,21 @@ function HostProxyTab({
             mode (useSecret) happens to be open — switching to "Enter a URL
             instead" on a secret-only config must keep naming the secret, not
             claim "Chaining through" a plain URL that was never set. */}
-        <ConfigStatusLine tone={configured ? "success" : "neutral"}>
+        <ConfigStatusLine tone={secretRefDangling ? "warning" : configured ? "success" : "neutral"}>
           {siteConfig?.upstream_proxy_url ? (
             <>Chaining through <Mono className="text-xs">{siteConfig.upstream_proxy_url}</Mono></>
           ) : siteConfig?.upstream_proxy_secret_ref ? (
-            <>
-              Chaining through the URL in secret <Mono className="text-xs">{siteConfig.upstream_proxy_secret_ref}</Mono> — write-only, so
-              the URL can&apos;t be shown here
-            </>
+            secretRefDangling ? (
+              <>
+                Secret <Mono className="text-xs">{siteConfig.upstream_proxy_secret_ref}</Mono> no longer exists in the
+                store — sandboxes go direct, not through a proxy, despite this looking configured
+              </>
+            ) : (
+              <>
+                Chaining through the URL in secret <Mono className="text-xs">{siteConfig.upstream_proxy_secret_ref}</Mono> — write-only, so
+                the URL can&apos;t be shown here
+              </>
+            )
           ) : (
             T.NOT_CONFIGURED
           )}
@@ -576,18 +649,36 @@ function HostProxyTab({
                 </Button>
               </>
             ) : (
-              <Button
-                size="sm"
-                // An empty URL here would PUT both upstream_proxy_url and
-                // upstream_proxy_secret_ref undefined — fine when nothing was
-                // configured yet, but a silent delete of a configured proxy
-                // (e.g. switching from the secret field via "Enter a URL
-                // instead" without typing one) otherwise.
-                disabled={!operator || saving || (!url.trim() && isProxyConfigured(siteConfig))}
-                onClick={() => saveUrl(url)}
-              >
-                {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  // An empty URL here would PUT both upstream_proxy_url and
+                  // upstream_proxy_secret_ref undefined — fine when nothing was
+                  // configured yet, but a silent delete of a configured proxy
+                  // (e.g. switching from the secret field via "Enter a URL
+                  // instead" without typing one) otherwise. Removing one on
+                  // purpose is the explicit "Remove proxy" control beside it.
+                  disabled={!operator || saving || (!url.trim() && isProxyConfigured(siteConfig))}
+                  onClick={() => saveUrl(url)}
+                >
+                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
+                </Button>
+                {/* W13-S1-1: an unreachable saved proxy hard-locks the operator
+                    behind the mandatory Corporate network gate — Save alone
+                    can't get back to "no proxy" (it refuses an empty URL to
+                    guard against an accidental clear, above), so "no proxy" needs
+                    its own explicit, un-ambiguous exit right where a proxy was set. */}
+                {isProxyConfigured(siteConfig) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!operator || saving}
+                    onClick={() => saveUrl("")}
+                  >
+                    Remove proxy
+                  </Button>
+                )}
+              </div>
             )}
           </>
         )}
@@ -659,6 +750,11 @@ function HostProxyTab({
         onOpenChange={setAddSecretOpen}
         lockName
         initialName={secretName}
+        // W12-W12-C-3: without this, the dialog's own overwrite-confirm gate
+        // (secrets.tsx) never fires — an operator typing an in-use name here
+        // silently clobbers whatever that secret already held, no different
+        // from every other AddSecretDialog caller that DOES pass this.
+        existingNames={secretNames}
         onSaved={(name) => {
           setAddSecretOpen(false);
           saveSecretRef(name);
@@ -696,6 +792,7 @@ export function CorpNetworkStep({
   registerActions,
   tab: tabProp,
   onTabChange,
+  secretNames,
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
@@ -728,6 +825,12 @@ export function CorpNetworkStep({
    *  falls back to its own state. */
   tab?: "proxy" | "egress";
   onTabChange?: (t: "proxy" | "egress") => void;
+  /** W12-W12-C-3: the store's live secret names — see HostProxyTab's
+   *  secretRefDangling and the AddSecretDialog existingNames wiring below.
+   *  Optional and UNKNOWN (not "empty") when omitted — a standalone/test
+   *  render that doesn't wire the orchestrator's list up must never read a
+   *  real secret ref as dangling just because nothing was passed. */
+  secretNames?: string[];
 }) {
   const operator = useOperator();
   const [innerTab, setInnerTab] = React.useState<"proxy" | "egress">("proxy");
@@ -853,6 +956,11 @@ export function CorpNetworkStep({
   const redirectRows = siteConfig?.egress_redirects ?? [];
   const egressDot = redirectRows.some((r) => gate.redirectProbes[r.from]?.state !== "reached");
 
+  // W13-S1-1: the server's graded host_proxy check — the SAME row the Review
+  // step lists, surfaced here too (see HostProxyCheckNote) since Review sits
+  // behind this step's own mandatory gate.
+  const hostProxyCheck = status.checks.find((c) => c.id === "host_proxy");
+
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.CORP_LEDE}</p>
@@ -871,6 +979,8 @@ export function CorpNetworkStep({
         <HostProxyTab
           siteConfig={siteConfig}
           detection={status.host_proxy}
+          hostProxyCheck={hostProxyCheck}
+          secretNames={secretNames}
           mutate={mutate}
           saving={saving}
           operator={operator}

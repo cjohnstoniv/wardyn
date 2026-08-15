@@ -236,6 +236,113 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByLabelText(/secret name/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add secret…/i })).toBeInTheDocument();
   });
+
+  // W12-W12-C-3: upstream_proxy_secret_ref has no lifecycle integrity — a
+  // secret it names can be deleted or rotated away from the Secrets screen,
+  // which has no idea this reference exists, and this step kept claiming
+  // "Chaining through the URL in secret X" forever after. secretNames (the
+  // store's own live list, already fetched by the orchestrator) is a
+  // presence check that catches it.
+  it("a configured secret ref that no longer resolves in the store renders a warning, not a stale success claim", () => {
+    renderStep({ siteConfig: { upstream_proxy_secret_ref: "corp-proxy" }, secretNames: [] });
+    expect(screen.getByText(/no longer exists in the store/i)).toBeInTheDocument();
+    expect(screen.getByText("corp-proxy")).toBeInTheDocument();
+    expect(screen.queryByText(/chaining through the url in secret/i)).not.toBeInTheDocument();
+  });
+
+  it("a configured secret ref that DOES resolve keeps the normal 'Chaining through' claim", () => {
+    renderStep({ siteConfig: { upstream_proxy_secret_ref: "corp-proxy" }, secretNames: ["corp-proxy"] });
+    expect(screen.getByText(/chaining through the url in secret/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no longer exists in the store/i)).not.toBeInTheDocument();
+  });
+
+  it("secretNames omitted (standalone render) never claims a real ref is dangling — unknown, not empty", () => {
+    renderStep({ siteConfig: { upstream_proxy_secret_ref: "corp-proxy" } }); // no secretNames prop at all
+    expect(screen.getByText(/chaining through the url in secret/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no longer exists in the store/i)).not.toBeInTheDocument();
+  });
+
+  // W12-W12-C-3 (overwrite half): AddSecretDialog only warns before an
+  // overwrite when it's HANDED the existing-names list — the corp-network
+  // step's own "Add secret…" dialog used to open with none, so saving over
+  // an in-use name here silently clobbered it with no warning at all (every
+  // other AddSecretDialog caller in the app already passes this).
+  it("'Add secret…' passes the store's real names through, so saving over an in-use name warns first", async () => {
+    // Default secretName state is "upstream-proxy-url" (the dialog opens
+    // locked to it) — put that exact name in the store already.
+    renderStep({ secretNames: ["upstream-proxy-url"] });
+    await userEvent.click(screen.getByRole("button", { name: /use a stored secret instead/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add secret…/i }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+  });
+
+  // W13-S1-1: the server's graded host_proxy check (Detail/Fix) is the ONLY
+  // place that explains a loopback-bound proxy is unreachable from a sandbox —
+  // and it used to render only on the Review step, which sits BEHIND this
+  // step's own mandatory gate. Surface it here, where the operator is stuck.
+  it("a loopback-bound host_proxy check's Detail/Fix render in place of EVIDENCE_NONE when nothing was detected", () => {
+    renderStep({
+      status: baseStatus({
+        checks: [
+          {
+            id: "host_proxy",
+            label: "Host proxy",
+            status: "warn",
+            detail: "Detected an env/shell/OS proxy setting. 127.0.0.1:8080 is bound to loopback, which a sandbox cannot reach.",
+            fix: "Run `wardyn setup proxy-relay <listen-port> <proxy-port>` on the host and store the relay address as the upstream-proxy secret.",
+          },
+        ],
+      }),
+    });
+    expect(screen.queryByText(T.EVIDENCE_NONE)).not.toBeInTheDocument();
+    expect(screen.getByText(/bound to loopback/i)).toBeInTheDocument();
+    expect(screen.getByText(/wardyn setup proxy-relay/i)).toBeInTheDocument();
+  });
+
+  it("a loopback-bound host_proxy check's Detail/Fix render BESIDE detected evidence rows too, not only in their absence", () => {
+    const detection: HostProxyDetection = {
+      has_credentials: false,
+      http_proxy: { value: "http://127.0.0.1:8080", source: "env", has_credentials: false },
+    };
+    renderStep({
+      status: baseStatus({
+        host_proxy: detection,
+        checks: [
+          {
+            id: "host_proxy",
+            label: "Host proxy",
+            status: "warn",
+            detail: "127.0.0.1:8080 is bound to loopback, which a sandbox cannot reach.",
+            fix: "Run `wardyn setup proxy-relay` on the host.",
+          },
+        ],
+      }),
+    });
+    // The row is still real evidence...
+    expect(screen.getByText("http://127.0.0.1:8080")).toBeInTheDocument();
+    // ...but the warn diagnosis sits right beside it, not hidden behind Review.
+    expect(screen.getByText(/bound to loopback/i)).toBeInTheDocument();
+  });
+
+  // W13-S1-1 (part 2): Save alone can never get back to "no proxy" once one is
+  // configured (it disables itself on an empty field to guard against an
+  // accidental clear) — an unreachable saved proxy needs its own, explicit way
+  // out right on the screen that set it, or the mandatory gate downstream
+  // never clears either.
+  it("'Remove proxy' clears a configured URL — the explicit exit Save alone can't provide", async () => {
+    const { saveSiteConfig } = renderStep({ siteConfig: { upstream_proxy_url: "http://127.0.0.1:8080" } });
+    await userEvent.click(screen.getByRole("button", { name: /^remove proxy$/i }));
+    await waitFor(() =>
+      expect(saveSiteConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ upstream_proxy_url: undefined, upstream_proxy_secret_ref: undefined }),
+      ),
+    );
+  });
+
+  it("'Remove proxy' does not render when nothing is configured", () => {
+    renderStep();
+    expect(screen.queryByRole("button", { name: /^remove proxy$/i })).not.toBeInTheDocument();
+  });
 });
 
 // ------------------------------------------------------------

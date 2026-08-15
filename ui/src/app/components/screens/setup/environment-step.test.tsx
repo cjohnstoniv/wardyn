@@ -346,4 +346,51 @@ describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
     expect(within(panel).queryByText(/needs a gVisor RuntimeClass/)).not.toBeInTheDocument();
     expect(within(panel).getByText(/CC1 \(k8s\/\(default\)\), CC2 \(k8s\/runsc\), CC3 \(k8s\/kata-qemu\)/)).toBeInTheDocument();
   });
+
+  // W4-S1-5/W27-S1-4: the tier matrix's own per-column guidance (below the
+  // k8s rows above) used to stay docker-shaped no matter the driver — a k8s
+  // operator got `wardyn setup wall`, "not listed in docker info runtimes",
+  // and a KVM-bind-mount /dev/kvm verdict probed on wardynd's own host, none
+  // of which apply to a cluster. The real lever (k8s.runtimeClasses) was
+  // never named anywhere on this step.
+  describe("tier-matrix guidance is driver-aware", () => {
+    it("a k8s driver's needs-setup column shows the Helm RuntimeClass command, never `wardyn setup wall`", async () => {
+      // CC1+CC3 live so CC2 is the ONLY needs-setup column — isolates the
+      // Show-setup-command button the same way the incompatible test below does.
+      renderStep({
+        status: k8sStatus({
+          runner: { driver: "k8s", confinement_classes: ["CC1", "CC3"], confinement_substrates: { CC1: "k8s/(default)", CC3: "k8s/kata-qemu" } },
+        }),
+      });
+      await user.click(screen.getByRole("button", { name: BTN.showSetupCommand }));
+      expect(screen.queryByText(/wardyn setup wall/)).not.toBeInTheDocument();
+      expect(screen.getByText(/k8s\.runtimeClasses\.CC2/)).toBeInTheDocument();
+    });
+
+    it("a k8s driver's still-not-detected line is RuntimeClass-shaped, never `docker info`", async () => {
+      const status = k8sStatus({
+        runner: { driver: "k8s", confinement_classes: ["CC1", "CC3"], confinement_substrates: { CC1: "k8s/(default)", CC3: "k8s/kata-qemu" } },
+      });
+      const { rerender } = renderStep({ status, recheckToken: 0 });
+      await user.click(screen.getByRole("button", { name: BTN.showSetupCommand }));
+      rerender(<EnvironmentStep status={status} selected={null} onSelect={vi.fn()} recheckToken={1} />);
+      expect(screen.queryByText(/docker info/)).not.toBeInTheDocument();
+      expect(screen.getByText(/no RuntimeClass is pinned to CC2/)).toBeInTheDocument();
+    });
+
+    it("a KVM-less k8s cluster never marks Vault 'Incompatible here' — a docker host's own /dev/kvm probe says nothing about cluster nodes", () => {
+      // CC2 also live so CC3 is the ONLY needs-setup/incompatible column —
+      // isolates the assertion to Vault specifically.
+      renderStep({
+        status: k8sStatus({
+          runner: { driver: "k8s", confinement_classes: ["CC1", "CC2"], confinement_substrates: { CC1: "k8s/(default)", CC2: "k8s/runsc" } },
+          platform: { os: "linux", wsl: false, kvm: false },
+        }),
+      });
+      expect(screen.queryByText("Incompatible here")).not.toBeInTheDocument();
+      expect(screen.queryByText(/doesn't expose \/dev\/kvm/)).not.toBeInTheDocument();
+      const vault = screen.getByRole("radio", { name: /Vault/ });
+      expect(within(vault.closest("th")!).getByRole("button", { name: BTN.showSetupCommand })).toBeInTheDocument();
+    });
+  });
 });
