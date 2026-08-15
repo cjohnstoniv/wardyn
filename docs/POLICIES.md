@@ -46,6 +46,22 @@ added on **every** brokered run, whether or not it holds an `ssh_key` grant at
 all — see "The `ssh_key` and `git_pat` lanes are closed too" below for what
 that buys.
 
+**Brokered is not the same as mintable — a `--repo`-only grant currently 502s
+the clone.** Being brokered (the denies above) is decided from `scope.repos`
+UNION the run's `--repo`/`workspace_repos` clone set, but only `scope.repos` —
+the grant row exactly as declared in the policy — is what the broker actually
+mints against (`mintGitHub` decodes `spec.Scope` fresh from the stored grant;
+nothing folds the run's clone set into it first). A `github_token` grant
+declared with the common template shape `"repos": []` (every shipped example
+policy ships it this way, meaning "the run fills it in") DOES get denied
+direct GitHub egress by the rule above, but the broker then refuses to mint
+anything for it ("github token requires at least one repo") — so a run
+relying on `--repo` alone against a template grant is worse off than an
+unbrokered one: it loses the direct route AND gets no working brokered route
+either. **List the repo(s) explicitly in the grant's own `scope.repos`** for
+a brokered clone to actually succeed today; do not rely on `--repo` /
+`workspace_repos` to fill an empty template.
+
 **Nothing in the policy re-opens those names.** The confinement runs last,
 after every widening phase, and a deny beats `allowed_domains`, beats
 `allow_all_egress`, beats a promoted `ApprovedEgress` entry, and beats a runtime
@@ -348,14 +364,14 @@ unioned into a confined replay's allowlist.
 |---|---|---|---|
 | `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, or `ssh_key`. Anything else is rejected. |
 | `scope` | object | — | Kind-specific; see the table below. |
-| `ttl_seconds` | `int` | `3600` | TTL of the minted credential. 1h is both the default and the maximum. Negative is rejected. |
+| `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window — honored only where the issuer honors a caller-supplied lifetime, which is no grant kind today: GitHub pins installation tokens at ~1h and ignores this value entirely (`MintInstallationToken`'s `ttl` param is documented informational); `git_pat`/`ssh_key`/`api_key` values are long-lived, operator-managed secrets Wardyn returns as-is, so this field only bounds how long Wardyn treats its OWN mint as fresh before re-minting/re-reading the same secret, never how long the underlying credential itself remains valid or usable. 1h is both the default and the maximum. Negative is rejected. |
 | `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
 | `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` or `git_pat` grant for the same forge at write time (see "The `ssh_key` and `git_pat` lanes are closed too"). Drop the grant if the run needs direct GitHub fetches. |
 | `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today. |
-| `api_key` | `{"host":"…","header":"…"}` | Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
+| `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…"}` | `host` and `secret_name` are required — a scope missing either is rejected at write time (422, `validateInlineSecretRefs`) for a stored policy, an inline run policy, or `WARDYN_DEFAULT_POLICY`. `header` defaults to `Authorization`; `format` defaults to `Bearer %s` (a `%s` template the secret value is substituted into — set it for a scheme other than `Bearer <value>`, e.g. a raw value or a different prefix). Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). A GitHub `host` (`github.com` or a `*.github.com` host) may not be combined with a `github_token` grant — refused at write, withheld at dispatch, refused at mint (see "The `ssh_key` and `git_pat` lanes are closed too"); every other host is unaffected. |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too"). |
 
