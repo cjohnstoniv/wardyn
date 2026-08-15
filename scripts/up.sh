@@ -26,6 +26,10 @@
 #             stack + ~/.wardyn install files. Leaves the machine clean (no
 #             re-up). Flags: --dry-run --purge-images --purge-env.
 #   pg        Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432).
+#
+# Regression coverage for the pure host-side decisions below (default-policy
+# auto-pick/re-pick, the CLI hand-off prefix) lives in scripts/test-up-policy.sh
+# (no docker, no network — extracts and exercises the functions directly).
 set -eu
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -80,6 +84,40 @@ composer_wants_llm() {
   echo ""
 }
 
+# resolve_default_policy ENV_FILE OVERRIDE RUNTIMES_JSON WANTS_LLM -> policy path
+# Decides + PERSISTS WARDYN_DEFAULT_POLICY into ENV_FILE (plus a
+# WARDYN_DEFAULT_POLICY_AUTO marker) and echoes the resulting path. OVERRIDE
+# is the process-env WARDYN_DEFAULT_POLICY for this invocation ("" if unset):
+# an explicit override always wins and clears the marker (operator has now
+# spoken) so a later plain `up` won't auto-pick over it. Otherwise ENV_FILE's
+# own value is kept UNLESS it is unset or still carries the marker (meaning WE
+# chose it last time, not the operator) — in which case pick_policy re-runs.
+# That re-pick is what lets a managed subscription or an exported API key
+# added AFTER the first `make setup` actually take effect on the next `up`:
+# the old "only decide when .env has nothing" rule froze the pure-Fence
+# demo.json/default.json ceiling forever once written, and a composed run kept
+# 404ing on its first model call even after a real model path showed up.
+# Pre-marker installs (a value with no marker at all) read as NOT-ours, same
+# as a hand-set override.
+resolve_default_policy() {
+  _rdp_file=$1; _rdp_override=$2; _rdp_runtimes=$3; _rdp_wants_llm=$4
+  if [ -n "${_rdp_override}" ]; then
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 0
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_override}"
+    echo "${_rdp_override}"
+    unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm
+    return
+  fi
+  _rdp_cur=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY)
+  if [ -z "${_rdp_cur}" ] || [ "$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "1" ]; then
+    _rdp_cur=$(pick_policy "${_rdp_runtimes}" "${_rdp_wants_llm}")
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 1
+  fi
+  env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_cur}"
+  echo "${_rdp_cur}"
+  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur
+}
+
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
 # (0 = in use, 1 = free/unknown — this only ever drives a WARN, never a block).
 port_in_use() {
@@ -118,8 +156,12 @@ host_goarch() {
 # your host" instead of "nothing is configured". Rewritten on every `up`, so it
 # can never go stale across a network change. base64 because compose interpolates
 # `$` inside .env values; the payload is credential-masked before it is emitted.
+#
+# Also leaves a working host-native CLI at bin/wardyn (same convention as
+# scripts/setup.sh's host-mode `go build -o bin/wardyn`) for cmd_up's hand-off
+# to point at — the containerized path installs no `wardyn` on PATH otherwise.
 seed_host_proxy() {
-  _shp_bin="${REPO_ROOT}/bin/wardyn-host"
+  _shp_bin="${REPO_ROOT}/bin/wardyn"
   mkdir -p "${REPO_ROOT}/bin" 2>/dev/null || return 0
   # distroless has no shell, so `docker run … cat` can't work — create, cp, rm.
   _shp_cid=$(docker create wardyn/wardynd:local 2>/dev/null) || return 0
@@ -135,6 +177,19 @@ seed_host_proxy() {
     fi
   fi
   unset _shp_bin _shp_cid _shp_json _shp_b64
+}
+
+# wardyn_cli_prefix REPO_ROOT_DIR -> invocation prefix for example commands.
+# seed_host_proxy extracts a working host-native `wardyn` to REPO_ROOT_DIR/bin
+# (same convention as scripts/setup.sh's host-mode `go build -o bin/wardyn`);
+# use it when present. Otherwise fall back to a bare `wardyn` (assumed on
+# PATH) — the caller is expected to also print the `go install` recovery line.
+wardyn_cli_prefix() {
+  if [ -x "$1/bin/wardyn" ]; then
+    echo "./bin/wardyn"
+  else
+    echo "wardyn"
+  fi
 }
 
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
@@ -465,18 +520,17 @@ cmd_up() {
   # publish this stack uses (see docker-compose.yaml). Inert under SSO (local-mode-only).
   env_set "${ENV_FILE}" WARDYN_LOCAL_TRUST_FORWARDER true
 
-  _policy="${WARDYN_DEFAULT_POLICY:-}"
-  [ -z "${_policy}" ] && _policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
-  if [ -z "${_policy}" ]; then
-    _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-    _policy=$(pick_policy "${_runtimes}" "$(composer_wants_llm "${ENV_FILE}")")
+  _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+  _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+  _policy=$(resolve_default_policy "${ENV_FILE}" "${WARDYN_DEFAULT_POLICY:-}" "${_runtimes}" "$(composer_wants_llm "${ENV_FILE}")")
+  if [ "${_policy}" != "${_prev_policy}" ]; then
     log "Auto-picked default policy: ${_policy}"
     case "${_policy}" in
       */composer-dev.json)
         log "  (composer-capable ceiling — a real model path is configured; a composed run can reach its LLM)" ;;
     esac
   fi
-  env_set "${ENV_FILE}" WARDYN_DEFAULT_POLICY "${_policy}"
+  unset _prev_policy
 
   if [ -z "$(env_get "${ENV_FILE}" WARDYN_COMPOSER_CONFIG)" ]; then
     env_set "${ENV_FILE}" WARDYN_COMPOSER_CONFIG '{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}'
@@ -573,6 +627,19 @@ cmd_up() {
     log "Connecting the Wardyn-managed Claude subscription from WARDYN_SUBSCRIPTION_TOKEN…"
     if printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | compose exec -T wardynd /usr/local/bin/wardyn subscription connect --token-stdin; then
       log "Managed Claude subscription connected (injected proxy-side; never resident in the sandbox)."
+      # The pick above ran BEFORE this connect (composer_wants_llm can't see a
+      # managed subscription, only WARDYN_COMPOSER_CONFIG/*_API_KEY), so an
+      # auto-picked demo.json/default.json would 404 a composed run's first
+      # model call all session. Re-pick with wants_llm forced on (still
+      # guarded by WARDYN_DEFAULT_POLICY_AUTO) and restart wardynd to apply it.
+      _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+      _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+      _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
+      if [ "${_post_policy}" != "${_prev_policy}" ]; then
+        log "Re-picked default policy now that a subscription is connected: ${_post_policy} — restarting wardynd"
+        compose up -d wardynd
+      fi
+      unset _prev_policy _post_runtimes _post_policy
     else
       warn "subscription connect failed — check the token (from 'claude setup-token', starts with sk-ant-oat)."
     fi
@@ -614,21 +681,25 @@ cmd_up() {
     *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
   esac
 
+  _cli=$(wardyn_cli_prefix "${REPO_ROOT}")
+
   # Route hand-off. CI/headless (no browser or no TTY): no browser, NO demos —
   # just the launch command. Interactive (UI/CLI): open Getting-started + point at
   # the keyless demo and a one-command governed run.
   if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ] || [ ! -t 1 ]; then
     log "Wardyn is up (headless): ${_url}"
     log "  Ready — launch a governed run:"
-    log "    wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
+    log "    ${_cli} run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
   else
     open_url "${_url}"
     log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
     log "  Prove the sandbox boundary from the CLI (keyless):"
-    log "    wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
-    log "  Give it a real Claude:  wardyn subscription connect   (then run with sandbox-claude.yaml)"
+    log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
+    log "  Give it a real Claude:  ${_cli} subscription connect   (then run with sandbox-claude.yaml)"
     log "  Or click the /demos screen in the UI."
   fi
+  [ "${_cli}" = "wardyn" ] && log "  (bin/wardyn wasn't extracted — build one: go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest)"
+  unset _cli
 
   # The per-run sandbox proxy + agent images are NOT needed to reach the UI or the
   # Getting-started page — only to LAUNCH a run. Build them AFTER the browser is

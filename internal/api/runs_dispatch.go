@@ -753,6 +753,17 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"GIT_AUTHOR_EMAIL":    gitEmailLocal(run.CreatedBy) + "@wardyn.local",
 		"GIT_COMMITTER_NAME":  "wardyn-agent:" + run.Agent,
 		"GIT_COMMITTER_EMAIL": run.ID.String() + "@agent.wardyn.local",
+		// The pre-exec clone (agent-run-lib.sh's clone_one) runs on a TTY exec
+		// (driver.go's ExecCreateOptions.TTY — needed for the agent CLI itself),
+		// so an unauthorized/blocked/misconfigured URL that would otherwise fail
+		// fast instead makes git see a terminal and sit at a credential prompt
+		// FOREVER (nobody is there to answer it — clone_one's own stdin isn't
+		// wired to a human). These three turn that hang back into the documented
+		// log-and-continue: git exits non-zero immediately, clone_one's `else`
+		// branch logs it as the governance signal it is, and the run proceeds.
+		"GIT_TERMINAL_PROMPT": "0",
+		"GIT_ASKPASS":         "",
+		"SSH_ASKPASS":         "",
 	}
 	// Toolchain-fidelity env — REQUIREMENTS-DRIVEN, never platform-wide: a
 	// workspace run gets exactly what its scans detected (needs), and only a

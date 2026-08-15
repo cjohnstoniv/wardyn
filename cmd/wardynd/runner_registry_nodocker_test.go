@@ -36,7 +36,7 @@ func TestBuildRunnerFromFlags_DockerNotCompiledInFailsClosed(t *testing.T) {
 		}
 	}
 	// And /healthz stays truthful: no substrate is available in this build.
-	if avail := componentsInfo(rrFlags("none"), "none")["sandbox"].Available; len(avail) != 0 {
+	if avail := componentsInfo(rrFlags("none"), "none", nil)["sandbox"].Available; len(avail) != 0 {
 		t.Fatalf("tagless sandbox.available must be empty, got %v", avail)
 	}
 }

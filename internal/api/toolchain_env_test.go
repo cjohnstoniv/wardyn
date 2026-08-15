@@ -44,6 +44,24 @@ func TestBuildBaseSandboxEnv_ToolchainEnvIsRequirementsDriven(t *testing.T) {
 		map[string]bool{"GOTMPDIR": false, "GOCACHE": false, "MAVEN_OPTS": false, "GRADLE_OPTS": false})
 }
 
+// The pre-exec clone (agent-run-lib.sh's clone_one) runs on a TTY exec, so a
+// git credential prompt that would otherwise fail fast instead hangs forever
+// waiting for input nobody supplies. GIT_TERMINAL_PROMPT=0 is what turns that
+// hang back into the documented "clone FAILED ... continuing" — it must reach
+// every run unconditionally, same as GIT_AUTHOR_* right next to it.
+func TestBuildBaseSandboxEnv_GitPromptsDisabled(t *testing.T) {
+	run := types.AgentRun{CreatedBy: "op", Agent: "claude-code"}
+	env := buildBaseSandboxEnv(run, "http://p:3128", nil)
+	if got := env["GIT_TERMINAL_PROMPT"]; got != "0" {
+		t.Errorf("GIT_TERMINAL_PROMPT = %q, want \"0\" (a terminal credential prompt must fail fast, not hang the run forever)", got)
+	}
+	for _, k := range []string{"GIT_ASKPASS", "SSH_ASKPASS"} {
+		if _, present := env[k]; !present {
+			t.Errorf("%s missing from sandbox env — an askpass helper could still pop a prompt nobody answers", k)
+		}
+	}
+}
+
 func TestRunToolchainNeeds(t *testing.T) {
 	wsWith := func(p workspacescan.WorkspaceProfile) types.Workspace {
 		raw, err := json.Marshal(p)

@@ -279,7 +279,7 @@ func run() error {
 		ManagedToken:              feats.managedToken,
 		DisableSubscriptionInject: feats.disableSubInject,
 		Composer:                  feats.composerReg,
-		Components:                componentsInfo(f, runnerTarget),
+		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",

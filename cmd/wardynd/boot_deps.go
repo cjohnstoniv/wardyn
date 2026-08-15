@@ -460,17 +460,29 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 // split lives in docs/PLUGGABILITY.md and ROADMAP.md, where a recommendation
 // this build cannot yet run belongs. policy_engine has no registry yet, so it
 // carries no "available".
-func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentInfo {
+//
+// recStore is the ACTUAL constructed store (nil when disabled — e.g. the fs
+// backend with no directory, the stock Helm install's default: persistence
+// off, WARDYN_RECORDING_DIR empty). Without it, "recording" reported the
+// *flag* (*f.recordingSel, e.g. "fs") regardless of whether that backend ever
+// came up, so a stock deployment's /healthz claimed a live recording store
+// while every run silently recorded nothing and the UI blamed "no session
+// captured yet" — a broken promise, not a missing feature.
+func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store) map[string]api.ComponentInfo {
 	sourceOf := func(selected, def string) string {
 		if selected == def {
 			return "default"
 		}
 		return "configured"
 	}
+	recInfo := api.ComponentInfo{Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "pg")}
+	if recStore == nil {
+		recInfo = api.ComponentInfo{Selected: "none", Available: recording.Names(), Source: "disabled"}
+	}
 	return map[string]api.ComponentInfo{
 		"identity":      {Selected: *f.identitySel, Available: identity.Names(), Source: sourceOf(*f.identitySel, "embedded")},
 		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), Source: sourceOf(*f.secretStoreSel, "pg")},
-		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "pg")},
+		"recording":     recInfo,
 		"policy_engine": {Selected: "builtin"},
 		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}
