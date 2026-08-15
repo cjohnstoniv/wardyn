@@ -61,6 +61,7 @@ log them.
 | `WARDYN_LOCAL_MODE` | bool | `false` | LOCAL HOST MODE: bypass public-API auth (flag `-local-mode`) |
 | `WARDYN_LOCAL_OPERATOR` | string | `local:<os-user>` | operator principal stamped in local-mode (flag `-local-operator`) |
 | `WARDYN_LOCAL_TRUST_FORWARDER` | bool | `false` | accept a non-loopback peer under local-mode (flag `-local-trust-forwarder`) |
+| `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` | bool | `false` | override: allow boot with `-local-mode` explicitly set alongside a configured `WARDYN_OIDC_ISSUER` — i.e. silently disable the configured OIDC/SSO admin-member RBAC deployment and attribute every request to the fixed local operator — normally refused (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`). The auto-enable heuristic (no explicit flag, no admin token, loopback bind) is unaffected — it already excludes a configured issuer on its own (flag `-allow-local-mode-with-oidc`) |
 | `WARDYN_TLS_CERT` | string | (unset) | TLS certificate PEM path (flag `-tls-cert`) |
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`) |
 | `WARDYN_TLS_TERMINATED` | bool | `false` | TLS terminates upstream; mark cookies Secure (flag `-tls-terminated`) |

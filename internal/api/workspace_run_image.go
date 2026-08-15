@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -108,6 +109,31 @@ func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
 	return present
 }
 
+// removeStaleImage best-effort reclaims a workspace-built image tag a
+// caller is about to supersede (bug-workspace-1): every resolveWorkspaceImage
+// build lane mints a fresh, uniquely-named local tag on every cache miss, and
+// nothing ever removed the tag it replaced — a rescan, an image-choice edit,
+// or a workspace delete each leaked a full docker image forever. No-op when
+// ref is empty (nothing built yet), ref == next (the cache actually hit —
+// never happens at a call site that reached a build, but cheap to guard), or
+// the wired Runner doesn't implement the optional runner.ImageRemover
+// capability (k8s: the kubelet pulls fresh, nothing local to reclaim). Errors
+// are logged, never surfaced: the NEW image already built/is already in use;
+// failing to reclaim the old one is a disk-usage regret, not a launch blocker.
+func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
+	if ref == "" || ref == next {
+		return
+	}
+	ir, ok := s.cfg.Runner.(runner.ImageRemover)
+	if !ok {
+		return
+	}
+	if err := ir.ImageRemove(ctx, ref); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not reclaim superseded workspace image",
+			slog.String("image", ref), slog.Any("err", err))
+	}
+}
+
 // resolveWorkspaceImage returns the sandbox image for a run driven by its PRIMARY
 // onboarded workspace, or ok=false to fall through to the convention image.
 // Order (all fail-OPEN — any failure returns ok=false + convention image, never
@@ -177,6 +203,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
 			return "", false
 		}
+		s.removeStaleImage(ctx, primary.ImageRef, built)
 		if s.cfg.Store != nil {
 			if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, byoiHash); uerr != nil {
 				// Non-fatal: the image built and is usable now; caching just missed.
@@ -227,6 +254,11 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		}
 		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
 		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
+			// This lane's tag is FIXED (no hash suffix) — a rebuild reuses the
+			// same name, so primary.ImageRef == built here and removeStaleImage
+			// is a no-op (its ref==next guard); removing "the old ref" by this
+			// name would in fact delete the image the retag just moved it to.
+			s.removeStaleImage(ctx, primary.ImageRef, built)
 			if s.cfg.Store != nil {
 				if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, repoHash); uerr != nil {
 					buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built, "cache_warn": uerr.Error()})
@@ -265,6 +297,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
 		return "", false
 	}
+	s.removeStaleImage(ctx, primary.ImageRef, built)
 	// Cache the built image on the workspace for reuse by later runs — a SCOPED
 	// write: the previous full-row UpdateWorkspace here replayed a stale
 	// pre-launch snapshot over every concurrently-persisted async column

@@ -1107,6 +1107,23 @@ func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
 	return len(res.Items) > 0, nil
 }
 
+// ImageRemove implements runner.ImageRemover (bug-workspace-1): reclaims a
+// workspace-built image tag superseded by a rescan/edit/delete. A ref already
+// absent is not an error — idempotent, same contract as StopSandbox — and a
+// ref still referenced by another tag/container (still in USE, e.g. a
+// concurrently-running sandbox launched off it) fails soft rather than
+// yanking an image out from under a live run: the caller logs and moves on,
+// the same best-effort posture as every other cache-bust here.
+func (d *Driver) ImageRemove(ctx context.Context, ref string) error {
+	if _, err := d.cli.ImageRemove(ctx, ref, client.ImageRemoveOptions{}); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("docker: image remove %q: %w", ref, err)
+	}
+	return nil
+}
+
 // statusFromInspect maps Docker container state to a Wardyn RunState.
 func statusFromInspect(insp container.InspectResponse) runner.Status {
 	st := runner.Status{State: types.RunRunning}

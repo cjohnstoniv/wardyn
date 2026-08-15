@@ -144,13 +144,15 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	// is a header-splitting shape rather than a typo. The injection sink
 	// (handleInternalInjection) enforces this too, defense-in-depth.
 	if g.Kind == types.GrantAPIKey {
-		if rule, derr := injectionRuleFromScope(g.Scope); derr == nil {
-			if sinkReservedSecret(rule.SecretName) {
-				return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
-			}
-			if !egress.ValidHeaderName(rule.Header) {
-				return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
-			}
+		rule, derr := injectionRuleFromScope(g.Scope)
+		if derr != nil {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope invalid: %w", i, derr)
+		}
+		if sinkReservedSecret(rule.SecretName) {
+			return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
+		}
+		if !egress.ValidHeaderName(rule.Header) {
+			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
 	}
 	// A git_pat grant returns the STORED PAT VALUE to the git credential

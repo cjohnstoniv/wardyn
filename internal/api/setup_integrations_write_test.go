@@ -159,6 +159,12 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		// instead of silently storing config nothing reads.
 		{"unknown config key on a closed kind", "acme-anthropic", `{"kind":"anthropic_api_key","config":{"regoin":"us-east-1"}}`},
 		{"bedrock legacy lane key (renamed auth_lane)", "acme-bedrock", `{"kind":"bedrock","config":{"lane":"auto","region":"us-east-1","model":"anthropic.claude-3"}}`},
+		// bug-integrations-2: resolveBedrockAuth reads FOUR FIXED global
+		// secret names, never this row's own secret_name — a row naming
+		// anything else is decorative (the write succeeds, the stored
+		// secret is silently never read). Reject at write time.
+		{"bedrock secret_name not one of the four fixed global names", "acme-bedrock",
+			`{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3"},"secrets":[{"role":"access_key","secret_name":"acme-bedrock-key"}]}`},
 
 		// A generic kind's secret rows must SAY how they deliver — the row is
 		// the whole contract; only a closed kind's bespoke transport may omit it.
@@ -331,6 +337,23 @@ func TestHandlePutIntegration_GenericNoHeaderIsEgressOnly(t *testing.T) {
 func TestHandlePutIntegration_BedrockBothSetIsAccepted(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
 	body := `{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3","auth_lane":"auto"}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-bedrock", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 1 {
+		t.Fatalf("expected the row to persist, got %+v", fake.cfg.Integrations)
+	}
+}
+
+// TestHandlePutIntegration_BedrockRecognizedSecretNameIsAccepted is the
+// counterfactual to the bug-integrations-2 rejection above: naming one of
+// the four secret names resolveBedrockAuth actually reads must still round-
+// trip cleanly.
+func TestHandlePutIntegration_BedrockRecognizedSecretNameIsAccepted(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
+	body := `{"kind":"bedrock","config":{"region":"us-east-1","model":"anthropic.claude-3"},` +
+		`"secrets":[{"role":"access_key","secret_name":"aws-access-key-id"}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-bedrock", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())

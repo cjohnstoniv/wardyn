@@ -44,6 +44,16 @@ func (s *sourcesEndpointFake) GetSource(_ context.Context, id uuid.UUID) (types.
 func (s *sourcesEndpointFake) WorkspacesAttaching(context.Context, uuid.UUID) ([]string, error) {
 	return s.attached, nil
 }
+func (s *sourcesEndpointFake) UpdateSourceConfig(_ context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error) {
+	for key, src := range s.lib.sources {
+		if src.ID == id {
+			src.Name, src.Requirements = name, reqs
+			s.lib.sources[key] = src
+			return src, nil
+		}
+	}
+	return types.Source{}, store.ErrNotFound
+}
 func (s *sourcesEndpointFake) DeleteSource(_ context.Context, id uuid.UUID, detach bool) error {
 	if s.notFound {
 		return store.ErrNotFound
@@ -87,6 +97,54 @@ func TestSources_UpsertByCanonicalIdentity(t *testing.T) {
 	_ = json.Unmarshal(second.Body.Bytes(), &again)
 	if again.ID != created.ID {
 		t.Error("identity re-POST must return the existing library entry, not a new one")
+	}
+}
+
+// TestSources_ReAddAppliesRenameOnIdentityHit is the bug-ops-1 regression
+// (W7-S1-3 applied to the sibling Sources tier): re-POSTing an existing
+// source's identity with a NEW name is the library's only re-add/rename
+// route (no PUT /sources/{id} — see mountLibraryRoutes' DEADCODE-1 comment),
+// so the operator's explicitly-typed name must actually apply, not get
+// silently discarded because the identity-hit branch only fired for a
+// requirements edit.
+func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
+	h := newHarness(t)
+	fake := &sourcesEndpointFake{}
+	srv := New(baseTestConfig(h, fake))
+
+	first := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken,
+		`{"kind":"local_dir","locator":"/home/me/payments"}`)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first POST: code = %d, want 201; body=%s", first.Code, first.Body.String())
+	}
+	var created types.Source
+	_ = json.Unmarshal(first.Body.Bytes(), &created)
+	if created.Name != "payments" {
+		t.Fatalf("derived name = %q, want payments", created.Name)
+	}
+
+	// Re-add the SAME identity with an explicit rename and no requirements.
+	renamed := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken,
+		`{"kind":"local_dir","locator":"/home/me/payments","name":"Payments Service"}`)
+	if renamed.Code != http.StatusOK {
+		t.Fatalf("re-POST with rename: code = %d, want 200; body=%s", renamed.Code, renamed.Body.String())
+	}
+	var again types.Source
+	_ = json.Unmarshal(renamed.Body.Bytes(), &again)
+	if again.ID != created.ID {
+		t.Fatal("identity re-POST must return the existing library entry, not a new one")
+	}
+	if again.Name != "Payments Service" {
+		t.Errorf("name = %q, want the operator's typed rename %q applied, not discarded", again.Name, "Payments Service")
+	}
+
+	// A subsequent GET must see the SAME persisted rename, not just the
+	// one-shot response body.
+	get := do(t, srv, http.MethodGet, "/api/v1/sources/"+created.ID.String(), adminToken, "")
+	var fetched types.Source
+	_ = json.Unmarshal(get.Body.Bytes(), &fetched)
+	if fetched.Name != "Payments Service" {
+		t.Errorf("stored name = %q, want the rename persisted", fetched.Name)
 	}
 }
 

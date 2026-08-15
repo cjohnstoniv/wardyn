@@ -132,6 +132,23 @@ const (
 	bedrockAPIKeySecret = "bedrock-api-key"
 )
 
+// bedrockGlobalSecretNames is the closed set of secret names resolveBedrockAuth
+// actually reads (bug-integrations-2): a Bedrock Integration row's own Secrets
+// entries are validated against this set at write time (validateIntegrationWrite)
+// so a renamed/invented secret_name is rejected up front instead of silently
+// orphaning the stored secret behind a field nothing reads.
+var bedrockGlobalSecretNames = map[string]bool{
+	bedrockAccessKeyIDSecret:     true,
+	bedrockSecretAccessKeySecret: true,
+	bedrockSessionTokenSecret:    true,
+	bedrockAPIKeySecret:          true,
+}
+
+// bedrockGlobalSecretNamesList is bedrockGlobalSecretNames rendered for the
+// validateIntegrationWrite error message — a fixed, sorted literal (not a
+// map-iteration-order-dependent join) since Go map order is unspecified.
+const bedrockGlobalSecretNamesList = `"` + bedrockAPIKeySecret + `", "` + bedrockAccessKeyIDSecret + `", "` + bedrockSecretAccessKeySecret + `", "` + bedrockSessionTokenSecret + `"`
+
 // bedrockAuth is the resolved Bedrock authentication plan for a run.
 type bedrockAuth struct {
 	env         map[string]string // sandbox env additions (bearer: placeholder; resident: real creds)

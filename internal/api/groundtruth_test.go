@@ -328,30 +328,33 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 // TestHealthzEbpfPartialWhenOneKindNeverArrives is W20-W20-groundtruth-
 // mapper-4: a sensor that has mapped real events (observed_total>0) but only
 // EVER for one kind (a mis-scoped TracingPolicy that never fires for
-// network.connect or file.write, say) used to read "healthy" identically to
-// one seeing all three kinds — the aggregate alone cannot tell them apart.
-// With the per-kind breakdown published, this must report "partial" and name
-// the missing kinds, not the "healthy" overclaim.
+// network.connect, say) used to read "healthy" identically to one seeing
+// every required kind — the aggregate alone cannot tell them apart. With the
+// per-kind breakdown published, this must report "partial" and name the
+// missing kind, not the "healthy" overclaim. kernel.file.write is NOT in the
+// required set (bug-audit-1: it fires only on a narrow credential-path
+// write, so its absence is not a coverage gap — see
+// TestHealthzEbpfHealthyWithoutFileWrite) and so is never named here.
 func TestHealthzEbpfPartialWhenOneKindNeverArrives(t *testing.T) {
 	h := newHarness(t)
 	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{
-		groundtruth.ActionProcessExec: 9, // network.connect and file.write NEVER arrived
+		groundtruth.ActionProcessExec: 9, // network.connect NEVER arrived
 	})
 	hb.Time = time.Now()
 	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
 
 	gt := healthzEbpf(t, h)
 	if gt["state"] != "partial" {
-		t.Fatalf("ebpf_groundtruth.state = %v, want partial (one kernel event kind never arrived)", gt["state"])
+		t.Fatalf("ebpf_groundtruth.state = %v, want partial (a REQUIRED kernel event kind never arrived)", gt["state"])
 	}
 	missing, ok := gt["missing_kinds"].([]any)
-	if !ok || len(missing) != 2 {
-		t.Fatalf("missing_kinds = %v, want the 2 kinds that never arrived", gt["missing_kinds"])
+	if !ok || len(missing) != 1 || missing[0] != groundtruth.ActionNetworkConnect {
+		t.Fatalf("missing_kinds = %v, want exactly [%s]", gt["missing_kinds"], groundtruth.ActionNetworkConnect)
 	}
 }
 
 // TestHealthzEbpfHealthyWhenAllKindsArrive is the companion: once every
-// known kernel event kind has been observed at least once, the stream is
+// required kernel event kind has been observed at least once, the stream is
 // genuinely healthy — not merely "some events flowed".
 func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	h := newHarness(t)
@@ -366,6 +369,34 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	gt := healthzEbpf(t, h)
 	if gt["state"] != "healthy" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want healthy (every kind has arrived)", gt["state"])
+	}
+}
+
+// TestHealthzEbpfHealthyWithoutFileWrite is the bug-audit-1 regression: the
+// P1 fix for W20-W20-groundtruth-mapper-4 (commit b7ad12fd) required ALL
+// THREE kernel event kinds — including kernel.file.write — before reporting
+// "healthy". But sensitive.go's own allowlist filter means file.write fires
+// only on a write to a narrow credential-shaped path (~/.ssh, ~/.aws, ...),
+// which most captures never touch, making "healthy" chronically unreachable
+// and stamping a spurious "partial coverage" caveat on nearly every capture.
+// exec+connect (both near-universal) having arrived must report healthy on
+// their own, with zero file.write observed.
+func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
+	h := newHarness(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 2, map[string]uint64{
+		groundtruth.ActionProcessExec:    1,
+		groundtruth.ActionNetworkConnect: 1,
+		// groundtruth.ActionFileWrite deliberately absent (0/never observed).
+	})
+	hb.Time = time.Now()
+	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
+
+	gt := healthzEbpf(t, h)
+	if gt["state"] != "healthy" {
+		t.Fatalf("ebpf_groundtruth.state = %v, want healthy (exec+connect arrived; file.write is not required)", gt["state"])
+	}
+	if _, has := gt["missing_kinds"]; has {
+		t.Errorf("missing_kinds = %v, want absent on a healthy verdict", gt["missing_kinds"])
 	}
 }
 

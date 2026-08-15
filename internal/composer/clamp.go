@@ -6,6 +6,7 @@ package composer
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -175,6 +176,26 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 		cp.WorkspaceSecretValues = nil
 		cp.ClassifiedMarkers = append([]string(nil), ceiling.LLMInspection.ClassifiedMarkers...)
 		out.LLMInspection = &cp
+		// bug-policy-1: the AllowedDomains intersection above already ran and
+		// narrowed out.AllowedDomains to the PROPOSAL's own (narrower) list —
+		// it never had a reason to keep the ceiling's detector_sidecar_url
+		// host, since AT THAT POINT the ceiling hadn't inherited yet. But
+		// validateLLMInspection (internal/api/policy.go) requires the
+		// inherited sidecar's host to be an EXACT entry on THIS SAME
+		// (post-clamp) spec's own allowed_domains — so every compose/
+		// profile/inline_policy run under an operator ceiling that sets
+		// detector_sidecar_url would self-reject unless the proposal
+		// happened to already allowlist that exact host. Union it in now,
+		// the same way DeniedDomains is already unioned in above — it does
+		// not widen egress by itself (the sidecar dial never goes through
+		// the sandbox's own allowlist, per validateLLMInspection's own
+		// comment), it only lets the ceiling's own inherited config pass
+		// its own validation.
+		if !out.AllowAllEgress {
+			if u, uerr := url.Parse(strings.TrimSpace(ceiling.LLMInspection.DetectorSidecarURL)); uerr == nil && u.Hostname() != "" {
+				out.AllowedDomains = union(out.AllowedDomains, []string{u.Hostname()})
+			}
+		}
 	} else if out.LLMInspection != nil {
 		warns = append(warns, "llm_inspection dropped: operator policy sets none, so a proposal/inline llm_inspection "+
 			"(incl. detector_sidecar_url/intercept_tls) can never survive the clamp")

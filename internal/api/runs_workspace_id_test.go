@@ -5,9 +5,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -323,6 +325,77 @@ func TestResolveWorkspaceImage_AlwaysBakesStandardAgentTool(t *testing.T) {
 	}
 }
 
+// TestResolveWorkspaceImage_RebuildReclaimsSupersededTag is the bug-workspace-1
+// regression: every build lane in resolveWorkspaceImage mints a fresh,
+// uniquely-named local docker tag on every cache miss, but nothing ever
+// called ImageRemove on the tag it superseded — every rescan/edit leaked a
+// full docker image forever. A cache-miss rebuild (a stale ImageRef whose
+// BuiltProfileHash no longer matches p.CacheKey()) must reclaim the OLD tag
+// once the new one has actually built.
+func TestResolveWorkspaceImage_RebuildReclaimsSupersededTag(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	builder := &capturingImageBuilder{}
+	cfg := baseTestConfig(h, &resolveImageStoreFake{})
+	cfg.ImageBuilder = builder
+	rr := &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	srv := New(cfg)
+	const oldRef = "wardyn-workspace/old-id:stale-hash"
+	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile),
+		ImageRef: oldRef, BuiltProfileHash: "a-stale-hash-that-will-never-match"}
+
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed")
+	}
+	if built == oldRef {
+		t.Fatalf("expected a freshly-built tag distinct from the stale one, got %q for both", built)
+	}
+	rr.mu.Lock()
+	removed := append([]string(nil), rr.removed...)
+	rr.mu.Unlock()
+	if len(removed) != 1 || removed[0] != oldRef {
+		t.Errorf("ImageRemove calls = %v, want exactly [%s] (the superseded tag reclaimed)", removed, oldRef)
+	}
+}
+
+// TestResolveWorkspaceImage_CacheHitNeverReclaimsItsOwnTag is the
+// counterfactual: a genuine cache HIT (the stored ref is still valid and
+// present) must never call ImageRemove on the ref it's about to return —
+// that would delete the very image the run is about to launch.
+func TestResolveWorkspaceImage_CacheHitNeverReclaimsItsOwnTag(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	builder := &capturingImageBuilder{}
+	cfg := baseTestConfig(h, &resolveImageStoreFake{})
+	cfg.ImageBuilder = builder
+	rr := &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	srv := New(cfg)
+	const cachedRef = "wardyn-workspace/w:cached-hash"
+	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile),
+		ImageRef: cachedRef, BuiltProfileHash: profile.CacheKey()}
+
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok || built != cachedRef {
+		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the cache hit (%q, true)", built, ok, cachedRef)
+	}
+	if len(builder.calls) != 0 {
+		t.Fatalf("cache hit must not trigger a rebuild, got %d builds", len(builder.calls))
+	}
+	rr.mu.Lock()
+	removed := len(rr.removed)
+	rr.mu.Unlock()
+	if removed != 0 {
+		t.Errorf("ImageRemove calls = %d, want 0 on a cache hit", removed)
+	}
+}
+
 // TestResolveWorkspaceImage_CacheKeyInvalidatesPreUnconditionalBake pins
 // CacheKey's salt bump (profile.go's cacheKeySalt): a workspace image cached
 // under the pre-bump formula (a bare ProfileHash — the old "no tools named"
@@ -460,6 +533,26 @@ type imageCheckerRunner struct {
 
 func (r *imageCheckerRunner) ImagePresent(_ context.Context, ref string) (bool, error) {
 	return r.present[ref], nil
+}
+
+// imageRemoverRunner wraps fakeRunner with runner.ImageRemover, so a test can
+// assert which refs resolveWorkspaceImage/handleUpdateWorkspace/
+// handleDeleteWorkspace reclaimed (bug-workspace-1).
+type imageRemoverRunner struct {
+	*fakeRunner
+	mu      sync.Mutex
+	removed []string
+	failRef string // ImageRemove errors for this ref, if set
+}
+
+func (r *imageRemoverRunner) ImageRemove(_ context.Context, ref string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ref == r.failRef {
+		return fmt.Errorf("docker: image in use")
+	}
+	r.removed = append(r.removed, ref)
+	return nil
 }
 
 // TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild is

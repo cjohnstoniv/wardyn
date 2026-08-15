@@ -289,12 +289,15 @@ setup `make setup` does not do for you:
 
 1. **Turn local mode off.** The containerized `make setup` path writes
    `WARDYN_LOCAL_MODE=true` into `deploy/compose/.env` (see the
-   `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)); left in place it wins over
-   OIDC — no login is ever required, for anyone, regardless of what you
-   configure below (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`: an
-   explicit `-local-mode` short-circuits even when an OIDC issuer is set; a
-   `make setup` re-run warns about exactly this combination, and boot announces
-   LOCAL HOST MODE). In `deploy/compose/.env`:
+   `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)); left in place alongside a
+   configured OIDC issuer, wardynd now **refuses to boot** rather than
+   silently winning over OIDC (`resolveLocalMode`,
+   `cmd/wardynd/boot_flags.go`: an explicit `-local-mode` with `-oidc-issuer`
+   also set is refused unless `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true`
+   explicitly overrides it — no login is ever required, for anyone, if you do
+   override it, regardless of what you configure below). A `make setup`
+   re-run also warns about exactly this combination before boot gets the
+   chance to refuse it. In `deploy/compose/.env`:
 
    ```sh
    WARDYN_LOCAL_MODE=false

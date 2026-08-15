@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -71,6 +72,10 @@ type recordStore struct {
 	// stamp the sensor's coverage state onto the capture. nil (the default)
 	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
 	heartbeat *types.AuditEvent
+	// mergeErr, when set, is what MergeWorkspaceRequirements returns instead
+	// of applying `add` — the bug-record-1 regression seam (a store error on
+	// the widening AFTER the promotion marker CAS already committed).
+	mergeErr error
 }
 
 // LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
@@ -103,6 +108,9 @@ func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
 // MergeWorkspaceRequirements mirrors the real scoped writer: atomic || into
 // the overlay, guarded by the 256-key cap (ErrConflict past it).
 func (s *recordStore) MergeWorkspaceRequirements(_ context.Context, _ uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error) {
+	if s.mergeErr != nil {
+		return types.Workspace{}, s.mergeErr
+	}
 	if len(s.ws.Requirements) >= 256 {
 		return types.Workspace{}, store.ErrConflict
 	}
@@ -554,6 +562,41 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	fake.saved = nil
 	if w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, ""); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("failed-recording promote: code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet is the
+// bug-record-1 regression: on base 17455349, the EgressPromoted marker CAS
+// is written and committed BEFORE MergeWorkspaceRequirements — so a store
+// error from the merge (a concurrent-cap race, or any other failure) left
+// the record claiming a widening that never landed. The fix must return the
+// merge error to the caller (never a 200) AND leave the persisted marker at
+// its pre-click value, so a retry does not skip re-attempting the merge on
+// the mistaken belief it already happened.
+func TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 3},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned,
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
+		})}},
+		mergeErr: errors.New("store: transient write failure"),
+	}
+	srv := newTestSrv(t, fake)
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500 when the requirements merge fails; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.Requirements) != 0 {
+		t.Errorf("requirements = %v, want untouched — the merge never applied", fake.ws.Requirements)
+	}
+	if res := fake.savedResult(t, "build"); res.EgressPromoted {
+		t.Error("egress_promoted marker must NOT be left set when the widening it claims never landed")
 	}
 }
 

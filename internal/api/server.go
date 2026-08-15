@@ -744,15 +744,20 @@ func (s *Server) ebpfGroundtruthCaveat(ctx context.Context) string {
 	}
 }
 
-// groundtruthKinds is the closed set of kernel event kinds the sensor maps
-// (cmd/wardyn-tetragon-ingest/main.go's processLine — exec/connect/sensitive-
-// write). ebpfGroundtruthStatus requires every one of these to have arrived
-// at least once before reporting "healthy" when the sensor publishes a
-// per-kind breakdown at all.
+// groundtruthKinds is the set of kernel event kinds required at least once
+// before ebpfGroundtruthStatus reports "healthy" when the sensor publishes a
+// per-kind breakdown at all — exec and connect only. kernel.file.write (the
+// sensor's third mapped kind, cmd/wardyn-tetragon-ingest/main.go's
+// processLine) is DELIBERATELY excluded: sensitive.go's own allowlist filter
+// means it fires only on a write to a narrow set of credential-shaped paths
+// (~/.ssh, ~/.aws, ...), so a normal capture that never happens to touch one
+// is not a coverage gap — requiring it made "healthy" chronically unreachable
+// and stamped a spurious "partial coverage" caveat on nearly every Record
+// Mode capture (bug-audit-1). observed_by_kind still reports its count when
+// the sensor does see one; it just never gates the health verdict.
 var groundtruthKinds = []string{
 	groundtruth.ActionProcessExec,
 	groundtruth.ActionNetworkConnect,
-	groundtruth.ActionFileWrite,
 }
 
 // missingGroundtruthKinds returns the subset of groundtruthKinds absent or

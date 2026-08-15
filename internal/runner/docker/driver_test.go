@@ -81,6 +81,28 @@ func newTestDriver(f *fakeDocker) *Driver {
 	return newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 }
 
+// TestDriver_ImageRemove is the bug-workspace-1 regression at the driver
+// level: runner.ImageRemover must actually reclaim a present image and treat
+// an already-absent one as a no-op (idempotent, same StopSandbox-style
+// contract), never surfacing "not found" as an error to a best-effort caller.
+func TestDriver_ImageRemove(t *testing.T) {
+	f := newFakeDocker()
+	f.images["wardyn-workspace/w:old"] = true
+	d := newTestDriver(f)
+
+	if err := d.ImageRemove(context.Background(), "wardyn-workspace/w:old"); err != nil {
+		t.Fatalf("ImageRemove on a present image: %v", err)
+	}
+	if f.images["wardyn-workspace/w:old"] {
+		t.Error("image still present after ImageRemove")
+	}
+	// Already absent (raced by a manual prune, or a repeat call) must be a
+	// silent no-op, not an error.
+	if err := d.ImageRemove(context.Background(), "wardyn-workspace/w:old"); err != nil {
+		t.Errorf("ImageRemove on an already-absent image must be a no-op, got: %v", err)
+	}
+}
+
 // TestEnsureImage_MissingHintsMakeTarget locks in the actionable error: when an
 // agent image is absent locally and cannot be pulled (the demo tags live in no
 // registry), the failure names the fix rather than leaking a bare

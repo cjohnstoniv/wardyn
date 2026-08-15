@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	neturl "net/url"
 	"regexp"
@@ -565,7 +566,8 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// un-set by a later no-op click against the same (immutable-once-
 	// recorded) observations — EgressPromoted means "this session HAS ever
 	// promoted something real", not "this specific click did".
-	res.EgressPromoted = res.EgressPromoted || len(promoted) > 0
+	priorPromoted := res.EgressPromoted
+	res.EgressPromoted = priorPromoted || len(promoted) > 0
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "persist promotion marker: "+perr.Error())
@@ -578,11 +580,21 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 
 	if len(promoted) > 0 {
 		wsAfter, serr := s.cfg.Store.MergeWorkspaceRequirements(r.Context(), id, add)
-		if errors.Is(serr, store.ErrConflict) {
-			writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
-			return
-		}
 		if serr != nil {
+			// bug-record-1: the CAS above already committed EgressPromoted=true,
+			// but the widening it claims did NOT land — compensate by writing
+			// the marker back to its pre-click value (best-effort; the CAS
+			// gate against a concurrent re-record already happened above, so
+			// this second write only ever restores what was already there).
+			res.EgressPromoted = priorPromoted
+			if _, _, cerr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded); cerr != nil {
+				slog.ErrorContext(r.Context(), "wardynd: promote-egress marker left set after a failed requirements merge",
+					slog.String("workspace_id", id.String()), slog.Any("err", cerr))
+			}
+			if errors.Is(serr, store.ErrConflict) {
+				writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "merge requirements: "+serr.Error())
 			return
 		}

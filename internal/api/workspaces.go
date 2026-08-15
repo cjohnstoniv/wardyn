@@ -443,6 +443,12 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// three-tier model requirements come from the sources + integrations,
 		// and the wizard persists its step-② image choice through here — a
 		// first-time pick must not destroy the overlay it just helped shape.
+		//
+		// bug-workspace-1: the docker tag this row was pointing at is about
+		// to become unreachable from the store (no run will ever resolve
+		// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
+		// — reclaim it now rather than leaking it forever.
+		s.removeStaleImage(r.Context(), ws.ImageRef, "")
 		ws.ImageRef = ""
 		ws.BuiltProfileHash = ""
 	}
@@ -1065,6 +1071,14 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// bug-workspace-1: read the row's built image ref BEFORE the delete drops
+	// the only pointer to it — best-effort (a lookup failure here just means
+	// the reclaim is skipped; DeleteWorkspace below still 404s a genuinely
+	// missing row on its own).
+	var staleImage string
+	if ws, gerr := s.cfg.Store.GetWorkspace(r.Context(), id); gerr == nil {
+		staleImage = ws.ImageRef
+	}
 	err := s.cfg.Store.DeleteWorkspace(r.Context(), id)
 	if notFoundIf(w, err, "workspace") {
 		return
@@ -1073,6 +1087,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete workspace: "+err.Error())
 		return
 	}
+	s.removeStaleImage(r.Context(), staleImage, "")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.delete", id.String(), "success", nil))
 	w.WriteHeader(http.StatusNoContent)

@@ -127,6 +127,46 @@ func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 	}
 }
 
+// TestReconcileOnBoot_OrphanSweepRetriesRevoke is the bug-lifecycle-1
+// regression: a terminal run's SandboxRef survives only when its ORIGINAL
+// finalizeRunTail teardown failed, but finalizeRunTail runs revokeRunCascade
+// BEFORE that teardown — so the run reaching this boot pass may carry an
+// un-revoked identity/broker credential independent of whether the retried
+// teardown itself succeeds. On base 17455349 the orphan sweep retries only
+// StopSandbox, never revokeRunCascade, so SweepTerminalSandboxes (the
+// written-but-never-wired retry surface) is the only place that credential
+// retry lives — and nothing calls it. The boot pass must re-run the revoke
+// cascade for every terminal run it walks.
+func TestReconcileOnBoot_OrphanSweepRetriesRevoke(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	now := time.Now().UTC()
+	st := &orphanSweepStore{runs: []types.AgentRun{{
+		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed,
+		RunnerTarget: "docker", SandboxRef: "orphan-container-2",
+	}}}
+	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnBoot: %v", err)
+	}
+
+	revoked := false
+	for _, id := range h.broker.revoked {
+		if id == runID {
+			revoked = true
+		}
+	}
+	if !revoked {
+		t.Errorf("boot orphan sweep must re-run the credential revoke cascade for %s; broker.revoked=%v", runID, h.broker.revoked)
+	}
+}
+
 // TestReconcileOnBoot_OrphanSweepFailureAudited: when the retried teardown
 // STILL fails, the ref must stay set (so the NEXT boot retries again) and the
 // failure must be audited with teardown_error — silence would re-create the

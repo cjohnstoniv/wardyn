@@ -162,6 +162,16 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
 
+func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.images[imageID] {
+		return client.ImageRemoveResult{}, fakeNotFound{msg: "no such image: " + imageID}
+	}
+	delete(f.images, imageID)
+	return client.ImageRemoveResult{}, nil
+}
+
 func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -288,7 +288,11 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		if region == "" && model == "" {
 			return integ.Kind, nil // inherit the global Bedrock config
 		}
-		if !spec.AllowAllEgress {
+		// Widen egress only when this row actually names a region: an empty
+		// region (row sets model only, region inherits from the global config)
+		// would otherwise build a malformed "bedrock-runtime..amazonaws.com"
+		// double-dot host here — the real region is resolved later at dispatch.
+		if region != "" && !spec.AllowAllEgress {
 			unionAllowedDomains(spec, []string{bedrockRuntimeHost(region), bedrockControlHost(region)})
 		}
 		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
@@ -379,7 +383,13 @@ func integrationKeyGrant(integ types.Integration, p llmProvider) (secret, header
 func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, workspaceRef string) (types.Integration, bool) {
 	if integrationID != "" {
 		in, ok := s.resolveIntegrationRef(ctx, integrationID)
-		if !ok || !types.AIProviderKind(in.Kind) {
+		// bug-integrations-1: a Disabled row must never fold into a run's
+		// model access — this is the actual agent-run credential path
+		// (applyIntegrationCreds authors EligibleGrants/AllowedDomains from
+		// whatever this returns), mirroring applyIntegrationRequirement's
+		// existing check on the probe path. Every tier below shares this
+		// same refusal.
+		if !ok || !types.AIProviderKind(in.Kind) || in.Disabled {
 			return types.Integration{}, false
 		}
 		// SECMODEL-3: a resident_host subscription mounts the OPERATOR'S OWN
@@ -407,7 +417,7 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		// site-wide default would be the exact credential surprise this
 		// tier's doc above says it refuses.
 		in, ok := s.resolveIntegrationRef(ctx, workspaceRef)
-		if !ok || !types.AIProviderKind(in.Kind) {
+		if !ok || !types.AIProviderKind(in.Kind) || in.Disabled {
 			return types.Integration{}, false
 		}
 		return in, true

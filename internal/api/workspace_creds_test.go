@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -177,6 +178,79 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 		t.Errorf("AllowedDomains carries the GLOBAL region's bedrock host; the integration override must replace it: %v",
 			spec.AllowedDomains)
 	}
+}
+
+// TestApplyPrimaryWorkspaceCreds_BedrockIntegration_ModelOnlyNoMalformedHost
+// pins bug-llmcred-2: a row that sets model but leaves region unset (the
+// global config supplies region) must NOT widen egress with
+// bedrockRuntimeHost("") — that builds a malformed "bedrock-runtime..
+// amazonaws.com" double-dot host. The row's model-only Config must still
+// come back as a WorkspaceBedrockRef for dispatch to resolve region against.
+func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_ModelOnlyNoMalformedHost(t *testing.T) {
+	const wsModel = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-bedrock", Kind: types.IntegrationKindBedrock,
+		Config: map[string]any{"model": wsModel},
+	}})
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-bedrock"}}
+	req := createRunRequest{Agent: "claude-code"}
+
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+	if bedrockRef == nil || bedrockRef.Model != wsModel || bedrockRef.Region != "" {
+		t.Fatalf("bedrockRef = %+v, want region=\"\" model=%s", bedrockRef, wsModel)
+	}
+	for _, d := range spec.AllowedDomains {
+		if strings.Contains(d, "..") {
+			t.Errorf("AllowedDomains carries a malformed double-dot host %q from an empty region: %v", d, spec.AllowedDomains)
+		}
+	}
+}
+
+// TestResolveRunIntegration_DisabledRow_NeverFolds is the bug-integrations-1
+// (CRIT) regression: resolveRunIntegration never read in.Disabled on any of
+// its three precedence tiers, so a row the operator explicitly disabled
+// still got resolved and folded into a run's model credentials/egress by
+// applyIntegrationCreds — the exact operator control the Disabled flag exists
+// to enforce, silently bypassed. All three tiers must refuse a Disabled row
+// the same way integrations_run.go's probe path already does.
+func TestResolveRunIntegration_DisabledRow_NeverFolds(t *testing.T) {
+	disabled := apiKeyIntegration("acme-anthropic", "acme-anthropic-key")
+	disabled.Disabled = true
+
+	t.Run("tier 1: explicit integration_id", func(t *testing.T) {
+		s := integrationTestServer(t, []types.Integration{disabled}, "acme-anthropic-key")
+		if _, ok := s.resolveRunIntegration(context.Background(), "acme-anthropic", ""); ok {
+			t.Fatal("resolveRunIntegration must refuse a Disabled row named by explicit integration_id")
+		}
+	})
+	t.Run("tier 2: workspace binding", func(t *testing.T) {
+		s := integrationTestServer(t, []types.Integration{disabled}, "acme-anthropic-key")
+		if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-anthropic"); ok {
+			t.Fatal("resolveRunIntegration must refuse a Disabled row named by a workspace binding")
+		}
+	})
+	t.Run("tier 3: operator site-wide default", func(t *testing.T) {
+		defaulted := disabled
+		defaulted.DefaultFor = []string{"agent_runs"}
+		s := integrationTestServer(t, []types.Integration{defaulted}, "acme-anthropic-key")
+		if _, ok := s.resolveRunIntegration(context.Background(), "", ""); ok {
+			t.Fatal("resolveRunIntegration must refuse a Disabled row even as the site-wide agent_runs default")
+		}
+	})
+	t.Run("end to end: a run never gets the disabled row's grant/egress", func(t *testing.T) {
+		s := integrationTestServer(t, []types.Integration{disabled}, "acme-anthropic-key")
+		spec := &types.RunPolicySpec{}
+		ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
+		req := createRunRequest{Agent: "claude-code"}
+		_, kind, _ := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+		if kind != "" {
+			t.Fatalf("foldRunIntegration folded a Disabled row: kind=%q", kind)
+		}
+		if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
+			t.Errorf("a Disabled row must grant no credential and no egress; spec=%+v", spec)
+		}
+	})
 }
 
 // TestApplyIntegrationCreds_IncompatibleAgentProvider_FoldsNothing pins SPINE-1:

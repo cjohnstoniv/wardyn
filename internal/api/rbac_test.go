@@ -172,6 +172,8 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPut, "/api/v1/workspaces/w1"},
 	{http.MethodDelete, "/api/v1/workspaces/w1"},
 	{http.MethodPost, "/api/v1/workspaces/w1/scan"},
+	{http.MethodPost, "/api/v1/workspaces/w1/build"},
+	{http.MethodPut, "/api/v1/workspaces/w1/requirements"},
 	{http.MethodPut, "/api/v1/workspaces/w1/approved-egress"},
 	{http.MethodPut, "/api/v1/workspaces/w1/llm-cred"},
 	{http.MethodPost, "/api/v1/workspaces/w1/record"},
@@ -186,6 +188,12 @@ var gatedRoutes = []struct{ method, path string }{
 	// 5. secrets — credential MATERIAL (the LIST is names-only and stays a read).
 	{http.MethodPut, "/api/v1/secrets/s1"},
 	{http.MethodDelete, "/api/v1/secrets/s1"},
+	// 6. integrations — the row IS a credential binding (secret refs + egress);
+	// the LIST/GET stay reads (readRoutes), same split as secrets above.
+	{http.MethodPut, "/api/v1/integrations/i1"},
+	{http.MethodDelete, "/api/v1/integrations/i1"},
+	{http.MethodPost, "/api/v1/integrations/i1/adopt"},
+	{http.MethodPost, "/api/v1/integrations/i1/test"},
 }
 
 // readRoutes are the reads in those same clusters. A member keeps all of them —

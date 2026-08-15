@@ -372,6 +372,58 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 	}
 }
 
+// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC is the bug-rbac-1
+// regression: humanOrAdminAuth branches on LocalMode FIRST and bypasses OIDC
+// entirely without ever consulting it, so an explicit -local-mode alongside a
+// configured -oidc-issuer used to boot clean and silently disable the whole
+// configured SSO/RBAC deployment — every request became the fixed
+// local:operator, full admin. Refused unless allowLocalModeWithOIDC
+// (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC) explicitly overrides it; the AUTO-
+// enable heuristic (no explicit flag, no admin token, loopback bind) is
+// untouched — it already excludes a configured issuer on its own.
+func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
+	tests := []struct {
+		name      string
+		localMode bool
+		issuer    string
+		override  bool
+		wantErr   bool
+	}{
+		{"explicit local-mode + OIDC configured: refused", true, "https://idp.example.com", false, true},
+		{"explicit local-mode + OIDC configured + override: allowed", true, "https://idp.example.com", true, false},
+		{"explicit local-mode, no OIDC: unaffected", true, "", false, false},
+		{"OIDC configured, local-mode NOT explicitly set (auto-enable path): unaffected", false, "https://idp.example.com", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listen := "127.0.0.1:8080"
+			adminToken := ""
+			localOperator := ""
+			localTrustFwd := false
+			empty := ""
+			f := &bootFlags{
+				listen:                 &listen,
+				adminToken:             &adminToken,
+				localMode:              &tt.localMode,
+				localOperator:          &localOperator,
+				localTrustFwd:          &localTrustFwd,
+				oidcIssuer:             &tt.issuer,
+				allowLocalModeWithOIDC: &tt.override,
+				// Reached only past the refusal (override / no-OIDC cases) —
+				// the Bedrock auto-detect tail dereferences these unconditionally.
+				bedrockRegion: &empty,
+				bedrockModel:  &empty,
+				bedrockAWSDir: &empty,
+			}
+			_, err := resolveLocalMode(f)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("resolveLocalMode(local_mode=%v, oidc_issuer=%q, override=%v) error = %v, want error: %v",
+					tt.localMode, tt.issuer, tt.override, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // ─── standard-AWS fallback for the Bedrock selectors ────────────────────────────
 //
 // WARDYN_BEDROCK_REGION / _AWS_PROFILE stay authoritative; the standard AWS env

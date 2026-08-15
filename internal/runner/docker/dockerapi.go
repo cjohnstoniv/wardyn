@@ -39,6 +39,9 @@ type dockerAPI interface {
 	// which the tag-shaped ImageList reference filter cannot match) to check
 	// local presence without a registry round-trip.
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	// ImageRemove reclaims a workspace-built image tag superseded by a
+	// rescan/edit/delete (runner.ImageRemover — bug-workspace-1).
+	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 
 	NetworkCreate(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error)
 	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
