@@ -27,7 +27,7 @@ UP_SH="${REPO_ROOT}/scripts/up.sh"
 extract_func() {  # $1=function name -> its body, verbatim
   sed -n "/^$1() {/,/^}/p" "${UP_SH}"
 }
-for fn in pick_policy composer_wants_llm llm_ready_from_status resolve_default_policy wardyn_cli_prefix; do
+for fn in pick_policy composer_wants_llm llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix; do
   body="$(extract_func "$fn")"
   [ -n "$body" ] || { echo "test-up-policy: '$fn' not found in ${UP_SH} (renamed/removed?)" >&2; exit 1; }
   eval "$body"
@@ -76,6 +76,30 @@ got="$(llm_ready_from_status '')"
 # process's env at all.
 got="$(resolve_default_policy "${env_file}2" "" '{}' "$(llm_ready_from_status '{"llm_ready":true}')")"
 [ "$got" = "/examples/policies/composer-dev.json" ] || fail "resolve_default_policy fed by llm_ready_from_status got '$got', want composer-dev.json"
+
+# 3c) THE regression this closes: cmd_up's post-boot probe used to hand
+# llm_ready_from_status the curl body alone, with no status-code check at
+# all — so an SSO 401 body (or any other non-200) was read exactly like an
+# unreachable daemon: "no signal", silently. llm_ready_from_probe folds the
+# status check IN, on curl's "\n%{http_code}"-suffixed STATUS_RAW encoding
+# (the -w '\n%{http_code}' cmd_up's probe now uses), so a 200 body still
+# drives the re-pick...
+got="$(llm_ready_from_probe '{"ready":true,"llm_ready":true,"providers":[]}
+200')"
+[ "$got" = "1" ] || fail "llm_ready_from_probe missed a true body behind a 200, got '$got'"
+# ...but a non-200 (the SSO 401 case: humanOrAdminAuth rejects the
+# unauthenticated in-network curl with a JSON error body that could
+# coincidentally still be well-formed) must NOT be read as "not ready" —
+# it must be read as "couldn't ask", same treatment either way, but the
+# call site now WARNS on this branch instead of staying silent.
+got="$(llm_ready_from_probe '{"error":"unauthorized"}
+401')"
+[ -z "$got" ] || fail "llm_ready_from_probe false-positived (or negatived past a warn) on a 401, got '$got'"
+# A 000 (curl couldn't even reach the daemon — the pre-existing failure mode)
+# stays "no signal", same as before this fix.
+got="$(llm_ready_from_probe '
+000')"
+[ -z "$got" ] || fail "llm_ready_from_probe false-positived on an unreachable-daemon 000, got '$got'"
 
 # 4) An explicit operator override wins outright and clears the auto marker.
 got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"

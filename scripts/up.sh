@@ -107,6 +107,26 @@ llm_ready_from_status() {
   esac
 }
 
+# llm_ready_from_probe STATUS_RAW -> "1" | ""
+# STATUS_RAW is curl's "\n%{http_code}"-suffixed response for GET
+# /api/v1/setup/status (the encoding cmd_up's post-boot probe emits via
+# -w '\n%{http_code}': the body, a newline, then the status line). A non-200 —
+# an unauthenticated probe 401ing under SSO because the WARDYN_OIDC_ISSUER
+# guard around the call site was skipped or missing, a mid-restart 502, any
+# daemon hiccup — must NOT be silently read the same as "no model path yet
+# and everyone agrees the ceiling stays put". Only a confirmed 200 body
+# reaches llm_ready_from_status; anything else is "no signal", same as an
+# unreachable daemon.
+llm_ready_from_probe() {
+  _lrfp_code=$(printf '%s' "$1" | tail -n1)
+  if [ "${_lrfp_code}" = "200" ]; then
+    llm_ready_from_status "$(printf '%s' "$1" | sed '$d')"
+  else
+    echo ""
+  fi
+  unset _lrfp_code
+}
+
 # resolve_default_policy ENV_FILE OVERRIDE RUNTIMES_JSON WANTS_LLM -> policy path
 # Decides + PERSISTS WARDYN_DEFAULT_POLICY into ENV_FILE (plus a
 # WARDYN_DEFAULT_POLICY_AUTO marker) and echoes the resulting path. OVERRIDE
@@ -662,21 +682,39 @@ cmd_up() {
   # browser session up.sh never sees. Ask the daemon itself instead, reachable
   # the same way the local-mode gate smoke below already proves: an in-network
   # peer under WARDYN_LOCAL_TRUST_FORWARDER, no token needed in local mode.
-  _status_json=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
-    -s -m 5 "http://wardynd:8080/api/v1/setup/status" 2>/dev/null || true)
-  _llm_ready=$(llm_ready_from_status "${_status_json}")
-  unset _status_json
-  if [ -n "${_llm_ready}" ]; then
-    _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
-    _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-    _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
-    if [ "${_post_policy}" != "${_prev_policy}" ]; then
-      log "Re-picked default policy now that a model path is live: ${_post_policy} — restarting wardynd"
-      compose up -d wardynd
+  #
+  # SSO/OIDC guard (same masking class as the local-mode gate smoke below):
+  # /api/v1/setup/status sits in the humanOrAdminAuth group, so under SSO
+  # (WARDYN_OIDC_ISSUER set, see the OIDC-clobber guard above) an unauthenticated
+  # in-network curl 401s. Uncaptured, that 401 body fails llm_ready_from_status's
+  # match same as an empty one — the re-pick silently no-ops with no signal that
+  # anything went wrong. Skip it and say why instead, and warn on a non-200 in
+  # local mode so a real daemon problem doesn't masquerade as "no model path yet".
+  if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
+    log "Post-boot LLM-ready re-pick: skipped (WARDYN_OIDC_ISSUER is set — SSO mode, /api/v1/setup/status correctly requires a real session)."
+  else
+    # -w appends "\n<code>" after the response body (llm_ready_from_probe's
+    # STATUS_RAW encoding) so one round trip yields both the body and the
+    # status needed to tell "no model path yet" apart from "couldn't ask".
+    _status_raw=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+      -s -m 5 -w '\n%{http_code}' "http://wardynd:8080/api/v1/setup/status" 2>/dev/null || echo 000)
+    _status_code=$(printf '%s' "${_status_raw}" | tail -n1)
+    [ "${_status_code}" = "200" ] \
+      || warn "post-boot LLM-ready probe got HTTP ${_status_code} from /api/v1/setup/status — skipping the policy re-pick this run (a managed subscription or UI-added key won't take effect until the next \`up\`); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'."
+    _llm_ready=$(llm_ready_from_probe "${_status_raw}")
+    unset _status_raw _status_code
+    if [ -n "${_llm_ready}" ]; then
+      _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+      _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+      _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
+      if [ "${_post_policy}" != "${_prev_policy}" ]; then
+        log "Re-picked default policy now that a model path is live: ${_post_policy} — restarting wardynd"
+        compose up -d wardynd
+      fi
+      unset _prev_policy _post_runtimes _post_policy
     fi
-    unset _prev_policy _post_runtimes _post_policy
+    unset _llm_ready
   fi
-  unset _llm_ready
 
   # Can THIS shell reach the published UI port? In WSL2 NAT mode it usually
   # cannot (only the Windows browser can) — an honest note, not a failure.
