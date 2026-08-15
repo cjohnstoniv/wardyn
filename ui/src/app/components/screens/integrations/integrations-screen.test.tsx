@@ -52,6 +52,7 @@ vi.mock("../../../lib/api/integrations", async (importOriginal) => {
 });
 
 import { IntegrationsScreen } from "./integrations-screen";
+import { harnessAuth } from "../../../lib/api/harness-auth";
 
 function renderScreen(operator = true) {
   return render(
@@ -249,6 +250,44 @@ describe("IntegrationsScreen — viewer role disables writes", () => {
     expect(adopt).toBeDisabled();
     expect(within(adopt).getByText(/requires the operator role/i)).toBeInTheDocument();
     expect(adopt).not.toHaveAttribute("title");
+  });
+});
+
+// Bug report 2026-08-15: deleting the managed Claude subscription "and it still
+// appeared" — the row is DERIVED from the captured harness login, not stored, so
+// a plain delete has nothing to remove and the list re-derives it. deleteWireRow
+// already disconnects the login when handed the provider; the call site must pass
+// it (managed subscription -> "anthropic"), or delete is a no-op that reappears.
+describe("IntegrationsScreen — deleting a harness-derived subscription disconnects the login", () => {
+  beforeEach(() => {
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue([]);
+    (harnessAuth.harnessDisconnect as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+    removeIntegrationMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("routes a captured managed-subscription delete to harnessDisconnect, not a doomed row delete", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getSetupStatusMock.mockResolvedValue(baseStatus({ harness: [{ provider: "anthropic", captured: true }] }));
+    const managed: WireIntegration = {
+      id: "anthropic_subscription:managed",
+      name: "Claude subscription (managed)",
+      kind: "anthropic_subscription",
+      source: "legacy", // DERIVED — projected from the harness login, never stored
+      egress: ["api.anthropic.com"],
+    };
+    listMock.mockResolvedValue([managed]);
+    renderScreen();
+    await screen.findByText("Claude subscription (managed)");
+
+    await user.click(screen.getByRole("button", { name: /Claude subscription \(managed\) actions/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /delete integration/i }));
+    // the confirm is honest about the real consequence (disconnect, not a config delete)
+    expect(await screen.findByText(/loses model access until you log in again/i)).toBeInTheDocument();
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: /delete integration/i }));
+
+    await waitFor(() => expect(harnessAuth.harnessDisconnect).toHaveBeenCalledWith("anthropic"));
+    expect(removeIntegrationMock).not.toHaveBeenCalled();
   });
 });
 

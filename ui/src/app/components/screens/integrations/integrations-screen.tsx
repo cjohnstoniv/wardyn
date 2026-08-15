@@ -113,6 +113,19 @@ export function IntegrationsScreen({
   const sections: Section[] = ["model", "scm", "other"];
   const toDeleteDefAgent = !!toDelete?.wire.default_for?.includes("agent_runs");
   const toDeleteDefFeat = !!toDelete?.wire.default_for?.includes("wardyn_features");
+  // A managed subscription / Bedrock-SSO row is DERIVED from a captured harness
+  // login, not stored — a plain delete has no row to remove, so the list just
+  // re-derives it. deleteWireRow already knows to disconnect the login instead
+  // when handed the provider; resolve it here (only for a non-stored row whose
+  // provider is actually captured, so the resident-host CLI lane and stored rows
+  // still take the normal delete path).
+  const harnessProviderForDelete = (row: GenericIntegrationRow): string | undefined => {
+    if (row.wire.source === "stored") return undefined;
+    const provider =
+      row.wire.id === "anthropic_subscription:managed" ? "anthropic" : row.wire.kind === "bedrock" ? "aws" : undefined;
+    return provider && status.harness?.some((h) => h.provider === provider && h.captured) ? provider : undefined;
+  };
+  const toDeleteHarnessProvider = toDelete ? harnessProviderForDelete(toDelete) : undefined;
 
   const adopt = async (row: GenericIntegrationRow) => {
     try {
@@ -244,15 +257,21 @@ export function IntegrationsScreen({
         entity="integration"
         description={
           <ul className="space-y-1">
-            {(toDelete ? baseBlastRadius(toDelete, { isDefaultAgent: toDeleteDefAgent, isDefaultFeatures: toDeleteDefFeat }) : []).map(
-              (line, i) => (
-                <li key={i}>{line}</li>
-              ),
-            )}
+            {(toDeleteHarnessProvider
+              ? [
+                  "Disconnects the captured login — every run relying on it loses model access until you log in again (Log in again on the integration, or the Getting Started subscription step).",
+                  ...(toDelete ? baseBlastRadius(toDelete, { isDefaultAgent: toDeleteDefAgent, isDefaultFeatures: toDeleteDefFeat }) : []),
+                ]
+              : toDelete
+                ? baseBlastRadius(toDelete, { isDefaultAgent: toDeleteDefAgent, isDefaultFeatures: toDeleteDefFeat })
+                : []
+            ).map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
           </ul>
         }
         onOpenChange={(o) => !o && setToDelete(null)}
-        onDelete={async () => deleteWireRow(toDelete!.wire)}
+        onDelete={async () => deleteWireRow(toDelete!.wire, toDeleteHarnessProvider)}
         onDeleted={() => {
           setToDelete(null);
           load();
