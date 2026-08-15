@@ -743,21 +743,6 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	})
 }
 
-// vetURL resolves the host of rawURL through the SSRF guard and returns the
-// pinned "ip:port" dial target. The port defaults to the URL scheme's default.
-// Fails closed on any unparseable URL or blocked address.
-func (p *Proxy) vetURL(rawURL string) (string, error) {
-	host, port, err := hostPortFromURL(rawURL)
-	if err != nil {
-		return "", err
-	}
-	guard := VetHost(host, p.res)
-	if guard.Denied {
-		return "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
-	}
-	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), nil
-}
-
 // resolveTrustedURL resolves the host of a TRUSTED rawURL (the operator-
 // configured control-plane endpoint) to a pinned "ip:port" dial target WITHOUT
 // applying the private/reserved-IP denial. Unlike vetURL, this is used only for
