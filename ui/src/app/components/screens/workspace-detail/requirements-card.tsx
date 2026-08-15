@@ -25,7 +25,7 @@ import { C } from "../../../lib/workspace-copy";
 import { StepRequirements } from "../workspace-wizard/step-requirements";
 import { operatorOverlay, type PowerSource, type SourceRow } from "../workspace-wizard/wizard-types";
 import { WorkspaceLLMCredDialog, llmCredLabel, llmCredTone } from "../workspace-llm-cred";
-import { SectionCard } from "./section-card";
+import { DetailSectionCard } from "./section-card";
 import { useOperator } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
@@ -168,7 +168,7 @@ export function RequirementsCard({
   };
 
   return (
-    <SectionCard
+    <DetailSectionCard
       title="Requirements"
       subtitle="What this workspace carries into every run — and what a run has to ask for."
       right={
@@ -184,7 +184,7 @@ export function RequirementsCard({
           gates the whole subtree at once, same as the rest of the console's
           Buttons already render when disabled — `contents` keeps it out of
           the box model since there's no existing wrapper div to repurpose
-          here. `space-y-4` is repeated on it: SectionCard's own space-y-4 is a
+          here. `space-y-4` is repeated on it: DetailSectionCard's own space-y-4 is a
           direct-child selector, and `contents` makes this fieldset's CHILDREN
           (not the fieldset itself) the effective direct children once the
           fieldset drops out of the box tree — the rule has to be on the
@@ -215,7 +215,7 @@ export function RequirementsCard({
           status={setupStatus}
         />
       </fieldset>
-    </SectionCard>
+    </DetailSectionCard>
   );
 }
 

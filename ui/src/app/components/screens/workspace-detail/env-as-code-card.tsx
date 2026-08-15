@@ -21,7 +21,7 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { WorkspaceSourceInput } from "../../../lib/api/workspaces";
 import type { Workspace } from "../../../lib/types";
 import { C } from "../../../lib/workspace-copy";
-import { SectionCard } from "./section-card";
+import { DetailSectionCard } from "./section-card";
 
 // True when this workspace has somewhere on THIS host to write into — its
 // legacy kind is local_dir, or (composed) at least one of its sources is.
@@ -75,7 +75,7 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
   };
 
   return (
-    <SectionCard title="Env as code" subtitle="Turn the scanned profile into files you can commit.">
+    <DetailSectionCard title="Env as code" subtitle="Turn the scanned profile into files you can commit.">
       {!files ? (
         <div className="flex flex-wrap items-center gap-3">
           <Button size="sm" variant="outline" onClick={() => void generate()} disabled={loading || !ws.profile}>
@@ -137,6 +137,6 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
           )}
         </div>
       )}
-    </SectionCard>
+    </DetailSectionCard>
   );
 }

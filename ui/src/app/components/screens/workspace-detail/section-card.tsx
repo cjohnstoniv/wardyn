@@ -7,13 +7,13 @@
 // own tiny file here since FOUR sibling cards need it (avoids either
 // duplicating it four times or a circular import with the main screen
 // file). Deliberately its own, larger style: run-detail.tsx actually
-// imports wardyn/primitives.tsx's SectionCard (p-4, small-caps uppercase
+// imports wardyn/primitives.tsx's DetailSectionCard (p-4, small-caps uppercase
 // eyebrow title, no subtitle) — this one uses p-5, a bold sentence-case
 // title, and a `subtitle` line every one of this screen's four sections
 // relies on. Don't collapse the two without adding subtitle support there.
 import type * as React from "react";
 
-export function SectionCard({
+export function DetailSectionCard({
   title,
   subtitle,
   right,

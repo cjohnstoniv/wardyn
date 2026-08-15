@@ -51,7 +51,7 @@ import { useOperator } from "../../wardyn/operator-context";
 import { KIND_META, attentionItems, sourceSubLine } from "../workspaces";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import { ProfileReview } from "../profile-review";
-import { SectionCard } from "./section-card";
+import { DetailSectionCard } from "./section-card";
 import { RequirementsCard } from "./requirements-card";
 import { DetectedCard } from "./detected-card";
 import { EnvAsCodeCard } from "./env-as-code-card";
@@ -385,7 +385,7 @@ export function WorkspaceDetailScreen() {
 
         <DetectedCard ws={ws} onWorkspaceUpdated={setWs} />
 
-        <SectionCard title="Sessions" subtitle="Learn what it really uses: record a live session in an open sandbox, promote what it reached, replay it confined.">
+        <DetailSectionCard title="Sessions" subtitle="Learn what it really uses: record a live session in an open sandbox, promote what it reached, replay it confined.">
           <RecordPane
             ws={ws}
             notice={recordNotice}
@@ -402,7 +402,7 @@ export function WorkspaceDetailScreen() {
               setProfileName(suggested);
             }}
           />
-        </SectionCard>
+        </DetailSectionCard>
 
         <EnvAsCodeCard ws={ws} />
       </div>

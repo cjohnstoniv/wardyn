@@ -28,7 +28,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { RequirementLevel, WorkspaceRequirementsMap } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace, type WorkspaceProfile } from "../../../lib/types";
-import { SectionCard } from "./section-card";
+import { DetailSectionCard } from "./section-card";
 
 // Boundary-local typed cast-read — same idiom requirements-card.tsx uses at
 // its own boundary (see that file's comment for why this isn't shared).
@@ -126,7 +126,7 @@ export function DetectedCard({
   const promoteSecret = (storable: string, level: RequirementLevel) => void promote(`secret:${storable}`, level);
 
   return (
-    <SectionCard
+    <DetailSectionCard
       title="Detected, not required"
       subtitle="Wardyn noticed these but hasn't given them to any run. Add one only if this workspace legitimately needs it."
     >
@@ -217,7 +217,7 @@ export function DetectedCard({
           setConfirmHost(null);
         }}
       />
-    </SectionCard>
+    </DetailSectionCard>
   );
 }
 

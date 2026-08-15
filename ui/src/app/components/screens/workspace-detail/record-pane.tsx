@@ -144,7 +144,7 @@ export function RecordPane({
     // it stays visually identical to the plain <div> it replaces.
     <fieldset disabled={!operator} className="m-0 min-w-0 border-0 p-0 space-y-4">
       {!operator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
-      {/* No "Sessions" label here — the SectionCard wrapping this pane already
+      {/* No "Sessions" label here — the DetailSectionCard wrapping this pane already
           titles it; repeating it would show the same word twice on the page. */}
       <Chip tone="info">Recommended · skippable</Chip>
       <p className="text-sm leading-relaxed text-muted-foreground">
