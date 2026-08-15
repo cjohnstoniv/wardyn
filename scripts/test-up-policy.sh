@@ -27,7 +27,7 @@ UP_SH="${REPO_ROOT}/scripts/up.sh"
 extract_func() {  # $1=function name -> its body, verbatim
   sed -n "/^$1() {/,/^}/p" "${UP_SH}"
 }
-for fn in pick_policy composer_wants_llm resolve_default_policy wardyn_cli_prefix; do
+for fn in pick_policy composer_wants_llm llm_ready_from_status resolve_default_policy wardyn_cli_prefix; do
   body="$(extract_func "$fn")"
   [ -n "$body" ] || { echo "test-up-policy: '$fn' not found in ${UP_SH} (renamed/removed?)" >&2; exit 1; }
   eval "$body"
@@ -55,6 +55,27 @@ got="$(resolve_default_policy "${env_file}" "" '{}' "")"
 got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
 [ "$got" = "/examples/policies/composer-dev.json" ] || fail "re-pick after a model signal got '$got', want composer-dev.json"
 [ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY)" = "/examples/policies/composer-dev.json" ] || fail "composer-dev.json pick did not persist to .env"
+
+# 3b) W1-S1-3 regression: llm_ready_from_status is the signal cmd_up uses when
+# composer_wants_llm sees NOTHING in this process's env — a subscription
+# connected in a PRIOR `up` (no token re-supplied this run) or a key added
+# through the UI. Neither ever touches WARDYN_COMPOSER_CONFIG or
+# *_API_KEY, so composer_wants_llm alone must still say "no signal" here...
+[ -z "$(composer_wants_llm "${env_file}")" ] || fail "composer_wants_llm found a signal from an empty env — test setup is wrong"
+# ...while llm_ready_from_status reads it straight off a canned /setup/status
+# body (compact encoding/json.Marshal shape, no space after the colon).
+got="$(llm_ready_from_status '{"ready":true,"llm_ready":true,"providers":[]}')"
+[ "$got" = "1" ] || fail "llm_ready_from_status missed a true body, got '$got'"
+got="$(llm_ready_from_status '{"ready":true,"llm_ready":false,"providers":[]}')"
+[ -z "$got" ] || fail "llm_ready_from_status false-positived on llm_ready:false, got '$got'"
+got="$(llm_ready_from_status '')"
+[ -z "$got" ] || fail "llm_ready_from_status false-positived on an empty/unreachable-daemon body, got '$got'"
+# ...and feeding THAT into resolve_default_policy — exactly what cmd_up does
+# with the daemon's live answer once wardynd is confirmed healthy — is what
+# actually upgrades the ceiling on a plain re-run with no token in this
+# process's env at all.
+got="$(resolve_default_policy "${env_file}2" "" '{}' "$(llm_ready_from_status '{"llm_ready":true}')")"
+[ "$got" = "/examples/policies/composer-dev.json" ] || fail "resolve_default_policy fed by llm_ready_from_status got '$got', want composer-dev.json"
 
 # 4) An explicit operator override wins outright and clears the auto marker.
 got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"

@@ -72,7 +72,8 @@ pick_policy() {
 
 # composer_wants_llm ENV_FILE -> "1" | ""
 # "1" when the operator has opted into a real model path: a non-fake composer
-# backend is configured, or a host LLM API key is exported.
+# backend is configured, or a host LLM API key is exported. THIS PROCESS'S env
+# only — see llm_ready_from_status below for the lane this can never see.
 composer_wants_llm() {
   _cwl_cfg=$(env_get "$1" WARDYN_COMPOSER_CONFIG)
   case "${_cwl_cfg}" in
@@ -82,6 +83,23 @@ composer_wants_llm() {
   [ -n "${ANTHROPIC_API_KEY:-}" ] && { echo 1; return; }
   [ -n "${OPENAI_API_KEY:-}" ]    && { echo 1; return; }
   echo ""
+}
+
+# llm_ready_from_status STATUS_JSON -> "1" | ""
+# W1-S1-3: composer_wants_llm is blind to a managed subscription connected in a
+# PRIOR `up` (no token re-supplied this run) and to a key added through the
+# UI — neither ever touches this process's env. cmd_up instead asks the
+# already-running daemon's own GET /api/v1/setup/status, whose llm_ready
+# aggregates every lane (subscription, composer backend, secret-name
+# heuristic, Bedrock, an AI-provider Integration) for the Getting-started
+# readiness banner. Split out as a pure string check (matching
+# composer_wants_llm's own case-pattern style) so test-up-policy.sh can pin
+# the match on a canned body with no docker/network.
+llm_ready_from_status() {
+  case "$1" in
+    *'"llm_ready":true'*) echo 1 ;;
+    *) echo "" ;;
+  esac
 }
 
 # resolve_default_policy ENV_FILE OVERRIDE RUNTIMES_JSON WANTS_LLM -> policy path
@@ -627,23 +645,33 @@ cmd_up() {
     log "Connecting the Wardyn-managed Claude subscription from WARDYN_SUBSCRIPTION_TOKEN…"
     if printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | compose exec -T wardynd /usr/local/bin/wardyn subscription connect --token-stdin; then
       log "Managed Claude subscription connected (injected proxy-side; never resident in the sandbox)."
-      # The pick above ran BEFORE this connect (composer_wants_llm can't see a
-      # managed subscription, only WARDYN_COMPOSER_CONFIG/*_API_KEY), so an
-      # auto-picked demo.json/default.json would 404 a composed run's first
-      # model call all session. Re-pick with wants_llm forced on (still
-      # guarded by WARDYN_DEFAULT_POLICY_AUTO) and restart wardynd to apply it.
-      _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
-      _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-      _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
-      if [ "${_post_policy}" != "${_prev_policy}" ]; then
-        log "Re-picked default policy now that a subscription is connected: ${_post_policy} — restarting wardynd"
-        compose up -d wardynd
-      fi
-      unset _prev_policy _post_runtimes _post_policy
     else
       warn "subscription connect failed — check the token (from 'claude setup-token', starts with sk-ant-oat)."
     fi
   fi
+
+  # W1-S1-3: the pick above ran BEFORE wardynd existed — composer_wants_llm can
+  # only see THIS process's env (WARDYN_COMPOSER_CONFIG/*_API_KEY), never a
+  # managed subscription (just connected above, OR left over from a PRIOR `up`
+  # with no token re-supplied this time) or a key added through the UI in a
+  # browser session up.sh never sees. Ask the daemon itself instead, reachable
+  # the same way the local-mode gate smoke below already proves: an in-network
+  # peer under WARDYN_LOCAL_TRUST_FORWARDER, no token needed in local mode.
+  _status_json=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+    -s -m 5 "http://wardynd:8080/api/v1/setup/status" 2>/dev/null || true)
+  _llm_ready=$(llm_ready_from_status "${_status_json}")
+  unset _status_json
+  if [ -n "${_llm_ready}" ]; then
+    _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+    _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+    _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
+    if [ "${_post_policy}" != "${_prev_policy}" ]; then
+      log "Re-picked default policy now that a model path is live: ${_post_policy} — restarting wardynd"
+      compose up -d wardynd
+    fi
+    unset _prev_policy _post_runtimes _post_policy
+  fi
+  unset _llm_ready
 
   # Can THIS shell reach the published UI port? In WSL2 NAT mode it usually
   # cannot (only the Windows browser can) — an honest note, not a failure.
