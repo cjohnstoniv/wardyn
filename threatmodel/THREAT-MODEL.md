@@ -213,7 +213,7 @@ the canary, never merely claimed because a policy object was applied.
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
 | Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin reaching another human's run still uses the web terminal (owner-or-admin attach ticket), never SSH; a member has no path to another human's run over either transport. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B9 |
 | Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B9 |
 | SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B9 |
@@ -410,24 +410,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set, so an operator either names the
     operators or explicitly accepts all-admin. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
     to a list of operator addresses makes every other signed-in human a
-    **viewer**: 403 on the mutating routes of nine clusters — the managed
+    **viewer**: 403 on the mutating routes of eight clusters — the managed
     harness credential, policy CRUD, workspace CRUD (including the scoped
     widening writes below), `PUT /site-config` and its two connectivity
     probes (each launches a sandbox on the operator's behalf), secret
-    write/delete, deciding an approval (`POST /approvals/{id}/approve|deny`),
-    attaching to a running sandbox — both the ticket mint (`POST
-    /runs/{id}/attach-ticket`) and the WebSocket itself (`GET
-    /runs/{id}/attach`), since the socket falls back to session-cookie auth
-    when no ticket is presented and a browser attaches that cookie to a
-    same-origin handshake on its own; gating only the mint would leave the PTY
-    reachable — the source-library and base-image catalog CRUD, and
-    integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
-    /integrations/{id}/adopt`). Reads are never gated, the admin token and local mode are always
+    write/delete, the attach WebSocket's ticket-LESS fallback lane (`GET
+    /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=`
+    is presented, since a browser attaches that cookie to a same-origin
+    handshake on its own), the source-library and base-image catalog CRUD,
+    and integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
+    /integrations/{id}/adopt`). **Two acts moved DOWN to owner-or-admin since
+    v0.5 and are deliberately NOT in this list**: minting an attach ticket
+    (`POST /runs/{id}/attach-ticket` — a member may still hold one for a run
+    THEY created; the WebSocket then re-checks the ticket's own stamped
+    role/principal at consume time, since the ticket-bearing lane never runs
+    this gate at all — `handleAttachWS`) and deciding an `egress_domain`
+    approval (a member may decide one raised by a run they own; `credential`
+    and `tool_call` approvals stay admin-only regardless of ownership — see
+    residual #17). Reads are never gated, the admin token and local mode are always
     operators (one shared credential carries no human to demote), and NOTHING
     ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
-    open to any signed-in human: launching and stopping a run is a viewer act
-    by design, and a viewer's own run that trips an approval simply blocks
-    until an operator decides it. Leave the list unset and the paragraph below
+    open to any signed-in human: launching, killing and deciding an
+    `egress_domain` approval on one's OWN run is a viewer/member act by
+    design. Leave the list unset and the paragraph below
     is the whole truth. Policy
     CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
     `requirements` writes that widen what a run may do), secret write/delete,
@@ -453,23 +458,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
 
-15. **SSH gateway authorization has no operator override.** Unlike the browser
-    terminal (`GET /runs/{id}/attach`, gated by `requireOperator` when
-    `WARDYN_OIDC_OPERATOR_EMAILS` is set — an operator may attach to *any* run),
-    SSH gateway (`docs/SSH.md`) authorization is exactly one check:
-    `run.created_by == the connecting key's registered principal`. There is no
-    role column an operator's key could satisfy instead, so an operator who
-    needs to reach a run they did not create has exactly one path today — the
-    web terminal, same as a viewer. This is a *narrower*, not a wider, gap than
-    #14 (SSH grants an operator strictly LESS reach than the browser terminal
-    already does) — named here because a reader auditing "who can reach a live
-    shell in MY run" should not have to infer that SSH and the browser terminal
-    answer the question differently. The upgrade path (a role column, so an
-    operator's own registered key could satisfy an "operator OR owner" check)
-    is marked with a `ponytail:` comment at the authorization check
-    (`internal/api/sshgateway.go`'s `sshAuth`) rather than built now — no
-    deployment has asked for it, and the narrower behavior is safe by
-    construction, not merely unfinished.
+15. **SSH gateway authorization has no admin override.** Unlike the browser
+    terminal (`GET /runs/{id}/attach` — owner-or-admin via a minted attach
+    ticket, since v0.5 a member may attach to a run THEY OWN this way;
+    admin-only via the ticket-LESS session-cookie fall-through), SSH gateway
+    (`docs/SSH.md`) authorization is exactly one check:
+    `run.created_by == the connecting key's registered principal`, with no
+    admin-or-owner alternative. So an admin reaching another human's run uses
+    the web terminal (owner-or-admin attach ticket); a member has no path to
+    another human's run over either transport — SSH's owner-only check
+    refuses them the same as it refuses everyone else, and the web
+    terminal's ticket mint is itself owner-or-admin-gated
+    (`handleAttachTicket`'s `getRunAuthorized`). This is a *narrower*, not a
+    wider, gap than #14 (SSH grants an admin strictly LESS reach than the
+    browser terminal already does) — named here because a reader auditing
+    "who can reach a live shell in MY run" should not have to infer that SSH
+    and the browser terminal answer the question differently. The upgrade
+    path (a role column, so an admin's own registered key could satisfy an
+    "admin OR owner" check) is marked with a `ponytail:` comment at the
+    authorization check (`internal/api/sshgateway.go`'s `sshAuth`) rather
+    than built now — no deployment has asked for it, and the narrower
+    behavior is safe by construction, not merely unfinished.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given
@@ -727,10 +736,12 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
   `localStorage` instead (survives restart, larger exposure window). Both stores
   are same-origin and readable by injected script — the checkbox trades restart
   convenience for a shorter at-rest window, not for a stronger boundary.
-- **SSO session (the hardened path, `[multi-user — not yet built, unscheduled]`).** The session
+- **SSO session (the hardened path, shipped v0.5).** The session
   is carried in an **`HttpOnly` cookie** that page script cannot read, so an
   injected script cannot exfiltrate it. This is the stronger posture; the
   admin-token path above is the local/single-operator convenience alternative.
+  See `docs/OPERATIONS.md` "Multi-user: who can change what" for the
+  admin/member contract this session carries.
 
 **Mitigations that exist:** the token is never written to `localStorage` unless
 you opt in; the console is served same-origin (no cross-origin token leak); the
@@ -964,7 +975,7 @@ The following controls apply regardless of Confinement Class:
 | Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 **[shipped]** + L3 **[v0.5+ — planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
 | Approval mints credential | B5 coupling, ID + AU | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; the explicit-kill path teardown-first, non-kill stops win the state CAS first then revoke — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5+ — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5+ — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU | Insider hiding behind agent identity |
 | Tamper-evident, free SIEM export | AU: Postgres log + PTY replay **[shipped]**, eBPF/Tetragon ground-truth stream **[shipped]** (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.blind`) | In-sandbox log tampering; audit vendor lock-in |
 | Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]** | Policy disablement before malicious action |
@@ -998,22 +1009,35 @@ the CC3 host-eBPF blind spot surfaced explicitly rather than hidden.
 
 The **explicit kill** path (`handleKillRun`) runs this fixed order:
 
-1. **Sandbox teardown** — runner `KillSandbox`.
-2. **Run-token deny-list** — embedded identity revocation.
-3. **Broker credential revoke** — every minted credential for the run.
-4. **Durable state transition** — compare-and-swap, so a finished run cannot be
-   resurrected.
+1. **Durable state transition** — compare-and-swap to KILLED from the state
+   just read. This runs FIRST (C002): a kill that loses the race to a
+   concurrent forward transition (e.g. a dispatch PENDING→STARTING) 409s
+   WITHOUT touching the runner or revoking anything, so it can never strip a
+   still-live run's credentials. Only the transition that actually WINS
+   KILLED proceeds to the steps below. An already-KILLED run is the one
+   exception to the terminal guard: re-kill CASes KILLED→KILLED (a value
+   no-op) and re-runs the idempotent steps below, so a first kill whose
+   teardown/revoke partially failed can be retried to actually free the
+   sandbox/credentials.
+2. **Sandbox teardown** — runner `KillSandbox`.
+3. **Run-token deny-list** — embedded identity revocation.
+4. **Broker credential revoke** — every minted credential for the run.
 
-Any step that fails is audited loudly (`run.kill`/`run.revoke` failure) instead
-of reporting containment — NOT fully contained, retry the kill. SPIRE entry
+Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the
+aggregate outcome, plus a distinct `run.revoke` failure event) instead of
+reporting containment — NOT fully contained, retry the kill. SPIRE entry
 deletion arrives with SPIRE **[v0.5+ — planned]**; GitHub installation tokens
 are TTL-bound (no per-token revoke API) — residual #7.
 
-Non-kill stops (completion, failure, idle auto-stop) run the **same set** of
-revocation+teardown steps and are equally fail-loud, but win the durable-state
-compare-and-swap *first* (the gate that prevents a double-finalize) and then
-revoke and tear down — and audit `run.complete`/`run.reconcile` rather than
-`run.kill`.
+Non-kill stops (completion, failure, idle auto-stop) also win the durable-state
+compare-and-swap *first* — same C002 invariant, a lost CAS never revokes a
+still-live run — but the caller wins it BEFORE calling the shared
+`finalizeRunTail`, whose own internal order is audit → revoke → teardown (the
+REVERSE of explicit kill's teardown-before-revoke), and which audits
+`run.complete`/`run.reconcile` rather than `run.kill`. Unlike an explicit
+kill, a non-kill stop has no re-kill-style retry lane: a failed teardown/revoke
+step there is not automatically retried today (`SweepTerminalSandboxes` is an
+unwired primitive for exactly this gap — nothing calls it yet).
 
 **Verification note (2026-07-06):** re-checked against the shipped Docker
 driver to confirm the "egress enforced outside the sandbox" / "env-var proxy

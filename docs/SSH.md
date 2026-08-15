@@ -191,14 +191,15 @@ would neither work nor mean anything).
 username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-only, not operator-gated.** SSH authorization is
+**Owner-only, no admin override.** SSH authorization is
 `run.created_by == the key's registered principal` — a single equality
-check, deliberately narrower than the browser terminal's `requireOperator`
-gate (which lets an operator attach to *any* run). SSH has no session
-cookie to carry an operator role through, so today an admin who needs
-another human's run uses the web terminal, same as a member would. Extending
-SSH to admins/operators needs a role column this table doesn't have yet —
-tracked as a residual in
+check, deliberately narrower than the browser terminal (owner-or-admin via a
+minted attach ticket; admin-only via the ticket-less session-cookie
+fall-through). SSH has no session cookie and no role column to carry an
+admin override through, so today: an admin reaching another human's run
+uses the web terminal (owner-or-admin attach ticket); a member has no path
+to another human's run over either transport. Extending SSH to admins needs
+a role column this table doesn't have yet — tracked as a residual in
 [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), not
 silently assumed away.
 
