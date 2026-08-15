@@ -70,7 +70,7 @@ func run() error {
 		controlURL      = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
 		token           = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
 		blindRuns       = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
-		forwardUnmapped = cliutil.FlagBool("forward-unmapped-host-events", "WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS", false, "opt-in: forward kernel exec/connect/write events this HOST sensor could NOT correlate to a Wardyn-managed run (other containers, the bare host) to the audit sink/SIEM; OFF by default (W24-S1-1, see gatedMapper in correlator.go)")
+		forwardUnmapped = cliutil.FlagBool("forward-unmapped-host-events", "WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS", false, "opt-in: forward host-wide kernel events this sensor could not correlate to a Wardyn run to the audit sink/SIEM; OFF by default (W24-S1-1, gatedMapper)")
 		heartbeatFlag   = cliutil.FlagDuration("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", 30*time.Second, "sensor heartbeat interval")
 		refreshFlag     = cliutil.FlagDuration("refresh", "WARDYN_GROUNDTRUTH_REFRESH", 15*time.Second, "container->run index refresh interval")
 		statsFlag       = cliutil.FlagDuration("stats", "WARDYN_GROUNDTRUTH_STATS", 60*time.Second, "how often to log throughput/drop stats")

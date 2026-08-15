@@ -346,22 +346,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// transport, subscription/Bedrock injection, the inspection gate) — so this is
 	// the envelope the proxy really enforces (ProxyConfig.Policy below), never a
 	// pre-union guess. One snapshot covers egress + first_use_approval +
-	// LLMInspection + mount read-only flags + resource caps. The spec carries
-	// secret NAMES/refs only, never values (types.GrantSpec.Scope) — EXCEPT
-	// LLMInspection.WorkspaceSecretValues, which resolveLLMInspectionSecrets just
-	// populated with the REAL resolved corpus for the proxy above. That field's own
-	// doc comment says NEVER logged (W12-A-2), so the audited copy is built from a
-	// Clone() (never the live `policy` the ProxyConfig snapshot below still
-	// references) with the values replaced by a count — the proxy still gets the
-	// real values, the audit log never does.
-	auditPolicy := policy.Clone()
-	if auditPolicy.LLMInspection != nil && len(auditPolicy.LLMInspection.WorkspaceSecretValues) > 0 {
-		auditPolicy.LLMInspection.WorkspaceSecretValues = []string{
-			fmt.Sprintf("<%d value(s) redacted>", len(auditPolicy.LLMInspection.WorkspaceSecretValues)),
-		}
-	}
+	// LLMInspection + mount read-only flags + resource caps. auditablePolicy
+	// redacts LLMInspection.WorkspaceSecretValues (which resolveLLMInspectionSecrets
+	// just populated with the REAL resolved corpus for the proxy above) — that
+	// field's own doc comment says NEVER logged (W12-A-2), so the audited copy is a
+	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
+	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
-		run.ID.String(), "success", mustJSON(auditPolicy)))
+		run.ID.String(), "success", mustJSON(auditablePolicy(policy))))
 
 	// Stamped BEFORE CreateSandbox, not after (review round 2, L7): the row
 	// still carries the heartbeat it was born with, which any image
@@ -690,6 +682,20 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		run.ID.String(), outcome, mustJSON(map[string]any{
 			"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
 		})))
+}
+
+// auditablePolicy returns a Clone of policy safe to write to the append-only
+// audit log: LLMInspection.WorkspaceSecretValues (the real resolved corpus, whose
+// own doc comment says NEVER logged, W12-A-2) is replaced by a redacted count.
+// The caller's live policy is never mutated.
+func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
+	out := policy.Clone()
+	if out.LLMInspection != nil && len(out.LLMInspection.WorkspaceSecretValues) > 0 {
+		out.LLMInspection.WorkspaceSecretValues = []string{
+			fmt.Sprintf("<%d value(s) redacted>", len(out.LLMInspection.WorkspaceSecretValues)),
+		}
+	}
+	return out
 }
 
 // toolchainNeeds is dispatchParams.Toolchains' shape: which of the two
