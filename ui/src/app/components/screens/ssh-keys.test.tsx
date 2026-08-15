@@ -80,6 +80,19 @@ describe("SSHKeysScreen — list + remove", () => {
 
     await waitFor(() => expect(deleteKeyMock).toHaveBeenCalledWith("SHA256:abc/def"));
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    // ui-shellAuth-5: curly quotes, matching the shared DeleteConfirmDialog
+    // pattern used by workspaces/policies/secrets — not straight ASCII quotes.
+    expect(toastSuccess).toHaveBeenCalledWith("Key “laptop” removed");
+  });
+
+  // ui-shellAuth-5: same curly-quote convention on the confirm dialog's own
+  // title, which precedes the toast in the flow above.
+  it("titles the confirm dialog with curly quotes around the key name", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText("laptop");
+    await user.click(screen.getByRole("button", { name: /remove key/i }));
+    expect(await screen.findByText("Remove key “laptop”?")).toBeInTheDocument();
   });
 
   it("surfaces a toast.error when deleteKey() rejects", async () => {
@@ -147,5 +160,18 @@ describe("SSHKeysScreen — add key", () => {
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     expect(screen.getByText("Public key only — never paste a private key.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/ssh-ed25519 AAAA/)).toBeInTheDocument();
+  });
+
+  // ui-shellAuth-3: "Public key" is the only field save() actually requires
+  // (and the submit button gates on) — it must carry the same `required`
+  // marker convention as every other required field in the app (step-shell's
+  // Field), not read identically to the genuinely-optional "Name" field.
+  it("marks the Public key field required — the app's required-field convention", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText("No keys yet.");
+    await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
+    expect(screen.getByLabelText(/public key/i)).toBeRequired();
+    expect(screen.getByLabelText(/^name$/i)).not.toBeRequired();
   });
 });

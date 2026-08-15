@@ -194,7 +194,7 @@ function AddSSHKeyDialog({
               autoComplete="off"
             />
           </Field>
-          <Field label="Public key" htmlFor="ssh-key-value">
+          <Field label="Public key" htmlFor="ssh-key-value" required>
             <Textarea
               id="ssh-key-value"
               placeholder="ssh-ed25519 AAAA…"
@@ -203,6 +203,7 @@ function AddSSHKeyDialog({
               rows={4}
               spellCheck={false}
               autoComplete="off"
+              required
               className="font-mono text-xs"
             />
           </Field>
@@ -247,7 +248,7 @@ function RemoveSSHKeyDialog({
     setRemoving(true);
     try {
       await sshKeysApi.deleteKey(keyToDelete.fingerprint);
-      toast.success(`Key "${label}" removed`);
+      toast.success(`Key “${label}” removed`);
       onRemoved();
       onOpenChange(false);
     } catch (e) {
@@ -261,7 +262,7 @@ function RemoveSSHKeyDialog({
     <AlertDialog open={!!keyToDelete} onOpenChange={(o) => !o && onOpenChange(false)}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Remove key "{label}"?</AlertDialogTitle>
+          <AlertDialogTitle>Remove key “{label}”?</AlertDialogTitle>
           <AlertDialogDescription>
             You will no longer be able to connect over SSH with this key. This cannot be undone.
           </AlertDialogDescription>

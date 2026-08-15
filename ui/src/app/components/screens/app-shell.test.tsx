@@ -173,6 +173,29 @@ describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
   });
 });
 
+// ui-shellAuth-4: the account-menu trigger must render via the shared Button
+// component (like every sibling header control) so keyboard focus gets the
+// app's focus-visible ring instead of falling back to a raw <button>'s bare
+// unthemed browser-default outline.
+describe("AppShell — account-menu trigger uses the shared Button (ui-shellAuth-4)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("carries the shared Button's focus-visible ring classes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    const accountTrigger = headerButtons[headerButtons.length - 1];
+    expect(accountTrigger).toHaveClass("focus-visible:ring-ring/50");
+  });
+});
+
 describe("MobileNav (below-md nav fallback)", () => {
   it("starts collapsed: trigger present, aria-expanded=false, no nav links rendered", () => {
     renderMobileNav();
@@ -206,16 +229,19 @@ describe("MobileNav (below-md nav fallback)", () => {
   });
 });
 
-// B3: member nav is Runs · Approvals · Recordings, nothing else — no
+// B3: member nav is Runs · Approvals · Demos · Recordings, nothing else — no
 // Policies/Secrets/Workspaces/Audit/Getting started. Hiding is cosmetic (the
 // server is the real boundary); this pins the UI half of that contract.
+// ui-shellAuth-2: Demos is included on the member side because routes.go has
+// no server-side gate on it at all — hiding it here would be a pure
+// discoverability regression with nothing backing it, unlike its siblings.
 describe("SidebarNav (member role — B3)", () => {
-  it("shows only Runs, Approvals, Recordings — admin-only items and Getting started are absent", async () => {
+  it("shows Runs, Approvals, Demos, Recordings — admin-only items and Getting started are absent", async () => {
     const user = userEvent.setup();
     renderMobileNav("member");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Recordings"]) {
+    for (const label of ["Runs", "Approvals", "Demos", "Recordings"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
     for (const label of ["Policies", "Secrets", "Integrations", "Workspaces", "Audit", "Getting started"]) {
