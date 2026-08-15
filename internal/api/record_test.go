@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -64,6 +66,23 @@ type recordStore struct {
 	saved         json.RawMessage // current record_results blob (per-key upserts land here)
 	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
 	clearedActive bool            // ClearWorkspaceActiveRun called
+	// heartbeat backs LatestAuditEventByAction — reconcileRecordRun's
+	// ebpfGroundtruthCaveat call (W20-W20-groundtruth-mapper-4) reads this to
+	// stamp the sensor's coverage state onto the capture. nil (the default)
+	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
+	heartbeat *types.AuditEvent
+}
+
+// LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
+// Every recordStore-based test now exercises this (reconcileRecordRun calls
+// it unconditionally on every capture) — default to "no heartbeat ever" so
+// the many existing tests that don't care about sensor health stay
+// unaffected; a test that DOES sets s.heartbeat first.
+func (s *recordStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	if s.heartbeat != nil {
+		return *s.heartbeat, nil
+	}
+	return types.AuditEvent{}, store.ErrNotFound
 }
 
 func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
@@ -317,6 +336,41 @@ func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	}
 	if !res.KernelSensorBlind {
 		t.Error("CC3 run must surface kernel_sensor_blind")
+	}
+}
+
+// TestReconcileRecordRun_StampsEbpfGroundtruthCaveat is
+// W20-W20-groundtruth-mapper-4: before this, a capture's Caveats never said
+// anything about the host eBPF sensor's own coverage — that state lived only
+// on the admin-only /healthz endpoint, nowhere an operator reviewing a
+// recording would see it. reconcileRecordRun must stamp the SAME state
+// ebpfGroundtruthCaveat computes (which /healthz's ebpfGroundtruthStatus also
+// reads) onto RecordTaskResult.Caveats for every non-healthy sensor state.
+func TestReconcileRecordRun_StampsEbpfGroundtruthCaveat(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
+	hb.Time = time.Now()
+	fake := &recordStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record",
+			State: types.RunCompleted, ConfinementClass: types.CC1},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+		events:          []types.AuditEvent{egressAllowEvent(runID, "registry.npmjs.org")},
+		heartbeat:       &hb,
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	found := false
+	for _, c := range res.Caveats {
+		if strings.Contains(c, "kernel ground truth") && strings.Contains(c, "partial") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("caveats = %v, want one naming the partial eBPF sensor coverage", res.Caveats)
 	}
 }
 

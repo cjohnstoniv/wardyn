@@ -1107,6 +1107,15 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if len(events) >= maxCaptureAuditEvents {
 		res.Caveats = append(res.Caveats, captureAuditTruncatedNote)
 	}
+	// W20-W20-groundtruth-mapper-4: surface the eBPF sensor's own coverage
+	// state on the capture itself — before this it lived only on the
+	// admin-only /healthz endpoint, nowhere an operator reviewing a recording
+	// would see it. Orthogonal to KernelSensorBlind above (that's THIS run's
+	// structural CC3 blindness; this is the host sensor's own health/coverage,
+	// which can be degraded or partial regardless of confinement class).
+	if gt := s.ebpfGroundtruthCaveat(ctx); gt != "" {
+		res.Caveats = append(res.Caveats, gt)
+	}
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
 		// W20-W20-capture-store-4: recordEmptyCaptureHint blames the operator's

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -365,6 +366,81 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	gt := healthzEbpf(t, h)
 	if gt["state"] != "healthy" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want healthy (every kind has arrived)", gt["state"])
+	}
+}
+
+// TestEbpfGroundtruthCaveat_OneLinePerState is W20-W20-groundtruth-mapper-4's
+// other half: before this, the per-kind coverage state ebpfGroundtruthStatus
+// computes existed ONLY on the admin-only /healthz endpoint — nowhere a
+// Record Mode capture or a synthesized profile (the surfaces an operator
+// actually reviews) would ever show it. ebpfGroundtruthCaveat is the shared
+// one-liner reconcileRecordRun (RecordTaskResult.Caveats) and
+// handleSynthesizeProfile (profileResponse.Warnings) each stamp — reading the
+// SAME state ebpfGroundtruthStatus reports, so the two surfaces can never
+// disagree about what "healthy" means. Only "healthy" (or no Store at all,
+// though that path is untestable via the harness) omits a caveat.
+func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
+	cases := []struct {
+		name      string
+		noStore   bool // leave h.srv.cfg.Store nil (no sensor ever configured)
+		hb        types.AuditEvent
+		wantEmpty bool
+		wantState string // substring the caveat must name
+	}{
+		{
+			name:      "unavailable (no sensor configured at all)",
+			noStore:   true,
+			wantState: "unavailable",
+		},
+		{
+			name: "idle (fresh heartbeat, zero events)",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 0, nil)
+				e.Time = time.Now()
+				return e
+			}(),
+			wantState: "idle",
+		},
+		{
+			name: "partial (one kind never arrived)",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9})
+				e.Time = time.Now()
+				return e
+			}(),
+			wantState: "partial",
+		},
+		{
+			name: "healthy (every kind arrived) -> no caveat",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 3, map[string]uint64{
+					groundtruth.ActionProcessExec:    1,
+					groundtruth.ActionNetworkConnect: 1,
+					groundtruth.ActionFileWrite:      1,
+				})
+				e.Time = time.Now()
+				return e
+			}(),
+			wantEmpty: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			if !c.noStore {
+				h.srv.cfg.Store = stubHeartbeatStore{ev: c.hb}
+			}
+			got := h.srv.ebpfGroundtruthCaveat(context.Background())
+			if c.wantEmpty {
+				if got != "" {
+					t.Fatalf("ebpfGroundtruthCaveat = %q, want empty (healthy sensor has nothing to caveat)", got)
+				}
+				return
+			}
+			if got == "" || !strings.Contains(got, "kernel ground truth") || !strings.Contains(got, c.wantState) {
+				t.Fatalf("ebpfGroundtruthCaveat = %q, want a one-line note naming %q", got, c.wantState)
+			}
+		})
 	}
 }
 
