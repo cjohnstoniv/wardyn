@@ -48,6 +48,17 @@ LLM-egress-inspection example: it adds `llm_inspection` (`mode: "alert"`,
 `detect_secrets: true`, `on_scanner_error: "pass"`) so prompt traffic to the
 model provider is scanned and alerts are logged without blocking.
 
+## ci-claude-llm.json
+
+`ci.json`'s CI baseline plus exactly what model access needs: `api.anthropic.com`
+in `allowed_domains` and one no-approval `api_key` grant
+(`anthropic-api-key`). Every other field — `first_use_approval: "always_deny"`,
+`auto_stop_after_sec: 3600`, `CC1` floor — is `ci.json` verbatim, so unlike
+`claude-llm.json` (a dev ceiling: `deny_with_review`, an approval-gated
+`github_token` grant, unbounded `auto_stop_after_sec: 0`) this one is safe to
+point a pipeline's `--policy-file` at as-is. See docs/CI.md's "Model access
+for harness mode".
+
 ## demo.json
 
 The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs

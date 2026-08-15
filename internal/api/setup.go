@@ -707,7 +707,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	if s.cfg.Store != nil {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			checks = append(checks, siteConfigCheck(sc), artifactRepoCheck(sc))
+			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
 		}
 	}
 

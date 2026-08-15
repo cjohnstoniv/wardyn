@@ -252,6 +252,42 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 	}
 }
 
+// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins W26-S1-2: PUT
+// /site-config must surface, never silently accept, a secret ref the store
+// doesn't currently hold (e.g. `wardyn site-config apply corp-baseline.json`
+// run before the referenced secrets were restored). The write itself still
+// succeeds — dangling is a valid mid-recovery state, never rejected.
+func TestHandlePutSiteConfig_ReportsDanglingSecretRefs(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, _ := newSiteConfigHarness(t, fake)
+	// Only npm-token is present; corp-proxy-url is dangling.
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"npm-token": []byte("tok")}}
+	srv.router = srv.routes() // re-mount with the secret surfaces enabled
+
+	body := `{
+		"upstream_proxy_secret_ref": "corp-proxy-url",
+		"egress_redirects": [
+			{"from": "https://registry.npmjs.org/", "to": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token", "ecosystem": "npm"}
+		]
+	}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (dangling refs are advisory, not rejected); body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		DanglingSecretRefs []string `json:"dangling_secret_refs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DanglingSecretRefs) != 1 || got.DanglingSecretRefs[0] != "corp-proxy-url" {
+		t.Errorf("dangling_secret_refs = %v, want [corp-proxy-url] (npm-token is present, must not be listed)", got.DanglingSecretRefs)
+	}
+	if fake.putSeen == nil || fake.putSeen.UpstreamProxySecretRef != "corp-proxy-url" {
+		t.Fatal("a dangling ref must still be persisted as given, never rejected")
+	}
+}
+
 // TestHandlePutSiteConfig_LegacyArtifactOverridesFold is the fold-compat proof
 // for Task 3: a body saved before EgressRedirects existed (still keyed by the
 // deprecated artifact_overrides) must keep applying — folded into

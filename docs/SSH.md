@@ -14,10 +14,18 @@ surface: the daemon does not even generate a host key.
 
 ## 1. Register a public key
 
-Account menu → **SSH keys** → **Add key** — paste your public key (the
-console never asks for a private key; the paste field's own helper line says
-so, and pasting one is refused server-side with a specific error). Or via the
-API:
+**SSO deployment (OIDC configured):** Account menu → **SSH keys** → **Add
+key** — paste your public key (the console never asks for a private key; the
+paste field's own helper line says so, and pasting one is refused
+server-side with a specific error). A key registered against your SSO
+session lands under your OIDC `sub` — the only principal the gateway's
+owner-only check (below) will ever match against a run you created.
+
+**Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
+registers the key against the shared, non-human `admin-token` principal, not
+any human's own identity. With OIDC configured, `POST` from a bare admin
+token now 422s for exactly this reason instead of silently writing a key
+that can never authorize anyone's run — use the console (above) instead:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \

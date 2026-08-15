@@ -66,6 +66,19 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		name = comment
 	}
 	principal := principalFromRequest(r)
+	if principal == adminTokenPrincipal && s.cfg.OIDC != nil {
+		// A key registered under the non-human admin-token principal can NEVER
+		// authorize an SSO human's run: sshAuth's owner-only gate compares
+		// run.CreatedBy (the OIDC sub) against the key's stored Principal, and
+		// "admin-token" matches no run a human ever creates. With SSO
+		// configured, only a signed-in human's own POST — which
+		// principalFromRequest resolves to their OIDC sub — can register a
+		// key that will ever work. Reject before writing one that would sit
+		// dead in the store forever (docs/SSH.md's admin-token/CI-only note).
+		writeError(w, http.StatusUnprocessableEntity,
+			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key from Account -> SSH keys instead")
+		return
+	}
 
 	existing, err := s.cfg.Store.ListSSHKeysByPrincipal(r.Context(), principal)
 	if err != nil {

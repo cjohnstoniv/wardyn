@@ -181,6 +181,24 @@ _confirm() {
   return 1
 }
 
+# _confirm_host_stop PROMPT — like _confirm, but gated on the SEPARATE
+# WARDYN_FORCE_STOP_HOST flag, never WARDYN_FORCE_RESET: `reset` only wipes the
+# compose volumes by contract (TRY-IT.md's "does not touch a host-mode
+# daemon"), so a headless `WARDYN_FORCE_RESET=1 make reset` confirming the
+# (unrelated) volume wipe must not ALSO silently kill a live host-mode wardynd
+# — that needs its own explicit opt-in. Interactive behavior is identical to
+# _confirm (prompt, default No).
+_confirm_host_stop() {
+  [ "${WARDYN_FORCE_STOP_HOST:-}" = 1 ] && return 0
+  if [ -t 0 ]; then
+    printf '  %s [y/N] ' "$1"
+    read -r _c_a || _c_a=""
+    case "${_c_a}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  fi
+  warn "Non-interactive: set WARDYN_FORCE_STOP_HOST=1 to also stop it headlessly."
+  return 1
+}
+
 # ── doctor ───────────────────────────────────────────────────────────────
 
 DOCTOR_BLOCKED=0
@@ -649,6 +667,10 @@ cmd_down() {
 # WARDYN_FORCE_RESET=1). A live HOST-mode (`make setup`) daemon is offered a stop
 # first: the containerized wardynd this brings up binds the same 127.0.0.1:8080,
 # so leaving the host one running guarantees a port collision, not a second UI.
+# That stop is gated SEPARATELY, on WARDYN_FORCE_STOP_HOST (_confirm_host_stop) —
+# WARDYN_FORCE_RESET alone confirms only the (unrelated) volume wipe, so a
+# headless `WARDYN_FORCE_RESET=1 make reset` never silently kills a host-mode
+# daemon it didn't ask to touch.
 # For the FULL undo (host daemon + rundir + compose, no re-up) use reset-all.
 cmd_reset() {
   warn "reset REMOVES the compose volumes: Postgres (ALL runs + the append-only audit log) and recordings."
@@ -656,7 +678,7 @@ cmd_reset() {
   _host_pid="$(cat "${HOME}/.wardyn/host-wardynd.pid" 2>/dev/null || true)"
   if [ -n "${_host_pid}" ] && kill -0 "${_host_pid}" 2>/dev/null; then
     warn "Host-mode wardynd is running (PID ${_host_pid}) — the containerized wardynd this brings up needs its :8080."
-    if _confirm "Stop the host daemon first (make stop-host)?"; then
+    if _confirm_host_stop "Stop the host daemon first (make stop-host)?"; then
       make -C "${REPO_ROOT}" stop-host
     else
       warn "Left the host daemon up — the fresh containerized wardynd will fail to bind :8080."

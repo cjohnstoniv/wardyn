@@ -325,9 +325,14 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
 ```
 
 `make reset` operates on the **compose** stack: it wipes those volumes and
-brings up a *containerized* wardynd. It does not touch a host-mode daemon — to
-reset host mode, `make stop-host && make setup`. `make doctor` is read-only —
-re-run it any time to re-check this host's capabilities.
+brings up a *containerized* wardynd. A live host-mode daemon would collide with
+it on `:8080`, so a still-running one is offered a stop first — interactively,
+a separate y/N prompt (never lumped into the wipe's own confirmation);
+headlessly, only if you *also* set `WARDYN_FORCE_STOP_HOST=1`
+(`WARDYN_FORCE_RESET=1` alone confirms the volume wipe and nothing else, so it
+never silently kills a host-mode daemon it wasn't asked to touch). To reset
+host mode instead, `make stop-host && make setup`. `make doctor` is read-only
+— re-run it any time to re-check this host's capabilities.
 
 ### When it goes wrong
 

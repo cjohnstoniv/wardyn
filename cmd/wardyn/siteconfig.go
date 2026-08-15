@@ -82,9 +82,12 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 			if err := json.Unmarshal(raw, &cfg); err != nil {
 				return fmt.Errorf("parse site config JSON: %w", err)
 			}
-			out, err := client().PutSiteConfig(cmd.Context(), cfg)
+			out, dangling, err := client().PutSiteConfig(cmd.Context(), cfg)
 			if err != nil {
 				return err
+			}
+			for _, name := range dangling {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: secret %q is referenced but not set — restore it with `wardyn secret set %s`\n", name, name)
 			}
 			return emitJSON(out)
 		},

@@ -1,0 +1,22 @@
+{
+  "allowed_domains": ["api.anthropic.com"],
+  "denied_domains": [],
+  "allow_all_egress": false,
+  "first_use_approval": "always_deny",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [
+    {
+      "kind": "api_key",
+      "scope": {
+        "host": "api.anthropic.com",
+        "header": "x-api-key",
+        "format": "%s",
+        "secret_name": "anthropic-api-key"
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": false
+    }
+  ],
+  "auto_stop_after_sec": 3600
+}

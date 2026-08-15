@@ -609,7 +609,14 @@ common state: a host with direct internet access needs none of this. Because
 it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
 site-config get > corp-baseline.json` before a reset and `wardyn site-config
 apply corp-baseline.json` after is the round-trip — the document carries
-secret **names**, never values, so it's safe to keep beside the repo.
+secret **names**, never values, so it's safe to keep beside the repo. Because
+values never round-trip, `apply` re-attaches the *names* unconditionally even
+when a named secret was never restored into the fresh store (e.g. `wardyn
+secret set` for it was skipped) — `apply` prints a warning naming every such
+dangling ref, and the setup checklist's "Site config" row grades `warn` (never
+the plain `info` of a fully-live config) for as long as one remains, so a
+reset+apply that leaves a credentialed path dead never reads as fully
+configured.
 
 ### Upstream proxy: plain URL vs. secret
 

@@ -108,9 +108,13 @@ Two paths work from zero prior state:
 
 - **API key** (simplest): policy grants an `api_key` scoped to
   `api.anthropic.com` (see
-  [`examples/policies/claude-llm.json`](../examples/policies/claude-llm.json))
-  and the pipeline seeds it: `WARDYN_CI_SECRETS=anthropic-api-key=$KEY`. The
-  key is injected proxy-side; the sandbox only ever holds a placeholder.
+  [`examples/policies/ci-claude-llm.json`](../examples/policies/ci-claude-llm.json)
+  — `ci.json` plus exactly that grant and egress entry, so it's CI-safe as-is;
+  `examples/policies/claude-llm.json` is a DEV ceiling, not a CI policy —
+  `deny_with_review`, an approval-gated grant, and an unbounded run all need
+  stripping before it belongs in a pipeline) and the pipeline seeds it:
+  `WARDYN_CI_SECRETS=anthropic-api-key=$KEY`. The key is injected proxy-side;
+  the sandbox only ever holds a placeholder.
 - **AWS Bedrock**: set `WARDYN_BEDROCK_REGION`/`WARDYN_BEDROCK_MODEL` on the
   stack and seed a `bedrock-api-key` bearer secret (never-resident,
   proxy-injected).

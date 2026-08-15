@@ -237,6 +237,35 @@ func foldLegacyArtifactOverrides(cfg *types.SiteConfig) error {
 	return nil
 }
 
+// danglingSiteConfigSecretRefs returns the sorted, de-duplicated names of every
+// secret ref sc points at that present does not currently hold — e.g. an
+// UpstreamProxySecretRef or EgressRedirect.TokenSecretRef surviving a `site-config
+// get` capture across a `make reset-all` that wiped the secret store but not the
+// captured JSON. TokenIntegrationRef is deliberately excluded: it names an
+// Integration, not a bare secret, and integration existence is its own
+// (already-surfaced) concern. present is normally s.presentSecretNames(ctx) — the
+// ONE name->present map every other secret-aware verdict is computed from, so
+// this can never disagree with them. Advisory only: a dangling ref is never
+// rejected (validateSiteConfig deliberately doesn't check existence either) —
+// this only makes the gap visible instead of silent.
+func danglingSiteConfigSecretRefs(sc types.SiteConfig, present map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(ref string) {
+		if ref == "" || present[ref] || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		out = append(out, ref)
+	}
+	add(sc.UpstreamProxySecretRef)
+	for _, red := range sc.EgressRedirects {
+		add(red.TokenSecretRef)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // handleGetSiteConfig returns the operator-wide site config. Secret VALUES are
 // NEVER included — only the refs (names) the broker/proxy resolve at dispatch/
 // injection time. A never-configured operator gets the zero value (empty refs/
@@ -309,5 +338,24 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			"egress_redirects_count":    len(saved.EgressRedirects),
 			"scm_hosts_count":           len(saved.ScmHosts),
 		})))
-	writeJSON(w, http.StatusOK, saved)
+	// dangling_secret_refs surfaces the "reset+apply came back green but every
+	// credentialed path is dead" gap: this document round-trips secret NAMES
+	// only, so an apply after a secret-store wipe (or a hand-edited file) can
+	// reference a secret that was never restored — never rejected (dangling is
+	// a valid mid-recovery state), always reported.
+	writeJSON(w, http.StatusOK, siteConfigPutResponse{
+		SiteConfig:         saved,
+		DanglingSecretRefs: danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+	})
+}
+
+// siteConfigPutResponse is PUT /site-config's response body: the persisted
+// document plus DanglingSecretRefs (see danglingSiteConfigSecretRefs). GET
+// /site-config deliberately returns the bare types.SiteConfig, not this type —
+// DanglingSecretRefs is a freshly-computed, PUT-time-only signal, never
+// persisted, so it must never round-trip through a `site-config get` capture
+// back into a later `site-config apply` body.
+type siteConfigPutResponse struct {
+	types.SiteConfig
+	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
 }

@@ -6,6 +6,8 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // M5: the golden-id test (setup_check_ids_test.go) pins that these two rows
@@ -92,6 +94,74 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // success) and "" (indeterminate — an old daemon build, or in principle any
 // unproven state; see the field's doc for why a genuinely indeterminate LIVE
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
+// TestSiteConfigCheck_DanglingSecretRef pins W26-S1-2: on base 763beb5,
+// siteConfigCheck graded "info" ("every run inherits it") purely off whether
+// UpstreamProxySecretRef/EgressRedirects/ScmHosts were SET — never whether the
+// secret they name is actually present. After the documented reset+apply
+// recovery (`wardyn site-config get > f` before a reset, `wardyn site-config
+// apply f` after) with the referenced secret never restored, that read as
+// fully configured while the credentialed path was dead. It must now grade
+// "warn" and name the missing secret.
+func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
+	cases := []struct {
+		name       string
+		sc         types.SiteConfig
+		present    map[string]bool
+		wantStatus string
+		wantNames  []string // must all appear in Detail when wantStatus == "warn"
+	}{
+		{"unconfigured", types.SiteConfig{}, nil, "info", nil},
+		{
+			"upstream proxy secret present: ok",
+			types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"},
+			map[string]bool{"corp-proxy-url": true},
+			"info", nil,
+		},
+		{
+			"upstream proxy secret DANGLING: warn",
+			types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"},
+			map[string]bool{},
+			"warn", []string{"corp-proxy-url"},
+		},
+		{
+			"egress redirect token secret DANGLING: warn",
+			types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote", TokenSecretRef: "ghcr-token"},
+			}},
+			map[string]bool{},
+			"warn", []string{"ghcr-token"},
+		},
+		{
+			"plain upstream_proxy_url (no secret ref) never dangles",
+			types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"},
+			map[string]bool{},
+			"info", nil,
+		},
+		{
+			"scm hosts only, no secret refs at all: ok",
+			types.SiteConfig{ScmHosts: []string{"dev.azure.com"}},
+			map[string]bool{},
+			"info", nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk := siteConfigCheck(tc.sc, tc.present)
+			if chk.Status != tc.wantStatus {
+				t.Fatalf("Status = %q, want %q (detail=%q)", chk.Status, tc.wantStatus, chk.Detail)
+			}
+			for _, name := range tc.wantNames {
+				if !strings.Contains(chk.Detail, name) {
+					t.Errorf("Detail = %q, want it to name dangling secret %q", chk.Detail, name)
+				}
+			}
+			if tc.wantStatus == "warn" && chk.Fix == "" {
+				t.Error("warn status must carry a Fix")
+			}
+		})
+	}
+}
+
 func TestK8sEgressContainmentCheck(t *testing.T) {
 	cases := []struct {
 		name             string

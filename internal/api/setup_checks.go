@@ -211,25 +211,42 @@ func ageKeyCheck(durable bool) SetupCheck {
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
-// proxy, egress redirects, default SCM hosts) has been authored yet. Always
-// "info" — it is optional and skippable, never a blocking gate.
+// proxy, egress redirects, default SCM hosts) has been authored yet. "info" for
+// the unconfigured/fully-configured cases — it is optional and skippable, never
+// a blocking gate. "warn" when it IS configured but names a secret present does
+// not currently hold (danglingSiteConfigSecretRefs) — e.g. after a
+// `wardyn site-config apply corp-baseline.json` recovery whose secrets were
+// never restored: the document round-trips fine and reads as fully configured,
+// but every credentialed path through it (the upstream proxy, a redirect's
+// token) is dead until the named secret is set.
 //
 // Deliberately does not check the deprecated ArtifactOverrides: sc always
 // comes from Store.GetSiteConfig, and every persisted document has already
 // gone through either the PUT-time fold (foldLegacyArtifactOverrides,
 // site_config.go) or the one-time 0030 migration, so that field is provably
 // always empty by the time it is read back here.
-func siteConfigCheck(sc types.SiteConfig) SetupCheck {
-	if sc.UpstreamProxySecretRef != "" || sc.UpstreamProxyURL != "" || len(sc.EgressRedirects) > 0 || len(sc.ScmHosts) > 0 {
+func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
+	if sc.UpstreamProxySecretRef == "" && sc.UpstreamProxyURL == "" && len(sc.EgressRedirects) == 0 && len(sc.ScmHosts) == 0 {
 		return SetupCheck{
 			ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-			Detail: "An operator-wide site config is set (upstream proxy / egress redirects / SCM hosts); every run inherits it.",
+			Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
+			Fix:    "Set one via PUT /api/v1/site-config (or the Corporate network step — the Host proxy / Artifact redirect tabs).",
+		}
+	}
+	if dangling := danglingSiteConfigSecretRefs(sc, present); len(dangling) > 0 {
+		word := "secret"
+		if len(dangling) > 1 {
+			word = "secrets"
+		}
+		return SetupCheck{
+			ID: "site_config", Label: "Site config (corporate baseline)", Status: "warn",
+			Detail: fmt.Sprintf("An operator-wide site config is set, but %s %s is not set — every credentialed path through it (the upstream proxy / a redirect's token) is dead until it's restored.", word, strings.Join(dangling, ", ")),
+			Fix:    "Restore the missing secret(s) with `wardyn secret set <name>`, or point the ref at a secret that exists.",
 		}
 	}
 	return SetupCheck{
 		ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-		Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
-		Fix:    "Set one via PUT /api/v1/site-config (or the Corporate network step — the Host proxy / Artifact redirect tabs).",
+		Detail: "An operator-wide site config is set (upstream proxy / egress redirects / SCM hosts); every run inherits it.",
 	}
 }
 
