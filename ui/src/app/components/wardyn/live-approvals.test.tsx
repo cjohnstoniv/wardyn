@@ -59,6 +59,16 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
+  it("only shows egress_domain approvals — a pending credential/tool_call for this run stays out of the egress strip", async () => {
+    listApprovalsMock.mockResolvedValue([
+      pending({ id: "cred", kind: "credential", requested_scope: { host: "api.example", secret_name: "x" } }),
+      pending({ id: "tool", kind: "tool_call", requested_scope: { cmd: "rm -rf /" } }),
+    ]);
+    render(<LiveApprovals runId="r1" />);
+    expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
+    expect(screen.queryByTestId("live-approvals")).not.toBeInTheDocument();
+  });
+
   it("approves inline via the API", async () => {
     listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } })]);
     render(<LiveApprovals runId="r1" />);
