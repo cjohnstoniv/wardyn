@@ -658,6 +658,9 @@ func (s *authzStore) UpsertBaseImage(_ context.Context, b types.BaseImageEntry) 
 	}
 	return b, nil
 }
+func (s *authzStore) UpdateBaseImageName(_ context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{ID: id, Name: name}, nil
+}
 func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
 	return types.BaseImageEntry{}, store.ErrNotFound
 }

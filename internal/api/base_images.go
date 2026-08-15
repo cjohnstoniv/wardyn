@@ -83,8 +83,9 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	explicitName := strings.TrimSpace(req.Name)
 	entry := types.BaseImageEntry{
-		ID: uuid.New(), Kind: req.Kind, Name: strings.TrimSpace(req.Name),
+		ID: uuid.New(), Kind: req.Kind, Name: explicitName,
 		Image: strings.TrimSpace(req.Image), Steps: req.Steps,
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
@@ -103,6 +104,19 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if created.ID != entry.ID {
 		status = http.StatusOK
+		// W7-S1-3: an identity hit is the Add dialog's ONLY rename route (no
+		// separate edit UI/API/CLI/SDK) — apply the operator's explicitly
+		// typed name here, never inside UpsertBaseImage's own conflict clause
+		// (see its doc comment: that upsert is also a passthrough path with
+		// no rename intent at all, which must never clobber a custom name).
+		if explicitName != "" {
+			updated, uerr := s.cfg.Store.UpdateBaseImageName(r.Context(), created.ID, explicitName)
+			if uerr != nil {
+				writeError(w, http.StatusInternalServerError, "apply name to existing base image: "+uerr.Error())
+				return
+			}
+			created = updated
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"base_image.write", created.ID.String(), "success", mustJSON(map[string]any{

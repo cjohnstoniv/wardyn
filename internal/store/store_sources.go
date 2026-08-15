@@ -336,14 +336,15 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
 //
-// An identity hit also APPLIES b.Name (W7-S1-3): without this, re-POSTing an
-// existing identity through the Add dialog silently discarded whatever the
-// operator typed as the entry's name, and there was no other route (UI, API,
-// CLI, SDK) to rename a catalog row at all. Safe on the common no-rename call
-// too — image is itself part of the conflict key, so a caller that never
-// supplies a name (handleCreateBaseImage defaults it to lastPathSegment(image))
-// resolves to the SAME default on every call for that identity, an idempotent
-// no-op unless the caller actually typed a different name.
+// An identity hit does NOT touch name (same as UpsertSource's conflict
+// clause below) — on purpose. This upsert is also the PASSTHROUGH path a
+// workspace/run resolves its declared base-image spec through (sources.go's
+// attachSourcesAndBaseImage-shaped callers), which always derives an
+// auto-placeholder name (lastPathSegment(image)) with no rename intent
+// whatsoever; if this conflict clause applied EXCLUDED.name unconditionally,
+// every such passthrough call would silently rename an operator's
+// custom-named catalog row back to that placeholder. See
+// UpdateBaseImageName for the actual rename path (W7-S1-3).
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -352,11 +353,23 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 	q := `
 		INSERT INTO base_images (` + baseImageCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb)))
-		DO UPDATE SET name = EXCLUDED.name, updated_at = now()
+		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb))) DO UPDATE SET updated_at = now()
 		RETURNING ` + baseImageCols
 	return scanBaseImage(s.Pool.QueryRow(ctx, q,
 		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt))
+}
+
+// UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
+// rename path (W7-S1-3), mirroring UpdateSourceConfig above. handleCreateBaseImage
+// is the only caller: on an identity hit where the REQUEST carried an explicit
+// name (the Add dialog's re-POST-to-rename shape), never from UpsertBaseImage's
+// own conflict clause, which passthrough callers share and must never let rename
+// an operator's chosen name away from under them (see UpsertBaseImage's doc).
+func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
+	return scanBaseImage(s.Pool.QueryRow(ctx, `
+		UPDATE base_images SET name=$1, updated_at=now()
+		WHERE id=$2 RETURNING `+baseImageCols,
+		name, id))
 }
 
 // GetBaseImage returns the catalog row for id, or ErrNotFound.
