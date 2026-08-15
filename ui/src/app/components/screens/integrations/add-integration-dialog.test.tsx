@@ -390,6 +390,21 @@ describe("buildIntegrationWrite — the real PUT payload satisfies the server (n
     expect(body.probe).toEqual({ method: "GET", url: "https://github.com/" });
   });
 
+  // W11-S1-4: gitlab (PAT-over-HTTPS) and gitssh (Git over SSH) share
+  // apiType "git_host", but the server's capability matrix
+  // (internal/api/integrations.go RoleSecret("pat")/RoleSecret("ssh_key"))
+  // keys clone:pat vs clone:ssh off the secret's role — mislabeling an SSH
+  // key as "pat" reports the wrong clone lane.
+  it("git_host: PAT lane (gitlab) writes role pat, SSH lane (gitssh) writes role ssh_key", () => {
+    const pat = buildIntegrationWrite(values("gitlab"));
+    expect(serverRejection(pat)).toBeNull();
+    expect(pat.secrets).toEqual([{ role: "pat", secret_name: "gitlab-pat" }]);
+
+    const ssh = buildIntegrationWrite(values("gitssh", { hostList: ["git.corp.internal"] }));
+    expect(serverRejection(ssh)).toBeNull();
+    expect(ssh.secrets).toEqual([{ role: "ssh_key", secret_name: "ssh-key-git-corp-internal" }]);
+  });
+
   it("a generic kind (artifactory): proxy_header secret + a probe, both server-valid", () => {
     const body = buildIntegrationWrite(values("artifactory"));
     expect(serverRejection(body)).toBeNull();

@@ -285,6 +285,126 @@ describe("wizardStateFromProposal — subscription sentinel recognition", () => 
   });
 });
 
+// W15-W15e-wizard-roundtrip-3: a recorded/composed spec's git_pat grant used
+// to vanish entirely on hydration (only github_token/api_key were read) while
+// spec.allowed_domains still carried its host — "Edit in wizard" (and the
+// recorded-profile fast-track, which delegates to this same function) would
+// re-launch a run that reaches the host with no credential to authenticate.
+describe("wizardStateFromProposal — hydrates the git_pat grant, not just github_token/api_key", () => {
+  const run = { agent: "claude-code", repo: "local:corp-app", interactive: true } as ComposeRunProposal;
+  const spec: RunPolicySpec = {
+    allowed_domains: ["dev.azure.com"],
+    first_use_approval: "deny_with_review",
+    min_confinement_class: "CC2",
+    eligible_grants: [
+      {
+        kind: "git_pat",
+        scope: { host: "dev.azure.com", secret_name: "ado-pat", username: "myuser" },
+        requires_approval: false,
+      },
+    ],
+  };
+
+  it("carries host/secret/username/requires_approval into the wizard's own git_pat fields", () => {
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.gitPatEnabled).toBe(true);
+    expect(state.gitPatHost).toBe("dev.azure.com");
+    expect(state.gitPatSecretName).toBe("ado-pat");
+    expect(state.gitPatUsername).toBe("myuser");
+    expect(state.gitPatRequiresApproval).toBe(false);
+  });
+
+  it("re-building re-emits the SAME git_pat grant, not a dropped one", () => {
+    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
+    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "git_pat");
+    expect(grant?.scope).toEqual({ host: "dev.azure.com", secret_name: "ado-pat", username: "myuser" });
+    // The host stayed in allowed_domains BOTH before and after — the defect
+    // was the credential vanishing while the host stayed reachable.
+    expect(inline_policy.allowed_domains).toContain("dev.azure.com");
+  });
+
+  it("no git_pat grant present -> gitPatEnabled stays false (no false positive)", () => {
+    const noGrant: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
+    expect(wizardStateFromProposal(run, noGrant).gitPatEnabled).toBe(false);
+  });
+});
+
+// W15-W15e-wizard-roundtrip-4: the two-state read/read+write toggle must
+// never WIDEN an asymmetric source scope — re-emitting a pull_requests:write
+// grant the recording never had contradicts Record Mode's "reuse can only
+// ever subset" claim.
+describe("wizardStateFromProposal + buildSpec — github_token scope never widens on round trip", () => {
+  const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
+
+  it("contents:write ALONE (no pull_requests:write) collapses to read-only, not read+write", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: ["github.com"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC2",
+      eligible_grants: [
+        { kind: "github_token", scope: { repos: ["org/repo"], permissions: { contents: "write" } }, requires_approval: true },
+      ],
+    };
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.githubPermission).toBe("read");
+    const { inline_policy } = buildSpec(state);
+    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "github_token");
+    expect(grant?.scope?.permissions).toEqual({ contents: "read" });
+    expect(grant?.scope?.permissions).not.toHaveProperty("pull_requests");
+  });
+
+  it("contents:write AND pull_requests:write together round-trip as read+write, unchanged", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: ["github.com"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC2",
+      eligible_grants: [
+        {
+          kind: "github_token",
+          scope: { repos: ["org/repo"], permissions: { contents: "write", pull_requests: "write" } },
+          requires_approval: true,
+        },
+      ],
+    };
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.githubPermission).toBe("read+write");
+    const { inline_policy } = buildSpec(state);
+    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "github_token");
+    expect(grant?.scope?.permissions).toEqual({ contents: "write", pull_requests: "write" });
+  });
+});
+
+// W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field — `[]` is
+// always a real, deliberate value (Record Mode's own synthesized profile
+// writes exactly `[]` for a genuine deny-all outcome), never "unset". The
+// recorded-profile fast-track skips straight to Review, so a silent rewrite
+// here reaches Launch with nobody having seen Egress to catch it.
+describe("wizardStateFromProposal — an empty allowed_domains (deny-all) round-trips as empty, not the fresh-wizard default", () => {
+  const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
+
+  it("a genuinely empty allowlist stays empty, not api.anthropic.com", () => {
+    const spec: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.allowedDomains).toEqual([]);
+    expect(state.allowedDomains).not.toContain("api.anthropic.com");
+  });
+
+  it("re-building emits the SAME deny-all shape, not a rewritten allow-list", () => {
+    const spec: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
+    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
+    expect(inline_policy.allowed_domains).toEqual([]);
+  });
+
+  it("a non-empty allowlist still round-trips normally (no regression)", () => {
+    const spec: RunPolicySpec = {
+      allowed_domains: ["github.com"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC2",
+    };
+    expect(wizardStateFromProposal(run, spec).allowedDomains).toEqual(["github.com"]);
+  });
+});
+
 // Item 3 (medium): "Edit in wizard" used to silently drop every Optional
 // opt-in the operator made on the AI path — the matched selection only ever
 // carried the mount's INFERRED read-only flag, never enabledOptional, because
@@ -506,6 +626,23 @@ describe("buildSpec — git_pat grant", () => {
       gitPatSecretName: "gl-pat",
     });
     expect((missingHost.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
+  });
+
+  // W12-W12-B-4: the broker's mint is single-use per grant regardless of
+  // RequiresApproval — an approval-gated git_pat authenticates exactly ONE
+  // git operation, then a second in the same run 409s with no way to
+  // re-approve mid-run. Default off (matching the cached github_token
+  // lane's effective behavior); the operator can still opt back in on Access.
+  it("defaults gitPatRequiresApproval to false — a fresh wizard's git_pat grant is not approval-gated", () => {
+    expect(initialWizardState().gitPatRequiresApproval).toBe(false);
+    const { inline_policy } = buildSpec({
+      ...initialWizardState(),
+      gitPatEnabled: true,
+      gitPatHost: "gitlab.com",
+      gitPatSecretName: "gl-pat",
+    });
+    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "git_pat");
+    expect(grant?.requires_approval).toBe(false);
   });
 });
 

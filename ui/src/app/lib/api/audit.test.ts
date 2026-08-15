@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
-import { egressFromAudit, exitCodeFromAudit } from "./audit";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { audit, egressFromAudit, exitCodeFromAudit } from "./audit";
 import type { AuditEvent } from "../types";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
@@ -69,6 +69,33 @@ describe("egressFromAudit", () => {
     ]);
     expect(withBytes.bytes).toBe(4096);
     expect(noBytes.bytes).toBeUndefined();
+  });
+});
+
+// W21-S1-5: listAudit's `action` param — run-detail issues a SECOND, filtered
+// fetch (?run_id=&action=session.recording) so the recording picker's index
+// doesn't compete with every other action for the shared 1000-row cap on a
+// chatty run's (oldest-first) audit trail.
+describe("listAudit — action filter reaches the wire (W21-S1-5)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends ?run_id=&action= together, and omits action entirely when unset", async () => {
+    // A fresh Response per call — a body stream can only be read once, and
+    // this test drives two separate listAudit() calls against the same mock.
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await audit.listAudit("run_1", "session.recording");
+    const url1 = String(fetchMock.mock.calls[0][0]);
+    expect(url1).toContain("run_id=run_1");
+    expect(url1).toContain("action=session.recording");
+
+    await audit.listAudit("run_1");
+    const url2 = String(fetchMock.mock.calls[1][0]);
+    expect(url2).toContain("run_id=run_1");
+    expect(url2).not.toContain("action=");
   });
 });
 

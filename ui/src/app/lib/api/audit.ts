@@ -54,9 +54,17 @@ export function exitCodeFromAudit(events: AuditEvent[]): number | undefined {
 }
 
 export const audit = {
-  // GET /api/v1/audit?run_id=   (run_id optional)
-  async listAudit(runId?: string): Promise<AuditEvent[]> {
-    const qs = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  // GET /api/v1/audit?run_id=&action=   (both optional; server-side filter —
+  // see parseAuditFilter, internal/api/audit.go). `action` narrows the
+  // 1000-row cap to just that action instead of spending the whole budget
+  // on every action a chatty run logged (W21-S1-5): a run-scoped list is
+  // returned OLDEST-first, so a single wide fetch can cap out before it ever
+  // reaches a later action's events.
+  async listAudit(runId?: string, action?: string): Promise<AuditEvent[]> {
+    const params = new URLSearchParams();
+    if (runId) params.set("run_id", runId);
+    if (action) params.set("action", action);
+    const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));
   },

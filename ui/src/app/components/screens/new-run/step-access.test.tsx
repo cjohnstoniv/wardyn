@@ -583,4 +583,36 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     await screen.findByText(RD.NONE_LINE("Claude Code"));
     expect(screen.getByRole("link", { name: /change on the workspace/i })).toHaveAttribute("href", "/workspaces/ws-1");
   });
+
+  // W15-W15e-wizard-roundtrip-5: a workspace pin (llm_cred.integration_ref)
+  // that doesn't resolve to any fetched integration row must refuse here —
+  // mirroring the server's resolveRunIntegration (internal/api/llmcred.go),
+  // which returns "no binding" the instant a SET workspace ref fails to
+  // resolve, rather than falling through to the server-default tier. Before
+  // the fix this cascaded past the dangling pin and resolved (and rendered)
+  // a DIFFERENT provider — one the actual launch would never use.
+  it("a workspace pinned to an integration that no longer resolves shows the honest none-line, not a different provider", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-1",
+        name: "payments",
+        kind: "repo",
+        source: "acme/payments",
+        status: "scanned",
+        created_at: "now",
+        updated_at: "now",
+        llm_cred: { integration_ref: "int-deleted" },
+      },
+    ]);
+    // teamKey IS the genuinely-marked server default — must NOT be shown,
+    // even though it would resolve fine on its own.
+    listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
+    // onPatch present (the manual wizard's usage) so an unresolved case
+    // renders the amber none-line rather than the compose-form's softer
+    // neutral "resolves at review" line (M7) — this is the wizard's own path.
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId="ws-1" onPatch={() => {}} />);
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByText("Team API key")).not.toBeInTheDocument();
+    expect(screen.queryByText(/this workspace pins it/i)).not.toBeInTheDocument();
+  });
 });

@@ -138,7 +138,12 @@ export function buildIntegrationWrite(v: IntegrationFormValues): IntegrationWrit
   } else if (isGithubApp) {
     secrets.push({ role: "app_id", secret_name: v.appIdSecret.trim() }, { role: "app_key", secret_name: v.appKeySecret.trim() });
   } else if (isGitHost) {
-    secrets.push({ role: "pat", secret_name: v.genericSecret.trim() });
+    // W11-S1-4: the "Git over SSH" catalog entry (id "gitssh") shares
+    // apiType "git_host" with the PAT-over-HTTPS lanes, but the server's
+    // capability matrix (internal/api/integrations.go) keys clone:pat vs
+    // clone:ssh off the secret's ROLE — mislabeling an SSH key as "pat"
+    // reports the wrong clone lane.
+    secrets.push({ role: type.id === "gitssh" ? "ssh_key" : "pat", secret_name: v.genericSecret.trim() });
   } else if (takesHeader && v.genericSecret.trim()) {
     secrets.push({
       role: "api_key",

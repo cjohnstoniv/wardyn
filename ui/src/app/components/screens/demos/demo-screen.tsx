@@ -142,10 +142,19 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
+        //
+        // W3-S1-1: the four keyless demos' cards promise "no allowed
+        // destinations / no key" — without task_mode="exec" the server still
+        // folds the operator's site-wide model integration onto ANY run
+        // (foldRunIntegration only skips it for task_mode=exec; see
+        // internal/api/llmcred.go), silently widening egress to
+        // api.anthropic.com and injecting a live key proxy-side. Only the
+        // harness demo (needsModel) actually wants a model call.
         const run = await api.createRun({
           agent: "claude-code",
           interactive: true,
           inline_policy: demo.policy,
+          task_mode: demo.needsModel ? undefined : "exec",
         });
         setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
         const store = loadStore();

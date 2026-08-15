@@ -11,7 +11,7 @@
 // runningLabel/fmtStepDuration checklist helpers (they served the old
 // automated build+verify pipeline, not the per-session record/replay model
 // this card uses). Pure TS — no React, no fetch, no DOM.
-import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { effectiveWorkspaceRequirements, type RecordResult, type Workspace, type WorkspaceProfile } from "../../../lib/types";
 
 // One recorded SESSION: its stable key (record_results map key) + the
 // operator's display name. Sessions are user-named, not derived — the list is
@@ -84,11 +84,31 @@ export function isRecording(ws: Workspace): boolean {
 // reached (allow_count > 0 — Synthesize's own promotion rule) that are NOT
 // already auto-allowed by the scan profile or operator-approved. Dedup,
 // order-preserving.
+//
+// W20-S1-1: this must mirror the server's OWN dedup in
+// handlePromoteRecordEgress (internal/api/record.go) — which skips a host
+// already covered by ApprovedEgress OR an effective egress:required
+// requirement row — or the card offers a host that's already covered,
+// the operator clicks Approve, the server folds in zero NEW rows (the
+// dedup drops it), yet EgressPromoted still flips true unconditionally
+// and the card renders "Promoted" for a click that promoted nothing.
+// approved_egress + profile.egress_domains alone missed the requirements
+// overlay (e.g. a host approved earlier via the workspace wizard, not this
+// legacy lane) — effectiveWorkspaceRequirements closes that gap.
+//
+// ponytail: this still omits the two PLUMBING exclusions the server also
+// applies (its own control-plane host, and a bound integration's
+// model-provider hosts) — those live in server config/integration state the
+// client has no view of. Add when promote-egress (or a GET sibling) starts
+// returning its computed promotable set (W20-S1-1's other half).
 export function newEgressHosts(ws: Workspace, taskKey: string): string[] {
   const rr = recordResult(ws, taskKey);
   const observed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
   const profile = (ws.profile ?? {}) as WorkspaceProfile;
   const already = new Set([...(ws.approved_egress ?? []), ...(profile.egress_domains ?? [])]);
+  for (const [key, req] of Object.entries(effectiveWorkspaceRequirements(ws))) {
+    if (req.level === "required" && key.startsWith("egress:")) already.add(key.slice("egress:".length));
+  }
   const out: string[] = [];
   for (const h of observed) {
     if (!already.has(h) && !out.includes(h)) out.push(h);

@@ -21,7 +21,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
-import { setToken, probeAuth } from "../../lib/api/core";
+import { errText, HttpError, setToken, wfetch, withLimit } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
@@ -50,6 +50,13 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     });
   }, []);
 
+  // W31-S1-4: probeAuth collapsed every failure — a rejected token (401), a
+  // daemon 5xx, and an unreachable control plane (network error) — to the
+  // same boolean `false`, so every one of them rendered "That admin token
+  // was rejected", even when the token was fine and the daemon just wasn't
+  // up yet. Call wfetch directly so the three cases can be told apart, and
+  // only clear the stored token on a REAL 401 (a 5xx/network blip shouldn't
+  // discard a token that may be perfectly valid).
   const submitToken = async () => {
     if (!token) return;
     setLoading("token");
@@ -57,14 +64,22 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     // Store the admin token (sessionStorage, or localStorage when "remember" is
     // checked), then verify it against a protected endpoint.
     setToken(token, remember);
-    const ok = await probeAuth();
-    if (ok) {
-      onSignIn();
-    } else {
-      // Bad token — clear it so subsequent requests don't carry it.
-      setToken(null);
+    try {
+      const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
+      if (res.ok) {
+        onSignIn();
+        return;
+      }
+      setError(await errText(res));
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 401) {
+        setToken(null); // a real rejection — don't keep carrying a bad token
+        setError("That admin token was rejected. Check the value and try again.");
+      } else {
+        setError("Could not reach the control plane.");
+      }
+    } finally {
       setLoading(null);
-      setError("That admin token was rejected. Check the value and try again.");
     }
   };
 

@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "../wardyn/theme-provider";
+import { getToken } from "../../lib/api/core";
 
 // The server-side OIDC flow (GET /auth/login) ships whenever WARDYN_OIDC_* is
 // set, and its session cookie authenticates the whole API — but the console used
@@ -71,5 +73,54 @@ describe("SignIn — admin token instructions are honest about provenance", () =
     // (e.g. openssl rand -hex 32) — there is no "wardyn_admin_" value prefix;
     // that string is only the UNRELATED localStorage key name (core.ts).
     expect(input).toHaveAttribute("placeholder", "demo-admin-token");
+  });
+});
+
+// W31-S1-4: every submitToken failure used to collapse to probeAuth's plain
+// boolean, so a daemon 5xx and an unreachable control plane both rendered the
+// SAME "That admin token was rejected" copy as an actually-bad token — and
+// cleared a token that may have been perfectly valid.
+describe("SignIn — submitToken tells a rejected token apart from a reachability failure", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function submit(token = "sometoken") {
+    sessionStorage.clear();
+    localStorage.clear();
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    await userEvent.type(screen.getByLabelText(/admin token/i), token);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  }
+
+  it("a real 401 shows the rejected-token copy and clears the stored token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 401, statusText: "Unauthorized" })),
+    );
+    await submit();
+    expect(await screen.findByText(/that admin token was rejected/i)).toBeInTheDocument();
+    expect(getToken()).toBeNull();
+  });
+
+  it("a 500 from a live daemon shows the server's OWN message, not the rejected-token copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "database unavailable" }), { status: 500 }),
+      ),
+    );
+    await submit();
+    expect(await screen.findByText("database unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
+    // A 5xx is not proof the token is bad — keep it.
+    expect(getToken()).toBe("sometoken");
+  });
+
+  it("a network error (daemon down / unreachable) shows a reachability message, not the rejected-token copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await submit();
+    expect(await screen.findByText(/could not reach the control plane/i)).toBeInTheDocument();
+    expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
+    expect(getToken()).toBe("sometoken");
   });
 });

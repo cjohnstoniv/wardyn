@@ -130,6 +130,38 @@ describe("record helpers — read the server-authored record fields", () => {
     expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
   });
 
+  // W20-S1-1: a host already covered by an effective egress:required
+  // requirement row (e.g. approved earlier via the workspace wizard, never
+  // written to the legacy approved_egress/profile lanes) must NOT be offered
+  // again — the server's own dedup (handlePromoteRecordEgress) drops it, so
+  // offering it here promotes zero new rows while the card still claims
+  // "Promoted".
+  it("newEgressHosts also excludes a host already required via effective_requirements (server dedup parity)", () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      mode: "auto",
+      status: "recorded",
+      observations: {
+        domains: [
+          { host: "registry.npmjs.org", allow_count: 3, deny_count: 0, pending_count: 0 },
+          { host: "api.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }, // effective-required
+        ],
+        minted_grant_ids: [],
+        exec_argv0s: [],
+        file_writes: [],
+        connects: [],
+        anomalies: [],
+      },
+    };
+    const w = ws({
+      record_results: { code: rr },
+      effective_requirements: {
+        "egress:api.example.com": { level: "required", provenance: "operator_set" },
+      },
+    });
+    expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
+  });
+
   it("isEmptyCapture is true when a settled recording observed no egress", () => {
     expect(isEmptyCapture(undefined)).toBe(false);
     expect(isEmptyCapture({ run_id: "r", mode: "auto", status: "record_failed" })).toBe(true);

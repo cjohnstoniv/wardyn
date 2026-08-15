@@ -342,6 +342,15 @@ export function resolveModelAccess(
   if (ref) {
     const pinned = ai.find((r) => r.serverId === ref || r.id === ref);
     if (pinned) return { row: pinned, because: "this workspace pins it." };
+    // W15-W15e-wizard-roundtrip-5: a SET-but-unresolvable pin must refuse
+    // here, not cascade to the server-default/global-fallback tiers below —
+    // mirroring resolveRunIntegration server-side (internal/api/
+    // llmcred.go), which returns "no binding" the instant a set workspace
+    // ref fails to resolve rather than falling through to tier 3. Without
+    // this, Access/Review would preview a DIFFERENT provider than the one
+    // the actual launch resolves to (none) — naming a provider the run will
+    // not use.
+    return null;
   }
   const marked = ai.find((r) => compatible(r) && isServerDefault(r));
   if (marked) return { row: marked, because: "it's the server default for agent runs." };

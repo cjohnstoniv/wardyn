@@ -129,7 +129,7 @@ describe("DemoScreen", () => {
     expect(screen.getByTestId(`demo-start-${harness.id}`)).toBeEnabled();
   });
 
-  it("Start on the harness demo posts an interactive run (the operator drives the agent)", async () => {
+  it("Start on the harness demo posts an interactive run with NO task_mode=exec (it needs the model)", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         ready: true,
@@ -144,6 +144,7 @@ describe("DemoScreen", () => {
       agent: "claude-code",
       interactive: true,
       inline_policy: harness.policy,
+      task_mode: undefined,
     });
   });
 
@@ -166,6 +167,7 @@ describe("DemoScreen", () => {
       agent: "claude-code",
       interactive: true,
       inline_policy: DEMOS[0].policy,
+      task_mode: "exec",
     });
   });
 

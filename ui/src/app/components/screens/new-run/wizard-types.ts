@@ -373,9 +373,16 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     gitPatHost: "",
     gitPatSecretName: "",
     gitPatUsername: "",
-    // Default to approval-gated: a PAT is a long-lived, non-expirable secret, so
-    // its first use should route through a human approval by default.
-    gitPatRequiresApproval: true,
+    // W12-W12-B-4: approval-gated by default used to sound safer, but the
+    // broker's mint is single-use per grant (internal/broker/broker.go's
+    // minted_jti guard) regardless of RequiresApproval — an approval-gated
+    // git_pat authenticates exactly ONE git operation, then every later one
+    // in the SAME run (a second push, a submodule fetch, …) 409s "mint
+    // returned without approval_id" with no way to re-approve mid-run. The
+    // cached github_token lane doesn't hit this (its brokered mint is
+    // refreshed per use, not a raw single-use secret grant), so default off
+    // to match its effective behavior; the operator can still opt back in.
+    gitPatRequiresApproval: false,
 
     allowedDomains: ["api.anthropic.com"],
     deniedDomains: [],
@@ -961,6 +968,21 @@ export function wizardStateFromProposal(
   const githubGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "github_token");
   const apiKeyGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "api_key");
   const apiKeySecret = (apiKeyGrant?.scope?.secret_name as string) ?? "";
+  // W15-W15e-wizard-roundtrip-3: this used to hydrate ONLY github_token/
+  // api_key — a recorded/composed spec's git_pat grant silently vanished on
+  // "Edit in wizard" / fast-track while spec.allowed_domains (below) still
+  // carried its host into allowedDomains, so the destination stayed allowed
+  // with no credential left to authenticate to it. git_pat has a full,
+  // editable home in WizardState (Access's Git-PAT card), so hydrate it.
+  const gitPatGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "git_pat");
+  const gitPatScope = (gitPatGrant?.scope ?? {}) as { host?: string; secret_name?: string; username?: string };
+  // ponytail: ssh_key/cloud_sts grants have no editable home in this wizard
+  // at all (no fields anywhere represent them) — they still silently drop
+  // here, same as any workspace_mounts entry this best-effort inverse
+  // doesn't recognize (see the recordedSubscription comment below). Add a
+  // pass-through bucket buildSpec re-emits verbatim, or refuse the
+  // fast-track for these two kinds, if a recorded ssh_key/cloud_sts profile
+  // shows up in practice.
 
   // A recorded profile's api_key grant can name the subscription OAuth sentinel
   // instead of a real stored secret (recordings never synthesize a resident
@@ -977,8 +999,20 @@ export function wizardStateFromProposal(
     repos?: unknown;
     permissions?: Record<string, unknown>;
   };
+  // W15-W15e-wizard-roundtrip-4: this wizard's github_token permission is a
+  // two-state read/read+write toggle (githubPermissionsMap re-emits
+  // "read+write" as BOTH contents:write AND pull_requests:write together).
+  // Collapsing to "read+write" off contents:write ALONE — the prior check —
+  // WIDENS an asymmetric source scope (contents:write with no
+  // pull_requests:write, e.g. a recording that never opened a PR) into one
+  // that re-emits pull_requests:write it never had, contradicting Record
+  // Mode's "reuse can only ever subset" claim. Require BOTH, matching
+  // exactly what "read+write" re-emits; an asymmetric scope this two-state
+  // toggle can't represent falls back to "read" (narrower, never wider).
   const ghPerm: GitHubPermission =
-    ghScope.permissions && ghScope.permissions.contents === "write" ? "read+write" : "read";
+    ghScope.permissions?.contents === "write" && ghScope.permissions?.pull_requests === "write"
+      ? "read+write"
+      : "read";
 
   return {
     ...base,
@@ -994,17 +1028,40 @@ export function wizardStateFromProposal(
     githubTtlMinutes: githubGrant?.ttl_seconds
       ? Math.max(1, Math.round(githubGrant.ttl_seconds / 60))
       : base.githubTtlMinutes,
+
+    gitPatEnabled: !!gitPatGrant,
+    gitPatHost: gitPatScope.host ?? "",
+    gitPatSecretName: gitPatScope.secret_name ?? "",
+    gitPatUsername: gitPatScope.username ?? "",
+    gitPatRequiresApproval: gitPatGrant?.requires_approval ?? base.gitPatRequiresApproval,
     // The api_key grant references a stored secret by name; carry it forward so
     // the wizard re-emits the same grant — EXCEPT the subscription sentinel, which
     // is not a real stored secret (it means "subscription auth", handled above).
     llmSecretName: recordedSubscription ? "" : apiKeySecret,
 
-    allowedDomains: spec.allowed_domains?.length ? dedupe(spec.allowed_domains) : base.allowedDomains,
+    // W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field
+    // (RunPolicySpec.allowed_domains string[]) — `[]` is always a real,
+    // meaningful value, not "unset". Record Mode's own synthesized profile
+    // (internal/recordmode/recordmode.go) writes exactly `[]` for a
+    // genuinely deny-all outcome ("no allowed egress observed"), and the
+    // recorded-profile fast-track (applyProfileSpecToState) skips straight
+    // to Review — the operator may never see Egress to notice `?.length`
+    // rewrote that deliberate deny-all into api.anthropic.com being allowed.
+    // `spec` always carries a real value here (the type is required), so
+    // there's no legitimate "absent" case this fallback exists for.
+    allowedDomains: dedupe(spec.allowed_domains),
     deniedDomains: dedupe(spec.denied_domains ?? []),
     firstUseApproval: asFirstUseMode(spec.first_use_approval),
     allowAllEgress: spec.allow_all_egress === true,
 
     confinementClass: cc,
+    // auto_stop_after_sec is `int json:"...,omitempty"` server-side (internal/
+    // types/types.go) — absent and an explicit 0 are indistinguishable on the
+    // wire, and 0 is never a meaningful idle-timeout choice (the UI's own
+    // min=1 already disallows it) — unlike allowed_domains above, there is no
+    // real "unset vs deliberately empty" distinction to lose here, so
+    // defaulting to this wizard's normal fresh-entry default (base, same as
+    // initialWizardState) when absent is not a misrepresentation.
     lifecycle: spec.auto_stop_after_sec === -1 ? "never" : "auto",
     autoStopMinutes:
       spec.auto_stop_after_sec != null && spec.auto_stop_after_sec > 0
