@@ -324,6 +324,37 @@ func TestLocalLLMInjectsAPIKeyAndStripsSandboxAuth(t *testing.T) {
 	}
 }
 
+// TestLocalLLMDialFailEmitsDenyNotAllow pins the E3 fix extended to the
+// brokered LLM tail (forwardInspectedLLM, bug-egress-1): a request to an
+// allowed LLM route whose upstream RoundTrip FAILS must emit exactly one
+// dial-failed Deny and NO allow decision — the allow is emitted only after a
+// successful round-trip, so a failed dial can never over-report an allow.
+func TestLocalLLMDialFailEmitsDenyNotAllow(t *testing.T) {
+	inj := staticInj(map[string]injectedHeader{
+		anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
+	})
+	// "127.0.0.1:1" is the repo's dead-port convention: nothing listens there,
+	// so the real RoundTrip fails.
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", inj, testInsecureTLSConfig)
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{}`))
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 on dial failure", rec.Code)
+	}
+	if d := findDecision(t, buf, "builtin:dial-failed"); d.Decision != egress.Deny {
+		t.Fatalf("dial-failed decision = %q, want deny", d.Decision)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var dl egress.DecisionLog
+		if json.Unmarshal([]byte(line), &dl) == nil && dl.Decision == egress.Allow {
+			t.Fatalf("a failed dial must NOT emit an allow decision; got %q", line)
+		}
+	}
+}
+
 func TestLocalUnknownWritPath404(t *testing.T) {
 	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
 	rec := httptest.NewRecorder()

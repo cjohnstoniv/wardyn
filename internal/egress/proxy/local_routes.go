@@ -392,13 +392,17 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	outReq.Host = host
 	outReq.Header.Del("Host")
 
-	p.emitLLMDecision(r, host, egress.Allow, ruleSource, scanSummary)
-
+	// The allow decision is emitted only AFTER a successful round-trip (same
+	// accuracy fix as handleConnect/handlePlain, E3): a failed upstream dial
+	// must NOT over-report an allow. Emit a dial-failed deny (carrying any scan
+	// summary) instead.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
+		p.emitLLMDecision(r, host, egress.Deny, "builtin:dial-failed", scanSummary)
 		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
 		return
 	}
+	p.emitLLMDecision(r, host, egress.Allow, ruleSource, scanSummary)
 	defer func() { _ = resp.Body.Close() }()
 
 	dst := w.Header()
