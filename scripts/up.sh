@@ -706,13 +706,24 @@ cmd_up() {
   # peer, like the docker gateway a host request arrives as): 200 = forwarder OK;
   # 403 = the peer gate is wrongly rejecting compose traffic (a real regression).
   # WSL2 NAT can't do this from the host shell, so probe from the network instead.
-  _me_code=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
-    -s -m 5 -o /dev/null -w '%{http_code}' "http://wardynd:8080/api/v1/me" 2>/dev/null || echo 000)
-  case "${_me_code}" in
-    200) log "Local-mode no-auth gate: OK (gated API reachable from a non-loopback peer — WARDYN_LOCAL_TRUST_FORWARDER effective)." ;;
-    403) warn "Local-mode no-auth gate REJECTED a non-loopback peer (HTTP 403). The UI/CLI will be locked out — ensure WARDYN_LOCAL_TRUST_FORWARDER=true reached wardynd (docker compose config)." ;;
-    *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
-  esac
+  #
+  # SSO/OIDC guard: this probe only means something in LOCAL_MODE — under SSO
+  # (WARDYN_OIDC_ISSUER set, see the OIDC-clobber guard above) /api/v1/me needs a
+  # real OIDC session, so an unauthenticated in-network curl 401s regardless of
+  # WARDYN_LOCAL_TRUST_FORWARDER. Left unguarded, that 401 fell into the generic
+  # "inconclusive, check logs" branch below and sent an SSO operator chasing a
+  # forwarder problem that doesn't exist. Skip it and say why instead.
+  if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
+    log "Local-mode no-auth gate: skipped (WARDYN_OIDC_ISSUER is set — SSO mode, not local-mode no-auth; /api/v1/me correctly requires a real session)."
+  else
+    _me_code=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+      -s -m 5 -o /dev/null -w '%{http_code}' "http://wardynd:8080/api/v1/me" 2>/dev/null || echo 000)
+    case "${_me_code}" in
+      200) log "Local-mode no-auth gate: OK (gated API reachable from a non-loopback peer — WARDYN_LOCAL_TRUST_FORWARDER effective)." ;;
+      403) warn "Local-mode no-auth gate REJECTED a non-loopback peer (HTTP 403). The UI/CLI will be locked out — ensure WARDYN_LOCAL_TRUST_FORWARDER=true reached wardynd (docker compose config)." ;;
+      *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
+    esac
+  fi
 
   _cli=$(wardyn_cli_prefix "${REPO_ROOT}")
 
