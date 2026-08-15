@@ -40,6 +40,16 @@ type capEnv struct {
 	BedrockModelSet          bool
 	ManagedBlobPresent       func(provider string) bool
 	ResidentSubscriptionLive bool
+	// BedrockCredentialPresent mirrors SetupBedrock's four-lane credential OR
+	// (bearer, captured AWS SSO, ~/.aws mount, resident SigV4 keys) — the
+	// precondition resolveBedrockAuth ALSO requires beyond region+model. Without
+	// this, bedrockCaps read "available" off region+model alone, so a
+	// wizard-completed Bedrock integration with zero credentials of any kind
+	// still showed model_api/tool:claude-code/wardyn_features as available —
+	// three surfaces (GET /integrations, SetupStatus.Integrations,
+	// WardynFeaturesBackend's boot composer derivation) believing a run that
+	// would silently get no Bedrock transport at all.
+	BedrockCredentialPresent bool
 }
 
 // CapState is one capability's current state.
@@ -75,6 +85,10 @@ const (
 	// region and a model id, resolveBedrockAuth never reports ready and the run
 	// falls through to whatever other lane it has (usually none).
 	reasonBedrockUnset = "Region and model id are unset — a run can't reach Bedrock until both are set."
+	// reasonBedrockNoCreds: region+model are set but resolveBedrockAuth's
+	// credential ladder (bearer, captured AWS SSO, ~/.aws mount, resident SigV4
+	// keys) has nothing to offer — a run still gets no Bedrock transport.
+	reasonBedrockNoCreds = "Region and model are set, but no AWS credential is configured — add a bearer key, resident access keys, an AWS SSO login, or a ~/.aws mount."
 	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
 	// cell — kept in sync with ui/src/app/lib/integrations.ts's CAPS.sub hostCli
 	// note, not the (stale) mock: nothing in the console switches this lane on,
@@ -278,6 +292,17 @@ func bedrockCaps(in types.Integration, env capEnv) []Capability {
 			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
 			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+		}
+	}
+	// A configured region+model with NO credential anywhere in
+	// resolveBedrockAuth's ladder is exactly as unreachable as an unset
+	// region/model — same drift this matrix exists to prevent.
+	if !env.BedrockCredentialPresent {
+		return []Capability{
+			{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
+			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
 		}
 	}
 	return []Capability{

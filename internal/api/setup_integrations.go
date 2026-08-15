@@ -32,9 +32,10 @@ import (
 // integrationView alone. Read-only throughout (Peek/host-CLI detection,
 // never a refresh or a write).
 //
-// present/providers are taken as parameters (PLATFORM-API-7), not recomputed:
-// see integrationsWithCapabilities' doc for why.
-func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, providers []SetupProvider) capEnv {
+// present/providers are taken as parameters (PLATFORM-API-7), not recomputed;
+// bedrock likewise (its own SetupStatus/GET-/integrations callers already
+// compute it once). See integrationsWithCapabilities' doc for why.
+func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) capEnv {
 	residentLive := false
 	if s.cfg.SubscriptionToken != nil {
 		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
@@ -51,6 +52,9 @@ func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, provid
 			return err == nil && ok
 		},
 		ResidentSubscriptionLive: residentLive,
+		// mirrors setupBedrock's own four-lane OR (runs_bedrock.go) — reused, not
+		// re-derived, so this can never drift from what resolveBedrockAuth accepts.
+		BedrockCredentialPresent: bedrock.CredsPresent || bedrock.AWSMount || bedrock.BearerPresent || bedrock.SSOPresent,
 	}
 }
 
@@ -101,7 +105,7 @@ func (s *Server) integrationsWithCapabilities(ctx context.Context) []SetupIntegr
 // AWS-SSO-blob age decrypt, each 2-3x instead of once.
 func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) []SetupIntegration {
 	rows := s.effectiveIntegrations(ctx, present, bedrock)
-	env := s.liveCapEnv(ctx, present, providers)
+	env := s.liveCapEnv(ctx, present, providers, bedrock)
 	out := make([]SetupIntegration, len(rows))
 	for i, row := range rows {
 		out[i] = SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, env)}
@@ -135,7 +139,8 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
 		providers, _ := s.setupProviders()
-		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers))}
+		bedrock := s.setupBedrock(ctx, present)
+		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers, bedrock))}
 	}
 	return SetupIntegration{}
 }

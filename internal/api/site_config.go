@@ -142,6 +142,18 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if !validSiteURL(cfg.UpstreamProxyURL) {
 			return fmt.Errorf("upstream_proxy_url: invalid URL %q", cfg.UpstreamProxyURL)
 		}
+		// http ONLY — reuse the EXACT gate resolveUpstreamProxyURL applies at
+		// dispatch (runs_bedrock.go) so this can never drift from it. An https://
+		// URL passed validSiteURL above (it accepts both schemes for its OTHER
+		// callers) but the sidecar's own config validation rejects https: the hop
+		// TO the corp proxy is a plaintext CONNECT + Proxy-Authorization, and an
+		// https:// URL would need a TLS wrap first or leak that Basic credential
+		// in cleartext. Before this gate, an https:// URL saved clean, displayed
+		// as the live chain (site_config_probe.go), and was silently dropped at
+		// dispatch — every run went direct with no signal anywhere (W13-S1-4).
+		if _, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); !ok {
+			return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
+		}
 	}
 	for i, red := range cfg.EgressRedirects {
 		if !validSiteURLOrHost(red.From) {

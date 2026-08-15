@@ -74,6 +74,20 @@
       "git.example.com"
     ]
   },
+  "claude-code/harness-login-bedrock-configured-gets-nothing": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": true,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
   "claude-code/managed-subscription-blob-present": {
     "subscription": false,
     "inject_sub": false,

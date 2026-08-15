@@ -636,6 +636,18 @@ wardyn secret set upstream-proxy-url          # paste the full, credentialed URL
 If both fields are set, `upstream_proxy_url` wins — harmless mid-migration
 from one to the other, but don't rely on it; clear whichever you're not using.
 
+**`http://` only — an `https://` upstream proxy URL is rejected server-side,
+always** (`validateSiteConfig`, same file). The hop from wardyn-proxy to your
+corporate proxy is a plaintext CONNECT + `Proxy-Authorization` header; an
+`https://` URL would need a TLS wrap the sidecar doesn't do, or would leak
+that Basic credential in cleartext. This is the SAME gate dispatch itself
+applies (`resolveUpstreamProxyURL`, `internal/api/runs_bedrock.go`) — before
+this write-time check existed, an `https://` URL saved clean, displayed as
+the live chain, and was silently dropped at dispatch: every run went direct
+with no signal anywhere. A secret referenced via `upstream_proxy_secret_ref`
+carries the same restriction; store the plain `http://` proxy URL in the
+secret even when it embeds a credential.
+
 ### Egress redirects: two tiers
 
 `egress_redirects` is a list of `{from, to, token_secret_ref,

@@ -55,7 +55,7 @@ export const T = {
   CONFIG_HEAD: "What sandboxes will use",
   NOT_CONFIGURED: "Not configured — sandboxes go direct",
   PROXY_URL_HINT:
-    "The URL sandboxes chain through. Stored as plain configuration — it's topology, not a credential — unless it carries a username and password.",
+    "The URL sandboxes chain through. http:// only — https is not supported (the hop to your proxy is a plaintext CONNECT and can't be TLS-wrapped). Stored as plain configuration — it's topology, not a credential — unless it carries a username and password.",
   CRED_URL_NOTE:
     "This URL has a username and password in it. Wardyn will store it as a secret so it isn't displayed or logged; the sandbox never holds it either way.",
   SECRET_INSTEAD_HINT:

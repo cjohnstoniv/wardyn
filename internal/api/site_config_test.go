@@ -38,6 +38,15 @@ func TestValidateSiteConfig(t *testing.T) {
 		{"upstream proxy plain URL with embedded userinfo is REJECTED (Task 1's mandatory guard)",
 			types.SiteConfig{UpstreamProxyURL: "http://user:pass@proxy.corp:3128"}, false},
 		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
+		{
+			// W13-S1-4 regression: https:// used to pass validSiteURL (it accepts
+			// both http/https for its OTHER callers) and save clean, then display
+			// as the live chain while resolveUpstreamProxyURL silently dropped it
+			// at dispatch (the sidecar's plaintext-CONNECT hop cannot carry
+			// https). Must be rejected at the SAME gate dispatch applies.
+			"upstream proxy plain URL https is REJECTED (dispatch cannot use it — W13-S1-4)",
+			types.SiteConfig{UpstreamProxyURL: "https://proxy.corp:8443"}, false,
+		},
 		{"good scm host", types.SiteConfig{ScmHosts: []string{"dev.azure.com"}}, true},
 		{"scm host with scheme", types.SiteConfig{ScmHosts: []string{"https://dev.azure.com"}}, false},
 		{"scm host with port", types.SiteConfig{ScmHosts: []string{"dev.azure.com:443"}}, false},

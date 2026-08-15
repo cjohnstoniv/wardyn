@@ -160,17 +160,25 @@ fi
 // sandbox so both probes observe the SAME confinement class's structural
 // egress:
 //  1. fetch To through the normal (proxied) path. If this fails, propagate
-//     curl's own exit code unchanged (`|| exit $?`) -- classified blocked.
+//     curl's own exit code unchanged (`|| exit $?`) -- classified blocked. -f
+//     turns an HTTP-level error response (4xx/5xx) into a failure too (curl
+//     exit 22) -- without it, an HTTP error response is a curl SUCCESS
+//     (connection worked, curl doesn't look at the status line), so
+//     wardyn-proxy's own policy deny (a well-formed 403) scored as "To
+//     reached" -- exactly backwards, and the one case this probe exists to
+//     catch.
 //  2. To succeeded: try From again, but with --noproxy '*' -- a DIRECT dial
 //     that bypasses wardyn-proxy's policy entirely, so this tests whether the
 //     confinement class's OWN network setup (not the proxy's allowlist)
 //     structurally blocks the public host. Success here means the redirect is
 //     configured but not enforced (bypass); the script exits the reserved
 //     sentinel explicitly (see redirectProbeBypassCode) -- never a
-//     passed-through curl code.
+//     passed-through curl code. -f here too, so a public host answering with
+//     an HTTP error (rather than refusing the connection outright) is not
+//     mistaken for a bypass.
 //  3. From correctly failed: the redirect is enforced end to end (reached).
-const redirectProbeScript = `curl -sS -o /dev/null --connect-timeout 5 --max-time 15 "$WARDYN_PROBE_TO_URL" || exit $?
-curl -sS -o /dev/null --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL" && exit 250
+const redirectProbeScript = `curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 "$WARDYN_PROBE_TO_URL" || exit $?
+curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL" && exit 250
 exit 0`
 
 // curlExitDetail maps curl's own stable, documented exit codes to a SPECIFIC,
@@ -180,6 +188,7 @@ exit 0`
 var curlExitDetail = map[int]string{
 	6:  "DNS resolution failed",
 	7:  "connection refused (or the host is unreachable)",
+	22: "the endpoint answered with an HTTP error (4xx/5xx) -- this is what wardyn-proxy's own policy deny looks like, but a mirror's own 401/500 reads identically here; check the mirror directly if the cause matters",
 	28: "connection timed out",
 	35: "TLS handshake failed",
 	52: "empty reply from the server",
@@ -193,6 +202,22 @@ func curlFailureDetail(exitCode int) string {
 		return d
 	}
 	return fmt.Sprintf("curl exit code %d", exitCode)
+}
+
+// upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
+// failReason codes in the same human-readable style as curlFailureDetail.
+var upstreamResolveFailDetail = map[string]string{
+	"unsupported-scheme":   "it is not an http:// URL (https is not supported)",
+	"reserved-secret-name": "its secret ref names a reserved secret",
+	"no-secret-store":      "no secret store is configured",
+	"secret-not-found":     "its secret ref does not resolve to a stored secret",
+}
+
+func upstreamFailDetail(reason string) string {
+	if d, ok := upstreamResolveFailDetail[reason]; ok {
+		return d
+	}
+	return reason
 }
 
 // probeRunResult is what a throwaway site-config probe run actually observed,
@@ -434,6 +459,13 @@ type proxyProbeSubject struct {
 	hosts     string
 	upstream  string
 	custom    bool
+	// resolveFailReason is resolveUpstreamProxyURL's failReason (runs_bedrock.go)
+	// when something WAS configured (a URL or a secret ref) but did not resolve
+	// to a usable proxy — "" both when nothing is configured and when it
+	// resolved fine. upstream stays "" in the fail case (never claim a hop
+	// dispatch would drop), so classify uses this to say WHY the probe went
+	// direct instead of silently reading like an unconfigured proxy.
+	resolveFailReason string
 }
 
 // via is the wire spelling of which path the probe traversed.
@@ -477,6 +509,13 @@ func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject) siteConfigPr
 		case subj.upstream != "":
 			resp.Detail = fmt.Sprintf("Reached %s through wardyn-proxy chained to %s in %s — payloads matched, the full chain a run takes.",
 				subj.endpoints, subj.upstream, elapsed)
+		case subj.resolveFailReason != "":
+			// A proxy WAS configured but did not resolve to something dispatch can
+			// use — the probe went direct exactly like a real run would (W13-S1-4 /
+			// W12-W12-C-2), and must say so rather than reading like an
+			// unconfigured proxy (the branch below).
+			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched, but the configured upstream proxy was NOT used: %s. A run would go direct too, not through the chain you configured.",
+				subj.endpoints, elapsed, upstreamFailDetail(subj.resolveFailReason))
 		default:
 			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched. No proxy is configured and none was needed; sandboxes on this host go straight out.",
 				subj.endpoints, elapsed)
@@ -600,9 +639,23 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// validateSiteConfig guarantees carries no userinfo) or the secret's NAME.
 	// The resolved secret VALUE stays inside dispatch (resolveRunUpstreamProxy)
 	// and must never surface in a detail or audit line.
-	upstream := siteCfg.UpstreamProxyURL
-	if upstream == "" && siteCfg.UpstreamProxySecretRef != "" {
-		upstream = "the upstream proxy in secret " + siteCfg.UpstreamProxySecretRef
+	//
+	// Set ONLY when it actually RESOLVES (W13-S1-4 / W12-W12-C-2): configured
+	// but unresolvable (an https:// URL from a pre-gate row, a dangling secret
+	// ref) must never claim "through wardyn-proxy chained to X" — that is
+	// exactly the chain dispatch would silently drop and run direct instead,
+	// same gate resolveRunUpstreamProxy applies at real dispatch time.
+	var getSecret func(context.Context, string) ([]byte, error)
+	if s.cfg.Secrets != nil {
+		getSecret = s.cfg.Secrets.Get
+	}
+	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
+	var upstream string
+	if resolvedUpstream != "" {
+		upstream = siteCfg.UpstreamProxyURL
+		if upstream == "" {
+			upstream = "the upstream proxy in secret " + siteCfg.UpstreamProxySecretRef
+		}
 	}
 	if s.cfg.Runner == nil {
 		writeJSON(w, http.StatusOK, noRunnerResponse)
@@ -610,7 +663,10 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	}
 
 	script, hosts := proxyProbeScript, proxyProbeHosts
-	subj := proxyProbeSubject{endpoints: proxyProbeEndpointsLabel, hosts: strings.Join(proxyProbeHosts, ", "), upstream: upstream}
+	subj := proxyProbeSubject{
+		endpoints: proxyProbeEndpointsLabel, hosts: strings.Join(proxyProbeHosts, ", "),
+		upstream: upstream, resolveFailReason: upstreamFailReason,
+	}
 	if custom != "" {
 		// One target, and NO body check: Wardyn has no idea what an operator's
 		// own endpoint is supposed to return, so the honest claim is only "the
@@ -620,7 +676,10 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		// correctness signal available without a known payload.
 		script = fmt.Sprintf("curl -fsS -o /dev/null --connect-timeout 5 --max-time 15 %q\n", custom)
 		hosts = []string{workspacescan.HostOf(custom)}
-		subj = proxyProbeSubject{endpoints: stripURLScheme(custom), hosts: workspacescan.HostOf(custom), upstream: upstream, custom: true}
+		subj = proxyProbeSubject{
+			endpoints: stripURLScheme(custom), hosts: workspacescan.HostOf(custom),
+			upstream: upstream, custom: true, resolveFailReason: upstreamFailReason,
+		}
 	}
 
 	actor := principalFromRequest(r)

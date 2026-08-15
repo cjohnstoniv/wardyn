@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -115,6 +117,43 @@ func TestClassifyRedirectProbe_BypassNeverInferred(t *testing.T) {
 	got := classifyRedirectProbe(probeRunResult{incompleteReason: "sandbox never started"}, "to.example", "from.example")
 	if got.State == "bypass" {
 		t.Fatalf("an incomplete probe (no exit code at all) must never be classified bypass; got %+v", got)
+	}
+}
+
+// TestRedirectProbeScript_HTTPErrorIsNotReached is the W13-S1-2 regression:
+// runs the ACTUAL redirectProbeScript text (not just classifyRedirectProbe's
+// exit-code table) through a real shell+curl against a local server that
+// answers the To probe with a plain HTTP 403 -- exactly what wardyn-proxy's
+// own policy deny looks like, and what any mirror's auth failure looks like
+// too. Without -f, curl treats a well-formed 403 response as a SUCCESSFUL
+// connection (exit 0) and never looks at the status line, so the script fell
+// through to its "From correctly failed" exit-0 branch once the From dial
+// (an unroutable loopback port, refused instantly) also failed -- "reached"
+// for a request that was actually denied. -f must turn that HTTP error into a
+// curl failure (exit 22) that propagates out of the script unchanged.
+func TestRedirectProbeScript_HTTPErrorIsNotReached(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not on PATH")
+	}
+	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden) // wardyn-proxy's own deny shape: a plain HTTP error
+	}))
+	defer denied.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", redirectProbeScript)
+	cmd.Env = append(cmd.Environ(),
+		"WARDYN_PROBE_TO_URL="+denied.URL,
+		// port 1 on loopback: refused instantly, never a real dial -- keeps this
+		// test network-independent and fast regardless of which branch wins.
+		"WARDYN_PROBE_FROM_URL=http://127.0.0.1:1",
+	)
+	_ = cmd.Run()
+	exitCode := cmd.ProcessState.ExitCode()
+	if exitCode != 22 {
+		t.Fatalf("redirectProbeScript exit code = %d, want 22 (curl -f's HTTP-error code): "+
+			"an HTTP 403 from To must classify as blocked, never as reached", exitCode)
 	}
 }
 
@@ -412,6 +451,62 @@ func TestHandleTestSiteConfigProxy_BlockedWithRealError(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "connection refused") {
 		t.Errorf("detail = %q, want the REAL curl error (connection refused), never a generic string", got.Detail)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_UnresolvableUpstreamReportsDirect is the
+// W13-S1-4 / W12-W12-C-2 regression: an https:// upstream_proxy_url (a row
+// written before validateSiteConfig's http-only gate existed — the store
+// fixture below bypasses that gate on purpose, to model exactly that) cannot
+// be used by resolveRunUpstreamProxy at real dispatch (the sidecar's
+// plaintext-CONNECT hop cannot carry https), so a run goes DIRECT. The probe
+// used to read UpstreamProxyURL straight off stored config for its `upstream`
+// display, so it reported via=proxy / "chained to https://..." for a chain no
+// run ever actually traverses. It must report via=direct and say why.
+func TestHandleTestSiteConfigProxy_UnresolvableUpstreamReportsDirect(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "https://proxy.corp:8443"}, fr)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.Via != "direct" {
+		t.Fatalf("via = %q, want direct: an https:// upstream never resolves at dispatch, so a run never actually chains through it", got.Via)
+	}
+	if strings.Contains(got.Detail, "chained to") {
+		t.Errorf("detail = %q, must never claim a chain dispatch would silently drop", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "NOT used") || !strings.Contains(got.Detail, "https") {
+		t.Errorf("detail = %q, want it to say the configured proxy was NOT used and why (https not supported)", got.Detail)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_UnresolvableSecretRefReportsDirect is the
+// W12-W12-C-2 regression, the sibling case to the https:// one above: a
+// configured upstream_proxy_secret_ref that names no ACTUALLY stored secret
+// (no secret store wired at all here -- the simplest way to make it
+// unresolvable) must not report via=proxy / state=reached either. The probe
+// used to build its `upstream` display from the stored secret_ref alone,
+// never asking whether it resolves to anything a real run could use.
+func TestHandleTestSiteConfigProxy_UnresolvableSecretRefReportsDirect(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}, fr)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.Via != "direct" {
+		t.Fatalf("via = %q, want direct: an unresolvable secret ref never produces a proxy a real run could use", got.Via)
+	}
+	if strings.Contains(got.Detail, "chained to") {
+		t.Errorf("detail = %q, must never claim a chain dispatch would silently drop", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "NOT used") {
+		t.Errorf("detail = %q, want it to say the configured proxy was NOT used", got.Detail)
 	}
 }
 

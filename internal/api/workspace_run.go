@@ -501,32 +501,33 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// global default.
 	var injections []runner.InjectionGrant
 
-	// The workspace's REQUIRED integration: rows ride a session the SAME way
-	// they ride a real run (SEAM-2): a confined replay whose install step
-	// needs Artifactory (say) must reach AND authenticate to it, not merely
-	// reach it — without this the held-then-approved request the operator
-	// approves below goes out credential-less and 401s, and the approve hook
-	// (learnVerifyEgress) durably writes a DUPLICATE egress: row for a host
-	// the integration: row already provides. Folded through the same
-	// chokepoint applyWorkspaceRequirements uses for a real run
-	// (applyIntegrationRequirement), independent of the LLM mode below — an
-	// integration credential is never skipped just because this session
+	// The workspace's REQUIRED contract rows ride a session the SAME way they
+	// ride a real run (SEAM-2): a confined replay whose install step needs
+	// Artifactory (say) or a declared secret must reach AND authenticate to
+	// it, not merely reach it — without this the held-then-approved request
+	// the operator approves below goes out credential-less and 401s, and the
+	// approve hook (learnVerifyEgress) durably writes a DUPLICATE egress: row
+	// for a host a integration: or secret: row already provides. Folded
+	// through the SAME chokepoint a real run uses (applyWorkspaceRequirements,
+	// runs_create.go) — not a hand-rolled integration:-only loop, which
+	// silently dropped required secret: rows even though the Verify carry
+	// card promises "N required secrets ride proxy-side" (W8-S1-2). nil
+	// selections: only Required rows apply — a confined replay has no per-run
+	// optional opt-in surface. Independent of the LLM mode below — a
+	// requirement credential is never skipped just because this session
 	// happens to be subscription-mounted.
-	if ids := requiredIntegrationIDs(ws); len(ids) > 0 {
-		present := s.presentSecretNames(ctx)
-		rows := s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
-		for _, id := range ids {
-			before := len(policy.EligibleGrants)
-			if _, applied := s.applyIntegrationRequirement(ctx, rows, &policy, id); !applied {
-				continue
-			}
-			minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
-			if ierr != nil {
-				return types.AgentRun{}, false, abort(fmt.Errorf("create integration grant: %w", ierr))
-			}
-			injections = append(injections, minted...)
-		}
+	before := len(policy.EligibleGrants)
+	_ = s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
+	if ierr != nil {
+		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
+	injections = append(injections, minted...)
+	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
+	// fold above already minted (and audited) the requirement grants — reusing
+	// the full policy.EligibleGrants slice there would remint and re-inject
+	// every one of them a second time.
+	llmGrantsBefore := len(policy.EligibleGrants)
 
 	var integKind string
 	var bedrockRef *types.WorkspaceBedrockRef
@@ -557,10 +558,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		llmMode = "bedrock" // dispatch's resolveBedrockAuth wires it from bedrockRef below
 	}
 	if !subMounted {
-		// Build the injection from whatever api_key grant the fold or the fallback
-		// added — mirrors handleCreateRun's api_key branch (a subscription/bedrock
-		// fold adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
-		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants)
+		// Build the injection from whatever api_key grant the FALLBACK just added
+		// (llmGrantsBefore: the fold's own grants above are already minted) —
+		// mirrors handleCreateRun's api_key branch (a subscription/bedrock fold
+		// adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
+		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[llmGrantsBefore:])
 		if ierr != nil {
 			return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", ierr))
 		}

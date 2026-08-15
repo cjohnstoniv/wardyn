@@ -144,6 +144,9 @@ type llmGoldenCase struct {
 	// call and must receive NO injected credential even with a managed/resident
 	// subscription wired. "" is the ordinary agent-harness run.
 	taskMode string
+	// task, when set to harnessLoginTask, models a `claude setup-token` login
+	// box (run.Task, not taskMode) — the harnessLogin discriminator.
+	task string
 }
 
 func llmGoldenCases() []llmGoldenCase {
@@ -299,6 +302,25 @@ func llmGoldenCases() []llmGoldenCase {
 			}},
 		},
 
+		// (j') W12-W12-C-1: a HARNESS LOGIN run (run.Task = harnessLoginTask —
+		// `claude setup-token` in the attach shell, no credential yet) with
+		// Bedrock fully configured must get NOTHING Bedrock-shaped: bedrock_ready
+		// and inject_bedrock_bearer both false, no ~/.aws mount, no bearer MITM.
+		// Same Bedrock config as (f) (bearer mode); the only difference is
+		// task=harnessLoginTask. Before the fix, resolveBedrockAuth ran
+		// unconditionally and this cell was byte-identical to (f) apart from
+		// sandbox_env — i.e. the login box still got a minted bearer grant.
+		{
+			name:  "claude-code/harness-login-bedrock-configured-gets-nothing",
+			agent: "claude-code",
+			task:  harnessLoginTask,
+			cfg: Config{
+				BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				Secrets:      &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bedrock-bearer-test")}},
+				MaskRegistry: secretmask.NewRegistry(),
+			},
+		},
+
 		// (k) MANAGED vs API-KEY opt-out: the managed fallback must NOT
 		// silently replace an operator's explicit api-key injection. Both are
 		// present and no resident mount is staged, so managed stays off.
@@ -334,7 +356,7 @@ func TestLLMTransportGolden(t *testing.T) {
 	got := map[string]llmTransportGoldenCell{}
 	for _, c := range llmGoldenCases() {
 		srv := New(c.cfg)
-		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, CreatedBy: "alice@example.com", WorkspaceID: c.workspaceID}
+		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, CreatedBy: "alice@example.com", WorkspaceID: c.workspaceID}
 		policy := &types.RunPolicySpec{
 			AllowedDomains:  []string{"git.example.com"},
 			WorkspaceMounts: c.mounts,

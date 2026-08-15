@@ -89,6 +89,21 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
 	t.injectSub = modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
+	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
+	// operator to run `claude setup-token` in the attach shell and mint one. Point
+	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
+	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
+	// mis-signals api-key mode. No mount, no injection, no MITM — computed BEFORE
+	// the Bedrock block below so it can gate resolveBedrockAuth itself, not just
+	// the sandboxEnv branch (W12-W12-C-1): every consumer of llm.bedrock* —
+	// resident_env's ~/.aws mount (runs_dispatch.go), the bearer grant + MITM
+	// host (runs_dispatch.go, dispatch.go) — reads bedrockReady/injectBedrockBearer
+	// directly, so leaving t.bedrock resolved (even though sandboxEnv correctly
+	// skipped applyBedrockTransport for this run) still handed a login box the
+	// host's AWS credentials or a minted bearer token it never asked for and has
+	// no attach-shell affordance to use.
+	t.harnessLogin = run.Task == harnessLoginTask
+
 	// Bedrock: a third Anthropic transport, mutually exclusive with subscription
 	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
 	// the readiness rule and the resident-AWS-cred rationale.
@@ -97,19 +112,14 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// exec run signs no Bedrock request, so it gets no resident AWS SigV4 creds.
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
-	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
-	t.bedrockReady = t.bedrock.ready
-	// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
-	// (never-resident); consumed by the CA / injection / MITM-host wiring
-	// alongside the subscription path.
-	t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
-
-	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
-	// operator to run `claude setup-token` in the attach shell and mint one. Point
-	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
-	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
-	// mis-signals api-key mode. No mount, no injection, no MITM.
-	t.harnessLogin = run.Task == harnessLoginTask
+	if !t.harnessLogin {
+		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
+		t.bedrockReady = t.bedrock.ready
+		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
+		// (never-resident); consumed by the CA / injection / MITM-host wiring
+		// alongside the subscription path.
+		t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
+	}
 
 	// MANAGED subscription: when there is no resident ~/.claude mount and no
 	// Bedrock, and the operator connected a Wardyn-managed setup-token, inject it
