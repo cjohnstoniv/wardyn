@@ -33,7 +33,7 @@ import { useOperator } from "../wardyn/operator-context";
 export function llmCredLabel(cred?: WorkspaceLLMCred, rows?: IntegrationRow[]): string {
   const ref = cred?.integration_ref;
   if (!ref) return "None";
-  return rows?.find((r) => r.id === ref)?.name ?? ref;
+  return rows?.find((r) => r.serverId === ref || r.id === ref)?.name ?? ref;
 }
 // success = a named binding resolves model access proxy-side; neutral = no
 // binding (global provider fallback).
@@ -81,16 +81,22 @@ export function LLMCredFields({
             None — use the server&apos;s global provider
           </Label>
         </label>
-        {(rows ?? []).map((r) => (
-          <label key={r.id} className="flex items-center gap-1.5 text-xs">
-            <RadioGroupItem value={r.id} id={`cred-ref-${r.id}`} />
-            <Label htmlFor={`cred-ref-${r.id}`} className="cursor-pointer font-normal">
-              {r.name} <span className="font-mono text-muted-foreground">{r.typeLabel}</span>
-            </Label>
-          </label>
-        ))}
+        {/* Skip rows with no server-side identity (aiServerId's azure_openai
+            case today): integration_ref is resolved server-side against the
+            SAME id (resolveIntegrationRef), so a client display id like
+            "ai:azure_openai" would silently fail to bind. */}
+        {(rows ?? [])
+          .filter((r) => r.serverId)
+          .map((r) => (
+            <label key={r.id} className="flex items-center gap-1.5 text-xs">
+              <RadioGroupItem value={r.serverId!} id={`cred-ref-${r.id}`} />
+              <Label htmlFor={`cred-ref-${r.id}`} className="cursor-pointer font-normal">
+                {r.name} <span className="font-mono text-muted-foreground">{r.typeLabel}</span>
+              </Label>
+            </label>
+          ))}
         {/* A stored ref whose integration no longer lists: still selectable/clearable, named honestly. */}
-        {ref && rows !== null && !rows.some((r) => r.id === ref) && (
+        {ref && rows !== null && !rows.some((r) => r.serverId === ref) && (
           <label className="flex items-center gap-1.5 text-xs">
             <RadioGroupItem value={ref} id="cred-ref-current" />
             <Label htmlFor="cred-ref-current" className="cursor-pointer font-mono font-normal">

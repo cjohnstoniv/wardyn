@@ -341,6 +341,49 @@ describe("wizardStateFromProposal — threads the echoed workspace_selections (I
   });
 });
 
+// W15-W15e-wizard-roundtrip-6: "Edit in wizard" used to silently drop a
+// composed devcontainer_repo — the wizard's own Launch (buildSpec) then built
+// the plain convention image, a DIFFERENT sandbox than "Approve & launch"
+// (which sends result.proposed.run, devcontainer_repo intact, unchanged)
+// would have built for the identical proposal.
+describe("wizardStateFromProposal + buildSpec — devcontainer_repo round-trips (W15e-6)", () => {
+  const spec: RunPolicySpec = {
+    allowed_domains: ["api.anthropic.com"],
+    first_use_approval: "deny_with_review",
+    min_confinement_class: "CC2",
+  };
+
+  it("carries devcontainer_repo from the proposal into WizardState", () => {
+    const run = {
+      agent: "claude-code",
+      repo: "org/repo",
+      interactive: true,
+      devcontainer_repo: "org/devcontainer-repo",
+    } as ComposeRunProposal;
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.devcontainerRepo).toBe("org/devcontainer-repo");
+  });
+
+  it("re-emits it on buildSpec, so the wizard's own Launch builds the SAME sandbox", () => {
+    const run = {
+      agent: "claude-code",
+      repo: "org/repo",
+      interactive: true,
+      devcontainer_repo: "org/devcontainer-repo",
+    } as ComposeRunProposal;
+    const { run: built } = buildSpec(wizardStateFromProposal(run, spec));
+    expect(built.devcontainer_repo).toBe("org/devcontainer-repo");
+    expect(built.image).toBeUndefined();
+  });
+
+  it("stays absent for a plain proposal with no devcontainer build", () => {
+    const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
+    const state = wizardStateFromProposal(run, spec);
+    expect(state.devcontainerRepo).toBe("");
+    expect(buildSpec(state).run.devcontainer_repo).toBeUndefined();
+  });
+});
+
 // Regression for the wizard-contract HIGH finding: under allow-all egress the
 // wizard dropped the run's own required hosts AND emitted allowed_domains=[].
 // But proxy credential injection fails CLOSED unless the api_key grant's exact

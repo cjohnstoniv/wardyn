@@ -158,4 +158,28 @@ describe("workspace client methods", () => {
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body))).toEqual({ requirements: reqs });
   });
+
+  // W20-S1-2: a 202 body always carries `warnings` (the masking caveat, at
+  // minimum) and the launch's real `confinement_class` — recordTask() must
+  // surface both rather than discarding everything but record_run_id.
+  it("recordTask() surfaces the 202 body's warnings and confinement_class, not just record_run_id", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          record_run_id: "run-1",
+          confinement_class: "CC3",
+          warnings: ["masking caveat text"],
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const res = await workspaces.recordTask("ws-1", "build & test", false);
+    expect(res).toEqual({
+      ok: true,
+      status: 202,
+      record_run_id: "run-1",
+      confinement_class: "CC3",
+      warnings: ["masking caveat text"],
+    });
+  });
 });

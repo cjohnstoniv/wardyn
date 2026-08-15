@@ -286,7 +286,15 @@ function serverRejection(body: IntegrationWrite): string | null {
     if (fmt && ((fmt.match(/%s/g) ?? []).length !== 1 || (fmt.match(/%/g) ?? []).length !== 1)) return `secret ${s.role}: invalid format ${fmt}`;
   }
   if ((body.secrets ?? []).filter((s) => s.delivery?.mode === "proxy_header").length > 1) return "more than one proxy_header secret";
-  if (body.probe && body.probe.method !== "GET" && body.probe.method !== "HEAD") return `bad probe method ${body.probe.method}`;
+  if (body.probe) {
+    if (body.probe.method !== "GET" && body.probe.method !== "HEAD") return `bad probe method ${body.probe.method}`;
+    // Mirrors validSiteURL (internal/api/site_config.go): a wildcard or
+    // port-qualified host makes url.Parse's Host invalid for
+    // workspacescan.ValidApprovedHost — the server 400s "probe.url: invalid
+    // URL" (W11-S1-3).
+    const host = body.probe.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (host.startsWith("*.") || host.includes(":")) return `probe.url host ${JSON.stringify(host)} is a wildcard/port — validSiteURL rejects it`;
+  }
   return null;
 }
 
@@ -396,5 +404,29 @@ describe("buildIntegrationWrite — the real PUT payload satisfies the server (n
     expect(body.secrets![0].delivery).toBeUndefined();
     expect(body.secrets![0].secret_name).toBe("bedrock-api-key");
     expect(body.secrets![0].secret_name).not.toBe("bedrock-bearer-token");
+  });
+
+  // W11-S1-3: HOSTS_HINT says "wildcards are fine" — the auto-probe must never
+  // contradict it by 400ing Save when the FIRST host happens to be one.
+  // genericSecret: "" (credential-less) isolates this from the server's
+  // SEPARATE, legitimate "a credential header needs a bare host" rejection
+  // (integrations_write.go's bareExactHost check, which only fires once a
+  // header secret is actually configured) — this defect is the auto-probe
+  // rejecting a wildcard even with no credential in play at all.
+  it("a credential-less generic kind with a wildcard FIRST host: the probe targets the first BARE host instead, never the wildcard", () => {
+    const body = buildIntegrationWrite(
+      values("other", { hostList: ["*.example.com", "api.example.com"], genericSecret: "" }),
+    );
+    expect(serverRejection(body)).toBeNull();
+    expect(body.secrets).toBeUndefined();
+    expect(body.probe).toEqual({ method: "GET", url: "https://api.example.com/" });
+  });
+
+  it("a credential-less generic kind where EVERY host is a wildcard: no probe at all, never a malformed one", () => {
+    const body = buildIntegrationWrite(
+      values("other", { hostList: ["*.example.com", "*.other.example.com"], genericSecret: "" }),
+    );
+    expect(serverRejection(body)).toBeNull();
+    expect(body.probe).toBeUndefined();
   });
 });

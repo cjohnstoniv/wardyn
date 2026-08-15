@@ -71,6 +71,7 @@ const teamKey: IntegrationRow = {
 
 const openaiTeam: IntegrationRow = {
   id: "int-openai",
+  serverId: "openai_api_key",
   category: "ai_provider",
   name: "OpenAI (team)",
   typeLabel: "openai · api key",
@@ -387,7 +388,10 @@ describe("StepAccess — Override for this run peek", () => {
     expect(compatibleRow).not.toBeDisabled();
   });
 
-  it("committing an override patches integrationId", async () => {
+  // W15-W15e-wizard-roundtrip-2: the peek must commit row.serverId — the id
+  // create/preflight actually resolve (resolveIntegrationRef) — never
+  // row.id, the client display namespace ("ai:…"/"int-…") that both 400.
+  it("committing an override patches integrationId with the row's SERVER id, not the client display id", async () => {
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([teamKey, openaiTeam]));
     let patched: Record<string, unknown> | null = null;
@@ -400,7 +404,62 @@ describe("StepAccess — Override for this run peek", () => {
     await user.click(within(peek).getByText("Team API key"));
     await user.click(within(peek).getByRole("button", { name: /use this integration/i }));
 
-    expect(patched).toEqual({ integrationId: "int-team-key" });
+    // teamKey.id is "int-team-key" (the display id) — teamKey.serverId is
+    // "anthropic_api_key" (what the server actually resolves).
+    expect(patched).toEqual({ integrationId: "anthropic_api_key" });
+  });
+
+  // Same defect, exercised against a REAL deriveAiRows-shaped row (the
+  // "ai:…" id namespace + aiServerId's actual mapping), not the synthetic
+  // "int-team-key"/"anthropic_api_key" fixture above — the id/serverId gap
+  // this finding is about is invisible unless the id namespaces actually
+  // differ the way deriveAiRows really produces them.
+  it("a real deriveAiRows row commits its aiServerId, and a row with no serverId can't be picked at all", async () => {
+    const realApiKeyRow: IntegrationRow = {
+      id: "ai:anthropic_api_key",
+      serverId: "anthropic_api_key",
+      category: "ai_provider",
+      name: "Anthropic (API key)",
+      typeLabel: "anthropic · api key",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: ["anthropic-api-key"],
+      aiType: "anthropic_api_key",
+      checkIds: [],
+    };
+    // ai:anthropic_cli_login: a passive CLI-login detection with NO serverId
+    // (see integrations.ts) — nothing server-side to adopt/commit.
+    const cliLoginDetected: IntegrationRow = {
+      id: "ai:anthropic_cli_login",
+      category: "ai_provider",
+      name: "Claude Code CLI (resident login)",
+      typeLabel: "anthropic · cli login detected",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      hostCli: true,
+      checkIds: [],
+    };
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([realApiKeyRow, cliLoginDetected]));
+    let patched: Record<string, unknown> | null = null;
+    const user = userEvent.setup();
+    renderStep({ patch: (p) => { patched = p; } });
+
+    await screen.findByText("Anthropic (API key)");
+    await user.click(screen.getByRole("button", { name: /override for this run/i }));
+    const peek = await screen.findByRole("dialog");
+
+    // No-serverId row is skipped entirely — never rendered as an option.
+    expect(within(peek).queryByText("Claude Code CLI (resident login)")).toBeNull();
+
+    await user.click(within(peek).getByText("Anthropic (API key)"));
+    await user.click(within(peek).getByRole("button", { name: /use this integration/i }));
+
+    expect(patched).toEqual({ integrationId: "anthropic_api_key" });
   });
 
   it("'Use the server default' clears an existing override", async () => {

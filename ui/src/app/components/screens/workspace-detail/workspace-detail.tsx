@@ -130,6 +130,11 @@ export function WorkspaceDetailScreen() {
   // ---------------- sessions (record / confined replay) ----------------
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
   const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
+  // W20-S1-2: the launch's own warnings (open-egress exfiltration window on
+  // weak confinement, the masking caveat) + its REAL confinement class — the
+  // server's own facts about THIS launch, never dropped and never guessed
+  // from the operator's persisted default tier.
+  const [recordLaunch, setRecordLaunch] = React.useState<{ warnings?: string[]; confinementClass?: string } | null>(null);
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
   const [pendingConfirm, setPendingConfirm] = React.useState<{ hosts: string[]; run: () => void } | null>(null);
@@ -138,9 +143,14 @@ export function WorkspaceDetailScreen() {
     if (!ws) return;
     setRecordBusyTask((confined ? "verify:" : "") + sessionKeyOf(name));
     setRecordNotice(null);
+    setRecordLaunch(null);
     try {
       const r = await workspacesApi.recordTask(ws.id, name, confined);
-      if (!r.ok) setRecordNotice({ status: r.status, detail: r.detail });
+      if (!r.ok) {
+        setRecordNotice({ status: r.status, detail: r.detail });
+      } else {
+        setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
+      }
       load(false);
     } catch (e) {
       toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", {
@@ -374,6 +384,7 @@ export function WorkspaceDetailScreen() {
           <RecordPane
             ws={ws}
             notice={recordNotice}
+            launch={recordLaunch}
             busyTask={recordBusyTask}
             modelReady={llmReady}
             onRecord={(name) => void doRecord(name, false)}

@@ -68,12 +68,14 @@ function renderPane(
   handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
   modelReady = true,
   operator = true,
+  launch: { warnings?: string[]; confinementClass?: string } | null = null,
 ) {
   return render(
     <OperatorProvider operator={operator}>
       <RecordPane
         ws={ws(over)}
         notice={null}
+        launch={launch}
         busyTask={null}
         modelReady={modelReady}
         onRecord={handlers.onRecord ?? noop}
@@ -114,6 +116,26 @@ describe("RecordPane — header, CC1 banner, model note", () => {
   it("warns when no model path is ready", () => {
     renderPane({}, {}, false);
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
+  });
+
+  // W20-S1-2: the localStorage default is only a pre-launch GUESS — once a
+  // session has actually launched, the server's own confinement_class is the
+  // truth, even when it disagrees with the guess (CC1 default here, but the
+  // launch resolved to CC3 — no shared-kernel exposure, so no banner).
+  it("keys the CC1 banner off the launch's REAL confinement class, not the localStorage default, once a session has launched", () => {
+    // localStorage still says nothing (=> CC1 guess) — unchanged from the
+    // default-banner test above.
+    renderPane({}, {}, true, true, { confinementClass: "CC3" });
+    expect(screen.queryByTestId("record-cc1-banner")).not.toBeInTheDocument();
+  });
+
+  it("renders the launch's own warnings instead of silently dropping them", () => {
+    renderPane({}, {}, true, true, {
+      confinementClass: "CC1",
+      warnings: ["this recording runs with OPEN egress under the WEAKEST available isolation"],
+    });
+    const warn = screen.getByTestId("record-launch-warnings");
+    expect(warn).toHaveTextContent(/OPEN egress/);
   });
 });
 

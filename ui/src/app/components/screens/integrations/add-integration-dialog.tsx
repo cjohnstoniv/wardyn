@@ -156,7 +156,14 @@ export function buildIntegrationWrite(v: IntegrationFormValues): IntegrationWrit
   if (isSubscription) config.lane = v.hostCli ? "resident_host" : "managed";
 
   const egress = isSubscription || isBedrock ? type.hosts.slice() : v.hostList;
-  const probeHost = egress[0];
+  // W11-S1-3: the auto-probe URL is `https://${probeHost}/` below — a wildcard
+  // (or port-qualified) FIRST host there builds a malformed URL validSiteURL
+  // (internal/api/site_config.go) rejects outright, 400ing Save even though
+  // HOSTS_HINT ("wildcards are fine") makes no such exception. Skip to the
+  // first BARE host instead — same shape the server's own bareExactHost
+  // (integrations_write.go) accepts a credential header on — and drop the
+  // probe entirely (never a 400) when every host is a wildcard/port entry.
+  const probeHost = egress.find((h) => !h.startsWith("*.") && !h.includes(":"));
 
   return {
     name: v.name.trim(),

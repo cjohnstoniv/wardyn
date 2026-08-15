@@ -90,4 +90,18 @@ describe("integration catalog", () => {
     // Capped at the mock's own cut-off.
     expect(searchIntegrationTypes("a").length).toBeLessThanOrEqual(7);
   });
+
+  // W11-S1-1: "Other service"'s lead promised the credential "works today" for
+  // ANY host — but the proxy only ever reads plaintext to inject it on plain
+  // HTTP or inside a TLS-MITM'd tunnel, and MITM never opens for a generic
+  // integration's own egress (internal/api/integrations_run.go's HONEST
+  // CEILING doc; internal/egress/proxy/mitm.go's isMITMHost). https is the
+  // whole shipped catalog, so the old claim was false for virtually every row.
+  it("'Other service' no longer over-promises the credential 'works today' on an unlisted https host", () => {
+    const other = integrationTypeById("other");
+    expect(other?.lead).toBeDefined();
+    expect(other!.lead!.toLowerCase()).not.toContain("works today");
+    expect(other!.lead!).toMatch(/https?/i);
+    expect(other!.lead!.toLowerCase()).toMatch(/mitm|opaque/);
+  });
 });

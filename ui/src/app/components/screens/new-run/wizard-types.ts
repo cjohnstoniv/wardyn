@@ -339,6 +339,12 @@ export interface WizardState {
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
   image: string;
+  // A composed proposal's devcontainer build (composer.RunInput.
+  // DevcontainerRepo — mutually exclusive with `image`, operator-only, same as
+  // it). Wizard-editable, never — it is CARRIED from "Edit in wizard" so the
+  // wizard's own Launch builds the SAME sandbox "Approve & launch" would have
+  // (see wizardStateFromProposal / buildSpec); "" = no devcontainer build.
+  devcontainerRepo: string;
 }
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
@@ -384,6 +390,7 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     profileName: "",
 
     image: "",
+    devcontainerRepo: "",
   };
 }
 
@@ -601,6 +608,11 @@ export function toRunWorkspacesWire(selections: RunWorkspaceSelection[]): RunWor
 export type CreateRunInputWithComposition = CreateRunInput & {
   workspaces?: RunWorkspaceSelectionWire[];
   integration_id?: string;
+  // A composed proposal's devcontainer build (pkg/client.CreateRunRequest.
+  // DevcontainerRepo — mutually exclusive with `image`). Carried from
+  // WizardState.devcontainerRepo so "Launch" from the wizard builds the same
+  // sandbox "Approve & launch" would have for the same proposal.
+  devcontainer_repo?: string;
   // The PRIMARY workspace's id, sent ONLY when the selection resolves to no
   // mount/repo (a pure-ephemeral / migrated-0029 container workspace). Such a
   // workspace has no source the server's referencedWorkspaces can match, so its
@@ -690,6 +702,11 @@ export function buildSpec(
   // BYOI: a user-supplied base image the backend wraps with the runner tools.
   if (state.image.trim()) {
     run.image = state.image.trim();
+  } else if (state.devcontainerRepo.trim()) {
+    // W15-W15e-wizard-roundtrip-6: re-emit a composed devcontainer build
+    // carried in from "Edit in wizard" (wizardStateFromProposal) — mutually
+    // exclusive with `image` (the `else` above), same as the server enforces.
+    run.devcontainer_repo = state.devcontainerRepo.trim();
   }
   // Governed command: task_mode=exec runs `task` as a plain shell command, no
   // agent/model involved. Omitted for "agent" so the wire default ("harness")
@@ -993,6 +1010,13 @@ export function wizardStateFromProposal(
       spec.auto_stop_after_sec != null && spec.auto_stop_after_sec > 0
         ? Math.max(1, Math.round(spec.auto_stop_after_sec / 60))
         : base.autoStopMinutes,
+
+    // W15-W15e-wizard-roundtrip-6: without this, "Edit in wizard" silently
+    // dropped a composed devcontainer_repo — the wizard's own Launch then
+    // built the plain convention image, a DIFFERENT sandbox than "Approve &
+    // launch" (which sends result.proposed.run — devcontainer_repo intact —
+    // unchanged) would have built for the identical proposal.
+    devcontainerRepo: run.devcontainer_repo ?? "",
   };
 }
 

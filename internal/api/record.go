@@ -306,7 +306,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"record_run_id": run.ID, "workspace_id": id, "task_key": key, "label": label,
 		"mode": mode, "confined": req.Confined, "state": run.State,
-		"detail": detail,
+		"confinement_class": run.ConfinementClass, "detail": detail,
 	}
 	var warnings []string
 	// The open-egress exfiltration warning applies only to a learning session; a
