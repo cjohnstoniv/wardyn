@@ -24,6 +24,25 @@ import { useTheme } from "../wardyn/theme-provider";
 import { errText, HttpError, setToken, wfetch, withLimit } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 
+// W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
+// redirects a user-actionable login denial to "/?auth_error=<code>" instead
+// of dead-ending the browser on a bare http.Error text page — but a redirect
+// nobody reads is no better: it silently bounces back to this exact screen
+// with zero explanation. These are the stable, machine-readable codes
+// redirectAuthError sends; keep in sync with oidc.go's authError* consts.
+function authErrorMessage(code: string): string {
+  switch (code) {
+    case "email_unverified":
+      return "Your identity provider reports this email as unverified. Verify your email with your identity provider, then try again.";
+    case "email_domain":
+      return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_ALLOWED_EMAIL_DOMAINS.";
+    case "no_role":
+      return "Your account has no Wardyn role assigned. Ask an operator to map your role (WARDYN_OIDC_ROLE_MAP) or add your email to WARDYN_OIDC_OPERATOR_EMAILS.";
+    default:
+      return "Sign-in failed. Try again, or contact an operator.";
+  }
+}
+
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const { theme, toggle } = useTheme();
   const [token, setTokenValue] = React.useState("");
@@ -48,6 +67,22 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
       if (h.identity_provider) setIdentityProvider(h.identity_provider);
       setSso(!!h.sso);
     });
+  }, []);
+
+  // W31-S1-5: render the OIDC callback's ?auth_error=<code> (see
+  // authErrorMessage above) inline, reusing the same alert box submitToken's
+  // own failures render below — a redirect back to this screen with no
+  // explanation is the same dead end the bare http.Error page used to be.
+  // Runs once on mount; strips the param from the URL bar so a refresh (or
+  // the user navigating away and back) doesn't keep re-showing a stale error.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("auth_error");
+    if (!code) return;
+    setError(authErrorMessage(code));
+    params.delete("auth_error");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
   }, []);
 
   // W31-S1-4: probeAuth collapsed every failure — a rejected token (401), a

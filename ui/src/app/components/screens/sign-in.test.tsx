@@ -124,3 +124,51 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
     expect(getToken()).toBe("sometoken");
   });
 });
+
+// W31-S1-5 (re-fix): the OIDC callback redirects a user-actionable login
+// denial to "/?auth_error=<code>" instead of a bare http.Error text page —
+// but that redirect lands right back on THIS screen, so if nothing here reads
+// the code the user sees a plain sign-in form with zero explanation, no
+// better than the dead end it replaced. SignIn must render the mapped
+// message inline.
+describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-S1-5)", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("renders the no_role message and strips the param from the URL", async () => {
+    window.history.pushState({}, "", "/?auth_error=no_role");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no wardyn role assigned/i);
+    expect(window.location.search).toBe("");
+  });
+
+  it("renders the email_domain message", async () => {
+    window.history.pushState({}, "", "/?auth_error=email_domain");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/domain isn't allowed/i);
+  });
+
+  it("renders the email_unverified message", async () => {
+    window.history.pushState({}, "", "/?auth_error=email_unverified");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/unverified/i);
+  });
+
+  it("falls back to a generic message for an unrecognized code", async () => {
+    window.history.pushState({}, "", "/?auth_error=something_new");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/sign-in failed/i);
+  });
+
+  it("shows no error banner when the URL carries no auth_error", () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
