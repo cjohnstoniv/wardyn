@@ -97,6 +97,15 @@ func canonicalRepoLocator(locator string) string {
 			return locator[:at+1] + strings.ToLower(rest[:colon]) + rest[colon:]
 		}
 	}
+	// Bare "<org>/<name>" GitHub slug: repoCloneURL already resolves this
+	// whole alias family (any case, with or without a trailing ".git") to one
+	// github.com clone URL, and gitBrokerKeyFromSlug canonicalizes it the same
+	// lowercased, ".git"-stripped way once it gets there — so dedupe on the
+	// identical key here instead of letting two spellings of one repo mint two
+	// library entries.
+	if repoCloneURL(locator) != "" {
+		return strings.ToLower(strings.TrimSuffix(locator, ".git"))
+	}
 	return locator
 }
 
@@ -107,9 +116,6 @@ func canonicalRepoLocator(locator string) string {
 // Integrations compose at the aggregate (tier 3, owner decision); the fold
 // would pass them through unharmed, so relaxing later is this one branch.
 func validateSourceWrite(src types.Source) string {
-	if strings.TrimSpace(src.Name) == "" {
-		return "name is required"
-	}
 	switch src.Kind {
 	case types.SourceLocalDir:
 		if src.Locator == "" {
@@ -130,6 +136,15 @@ func validateSourceWrite(src types.Source) string {
 		}
 	default:
 		return `kind must be "local_dir" or "repo" (ephemeral scratch is a per-workspace row, not a library entry)`
+	}
+	// Checked AFTER kind/locator: Name derives from the locator when the
+	// caller didn't set one (handleCreateSource), so an empty Name is a
+	// SYMPTOM of a missing/invalid locator, not an independent error — put
+	// the kind/locator checks first so a missing --locator reports itself,
+	// not the misleading "name is required" every missing-locator request
+	// used to surface instead (W6-S1-6).
+	if strings.TrimSpace(src.Name) == "" {
+		return "name is required"
 	}
 	if len(src.Requirements) > maxWorkspaceRequirements {
 		return fmt.Sprintf("too many requirements (max %d)", maxWorkspaceRequirements)

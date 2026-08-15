@@ -107,6 +107,10 @@ func sourceCmd(client clientFn) *cobra.Command {
 	create.Flags().StringVar(&req.Ref, "ref", "", "git ref (branch/tag/sha); repo kind only — part of the identity")
 	create.Flags().StringVar(&req.Name, "name", "", "human-readable name (defaults to the locator's last path segment)")
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the source as JSON")
+	// W6-S1-6: fail locally with cobra's own "required flag(s)" message
+	// instead of round-tripping an empty locator to the server for a 400.
+	_ = create.MarkFlagRequired("kind")
+	_ = create.MarkFlagRequired("locator")
 
 	scan := &cobra.Command{
 		Use:   "scan <source-id>",

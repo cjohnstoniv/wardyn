@@ -90,6 +90,24 @@ func TestSources_UpsertByCanonicalIdentity(t *testing.T) {
 	}
 }
 
+// W6-S1-6: a missing --locator must report the LOCATOR error, not the
+// derived-name symptom — Name is empty only because it derives from an empty
+// locator, so the locator-specific message has to win.
+func TestSources_MissingLocatorReportsLocatorError(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))
+	w := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken, `{"kind":"repo"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "name is required") {
+		t.Errorf("body = %s, must not surface the misleading name error for a missing locator", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "locator") {
+		t.Errorf("body = %s, want the locator-specific error", w.Body.String())
+	}
+}
+
 func TestSources_ContractRefusesIntegrationKeys(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))
@@ -172,11 +190,43 @@ func TestSources_RepoLocatorCanonicalizesHostOnly(t *testing.T) {
 	}
 }
 
+// W6-S1-4: a bare GitHub slug's case and a trailing ".git" are aliases of the
+// same repo (repoCloneURL/gitBrokerKeyFromSlug already treat them as one
+// clone target) — the library must dedupe them to one entry, not mint a
+// second row per spelling.
+func TestSources_RepoLocatorDedupesBareSlugAliases(t *testing.T) {
+	h := newHarness(t)
+	fake := &sourcesEndpointFake{}
+	srv := New(baseTestConfig(h, fake))
+
+	first := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken,
+		`{"kind":"repo","locator":"octocat/Hello-World"}`)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first POST: code = %d, want 201; body=%s", first.Code, first.Body.String())
+	}
+	var created types.Source
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	second := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken,
+		`{"kind":"repo","locator":"OctoCat/hello-world.git"}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("aliased re-POST: code = %d, want 200 (upsert hit); body=%s", second.Code, second.Body.String())
+	}
+	var again types.Source
+	_ = json.Unmarshal(second.Body.Bytes(), &again)
+	if again.ID != created.ID {
+		t.Error("a differently-cased slug with/without a trailing .git must dedupe to the SAME library entry")
+	}
+}
+
 func TestCanonicalRepoLocator_HostOnlyLowercased(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"https URL, mixed-case host and path", "https://Git.Corp.Example/MyGroup/MyRepo.git", "https://git.corp.example/MyGroup/MyRepo.git"},
 		{"scp-form, mixed-case host, path untouched", "git@GitHub.com:MyOrg/MyRepo.git", "git@github.com:MyOrg/MyRepo.git"},
-		{"bare org/name slug: no host component to normalize", "MyOrg/MyRepo", "MyOrg/MyRepo"},
+		{"bare org/name slug: lowercased like the git-broker's own key", "MyOrg/MyRepo", "myorg/myrepo"},
+		{"bare org/name slug with .git suffix: suffix stripped too", "MyOrg/MyRepo.git", "myorg/myrepo"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

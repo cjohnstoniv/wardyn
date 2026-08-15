@@ -4,10 +4,43 @@
 package main
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
+
+// W6-S1-6: --kind and --locator are cobra-required, so a missing one fails
+// locally with cobra's own "required flag(s)" message rather than
+// round-tripping to the server and surfacing its misleading 400.
+func TestSourceCreateCmd_RequiresKindAndLocator(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, sdk.Source{})
+
+	err := execCmd(t, "source", "create", "--locator", "acme/widgets", "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected error when --kind is missing, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "kind" not set`) {
+		t.Errorf("error = %q, want the required-flag message", err)
+	}
+
+	err = execCmd(t, "source", "create", "--kind", "repo", "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected error when --locator is missing, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "locator" not set`) {
+		t.Errorf("error = %q, want the required-flag message", err)
+	}
+
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("a required-flag failure must never round-trip to the server, got %d request(s)", n)
+	}
+}
 
 func TestParseAttachArg(t *testing.T) {
 	id := uuid.New()

@@ -57,6 +57,17 @@ func (s *Server) setProbeStatus(id string, st types.IntegrationProbeStatus) {
 	s.probeStatusCache[id] = st
 }
 
+// invalidateProbeStatus drops id's cached probe result. A cached "passed" is
+// a claim about the credential/egress/config the row had when it was probed;
+// a PUT or DELETE changes (or removes) that row, so the stale result must not
+// keep reading as current for up to probeStatusTTL after the edit (W11-S1-2)
+// — every write/delete path for a stored integration calls this.
+func (s *Server) invalidateProbeStatus(id string) {
+	s.probeStatusMu.Lock()
+	defer s.probeStatusMu.Unlock()
+	delete(s.probeStatusCache, id)
+}
+
 // integrationProbeScript curls the row's probe URL through the sandbox's normal
 // egress path (HTTP_PROXY/HTTPS_PROXY already point at wardyn-proxy, which is
 // also what injects the row's credential header). -f makes an HTTP error status

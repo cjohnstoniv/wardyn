@@ -243,6 +243,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
+	s.invalidateProbeStatus(id) // W11-S1-2: the edit may change what a probe observes
 	// egress and header are the two facts an incident review actually needs
 	// from this event: what a granted run may now REACH, and what credential
 	// header gets presented there. Both are non-secret by construction (Secrets
@@ -301,6 +302,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
+	s.invalidateProbeStatus(id) // W11-S1-2: a deleted row's last probe result must not outlive it
 	// Record what stopped being reachable — after the delete the row is gone,
 	// so this event is the only remaining answer to "what did that one open?".
 	// The operator's underlying secrets are NOT deleted (handleDeleteIntegration's
