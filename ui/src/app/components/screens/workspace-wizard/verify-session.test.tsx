@@ -81,6 +81,17 @@ describe("WizardVerifySession", () => {
     expect(await screen.findByText(/anything you approved is in the contract now/i)).toBeInTheDocument();
   });
 
+  // ui-wsWizard-1: "Verify with a session" and "Verify in a terminal" used to
+  // both render at once when nothingResolves is false, wired to the exact
+  // same launch() — two labels claiming to be different actions. Only one
+  // launch control may exist.
+  it("renders exactly one launch button, never both labels at once", () => {
+    render(<Harness ws={ws} nothingResolves={false} />);
+    expect(screen.getAllByRole("button", { name: /^verify (with a session|in a terminal)$/i })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Verify with a session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Verify in a terminal" })).not.toBeInTheDocument();
+  });
+
   it("renders a refused start (409/503/422) inline with the server's reason", async () => {
     recordTaskMock.mockResolvedValue({ ok: false, status: 409, detail: "an import step is already running" });
     const user = userEvent.setup({ pointerEventsCheck: 0 });

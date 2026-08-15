@@ -126,21 +126,15 @@ export function WizardVerifySession({
           Session ended — anything you approved is in the contract now (see Reach).
         </p>
       )}
+      {/* ui-wsWizard-1: this used to be two buttons — "Verify with a session"
+          and "Verify in a terminal" — both wired to the identical launch(),
+          which starts the same CONFINED session (terminal + live approvals)
+          either way. Two labels for one action is a broken promise, not a
+          choice; one truthfully-labeled button, contextual by nothingResolves. */}
       <div className="flex flex-wrap gap-2">
-        {!nothingResolves && (
-          <Button type="button" size="sm" onClick={() => void launch()} disabled={busy}>
-            {busy && <Loader2 className="size-3.5 animate-spin" />}
-            Verify with a session
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          variant={nothingResolves ? "default" : "outline"}
-          onClick={() => void launch()}
-          disabled={busy}
-        >
-          Verify in a terminal
+        <Button type="button" size="sm" onClick={() => void launch()} disabled={busy}>
+          {busy && <Loader2 className="size-3.5 animate-spin" />}
+          {nothingResolves ? "Verify in a terminal" : "Verify with a session"}
         </Button>
       </div>
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">

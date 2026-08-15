@@ -10,6 +10,7 @@
 // run gets its wiring; optional = a run opts in) — one name, and the hosts
 // and credential ride along instead of being restated on every workspace.
 import * as React from "react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { integrationsApi, type IntegrationRow as AiScmRow } from "../../../lib/api/integrations";
 import { getErrorMessage } from "../../../lib/format";
@@ -73,24 +74,35 @@ export function StepIntegrations({
 }) {
   // AI providers + SCM hosts — the two categories genericIntegrations
   // deliberately excludes, and exactly the ones an operator means first when
-  // they say "integrations". Best-effort: a failed fetch leaves the generic
-  // section (below) as the whole surface.
+  // they say "integrations".
   const [ai, setAi] = React.useState<AiScmRow[]>([]);
   const [scm, setScm] = React.useState<AiScmRow[]>([]);
+  // ui-wsWizard-6: loading, ready, and a failed fetch all used to collapse
+  // onto the same ai=[]/scm=[] state, which is indistinguishable from a
+  // genuinely-empty account — the operator saw the same "nothing connected
+  // yet" copy whether the request was in flight, failed outright, or the
+  // account really has nothing. Tracked explicitly so each renders its own
+  // truth, with a retry for the failure case.
+  const [fetchStatus, setFetchStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [retryTick, setRetryTick] = React.useState(0);
   React.useEffect(() => {
     let live = true;
+    setFetchStatus("loading");
     integrationsApi
       .list()
       .then((d) => {
         if (!live) return;
         setAi(d.ai);
         setScm(d.scm);
+        setFetchStatus("ready");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (live) setFetchStatus("error");
+      });
     return () => {
       live = false;
     };
-  }, []);
+  }, [retryTick]);
 
   // Contracts name SERVER-side integration ids. A derived legacy row's
   // serverId is adoptable (POST /integrations/{id}/adopt persists it verbatim
@@ -164,7 +176,20 @@ export function StepIntegrations({
       {/* Package feeds, registries, data stores, MCP, … — the generic
           categories, same component that used to hide on the Reach tab. */}
       <IntegrationRequirements status={status} requirements={requirements} setLane={setLane} clear={clear} />
-      {ai.length === 0 && scm.length === 0 && (
+      {fetchStatus === "loading" && (
+        <p className="flex items-center gap-1.5 text-[0.6875rem] leading-snug text-muted-foreground" data-testid="integrations-loading">
+          <Loader2 className="size-3 animate-spin" /> Loading integrations…
+        </p>
+      )}
+      {fetchStatus === "error" && (
+        <p className="text-[0.6875rem] leading-snug text-warning" data-testid="integrations-error">
+          Couldn&apos;t load integrations.{" "}
+          <button type="button" className="underline" onClick={() => setRetryTick((n) => n + 1)}>
+            Retry
+          </button>
+        </p>
+      )}
+      {fetchStatus === "ready" && ai.length === 0 && scm.length === 0 && (
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
           Nothing connected yet? Integrations are configured once under Integrations in the sidebar,
           then selected here per workspace.

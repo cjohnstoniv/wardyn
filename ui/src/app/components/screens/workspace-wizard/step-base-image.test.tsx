@@ -187,6 +187,47 @@ describe("StepBaseImage — the four base-image cards", () => {
   });
 });
 
+// ui-wsWizard-4: role=radio's interaction contract (APG radiogroup pattern)
+// is roving tabindex + arrow keys moving selection and focus together —
+// every card used to be its own tab stop with no arrow handling at all.
+describe("StepBaseImage — radiogroup keyboard semantics (ui-wsWizard-4)", () => {
+  it("only the selected card is a tab stop (roving tabindex)", () => {
+    render(<CardsHarness />);
+    expect(screen.getByTestId("image-card-recommended")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("image-card-registry")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("image-card-custom")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("image-card-byo")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ArrowDown moves selection AND focus to the next card, and demotes the old one's tabindex", () => {
+    render(<CardsHarness />);
+    const recommended = screen.getByTestId("image-card-recommended");
+    recommended.focus();
+    fireEvent.keyDown(recommended, { key: "ArrowDown" });
+
+    const registry = screen.getByTestId("image-card-registry");
+    expect(registry).toHaveAttribute("aria-checked", "true");
+    expect(registry).toHaveAttribute("tabindex", "0");
+    expect(document.activeElement).toBe(registry);
+    expect(recommended).toHaveAttribute("aria-checked", "false");
+    expect(recommended).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ArrowUp from the first card wraps to the last, and ArrowLeft/ArrowRight behave the same as Up/Down", () => {
+    render(<CardsHarness />);
+    const recommended = screen.getByTestId("image-card-recommended");
+    recommended.focus();
+    fireEvent.keyDown(recommended, { key: "ArrowUp" });
+
+    const byo = screen.getByTestId("image-card-byo");
+    expect(byo).toHaveAttribute("aria-checked", "true");
+    expect(document.activeElement).toBe(byo);
+
+    fireEvent.keyDown(byo, { key: "ArrowRight" });
+    expect(screen.getByTestId("image-card-recommended")).toHaveAttribute("aria-checked", "true");
+  });
+});
+
 describe("ImageCards — inventory, never consequence (the tools-not-AI law)", () => {
   // The image doesn't decide whether or which AI is used — the workspace's
   // requirements do. A card may NAME a tool it carries; only the requirements
@@ -207,6 +248,25 @@ describe("ImageCards — inventory, never consequence (the tools-not-AI law)", (
     render(<CardsHarness initial={{ choice: "byo" }} />);
     expect(screen.getByText(V2C.IMG_NO_INJECT)).toBeInTheDocument();
     expect(screen.queryByText(/governed commands only/)).not.toBeInTheDocument();
+  });
+
+  // ui-wsWizard-5: an empty scan used to render "What the image needs" over a
+  // blank chip row with no fallback sentence — reads as a rendering glitch.
+  it("shows a fallback line under 'What the image needs' when the scan detected nothing", () => {
+    render(
+      <StepBaseImage
+        sources={[]}
+        scans={{}}
+        phaseA={false}
+        partial={false}
+        onEditSource={vi.fn()}
+        onRescan={vi.fn()}
+        detectedChips={[]}
+        state={defaultBaseImageState()}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/nothing detected in the scan/i)).toBeInTheDocument();
   });
 
   it("offers no power-source row and no Change… peek — that choice lives on Reach now", () => {

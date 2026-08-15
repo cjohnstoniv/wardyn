@@ -16,6 +16,7 @@ import { genericIntegrations, type GenericIntegrationRow } from "../../../lib/ap
 import { CATALOG_COPY } from "../../../lib/integration-catalog";
 import { RESIDENCY_META } from "../../../lib/integrations";
 import type { SetupStatus } from "../../../lib/types";
+import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { RequiredOptionalToggle } from "./step-requirements";
@@ -166,18 +167,17 @@ function IntegrationRow({
             value={level}
             onChange={onLane}
           />
-          <button type="button" className="text-[0.6875rem] text-muted-foreground underline" onClick={onClear}>
-            Remove
-          </button>
+          {/* ui-wsWizard-3: same shared Button + label pair step-integrations.tsx's
+              NamedRow uses for the identical add/remove-integration action —
+              two button systems for one action, stacked in the same step. */}
+          <Button type="button" size="sm" variant="ghost" className="h-7" onClick={onClear}>
+            Not used
+          </Button>
         </>
       ) : (
-        <button
-          type="button"
-          className="rounded-md border border-border px-2 py-1 text-[0.6875rem] text-foreground"
-          onClick={() => onLane("required")}
-        >
-          Add to this workspace
-        </button>
+        <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => onLane("required")}>
+          Use in this workspace
+        </Button>
       )}
     </div>
   );

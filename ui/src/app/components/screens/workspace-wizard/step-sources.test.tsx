@@ -71,6 +71,18 @@ describe("StepSources — the ephemeral floor", () => {
     expect(screen.getByRole("button", { name: /remove ephemeral directory/i })).toBeDisabled();
   });
 
+  // ui-wsWizard-2: disabled:pointer-events-none (button.tsx) means a plain
+  // `title` never fires on hover or for assistive tech — the reason has to
+  // be reachable via aria-describedby pointing at a VISIBLE line.
+  it("the disabled remove button's reason is reachable via aria-describedby, not just a native title", () => {
+    render(<Harness />);
+    const removeBtn = screen.getByRole("button", { name: /remove ephemeral directory/i });
+    const describedBy = removeBtn.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const reason = document.getElementById(describedBy!);
+    expect(reason).toHaveTextContent(/every workspace has at least one source/i);
+  });
+
   it("enables removal once a second source exists, and the floor returns when the last other source is removed", () => {
     render(<Harness />);
     // Add a local directory — now the floor is no longer alone.
