@@ -253,4 +253,25 @@ describe("RecordingScreen", () => {
     expect(fireEvent.keyDown(link, { key: "Enter" })).toBe(true);
     expect(screen.queryByTestId("player")).not.toBeInTheDocument();
   });
+
+  // ui-auditRec-4: the card used to be a single role="button" div with the
+  // "Open run" <Link> nested INSIDE it (an ARIA nested-interactive
+  // anti-pattern — a real, separately-focusable anchor inside another
+  // focusable/clickable element). "Open run" must now be its own row,
+  // outside the button's subtree, not merely reachable despite the nesting.
+  it("'Open run' is NOT nested inside the role=button card (no nested-interactive anti-pattern)", async () => {
+    listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
+    getRecordingMock.mockResolvedValue(rec("run_1"));
+    renderScreen();
+
+    await screen.findByText("ship the fix");
+    const card = screen.getByRole("button", { name: /ship the fix/i });
+    const link = screen.getByRole("link", { name: /open run/i });
+
+    expect(card.contains(link)).toBe(false);
+    // A single focusable target per subtree: exactly one <a> in the whole
+    // card's OUTER container (the button div's parent), and it isn't inside
+    // the button div itself.
+    expect(card.querySelector("a")).toBeNull();
+  });
 });
