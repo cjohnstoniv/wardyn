@@ -197,6 +197,29 @@ func TestRunCmd_DryRunPreflightsInsteadOfLaunching(t *testing.T) {
 	}
 }
 
+// printPreflight's table must include LABEL: it's the only field the server
+// populates with the actual identifying text for a setup item (e.g. "Workspace
+// secret: <name>"); KIND is just a shared coarse category like "workspace_secret".
+// Without LABEL, a dry-run listing two missing "secret" rows is indistinguishable.
+func TestRunCmd_DryRunPrintsSetupItemLabel(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string]any{
+		"enforced_confinement_class": "CC3",
+		"setup_items": []map[string]string{
+			{"kind": "secret", "status": "missing", "required_by": "claude-code", "label": "Workspace secret: GITHUB_TOKEN"},
+		},
+	})
+
+	out := captureStdout(t, func() {
+		if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+			"--agent", "claude-code", "--dry-run"); err != nil {
+			t.Fatalf("run --dry-run returned error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Workspace secret: GITHUB_TOKEN") {
+		t.Errorf("printPreflight output missing setup item label, got:\n%s", out)
+	}
+}
+
 // run grants reaches the SDK's ListGrants route (the eligibility records the
 // console shows and the CLI previously could not reach at all).
 func TestRunCmd_Grants(t *testing.T) {
