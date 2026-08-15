@@ -271,14 +271,17 @@ test.describe("Add workspace wizard", () => {
     await expect(dlg.getByRole("radiogroup", { name: "Base image" })).toBeVisible({ timeout: 30_000 });
 
     // Step 3 — Integrations (INTEGRATIONS_BLURB). Pick the injected feed row
-    // for real: "Add to this workspace" defaults a generic row to Required
-    // (IntegrationRow, integration-requirements.tsx), so the Continue below
-    // has an actual pick to persist, not just a blurb to read past.
+    // for real: "Use in this workspace" (ui-wsWizard-3 — renamed from "Add to
+    // this workspace" to share the same Button+label pair step-integrations.tsx's
+    // NamedRow uses for the identical action) defaults a generic row to
+    // Required (IntegrationRow, integration-requirements.tsx), so the
+    // Continue below has an actual pick to persist, not just a blurb to read
+    // past.
     await dlg.getByRole("button", { name: "Continue →" }).click();
     await expect(dlg.getByText(/Pick what this workspace connects through/)).toBeVisible();
     const integrationsSection = dlg.locator('[data-testid="integration-requirements"]');
     await expect(integrationsSection.getByText(feedName)).toBeVisible();
-    await integrationsSection.getByRole("button", { name: "Add to this workspace" }).click();
+    await integrationsSection.getByRole("button", { name: "Use in this workspace" }).click();
     const feedLane = dlg.getByRole("radiogroup", { name: `${feedName} lane` });
     await expect(feedLane.getByRole("radio", { name: "Required" })).toBeChecked();
 
@@ -316,13 +319,18 @@ test.describe("Add workspace wizard", () => {
 
     // Step 6 — Verify. -runner none hard-503s a record/verify launch before
     // any session exists (handleRecordWorkspace's Runner==nil gate,
-    // internal/api/record.go:265) — no live session is reachable under this
-    // e2e binary. "Verify with a session" is hidden too (nothingResolves: no
-    // AI integration was named), leaving only "Verify in a terminal" — click
+    // internal/api/record.go:266) — no live session is reachable under this
+    // e2e binary. The single launch button (ui-wsWizard-1 collapsed the old
+    // "Verify with a session" / "Verify in a terminal" pair — both wired to
+    // the identical launch()) is contextually labeled by nothingResolves
+    // (wizard.tsx's powerSource, driven by s.harnessAvailable: whether ANY
+    // ai-driving integration exists SYSTEM-WIDE, not whether this workspace
+    // named one) — the seeded backend's host-cli login makes that true, so
+    // it reads "Verify with a session" here. Same handler either way — click
     // it and assert the honest failure the launch actually reports, rather
     // than asserting nothing about what the button does.
     const verifyLaunch = dlg.locator('[data-testid="verify-session-launch"]');
-    await verifyLaunch.getByRole("button", { name: "Verify in a terminal" }).click();
+    await verifyLaunch.getByRole("button", { name: "Verify with a session" }).click();
     await expect(verifyLaunch.getByText(/record needs a configured runner/)).toBeVisible();
 
     await dlg.getByRole("button", { name: "Finish" }).click();
