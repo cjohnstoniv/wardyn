@@ -804,6 +804,46 @@ func TestKillCmd_RejectsNonUUID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// run recording command
+// --------------------------------------------------------------------------
+
+func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
+	runID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, "cast-bytes")
+	outPath := t.TempDir() + "/out.cast"
+
+	err := execCmd(t, "run", "recording", runID.String(), "-o", outPath, "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("run recording returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String()
+	if got.method != http.MethodGet || got.path != want {
+		t.Errorf("got %s %s, want GET %s", got.method, got.path, want)
+	}
+}
+
+// W21-S1-6: --session fetches an interactive run's OTHER recordings — an
+// attach session's cast is stored server-side under the composite key
+// "<run-id>~<session>" (recording.CastKey), which the server has always
+// served, but nothing on the CLI/SDK side could ever request one before this.
+func TestRunRecordingCmd_SessionFlagUsesCompositeKey(t *testing.T) {
+	runID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, "cast-bytes")
+	outPath := t.TempDir() + "/out.cast"
+
+	err := execCmd(t, "run", "recording", runID.String(), "--session", "attach-1", "-o", outPath, "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("run recording --session returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String() + "~attach-1"
+	if got.method != http.MethodGet || got.path != want {
+		t.Errorf("got %s %s, want GET %s", got.method, got.path, want)
+	}
+}
+
+// --------------------------------------------------------------------------
 // secret commands (set from stdin, ls, rm)
 // --------------------------------------------------------------------------
 

@@ -197,7 +197,7 @@ func runCmd(client clientFn) *cobra.Command {
 // a least-privilege policy from a run's activity), an unrelated concept the
 // name would fuse with this one.
 func runRecordingCmd(client clientFn) *cobra.Command {
-	var outPath string
+	var outPath, session string
 	rec := &cobra.Command{
 		Use:   "recording <run-id>",
 		Short: "Download a run's terminal recording as an asciicast (stdout unless -o)",
@@ -207,7 +207,11 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rc, err := client().GetRecording(cmd.Context(), id)
+			// W21-S1-6: defaults to the run's own (bare-id) cast when --session is
+			// unset — an interactive run's OTHER recordings (one per attach
+			// session, keyed "<run-id>~<session>") are otherwise unreachable from
+			// the CLI/SDK even though the server has always served them.
+			rc, err := client().GetRecording(cmd.Context(), id, session)
 			if err != nil {
 				return err
 			}
@@ -234,6 +238,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 		},
 	}
 	rec.Flags().StringVarP(&outPath, "output", "o", "", "write the .cast here instead of stdout")
+	rec.Flags().StringVar(&session, "session", "", "attach-session id, for an interactive run's OTHER recordings (default: the run's own recording)")
 	return rec
 }
 

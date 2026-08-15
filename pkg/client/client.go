@@ -66,6 +66,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -644,12 +645,23 @@ func (c *Client) httpClient() *http.Client {
 
 // GetRecording streams a run's terminal recording as raw asciicast bytes (the
 // .cast a player consumes). The caller MUST Close the returned reader.
-// GET /api/v1/runs/{id}/recording/{id} — the id really does appear twice: the
-// route is mounted per-run and its handler takes the recording's own id, which
-// for a run recording is the run id.
-// Returns 404/APIError when the run has no recording.
-func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID) (io.ReadCloser, error) {
-	path := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String()
+// GET /api/v1/runs/{id}/recording/{key} — the id really does appear twice: the
+// route is mounted per-run and its handler takes the recording's own CAST KEY,
+// which defaults to the bare run id (a batch run's single recording) when
+// session is omitted — existing zero-arg callers are unaffected. An
+// INTERACTIVE run can carry multiple recordings, one per attach session, each
+// keyed "<runID>~<session>" (recording.CastKey — see internal/recording's own
+// doc comment); pass that session id as the optional session argument to fetch
+// one of those instead of the run's own bare-id cast. At most one value is
+// meaningful; variadic only to keep it optional without a second method name.
+// Returns 404/APIError when the run/session has no recording.
+func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...string) (io.ReadCloser, error) {
+	suffix := ""
+	if len(session) > 0 {
+		suffix = session[0]
+	}
+	key := recording.CastKey(runID.String(), suffix)
+	path := "/api/v1/runs/" + runID.String() + "/recording/" + url.PathEscape(key)
 	req, err := c.newRequest(ctx, http.MethodGet, path, nil, false)
 	if err != nil {
 		return nil, err
