@@ -329,6 +329,34 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
+// TestRunCmd_PolicyFileRejectsUnknownField is the W14-S1-2 regression: a
+// misspelled/unknown spec field in --policy-file used to be silently dropped
+// (json.Unmarshal ignores what it doesn't recognize), so the run launched
+// under a policy the operator believed enforced a setting it never carried.
+// It must now fail locally, before any request, exactly like `policy render`.
+func TestRunCmd_PolicyFileRejectsUnknownField(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	dir := t.TempDir()
+	file := dir + "/typo.json"
+	writeFile(t, file, `{"allowed_domains":["example.com"],"min_confinement_klass":"CC1"}`)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--policy-file", file)
+	if err == nil {
+		t.Fatal("expected an error for an unknown spec field, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse --policy-file") {
+		t.Errorf("error = %q, want a parse error", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (an unknown field must short-circuit before launch)", n)
+	}
+}
+
 func TestRunCmd_ImageAndTaskModeInBody(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
 

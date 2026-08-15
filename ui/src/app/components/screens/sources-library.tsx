@@ -390,7 +390,7 @@ export function SourcesLibrary({
         onOpenChange={(o) => !o && setToDelete(null)}
         onDeleted={load}
         description="Removes the library entry and its contract. Workspaces attaching it keep their own overlays; the shared configuration is what goes."
-        inUseHint="Detaching un-mounts this source from those workspaces — their next runs fail loudly at the mount gate instead of silently losing code."
+        inUseHint="Detaching un-mounts this source from those workspaces — their next runs succeed without it, using whatever sources remain."
         onDelete={(src, force) => sourcesApi.deleteSource(src.id, force)}
         removedFrom="the library"
         errorNoun="source"

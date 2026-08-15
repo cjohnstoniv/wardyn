@@ -53,7 +53,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	if req, ok := created.Requirements["egress:example.com"]; !ok || req.Level != "required" {
 		t.Fatalf("created source requirements = %+v, want the seeded egress:example.com row", created.Requirements)
 	}
-	t.Cleanup(func() { _ = h.sdk.DeleteSource(context.Background(), created.ID, true) })
+	t.Cleanup(func() { _, _ = h.sdk.DeleteSource(context.Background(), created.ID, true) })
 
 	got, err := h.sdk.GetSource(ctx, created.ID)
 	if err != nil {
@@ -109,11 +109,17 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	}
 
 	// In use: a non-forced delete 409s naming the attaching workspace.
-	assertAPIStatus(t, h.sdk.DeleteSource(ctx, created.ID, false), http.StatusConflict)
+	_, err = h.sdk.DeleteSource(ctx, created.ID, false)
+	assertAPIStatus(t, err, http.StatusConflict)
 
-	// force=1: detaches everywhere and deletes.
-	if err := h.sdk.DeleteSource(ctx, created.ID, true); err != nil {
+	// force=1: detaches everywhere and deletes, echoing which workspace(s) it
+	// detached (W6-S1-2: the operator's only signal — nothing 422s downstream).
+	detachedFrom, err := h.sdk.DeleteSource(ctx, created.ID, true)
+	if err != nil {
 		t.Fatalf("DeleteSource(force=true): %v", err)
+	}
+	if !slices.Contains(detachedFrom, ws.Name) {
+		t.Errorf("DeleteSource(force=true) detachedFrom = %v, want it to include %q", detachedFrom, ws.Name)
 	}
 	_, gerr := h.sdk.GetSource(ctx, created.ID)
 	assertAPIStatus(t, gerr, http.StatusNotFound)

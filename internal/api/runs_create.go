@@ -54,11 +54,18 @@ var reservedRunTasks = map[string]bool{
 // store) integration_id naming a real AI-provider integration. On any
 // violation it writes the HTTP error itself and returns ok=false. Extracted
 // verbatim from handleCreateRun.
-func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, bool) {
+//
+// It also returns an advisory warning (empty when none): a non-interactive
+// request with no task would dispatch a sandbox that execs nothing and never
+// reaches a terminal state on its own (task_mode-independent — exec mode also
+// needs a command), so it is coerced to interactive here, at the one
+// chokepoint every caller (CLI, SDK, raw API) routes through, rather than
+// silently launching a run that just sits there unexplained.
+func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, string, bool) {
 	var req createRunRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return req, "", false
+		return req, "", "", false
 	}
 	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that
 	// mounts a local host folder (WorkspaceMount target /work) has no git repo to
@@ -68,7 +75,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// workspace (or an empty one).
 	if req.Agent == "" {
 		writeError(w, http.StatusBadRequest, "agent is required")
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// W15-d (CRIT, rbac-bypass): reject a client-supplied task that forges a
@@ -84,7 +91,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// independently defend itself.
 	if reservedRunTasks[req.Task] {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// Item 5 + HIGH-3 review fix: a member may not bring their own sandbox
@@ -93,7 +100,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// XOR/builder validation below so a member's request is refused with 403,
 	// never a 400 that implies the shape alone is the problem.
 	if s.denyMemberCustomImage(w, r, req) {
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// BYOI validation (fail closed before any store write): a user-supplied image
@@ -105,7 +112,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
 	if msg := s.validateImageBuildRequest(req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// Validate the requested confinement class up front (fail closed before any
@@ -114,14 +121,14 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
 	if !ccOK {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// task_mode is a tiny closed enum; reject anything else up front (fail
 	// closed, same shape as confinement_class above).
 	if req.TaskMode != "" && req.TaskMode != "harness" && req.TaskMode != "exec" {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown task_mode %q (want harness or exec)", req.TaskMode))
-		return req, "", false
+		return req, "", "", false
 	}
 
 	// Same UUID contract as the compose endpoint's session_id: this field only
@@ -130,7 +137,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if req.ComposeSessionID != "" {
 		if _, err := uuid.Parse(req.ComposeSessionID); err != nil {
 			writeError(w, http.StatusBadRequest, "compose_session_id must be a UUID")
-			return req, "", false
+			return req, "", "", false
 		}
 	}
 
@@ -142,10 +149,20 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if req.IntegrationID != "" {
 		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
-			return req, "", false
+			return req, "", "", false
 		}
 	}
-	return req, reqCC, true
+
+	// W15-S1-2: a non-interactive request with no task would dispatch a sandbox
+	// that execs nothing and never reaches a terminal state on its own —
+	// coerce to interactive (idle, attachable, reapable) instead of silently
+	// launching a run that just sits there unexplained.
+	var warning string
+	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
+		req.Interactive = true
+		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn attach <run-id>` or pass a task"
+	}
+	return req, reqCC, warning, true
 }
 
 // denyMemberCustomImage refuses a member's (role != admin) explicit custom

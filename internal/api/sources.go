@@ -262,15 +262,26 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, src)
 }
 
+// deleteSourceResponse is handleDeleteSource's 200 body: the workspaces the
+// delete detached the source from (empty when it wasn't attached to any).
+// W6-S1-2: force silently narrows those workspaces down to their remaining
+// sources — nothing 422s, so this is the operator's only visibility into
+// which workspaces just lost a mount; a bare 204 gave them none.
+type deleteSourceResponse struct {
+	DetachedFrom []string `json:"detached_from"`
+}
+
 // handleDeleteSource removes a library source — LOUDLY refusing while
-// workspaces attach it. A dangling attachment silently un-mounts code and
-// turns runs into unexplained 422s at the mount gate, so in-use is a 409
-// naming every attaching workspace; ?force=1 is the explicit
-// detach-everywhere escape. The in-use gate and the delete are ONE atomic
-// statement in the store (DeleteSource): WorkspacesAttaching here only names
-// who's attached for the 409 body, it does not decide the outcome, so a
-// workspace attaching between this call and the delete can never slip
-// through.
+// workspaces attach it: in-use is a 409 naming every attaching workspace;
+// ?force=1 is the explicit detach-everywhere escape. Forcing does NOT make a
+// workspace's next run fail loudly (W6-S1-2 — the mount gate has no check for
+// a source that used to be there): it un-mounts the source and the workspace's
+// remaining sources mount as normal, so DetachedFrom above is the only signal
+// the operator gets that anything changed. The in-use gate and the delete are
+// ONE atomic statement in the store (DeleteSource): WorkspacesAttaching here
+// only names who's attached for the 409/200 body, it does not decide the
+// outcome, so a workspace attaching between this call and the delete can
+// never slip through.
 //
 //	DELETE /api/v1/sources/{id}[?force=1]
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +321,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		"source.delete", id.String(), "success", mustJSON(map[string]any{
 			"detached_from": names, "forced": force,
 		})))
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, deleteSourceResponse{DetachedFrom: names})
 }
 
 // lastPathSegment names a source from its locator when the caller didn't:

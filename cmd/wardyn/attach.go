@@ -75,10 +75,20 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	if c.Token != "" {
 		hdr = http.Header{"Authorization": []string{"Bearer " + c.Token}}
 	}
-	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: hdr,
 	})
 	if err != nil {
+		// A rejected handshake (e.g. 401/403/404, never a network failure) leaves
+		// resp non-nil with the server's real status + {"error":...} body — surface
+		// it as a *sdk.APIError so exitCodeFor/dialHint classify it exactly like
+		// every other API call, instead of collapsing every rejection into the raw
+		// "failed to WebSocket dial: expected status 101 but got NNN" text and a
+		// bare exit 1.
+		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			return &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+		}
 		return fmt.Errorf("dial %s: %w", wsURL, err)
 	}
 	// CloseNow is the fail-closed backstop; a normal exit path does a clean close.

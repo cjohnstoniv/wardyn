@@ -84,7 +84,7 @@ func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, wo
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	req, reqCC, ok := s.decodeAndValidateCreateRun(w, r)
+	req, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return
 	}
@@ -189,6 +189,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	warnings := s.warnWorkspaceCollision(ctx, runID, workspacePath)
+	if taskWarning != "" {
+		warnings = append(warnings, taskWarning)
+	}
 
 	// Record the model-access + requirements folds that ran ABOVE the confinement
 	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw

@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -151,5 +153,40 @@ func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
 	}
 	if got := err.Error(); strings.Contains(got, "no admin token") {
 		t.Errorf("error = %q, must not hard-refuse on empty token", got)
+	}
+}
+
+// TestRunAttach_RejectedHandshakeReturnsAPIError is the W25-W25.1-2
+// regression: a server-side handshake rejection (401/403/404 — never a
+// network failure) used to be flattened into websocket.Dial's raw
+// "failed to WebSocket dial: expected status 101 but got NNN" text, discarding
+// the HTTP response and always exiting 1. It must now come back as an
+// *sdk.APIError carrying the real status + the server's {"error":...} body, so
+// exitCodeFor and dialHint classify it exactly like every other API call.
+func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"not an operator"}`))
+	}))
+	defer srv.Close()
+
+	c := &sdk.Client{BaseURL: srv.URL, Token: "tok"}
+	err := runAttach(context.Background(), c, "run-1")
+	if err == nil {
+		t.Fatal("expected an error for a rejected handshake, got nil")
+	}
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("error = %v (%T), want an *sdk.APIError (the HTTP rejection must not be discarded)", err, err)
+	}
+	if ae.Status != http.StatusForbidden {
+		t.Errorf("APIError.Status = %d, want %d", ae.Status, http.StatusForbidden)
+	}
+	if !strings.Contains(err.Error(), "not an operator") {
+		t.Errorf("error = %q, want the server's {\"error\":...} message carried through", err.Error())
+	}
+	if code := exitCodeFor(err); code != 2 {
+		t.Errorf("exitCodeFor(403 attach rejection) = %d, want 2 (the universal auth exit code)", code)
 	}
 }

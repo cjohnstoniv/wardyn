@@ -176,6 +176,7 @@ type dockerEnv struct {
 	colima     bool   // colima on PATH (macOS)
 	rancherDsk bool   // rdctl on PATH (Rancher Desktop — a VM you control, like Colima)
 	dockerHost string // DOCKER_HOST
+	infoOK     bool   // `docker info` succeeded (desktop/osType/rootless below are only trustworthy when true)
 }
 
 func detectDocker() dockerEnv {
@@ -205,6 +206,7 @@ func detectDocker() dockerEnv {
 	}
 	if e.hasDocker {
 		if info, ok := dockerInfo(); ok {
+			e.infoOK = true
 			e.osType = info.OSType
 			e.desktop = strings.Contains(info.OperatingSystem, "Docker Desktop")
 			for _, s := range info.SecurityOptions {
@@ -235,6 +237,18 @@ func dockerInfo() (dockerInfoJSON, bool) {
 		return dockerInfoJSON{}, false
 	}
 	return info, true
+}
+
+// dockerInfoFailedHint explains a failed `docker info` (permission or daemon
+// reachability, most commonly) rather than letting the caller silently fall
+// through to a plan built on the zero-valued desktop/osType/rootless fields —
+// which, on a Docker-Desktop or rootless host, is exactly the "clean install"
+// plan this command's own invariant says never to offer there.
+func dockerInfoFailedHint(tier string) string {
+	return "`docker info` didn't return valid output, so the desktop/rootless/engine-type detection below " +
+		"can't be trusted. This is usually either the current user not being in the docker group " +
+		"(`sudo usermod -aG docker $USER`, then re-login) or the daemon not running/reachable at " +
+		"$DOCKER_HOST. Fix that, then re-run `wardyn setup " + tier + "`."
 }
 
 func detectInit() string {
@@ -306,6 +320,8 @@ func planWall(e dockerEnv) plan {
 		return plan{action: actUnsupported, title: "Windows containers",
 			why: "Docker is in Windows-containers mode. Wall (gVisor) and Vault (Kata) are Linux-kernel " +
 				"sandboxes — switch Docker to Linux containers to use them."}
+	case !e.infoOK:
+		return plan{action: actUnsupported, title: "docker info failed", why: dockerInfoFailedHint("wall")}
 	case e.desktop:
 		return planWallDesktop(e)
 	case e.rootless:
@@ -379,6 +395,8 @@ func planVault(e dockerEnv) plan {
 	case !e.hasDocker:
 		return plan{action: actUnsupported, title: "Docker not found",
 			why: "Docker isn't installed or isn't on PATH. Install Docker first, then re-run."}
+	case !e.infoOK:
+		return plan{action: actUnsupported, title: "docker info failed", why: dockerInfoFailedHint("vault")}
 	case e.desktop:
 		return plan{action: actUnsupported, title: "Vault needs a native Docker engine + KVM",
 			why: "Docker Desktop's managed VM can't persist a kata runtime, and Vault also needs /dev/kvm. Use " +
@@ -401,7 +419,7 @@ func planVault(e dockerEnv) plan {
 			why += " NOTE: under WSL2, Kata is nested QEMU inside Hyper-V — experimental, not an officially " +
 				"supported target."
 		}
-		return plan{action: actPrint, title: "Enable the Vault tier (Kata Containers)", why: why, script: kataScript()}
+		return plan{action: actPrint, title: "Enable the Vault tier (Kata Containers)", why: why, script: kataScript(e)}
 	}
 }
 
@@ -567,6 +585,28 @@ rdctl shell sudo sh -euc '
 # 3. Verify the runtime survived a restart:  wardyn setup status`
 }
 
+// zstdBootstrapLine returns the family-appropriate command to install zstd
+// (needed to unpack the .tar.zst Kata release), instead of assuming apt-get:
+// planVault's `default` case — where kataScript is the whole plan — offers
+// Kata on EVERY native-Linux family, not just Debian (unlike gVisor's native
+// path, which only auto-installs via apt on debian+systemd and otherwise
+// downloads a binary with no package manager at all). An unknown family fails
+// with a named message instead of a bare "apt-get: command not found".
+func zstdBootstrapLine(family string) string {
+	switch family {
+	case "debian":
+		return "sudo apt-get update && sudo apt-get install -y zstd"
+	case "fedora":
+		return "sudo dnf install -y zstd"
+	case "arch":
+		return "sudo pacman -Sy --noconfirm zstd"
+	case "suse":
+		return "sudo zypper --non-interactive install zstd"
+	default:
+		return `{ echo "zstd is required to unpack the Kata release and no install command is known for this distro; install zstd manually, then re-run" >&2; exit 1; }`
+	}
+}
+
 // kataScript installs Kata + verifies KVM, then PRINTS the daemon.json runtime
 // to add — it never edits daemon.json (avoids clobbering an existing one).
 //
@@ -576,7 +616,7 @@ rdctl shell sudo sh -euc '
 // mirror, a GitHub API hiccup, or an explicit downgrade override must never
 // silently reintroduce CVE-2026-44210/-47243 (virtio-fs guest-root ->
 // host-root via virtiofsd).
-func kataScript() string {
+func kataScript(e dockerEnv) string {
 	return `set -euo pipefail
 test -e /dev/kvm || { echo "no /dev/kvm — Vault needs KVM-capable hardware"; exit 1; }
 echo "-> installing Kata Containers (static build) to /opt/kata"
@@ -596,7 +636,7 @@ case "$(uname -m)" in
   aarch64) ARCH=arm64 ;;
   *)       ARCH="$(uname -m)" ;;
 esac
-if ! command -v zstd >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y zstd; fi
+if ! command -v zstd >/dev/null 2>&1; then ` + zstdBootstrapLine(e.family) + `; fi
 curl -fsSL -o /tmp/kata-static.tar.zst "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-${ARCH}.tar.zst"
 sudo tar -C / --zstd -xf /tmp/kata-static.tar.zst
 echo "-> checking host virtualization"

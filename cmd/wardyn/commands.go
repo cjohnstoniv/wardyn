@@ -118,8 +118,11 @@ func runCmd(client clientFn) *cobra.Command {
 				if data, err = policyToJSON(data); err != nil {
 					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
 				}
-				var spec types.RunPolicySpec
-				if err := json.Unmarshal(data, &spec); err != nil {
+				// Strict decode (DisallowUnknownFields, shared with `policy create`/
+				// `policy render`): a misspelled spec field fails here, not as a
+				// silently-dropped setting the server never sees.
+				spec, err := decodeSpecStrict(data)
+				if err != nil {
 					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
 				}
 				body.InlinePolicy = &spec

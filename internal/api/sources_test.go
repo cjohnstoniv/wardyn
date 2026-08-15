@@ -138,9 +138,15 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 		t.Error("a refused delete must not delete")
 	}
 
+	// W6-S1-2: a forced delete's response body NAMES the workspaces it just
+	// detached — the operator's only visibility, since nothing 422s downstream
+	// (force silently narrows those workspaces to their remaining sources).
 	forced := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String()+"?force=1", adminToken, "")
-	if forced.Code != http.StatusNoContent {
-		t.Fatalf("forced: code = %d, want 204; body=%s", forced.Code, forced.Body.String())
+	if forced.Code != http.StatusOK {
+		t.Fatalf("forced: code = %d, want 200; body=%s", forced.Code, forced.Body.String())
+	}
+	if !strings.Contains(forced.Body.String(), "payments-ws") || !strings.Contains(forced.Body.String(), "review-ws") {
+		t.Errorf("forced delete body must NAME the detached workspaces: %s", forced.Body.String())
 	}
 	if fake.deleted == nil || !fake.detached {
 		t.Error("force=1 must detach-and-delete")

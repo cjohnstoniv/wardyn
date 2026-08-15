@@ -92,6 +92,15 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
+	// W4-S1-7 regression: `wardyn setup` is a subcommand group with no bare
+	// RunE (prints help, exits 0) — it never starts wardynd, so the recovery
+	// hint must not send an operator there. `make setup` is a live alternative.
+	if hint := dialHint(err); strings.Contains(hint, "`wardyn setup`") {
+		t.Errorf("dialHint(refused) = %q, must not point at `wardyn setup` (a dead end: no bare RunE)", hint)
+	}
+	if hint := dialHint(err); !strings.Contains(hint, "make setup") {
+		t.Errorf("dialHint(refused) = %q, want a working recovery command (make setup)", hint)
+	}
 	// A reached server returning a non-auth API error must not get a hint.
 	if hint := dialHint(&sdk.APIError{Status: 500}); hint != "" {
 		t.Errorf("dialHint(APIError 500) = %q, want empty (server was reached)", hint)

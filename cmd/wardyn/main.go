@@ -51,7 +51,10 @@ func main() {
 func dialHint(err error) string {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return "is wardynd running? (start it with `make setup` or `wardyn setup`; point the CLI elsewhere with --url or WARDYN_URL)"
+		// `wardyn setup` is deliberately NOT named here: it's a subcommand group
+		// (status/wall/vault/...) with no bare RunE, so it prints help and exits 0
+		// rather than starting wardynd — a dead-end recovery step.
+		return "is wardynd running? (start it with `make setup`, the compose quick-start; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
 	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
 	// the two ways to supply one, so first contact against the compose stack

@@ -190,10 +190,8 @@ func policyRenderCmd() *cobra.Command {
 			}
 			// Strict decode so an unknown/misspelled field is caught locally,
 			// mirroring the server's DisallowUnknownFields validator.
-			dec := json.NewDecoder(bytes.NewReader(specBytes))
-			dec.DisallowUnknownFields()
-			var spec types.RunPolicySpec
-			if err := dec.Decode(&spec); err != nil {
+			spec, err := decodeSpecStrict(specBytes)
+			if err != nil {
 				return fmt.Errorf("invalid RunPolicySpec: %w", err)
 			}
 			out, err := json.MarshalIndent(spec, "", "  ")
@@ -213,7 +211,11 @@ func policyRenderCmd() *cobra.Command {
 // may contain a full body ({"name":..., "spec":{...}}) or a bare spec object;
 // when the top-level "spec" key is absent the whole document is treated as the
 // spec. A non-empty nameOverride always wins over any name in the file. The
-// server validates the spec, so we only do light structural parsing here.
+// enclosing body is parsed loosely (a `policy get --json` dump carries stray
+// top-level keys like "id"/"updated_at" that a round-trip edit should tolerate),
+// but the spec itself is decoded STRICT — see decodeSpecStrict — so a
+// misspelled/unknown spec field fails here, at authoring time, instead of
+// silently vanishing into a policy the operator believes enforces it.
 func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 	var raw []byte
 	var err error
@@ -231,17 +233,27 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 		return sdk.PolicyRequest{}, fmt.Errorf("parse policy file: %w", err)
 	}
 
-	// First try the full body shape.
 	var body sdk.PolicyRequest
-	if jerr := json.Unmarshal(raw, &body); jerr == nil && hasSpec(raw) {
-		// Document carried a "spec" key: trust the parsed body.
-	} else {
-		// Treat the whole document as a bare spec.
-		body = sdk.PolicyRequest{}
-		if serr := json.Unmarshal(raw, &body.Spec); serr != nil {
-			return sdk.PolicyRequest{}, fmt.Errorf("parse policy JSON: %w", serr)
+	specBytes := raw
+	if hasSpec(raw) {
+		// Full body shape: pull out the name loosely and isolate the spec bytes
+		// for strict decoding below.
+		var probe struct {
+			Name string          `json:"name"`
+			Spec json.RawMessage `json:"spec"`
 		}
+		if perr := json.Unmarshal(raw, &probe); perr != nil {
+			return sdk.PolicyRequest{}, fmt.Errorf("parse policy body: %w", perr)
+		}
+		body.Name = probe.Name
+		specBytes = probe.Spec
 	}
+	spec, serr := decodeSpecStrict(specBytes)
+	if serr != nil {
+		return sdk.PolicyRequest{}, fmt.Errorf("parse policy JSON: %w", serr)
+	}
+	body.Spec = spec
+
 	if nameOverride != "" {
 		body.Name = nameOverride
 	}
@@ -249,6 +261,21 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 		return sdk.PolicyRequest{}, fmt.Errorf("policy name is required (set \"name\" in the file or pass --name)")
 	}
 	return body, nil
+}
+
+// decodeSpecStrict decodes canonical JSON into a RunPolicySpec, rejecting any
+// field the type doesn't recognize (DisallowUnknownFields) — the same shape as
+// the server's own strict validator. Shared by readPolicyFile (create/update),
+// the --policy-file branch of `run`, and policyRenderCmd, so a misspelled spec
+// field fails identically wherever it's authored.
+func decodeSpecStrict(raw []byte) (types.RunPolicySpec, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var spec types.RunPolicySpec
+	if err := dec.Decode(&spec); err != nil {
+		return types.RunPolicySpec{}, err
+	}
+	return spec, nil
 }
 
 // hasSpec reports whether the JSON document has a top-level "spec" key.

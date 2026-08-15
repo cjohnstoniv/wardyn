@@ -156,15 +156,24 @@ func (c *Client) ScanSource(ctx context.Context, id uuid.UUID) (json.RawMessage,
 }
 
 // DeleteSource removes a library source. In use → 409 APIError naming the
-// attaching workspaces; force detaches them first (their runs then 422 at the
-// mount gate for the missing attachment — loud, not silent).
-// DELETE /api/v1/sources/{id}[?force=1].
-func (c *Client) DeleteSource(ctx context.Context, id uuid.UUID, force bool) error {
+// attaching workspaces; force detaches them first — those workspaces just stop
+// mounting this source, and their next runs succeed without it (there is no
+// loud failure at run time: the mount gate has nothing to check for a source
+// that used to be there). detachedFrom names whichever workspaces the delete
+// actually detached (empty when the source wasn't attached to any), the only
+// visibility into what changed. DELETE /api/v1/sources/{id}[?force=1].
+func (c *Client) DeleteSource(ctx context.Context, id uuid.UUID, force bool) (detachedFrom []string, err error) {
 	path := "/api/v1/sources/" + id.String()
 	if force {
 		path += "?force=1"
 	}
-	return c.do(ctx, http.MethodDelete, path, nil, nil)
+	var out struct {
+		DetachedFrom []string `json:"detached_from"`
+	}
+	if err := c.do(ctx, http.MethodDelete, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.DetachedFrom, nil
 }
 
 // GetSiteConfig returns the operator-wide site config. GET /api/v1/site-config.

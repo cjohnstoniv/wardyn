@@ -44,7 +44,17 @@ func TestRestartDocker(t *testing.T) {
 
 // linuxNative is a fully-detected native rootful Linux host.
 func linuxNative() dockerEnv {
-	return dockerEnv{goos: "linux", hasDocker: true, osType: "linux", initSys: "systemd", family: "debian"}
+	return dockerEnv{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", initSys: "systemd", family: "debian"}
+}
+
+// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents WHY W4-S1-7's
+// fix removed `wardyn setup` from dialHint's recovery text: the bare command is
+// a subcommand group with no RunE, so it exits 0 having started nothing — never
+// a working "start wardynd" recovery step.
+func TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon(t *testing.T) {
+	if err := execCmd(t, "setup"); err != nil {
+		t.Fatalf("bare `wardyn setup` returned an error: %v", err)
+	}
 }
 
 func TestPlanWall(t *testing.T) {
@@ -63,6 +73,12 @@ func TestPlanWall(t *testing.T) {
 		{"rootless", func() dockerEnv { e := linuxNative(); e.rootless = true; return e }(), actUnsupported, "rootless"},
 		{"windows-containers", func() dockerEnv { e := linuxNative(); e.osType = "windows"; return e }(), actUnsupported, "Windows containers"},
 		{"no-docker", dockerEnv{goos: "linux"}, actUnsupported, "Docker isn't installed"},
+		// W4-S1-1 regression: `docker info` failing (permission/daemon) must
+		// refuse to guess, not silently fall through to the native-install plan
+		// (family/initSys zero-valued here would otherwise reach planWallNativeLinux's
+		// actPrint branch — offering a gVisor install on a host that, for all we
+		// know, is actually Docker Desktop).
+		{"docker-info-failed", dockerEnv{goos: "linux", hasDocker: true}, actUnsupported, "docker info"},
 		{"windows-host", dockerEnv{goos: "windows"}, actUnsupported, "WSL2"},
 		{"macos", dockerEnv{goos: "darwin"}, actPrint, "Colima"},
 		{"macos-rancher", dockerEnv{goos: "darwin", rancherDsk: true}, actPrint, "Rancher"},
@@ -90,6 +106,9 @@ func TestPlanVault(t *testing.T) {
 	}{
 		{"kvm-native-print", kvm(), actPrint},
 		{"no-kvm-unsupported", linuxNative(), actUnsupported},
+		// W4-S1-1 regression, Vault side: same info-failed guard ahead of the
+		// desktop/rootless/kvm checks below it.
+		{"docker-info-failed", dockerEnv{goos: "linux", hasDocker: true, kvm: true}, actUnsupported},
 		{"desktop-unsupported", func() dockerEnv { e := kvm(); e.desktop = true; return e }(), actUnsupported},
 		{"rootless-unsupported", func() dockerEnv { e := kvm(); e.rootless = true; return e }(), actUnsupported},
 		{"macos-unsupported", dockerEnv{goos: "darwin"}, actUnsupported},
@@ -156,6 +175,39 @@ func TestPlanVault_KataVersionFloor(t *testing.T) {
 	}
 }
 
+// TestKataScript_ZstdBootstrapIsFamilyAware is the W4-S1-3 regression:
+// kataScript's zstd bootstrap used to be a bare apt-get line even though
+// planVault offers Kata on every native-Linux family, so a fedora/arch/suse
+// operator hit "apt-get: command not found" instead of an install. Each known
+// family gets its own package manager; an unknown family fails with a named
+// message instead of guessing apt-get.
+func TestKataScript_ZstdBootstrapIsFamilyAware(t *testing.T) {
+	cases := []struct {
+		family  string
+		wantIn  string
+		wantOut string // must NOT appear
+	}{
+		{"debian", "apt-get install -y zstd", "dnf"},
+		{"fedora", "dnf install -y zstd", "apt-get"},
+		{"arch", "pacman -Sy --noconfirm zstd", "apt-get"},
+		{"suse", "zypper --non-interactive install zstd", "apt-get"},
+		{"other", "no install command is known", "apt-get"},
+	}
+	for _, c := range cases {
+		t.Run(c.family, func(t *testing.T) {
+			e := linuxNative()
+			e.family = c.family
+			script := kataScript(e)
+			if !strings.Contains(script, c.wantIn) {
+				t.Errorf("family=%q: script missing %q:\n%s", c.family, c.wantIn, script)
+			}
+			if strings.Contains(script, c.wantOut) {
+				t.Errorf("family=%q: script must not contain %q:\n%s", c.family, c.wantOut, script)
+			}
+		})
+	}
+}
+
 // TestKataScript_FloorEnforcement extracts kataScript's version-floor snippet
 // (the KATA_MIN_VERSION/ver_num compare, ahead of the network-touching
 // download lines) and runs it under bash — with the candidate version supplied
@@ -168,7 +220,7 @@ func TestKataScript_FloorEnforcement(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
 	}
-	full := kataScript()
+	full := kataScript(linuxNative())
 	snippet := strings.SplitN(full, "# Kata's release assets", 2)[0]
 	if !strings.Contains(snippet, "KATA_MIN_VERSION") {
 		t.Fatalf("could not extract the version-floor snippet from kataScript: %s", full)
@@ -205,8 +257,8 @@ func TestKataScript_FloorEnforcement(t *testing.T) {
 // executePlan won't touch the Desktop daemon.
 func TestDockerDesktopNeverExecutes(t *testing.T) {
 	for _, e := range []dockerEnv{
-		{goos: "linux", hasDocker: true, osType: "linux", desktop: true, initSys: "systemd", family: "debian"},
-		{goos: "linux", hasDocker: true, osType: "linux", desktop: true, wsl: true, initSys: "systemd", family: "debian"},
+		{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", desktop: true, initSys: "systemd", family: "debian"},
+		{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", desktop: true, wsl: true, initSys: "systemd", family: "debian"},
 	} {
 		if p := planWall(e); p.action != actUnsupported {
 			t.Errorf("docker desktop wall action=%d, must be actUnsupported so it never restarts the engine", p.action)
