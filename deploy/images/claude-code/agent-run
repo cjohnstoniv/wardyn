@@ -289,7 +289,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
     else
         echo "  ~/.claude creds: ABSENT (no subscription OAuth creds mounted)"
     fi
-    selftest_report_repo_and_git
+    selftest_report_repo_and_git || ok=0
     echo "--- SSH SCM lane (selftest never mints/writes a key) ---"
     echo "  WARDYN_SSH_GRANTS=${WARDYN_SSH_GRANTS:-<unset (no ssh_key grants)>}"
     for sbin in ssh corkscrew; do

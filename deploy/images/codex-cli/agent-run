@@ -61,7 +61,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
     echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
     selftest_report_mitm_ca
-    selftest_report_repo_and_git
+    selftest_report_repo_and_git || ok=0
     if [[ $ok -eq 1 ]]; then
         echo "=== selftest PASS ==="
         exit 0

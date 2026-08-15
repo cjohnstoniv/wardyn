@@ -102,7 +102,13 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 
 `--system` (not `--global`) also means every `git` invocation in the sandbox is
 covered with no per-user configuration.  `agent-run --selftest` reports what it
-finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`).
+finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`) — and fails the
+selftest closed when a git grant is present but no credential helper is wired,
+so a BYOI-wrapped base that never ran this `RUN git config --system …` line
+(the wrap COPYs the `wardyn-git-helper` binary onto PATH but does not itself
+wire the system gitconfig — only the prebuilt `claude-code`/`codex-cli` images
+bake this `RUN` line in) surfaces as an honest selftest FAIL instead of a
+silent no-op the first time the agent tries to clone a private repo.
 
 ### SSH relay binaries (`claude-code`, `codex-cli`)
 

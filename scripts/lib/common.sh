@@ -47,6 +47,14 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 # text on purpose; only this predicate is shared.
 image_missing() { ! docker image inspect "$1" >/dev/null 2>&1; }
 
+# clone_present CTR DIR — true iff a `git clone` actually landed in DIR inside
+# container CTR. Checks DIR/.git specifically: agent-run-lib.sh's clone_one()
+# unconditionally `mkdir -p`'s DIR before attempting the clone, so a bare
+# `test -d DIR` is true even when the clone failed (egress denied, broker
+# rejected, etc.) — that false positive is what test-drive.sh's section 1 was
+# reporting as a green "clone dir exists".
+clone_present() { docker exec "$1" test -d "$2/.git" >/dev/null 2>&1; }
+
 # license_scope_files — the SINGLE source of truth for which tracked files must
 # carry the SPDX/copyright header, used by scripts/license-headers.sh in both
 # its gate and its --fix mode. Excludes generated

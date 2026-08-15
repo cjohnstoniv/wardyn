@@ -268,6 +268,22 @@ cmd_doctor() {
   else
     report ok "port 5432 free."
   fi
+  # registry: auto-started via postgres/dex/wardynd's depends_on, so it binds
+  # even on a plain `make setup` — not opt-in like the SSO/groundtruth profiles.
+  _registry_port="${WARDYN_REGISTRY_PORT:-5010}"
+  if port_in_use "${_registry_port}"; then
+    report warn "port ${_registry_port} already in use — the devcontainer-build registry may fail to bind. Override with WARDYN_REGISTRY_PORT=<port>, or free the port."
+  else
+    report ok "port ${_registry_port} free."
+  fi
+  # wardynd's SSH gateway mapping is always published in compose, whether or
+  # not WARDYN_SSH_LISTEN is set to actually enable the gateway.
+  _ssh_port="${WARDYN_SSH_PORT:-2222}"
+  if port_in_use "${_ssh_port}"; then
+    report warn "port ${_ssh_port} already in use — wardynd's SSH gateway mapping may fail to bind. Override with WARDYN_SSH_PORT=<port>, or free the port."
+  else
+    report ok "port ${_ssh_port} free."
+  fi
 
   if [ -e /dev/kvm ]; then
     report ok "/dev/kvm present (CC3/Kata-capable hardware)."

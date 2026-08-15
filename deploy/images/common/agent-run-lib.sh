@@ -405,7 +405,11 @@ repo_scan_ok() {
 maybe_exec_task_mode() {
     if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
         echo "agent-run: exec task mode — running task as a shell command (no agent harness)" >&2
-        exec /bin/sh -lc "$1"
+        # Plain `-c`, NOT `-l`: this process already has the env it needs (it
+        # survives `sh -c` fine), and a login shell sources /etc/profile,
+        # which reassembles PATH from scratch — destroying every BYOI/
+        # devcontainer image's own Dockerfile ENV PATH toolchain.
+        exec /bin/sh -c "$1"
     fi
 }
 
@@ -494,10 +498,11 @@ selftest_check_bins() {
     return $rc
 }
 
-# Shared, report-only selftest output: these echo/inspect, never mutate $ok and
-# never exit — the PASS/FAIL decision stays with the caller. Split in two
-# because claude-code prints its anthropic-auth section between them, so the
-# output order stays CA -> (anthropic auth) -> repo/git.
+# Shared selftest output, split in two because claude-code prints its
+# anthropic-auth section between them, so the output order stays
+# CA -> (anthropic auth) -> repo/git. selftest_report_mitm_ca is pure
+# report-only (echo/inspect, never mutates $ok). selftest_report_repo_and_git
+# is NOT — see its own doc comment.
 selftest_report_mitm_ca() {
     echo "--- TLS-MITM CA trust (selftest: report only) ---"
     if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
@@ -522,7 +527,19 @@ selftest_report_mitm_ca() {
     fi
 }
 
+# selftest_report_repo_and_git — mostly report-only (repo wiring is always
+# informational), EXCEPT the gitconfig check: RETURNS nonzero when a git grant
+# is present (WARDYN_GITHUB_GRANT_ID or WARDYN_GIT_PAT_GRANTS) but the system
+# gitconfig has no credential.helper wired. A BYOI-wrapped image copies the
+# wardyn-git-helper binary onto PATH (finalizeImage's tools/ COPY) but never
+# wires `git config --system credential.helper` — only the prebuilt
+# claude-code/codex-cli images bake that RUN line in. Without it git never
+# invokes the helper, so a granted run's credential brokering silently
+# no-ops. Report-only would let that ship quietly; callers write
+# `selftest_report_repo_and_git || ok=0` so the documented fail-closed
+# contract (deploy/images/README.md §6) is actually enforced, not just echoed.
 selftest_report_repo_and_git() {
+    local rc=0
     echo "--- repo wiring (selftest never clones) ---"
     echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
     echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"
@@ -533,12 +550,20 @@ selftest_report_repo_and_git() {
     fi
     echo "--- git credential helper ---"
     echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
-    git config --system --get credential.helper 2>/dev/null \
-        && echo "  OK (system config, global)" || echo "  MISSING (system gitconfig not wired)"
+    if git config --system --get credential.helper >/dev/null 2>&1; then
+        echo "  OK (system config, global)"
+    else
+        echo "  MISSING (system gitconfig not wired)"
+        if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
+            echo "  FAIL: a git grant is present but the credential helper is not wired — brokered git would silently no-op"
+            rc=1
+        fi
+    fi
     # Caller-auth gate (selftest never provisions — that happens at task time):
     if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
         echo "  caller-auth gate: ACTIVE at task time (a git grant is present; agent-run will provision WARDYN_GIT_HELPER_SECRET + a 0400 secret file)"
     else
         echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
     fi
+    return $rc
 }
