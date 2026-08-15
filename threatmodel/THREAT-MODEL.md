@@ -1055,7 +1055,7 @@ the files were split. The actual mechanism is structural and tier-independent:
 2. The agent joins ONLY that network — `CreateSandbox` step (3) attaches it at
    create time via `NetworkMode` + `NetworkingConfig`, never the host bridge
    (same file); `HTTP_PROXY`/`HTTPS_PROXY` (`buildBaseSandboxEnv`,
-   `internal/api/runs_dispatch.go`) are set for proxy-aware clients as a
+   `internal/api/runs_dispatch_mounts.go`) are set for proxy-aware clients as a
    convenience, not the enforcement boundary.
 3. Under gVisor (CC2/`runsc`), Docker's embedded DNS resolver (127.0.0.11) is
    not reachable from the sandbox's netstack, so the `wardyn-proxy` alias is
