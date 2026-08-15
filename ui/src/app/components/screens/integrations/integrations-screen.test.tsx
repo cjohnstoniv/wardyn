@@ -106,7 +106,24 @@ describe("IntegrationsScreen — three sections", () => {
     await screen.findByRole("region", { name: "AI providers" });
     expect(screen.getByText("Anthropic API key")).toBeInTheDocument();
     expect(screen.getByText(T.EMPTY_SCM)).toBeInTheDocument();
+    // ui-integrations-8: Connections' empty state used to fall back to the bare
+    // literal "None." — it now explains itself like its two siblings.
+    expect(screen.getByText(T.EMPTY_OTHER)).toBeInTheDocument();
+    expect(screen.queryByText("None.")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Connections" })).toBeInTheDocument();
+  });
+
+  // ui-integrations-9: the detail page wraps "stored" in a bordered Chip; the
+  // list row used to drop to a bare <span> for the identical state.
+  it("the 'stored' indicator renders as a bordered Chip, matching the detail page", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    listMock.mockResolvedValue([FEED_ROW]);
+
+    renderScreen();
+
+    const stored = await screen.findByText("stored");
+    expect(stored.className).toMatch(/rounded-md/);
+    expect(stored.className).toMatch(/\bborder\b/);
   });
 
   it("shows the base-summary line and the probe chip", async () => {
@@ -219,6 +236,20 @@ describe("IntegrationsScreen — viewer role disables writes", () => {
     expect(del).toHaveAttribute("data-disabled");
     expect(within(del).getByText(/requires the operator role/i)).toBeInTheDocument();
   });
+
+  // ui-integrations-6: "Adopt to edit" used to disable with a hover-only
+  // `title`, unreachable by keyboard/AT — it now names the reason as visible
+  // button content, same as every other disabled control on this screen.
+  it("a viewer's disabled 'Adopt to edit' names the reason visibly, not just via title", async () => {
+    listMock.mockResolvedValue([AI_ROW]); // source: "legacy" — derived, shows Adopt to edit
+    renderScreen(false);
+    await screen.findByText("Anthropic API key");
+
+    const adopt = screen.getByRole("button", { name: /adopt to edit/i });
+    expect(adopt).toBeDisabled();
+    expect(within(adopt).getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(adopt).not.toHaveAttribute("title");
+  });
 });
 
 describe("IntegrationsScreen — the proxy banner", () => {
@@ -299,5 +330,56 @@ describe("IntegrationsScreen — delete confirm carries the base blast radius", 
     const dialog = within(await screen.findByRole("alertdialog"));
     expect(dialog.getByText(/first model call fails/i)).toBeInTheDocument();
     expect(dialog.getByText(/Composer loses its backend/i)).toBeInTheDocument();
+  });
+});
+
+// ui-integrations-4: the "Off" badge (wire.disabled) used to be read-only —
+// no control anywhere ever set or cleared it. A stored row's kebab now offers
+// Enable/Disable, PUTting the flipped flag straight through actions.ts's
+// toggleDisabled (same discipline as the default-for items just above it).
+describe("IntegrationsScreen — a stored row can be disabled and re-enabled", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue([]);
+    putIntegrationMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("offers 'Disable integration' for a stored, enabled row and PUTs disabled: true", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    listMock.mockResolvedValue([FEED_ROW]); // FEED_ROW: source "stored", non-AI kind
+    renderScreen();
+    await screen.findByText("Corp Artifactory");
+
+    await user.click(screen.getByRole("button", { name: `${FEED_ROW.name} actions` }));
+    await user.click(await screen.findByRole("menuitem", { name: /^disable integration$/i }));
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("corp-artifactory", expect.objectContaining({ disabled: true })),
+    );
+  });
+
+  it("offers 'Enable integration' for a stored, disabled row and PUTs disabled: false", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    listMock.mockResolvedValue([{ ...FEED_ROW, disabled: true }]);
+    renderScreen();
+    await screen.findByText("Corp Artifactory");
+
+    await user.click(screen.getByRole("button", { name: `${FEED_ROW.name} actions` }));
+    await user.click(await screen.findByRole("menuitem", { name: /^enable integration$/i }));
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("corp-artifactory", expect.objectContaining({ disabled: false })),
+    );
+  });
+
+  it("a derived (non-stored) row offers no Enable/Disable item — PUT would 409", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    listMock.mockResolvedValue([AI_ROW]); // source: "legacy"
+    renderScreen();
+    await screen.findByText("Anthropic API key");
+
+    await user.click(screen.getByRole("button", { name: `${AI_ROW.name} actions` }));
+    expect(screen.queryByRole("menuitem", { name: /disable integration/i })).not.toBeInTheDocument();
   });
 });

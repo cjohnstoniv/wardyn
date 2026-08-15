@@ -8,10 +8,11 @@
 // table — that was the legacy screen's own richness; a generic kind is
 // base-only, and the closed kinds differ only in prefill.
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { T } from "../../../lib/integrations";
 import type { WireIntegration } from "../../../lib/types/setup";
 
 vi.mock("../../../lib/api/harness-auth", () => ({
@@ -148,5 +149,101 @@ describe("IntegrationDetailScreen — base sections", () => {
     renderDetail("does-not-exist");
 
     expect(await screen.findByText("Integration not found")).toBeInTheDocument();
+  });
+});
+
+// ui-integrations-5: the list screen shows a Viewer-role chip + explanatory
+// line when !operator; the detail screen had no such signal at all — only
+// per-button disablement (and per ui-integrations-3/6, some of those didn't
+// even explain themselves).
+describe("IntegrationDetailScreen — viewer role", () => {
+  it("renders the Viewer-role chip and line, matching the list screen", async () => {
+    listMock.mockResolvedValue([FEED_ROW]);
+    renderDetail("corp-artifactory", false);
+
+    await screen.findByText("Corp Artifactory");
+    expect(screen.getByText("Viewer role")).toBeInTheDocument();
+    expect(screen.getByText(T.VIEWER_LINE)).toBeInTheDocument();
+  });
+
+  it("an operator sees neither the chip nor the line", async () => {
+    listMock.mockResolvedValue([FEED_ROW]);
+    renderDetail("corp-artifactory", true);
+
+    await screen.findByText("Corp Artifactory");
+    expect(screen.queryByText("Viewer role")).not.toBeInTheDocument();
+  });
+});
+
+// ui-integrations-3 + ui-integrations-6: disabled controls on this page used
+// to fall back to native `title` (Adopt to edit, Danger-zone Delete) or say
+// nothing at all (the Used-by Set/Unset default buttons) — every one of them
+// now names the reason as visible button content, like the list row's kebab.
+describe("IntegrationDetailScreen — viewer-disabled controls all explain themselves", () => {
+  const AI_STORED_ROW: WireIntegration = { ...FEED_ROW, kind: "anthropic_api_key", source: "stored", default_for: ["agent_runs"] };
+
+  it("the Used-by Set/Unset default buttons carry the operator-only reason when disabled", async () => {
+    listMock.mockResolvedValue([AI_STORED_ROW]);
+    renderDetail("corp-artifactory", false);
+
+    await screen.findByText("Corp Artifactory");
+    const unset = screen.getByRole("button", { name: /unset default for agent runs/i });
+    expect(unset).toBeDisabled();
+    expect(within(unset).getByText(/requires the operator role/i)).toBeInTheDocument();
+  });
+
+  it("'Adopt to edit' and the Danger-zone Delete button name the reason visibly, not via title", async () => {
+    listMock.mockResolvedValue([{ ...BEDROCK_ROW, source: "legacy" as const }]);
+    renderDetail("bedrock", false);
+
+    await screen.findByText("AWS Bedrock");
+    const adopt = screen.getByRole("button", { name: /adopt to edit/i });
+    expect(adopt).toBeDisabled();
+    expect(within(adopt).getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(adopt).not.toHaveAttribute("title");
+
+    const del = screen.getByRole("button", { name: /delete integration…/i });
+    expect(del).toBeDisabled();
+    expect(within(del).getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(del).not.toHaveAttribute("title");
+  });
+});
+
+// ui-integrations-4: wire.disabled ("Off") used to be read-only on this page
+// too — no control ever wrote it. A stored row now offers Enable/Disable next
+// to the "stored" chip, PUTting the flipped flag through toggleDisabled.
+describe("IntegrationDetailScreen — enable/disable a stored row", () => {
+  it("a stored, enabled row offers 'Disable' and PUTs disabled: true", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([FEED_ROW]); // stored, disabled undefined
+    renderDetail("corp-artifactory");
+    await screen.findByText("Corp Artifactory");
+
+    await user.click(screen.getByRole("button", { name: "Disable" }));
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("corp-artifactory", expect.objectContaining({ disabled: true })),
+    );
+  });
+
+  it("a stored, disabled row offers 'Enable' and PUTs disabled: false", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([{ ...FEED_ROW, disabled: true }]);
+    renderDetail("corp-artifactory");
+    await screen.findByText("Corp Artifactory");
+
+    await user.click(screen.getByRole("button", { name: "Enable" }));
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("corp-artifactory", expect.objectContaining({ disabled: false })),
+    );
+  });
+
+  it("a derived (non-stored) row offers no Enable/Disable control — PUT would 409", async () => {
+    listMock.mockResolvedValue([BEDROCK_ROW]); // source: "legacy"
+    renderDetail("bedrock");
+    await screen.findByText("AWS Bedrock");
+
+    expect(screen.queryByRole("button", { name: /^(enable|disable)$/i })).not.toBeInTheDocument();
   });
 });

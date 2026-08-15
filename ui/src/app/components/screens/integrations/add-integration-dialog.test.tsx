@@ -108,6 +108,27 @@ describe("AddIntegrationDialog — AI flavor step", () => {
     expect(screen.getByText("Access keys")).toBeInTheDocument();
   });
 
+  // ui-integrations-2: the 4-lane Bedrock picker used to signal selection with
+  // a CSS class swap only — no aria-pressed/aria-checked, unlike the sibling
+  // OptionCard picker (Subscription lane) one step earlier. Every lane button
+  // now exposes its selected state via aria-pressed.
+  it("the Bedrock lane picker exposes selected state via aria-pressed", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "bedrock");
+    await user.click(await screen.findByText("AWS Bedrock", { exact: true }));
+    await screen.findByText("Bearer token");
+
+    const bearer = screen.getByRole("button", { name: /bearer token/i });
+    const sso = screen.getByRole("button", { name: /aws sso/i });
+    expect(bearer).toHaveAttribute("aria-pressed", "true");
+    expect(sso).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(sso);
+    expect(sso).toHaveAttribute("aria-pressed", "true");
+    expect(bearer).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("Back from the flavor step returns to the pick panel, not straight to the form", async () => {
     const user = userEvent.setup();
     renderDialog();
@@ -170,6 +191,53 @@ describe("AddIntegrationDialog — base form and save", () => {
     expect(await screen.findByText(/Adopt to edit/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add integration/i })).toBeDisabled();
     expect(putIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  // ui-integrations-7: canSave used to check only name/hostList/isSubscription/
+  // isBedrock — none of the per-kind required secret-name fields. Clearing a
+  // prefilled required secret left Save clickable; the empty secret_name was
+  // only ever caught by a raw server 400.
+  it("clearing a required secret-name field (git host PAT) disables Save", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "gitlab");
+    await user.click(await screen.findByText("GitLab", { exact: true }));
+
+    const pat = await screen.findByDisplayValue("gitlab-pat");
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeEnabled();
+
+    await user.clear(pat);
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeDisabled();
+
+    await user.type(pat, "gitlab-pat");
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeEnabled();
+  });
+
+  // ui-integrations-1: Name, Region, Model, and every SecretRow secret-name
+  // field render Label/Input as unlinked siblings — getByLabelText only
+  // resolves when the pair is actually wired with id/htmlFor.
+  it("Name and every SecretRow secret-name field are reachable by label", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "gitlab");
+    await user.click(await screen.findByText("GitLab", { exact: true }));
+    await screen.findByDisplayValue("GitLab");
+
+    expect(screen.getByLabelText("Name")).toHaveValue("GitLab");
+    expect(screen.getByLabelText("Personal access token")).toHaveValue("gitlab-pat");
+  });
+
+  it("Bedrock's Region/Model and its bearer-token SecretRow are reachable by label", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.type(await screen.findByRole("textbox", { name: /search integration types/i }), "bedrock");
+    await user.click(await screen.findByText("AWS Bedrock", { exact: true }));
+    await screen.findByText("Bearer token");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByLabelText("Bearer token")).toHaveValue("bedrock-api-key");
+    expect(screen.getByLabelText("Region")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeInTheDocument();
   });
 
   it("only an AI kind offers the Defaults section", async () => {

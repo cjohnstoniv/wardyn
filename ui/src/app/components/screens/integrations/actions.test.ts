@@ -47,7 +47,7 @@ vi.mock("../../../lib/api/integrations", async (importOriginal) => {
   };
 });
 
-import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor } from "./actions";
+import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor, toggleDisabled } from "./actions";
 import { HttpError } from "../../../lib/api/core";
 import type { WireIntegration } from "../../../lib/types/setup";
 
@@ -258,5 +258,39 @@ describe("setDefaultFor", () => {
         disabled_capabilities: ["wardyn_features"],
       }),
     );
+  });
+});
+
+// ui-integrations-4: until toggleDisabled existed, both list and detail read
+// wire.disabled (the "Off" badge) but nothing in ui/src ever wrote it —
+// buildIntegrationWrite (add-integration-dialog.tsx) never sets it and
+// setDefaultFor only round-trips the existing value unchanged. This PUTs the
+// flipped value directly, same discipline as setDefaultFor.
+describe("toggleDisabled", () => {
+  function storedWire(overrides: Partial<WireIntegration> = {}): WireIntegration {
+    return { id: "bedrock", kind: "bedrock", source: "stored", ...overrides };
+  }
+
+  beforeEach(() => {
+    putIntegrationMock.mockReset();
+  });
+
+  it("PUTs the row with disabled flipped, everything else round-tripped", async () => {
+    putIntegrationMock.mockResolvedValue(undefined);
+
+    await toggleDisabled(storedWire({ disabled: false, config: { lane: "auto" } }), true);
+
+    expect(putIntegrationMock).toHaveBeenCalledWith(
+      "bedrock",
+      expect.objectContaining({ disabled: true, config: { lane: "auto" } }),
+    );
+  });
+
+  it("re-enabling flips it back", async () => {
+    putIntegrationMock.mockResolvedValue(undefined);
+
+    await toggleDisabled(storedWire({ disabled: true }), false);
+
+    expect(putIntegrationMock).toHaveBeenCalledWith("bedrock", expect.objectContaining({ disabled: false }));
   });
 });
