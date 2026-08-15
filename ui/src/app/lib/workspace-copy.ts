@@ -63,7 +63,8 @@ export const V2C = {
   EPH_HELP:
     "A scratch directory that exists only inside the sandbox — nothing on this machine is used, and it's discarded when the run ends.",
   WAIT_NOTE: "Suggestions improve when the scan lands — you can change the image on the workspace's page any time.",
-  REC_SUB: "Wardyn builds and caches this image from the scan, and rebuilds it when the profile changes.",
+  REC_SUB:
+    "Wardyn builds and caches this image from the scan, and rebuilds it when the profile changes. Generated images include standard tooling — git, curl, and the claude-code CLI (inert until a run is granted model access; credentials are never in the image).",
   CUSTOM_SUB: "Wardyn builds and caches your custom image like the recommended one.",
   STEPS_HELP:
     "Dockerfile instructions appended after the tools above (RUN, ENV, ARG). They execute during the image build, inside the build sandbox — never on this machine.",
