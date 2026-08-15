@@ -92,6 +92,15 @@ docker push "$REGISTRY/wardynd:$TAG"
 wardynd with `-tags docker` onto `distroless:nonroot` (uid 65532), which is what
 this chart's `podSecurityContext` already assumes.
 
+**`k8s.enabled` also needs `wardyn-proxy` built and pushed** — the chart
+refuses to render without `k8s.proxyImage` set (see below), and the quickstart
+a few sections down assumes `$REGISTRY/wardyn-proxy:$TAG` already exists:
+
+```bash
+docker build -f deploy/compose/Dockerfile.proxy -t "$REGISTRY/wardyn-proxy:$TAG" .
+docker push "$REGISTRY/wardyn-proxy:$TAG"
+```
+
 If your registry is private, create a pull secret and pass it as
 `image.pullSecrets` (a list of `{name: ...}`):
 
@@ -247,8 +256,13 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
   carries no chart labels) so its proxy sidecars can still reach wardynd for
   credential mints, approval checks, and recording uploads.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
-  also what the boot-time egress canary launches. Required in practice: empty
-  boots wardynd fine but every run then fails closed.
+  also what the boot-time egress canary launches. **Required — the chart
+  refuses to render without it** (like `serviceAccount.automount` above): the
+  k8s runner substrate refuses to construct on an empty value
+  (`errProxyImageUnset`), which is a boot-time failure, not a per-run one —
+  wardynd itself never comes up, it does not boot fine with runs merely
+  failing closed. See "Build and push wardynd" above for how to build and
+  push it (`deploy/compose/Dockerfile.proxy`).
 - `k8s.imagePullSecret`: optional pre-existing Secret name
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is

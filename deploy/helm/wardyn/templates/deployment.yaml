@@ -27,6 +27,9 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
 {{- end -}}
+{{- if and .Values.k8s.enabled (not .Values.k8s.proxyImage) -}}
+{{- fail "wardyn: k8s.enabled requires k8s.proxyImage. The k8s runner substrate (internal/runner/k8s driver.go) refuses to construct without one (errProxyImageUnset) — this is a boot-time failure, not a per-run one: wardynd's runner build returns the error straight up through cmd/wardynd/main.go, so the pod crash-loops instead of coming up with runs merely failing closed. Set k8s.proxyImage to the wardyn-proxy image you built and pushed (see the chart README's Prerequisites)." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

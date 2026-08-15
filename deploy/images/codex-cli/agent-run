@@ -143,6 +143,14 @@ cd "$workdir"
 # Governed SCAN run: walk the cloned/mounted workspace and upload ScanFacts to the
 # brokered scan-results route, then exit. No agent/model invocation (read-only scan).
 if [[ "${WARDYN_SCAN_ONLY:-}" == "1" ]]; then
+    # A repo-kind scan whose clone failed must NOT scan an empty workdir and
+    # upload a false-green high-confidence profile — fail the run instead so
+    # the completion watcher's reconcileWorkspaceRun (no_facts_uploaded) settles
+    # the source honestly. See repo_scan_ok in agent-run-lib.sh.
+    if ! repo_scan_ok; then
+        echo "agent-run: scan-only mode requested a repo clone (WARDYN_REPOS/WARDYN_REPO_URL) but no .git is present after dispatch_repo_clones — the clone failed; refusing to upload a false-green empty profile" >&2
+        exit 1
+    fi
     export WARDYN_WORKSPACE_DIR="${WARDYN_WORKSPACE_DIR:-$workdir}"
     echo "agent-run: scan-only mode — running wardyn-scan over ${WARDYN_WORKSPACE_DIR}" >&2
     exec wardyn-scan

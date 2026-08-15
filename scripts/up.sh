@@ -775,6 +775,20 @@ cmd_reset_all() {
     _ra_net_attached=$(docker network inspect -f '{{len .Containers}}' wardyn-internal 2>/dev/null || echo 0)
   fi
 
+  # Per-run sandbox containers + their per-run internal networks: wardynd
+  # launches these dynamically via the docker runner (internal/runner/docker/
+  # naming.go), NOT as part of this compose project — `compose down`
+  # (below) only tears down services declared in docker-compose.yaml, so a run
+  # mid-flight when reset-all fires leaves these live and unlisted. Once -v
+  # drops the Postgres volume a few lines down there is no run row left to
+  # reconcile against either, so they become unreapable garbage. Selector-free
+  # by construction: labelManaged tags every wardynd-owned object, and every
+  # per-run internal network is named wardyn-int-<runID>.
+  _ra_sandbox_ids=$(docker ps -aq --filter "label=wardyn.managed=true" 2>/dev/null || true)
+  _ra_sandbox_containers=$(printf '%s\n' "${_ra_sandbox_ids}" | grep -c . || true)
+  _ra_sandbox_net_ids=$(docker network ls -q --filter "name=^wardyn-int-" 2>/dev/null || true)
+  _ra_sandbox_nets=$(printf '%s\n' "${_ra_sandbox_net_ids}" | grep -c . || true)
+
   _ra_testpg=0
   docker inspect wardyn-test-pg >/dev/null 2>&1 && _ra_testpg=1
 
@@ -830,6 +844,10 @@ cmd_reset_all() {
   else
     _ra_mark 0 "docker network wardyn-internal"
   fi
+  _ra_mark "$([ "${_ra_sandbox_containers:-0}" -gt 0 ] && echo 1 || echo 0)" \
+    "live per-run sandbox containers: ${_ra_sandbox_containers:-0} (label wardyn.managed=true — compose down never touches these)"
+  _ra_mark "$([ "${_ra_sandbox_nets:-0}" -gt 0 ] && echo 1 || echo 0)" \
+    "per-run internal networks: ${_ra_sandbox_nets:-0} (wardyn-int-*)"
   _ra_mark "${_ra_testpg}" "dev/e2e postgres container wardyn-test-pg (:55432)"
   _ra_mark "$([ -n "${_ra_install}" ] && echo 1 || echo 0)" "~/.wardyn install files: ${_ra_install:-none }(includes STAGED CLAUDE CREDS — re-stage after next setup)"
   [ -n "${_ra_preserved}" ] && printf '  [keep]    ~/.wardyn PRESERVED (not Wardyn setup'\''s): %s\n' "${_ra_preserved}"
@@ -858,6 +876,22 @@ cmd_reset_all() {
   fi
 
   [ "${_ra_host_live}" = 1 ] && make -C "${REPO_ROOT}" stop-host
+
+  # Reap per-run sandbox containers + their internal networks BEFORE compose
+  # down/-v drops the Postgres volume — compose down never touches these (see
+  # the manifest-gathering comment above), and once the volume is gone there is
+  # no run row left to reconcile them against. Containers first: a network
+  # with an attached container refuses `network rm`.
+  if [ -n "${_ra_sandbox_ids}" ]; then
+    # shellcheck disable=SC2086 — word-split container ids by construction
+    docker rm -f ${_ra_sandbox_ids} >/dev/null 2>&1 \
+      || warn "could not remove some per-run sandbox containers (label wardyn.managed=true)"
+  fi
+  if [ -n "${_ra_sandbox_net_ids}" ]; then
+    # shellcheck disable=SC2086 — word-split network ids by construction
+    docker network rm ${_ra_sandbox_net_ids} >/dev/null 2>&1 \
+      || warn "some per-run internal networks (wardyn-int-*) still have attached containers — left in place"
+  fi
 
   # shellcheck disable=SC2086 — _ra_profiles is a flat flag list by construction
   compose ${_ra_profiles} down -v --remove-orphans \

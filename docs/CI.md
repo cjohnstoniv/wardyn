@@ -164,32 +164,24 @@ What synthesis does and does not derive:
 Several jobs can run on one build host at the same time, under one trusted
 operator (e.g. a CI fleet on one service account). `scripts/ci-run.sh` already
 does most of this for you: it scopes every compose object to a unique project +
-namespace and binds the control plane's own host ports ephemerally, so
-parallel invocations don't collide on container names, the control-plane
-network, the recordings volume, or the UI/Postgres host ports — and one job's
+namespace and binds the control plane's own host ports ephemerally — UI,
+Postgres, AND the devcontainer-build registry sidecar (`registry`, a `wardynd`
+dependency — `up -d postgres wardynd` always starts it too) — so parallel
+invocations don't collide on container names, the control-plane network, the
+recordings volume, or any of those three host ports, and one job's
 `down --volumes` never tears down another's.
-
-**One port is not yet scoped.** The devcontainer-build registry sidecar
-(`registry`, a `wardynd` dependency — `up -d postgres wardynd` always starts
-it too) publishes on `WARDYN_REGISTRY_PORT` (default `5010`), and `ci-run.sh`
-does not override it the way it overrides `WARDYN_UP_PORT`/`WARDYN_PG_PORT`.
-Two concurrent jobs that both leave it at the default collide on that bind
-("port is already allocated"), and the second job's `wardynd` never starts —
-this is a known gap, not yet automated; set `WARDYN_REGISTRY_PORT` to a
-distinct value (or `0` for an OS-assigned port) per concurrent job until it is.
 
 The variables that do it (see [docs/ENV.md](ENV.md#compose--scripts-shell-only--not-read-by-go)):
 
 ```sh
-# ci-run.sh derives most of this from one name:
+# ci-run.sh derives all of this from one name:
 WARDYN_CI_PROJECT="$CI_JOB_ID" scripts/ci-run.sh
 #   -> COMPOSE_PROJECT_NAME=$CI_JOB_ID   (compose bookkeeping + unnamed volumes)
 #   -> WARDYN_NS=$CI_JOB_ID              (container names, network, recordings volume)
-#   -> WARDYN_UP_PORT=0, WARDYN_PG_PORT=0 (OS-assigned ephemeral host ports)
-#   -> WARDYN_REGISTRY_PORT is NOT derived — set it yourself (see above)
+#   -> WARDYN_UP_PORT=0, WARDYN_PG_PORT=0, WARDYN_REGISTRY_PORT=0 (OS-assigned ephemeral host ports)
 
 # Driving compose directly (no ci-run.sh) needs the same, set by hand — five
-# variables, not four, if another job may run at the same time:
+# variables if another job may run at the same time:
 COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
   WARDYN_REGISTRY_PORT=0 \
   docker compose -p job-a -f deploy/compose/docker-compose.yaml up -d
@@ -206,8 +198,8 @@ both come up healthy with no collision, that a container on job A's network
 cannot reach job B's wardynd, that A survives B's `down --volumes`, and that each
 tears down independently. It needs a live daemon and `wardyn/wardynd:local` (the
 target builds it if absent), so it is a manual/pre-release check, not a CI job.
-Its `compose_ns` helper has the same `WARDYN_REGISTRY_PORT` gap as `ci-run.sh`
-above, so it proves isolation on the ports it does derive — not yet on this one.
+Its `compose_ns` helper scopes the same `WARDYN_UP_PORT`/`WARDYN_PG_PORT`/
+`WARDYN_REGISTRY_PORT` trio as `ci-run.sh` above.
 
 **Scope of this:** one trusted operator on one host. Concurrent jobs share the
 docker daemon, so this is job *isolation*, not a multi-tenant boundary — a job

@@ -379,6 +379,22 @@ resolve_workdir() {
     fi
 }
 
+# repo_scan_ok — for the scan-only lane ONLY: false when a repo clone was
+# requested (WARDYN_REPOS / WARDYN_REPO_URL) but no .git shows up under
+# `workdir` after dispatch_repo_clones + resolve_workdir — i.e. the clone
+# FAILED (egress policy or credential broker blocked it; clone_one already
+# logged and continued rather than aborting the run). Without this check a
+# scan-only run silently scans the empty ~/work dir and uploads a
+# high-confidence EMPTY profile: false green on a stock no-GitHub-App
+# install. A dir-kind scan (no repo requested) has no repo to fail cloning,
+# so it always passes here. Call ONLY from the WARDYN_SCAN_ONLY branch — an
+# agent/exec run tolerates a missing repo by design.
+repo_scan_ok() {
+    [[ -z "${WARDYN_REPOS:-}" && -z "${WARDYN_REPO_URL:-}" ]] && return 0
+    [[ -d "$workdir" ]] || return 1
+    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep -q .
+}
+
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
 # control plane set WARDYN_TASK_MODE=exec, run the task as a plain shell
 # command INSTEAD of the agent harness and never return. No-op otherwise.
