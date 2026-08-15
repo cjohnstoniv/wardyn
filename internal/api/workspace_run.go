@@ -584,7 +584,8 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
-	return s.dispatchAndSettle(ctx, created, dispatchParams{
+	var resolvedManaged bool
+	result := s.dispatchAndSettle(ctx, created, dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,
@@ -602,7 +603,24 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// Any ephemeral source's scratch target — wireWorkspaceSource's doc
 		// comment — surfaced the same way the ordinary create-run path does.
 		EphemeralDirs: ephemeralDirs,
-	}), weakCC, nil
+		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
+		// cannot see the Wardyn-managed subscription lane at all — correct it
+		// below against what dispatch ACTUALLY resolved.
+		ResolvedManaged: &resolvedManaged,
+	})
+	// The mount/integration-based guess above already covers a host-staged
+	// subscription and a bound Bedrock/api-key integration; only the managed
+	// lane can flip "none"/"api-key" to "subscription" post-dispatch (the
+	// fallback grant it should have preempted was never minted in that case —
+	// see resolveLLMTransport's managed precedence comment).
+	if resolvedManaged && llmMode != "subscription" {
+		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
+			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
+			Status: recordStatusRecording, StartedAt: startedAt,
+			LLMMode: "subscription", Model: s.cfg.AgentAnthropicModel,
+		}, recordStatusRecording)
+	}
+	return result, weakCC, nil
 }
 
 // requiredIntegrationIDs returns the integration ids every REQUIRED

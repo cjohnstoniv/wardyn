@@ -51,6 +51,16 @@ type dispatchParams struct {
 	// sandbox just needs the directory to exist. Surfaced as
 	// WARDYN_EPHEMERAL_DIRS (comma-separated); nil/empty adds nothing.
 	EphemeralDirs []string
+	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
+	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
+	// lane (llm.injectManaged — resolveLLMTransport's MANAGED subscription
+	// section). W20-llm-transport-matrix-2: launchRecordRun's pre-dispatch
+	// llm_mode guess for the session entry is a mount/integration check that
+	// cannot see this lane at all (it resolves only here, inside dispatch,
+	// gated on s.managedInjectReady) — that guess would otherwise say "none"
+	// for a session the managed subscription actually credentialed. nil for
+	// every other caller: a no-op.
+	ResolvedManaged *bool
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -212,6 +222,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
 	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	if p.ResolvedManaged != nil {
+		*p.ResolvedManaged = llm.injectManaged
+	}
 
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
@@ -500,11 +513,18 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
-		// BYOI: gate the task exec on a passing selftest (fail closed).
-		if byoi && !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
-			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-			s.failAndRevoke(ctx, run.ID, types.RunRunning)
-			return
+		// BYOI: gate the task exec on a passing selftest (fail closed) — but
+		// refuse UP FRONT, before even attempting the selftest, on an
+		// exec-less (krun) substrate: see byoiExecLessRefused.
+		if byoi {
+			if s.byoiExecLessRefused(ctx, run, ref) {
+				return
+			}
+			if !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
+				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
+				s.failAndRevoke(ctx, run.ID, types.RunRunning)
+				return
+			}
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
 		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
@@ -569,6 +589,16 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
+		// W5-S1-5: the resident ~/.claude subscription mount is a MODEL-RUN-ONLY
+		// credential (THREAT-MODEL.md 5.1a) — a task-mode=exec or non-interactive
+		// scan run makes no model call and must get NO LLM credential, even when
+		// the resolved POLICY still carries the mount (e.g. a subscription-blessed
+		// default/named policy reused for a plain exec task with no per-run
+		// integration consent). Every other injection mode already gates on
+		// llm.modelRun; this is the one path that read the policy verbatim.
+		if !llm.modelRun && (wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget) {
+			continue
+		}
 		mounts = append(mounts, runner.Mount{
 			Source: wm.Source,
 			Target: wm.Target,
@@ -910,6 +940,34 @@ func hasAnthropicAPIKeyInjection(injections []runner.InjectionGrant) bool {
 		}
 	}
 	return false
+}
+
+// byoiExecLessRefused is the W15-W15f-exec-lane-runtime-4 guard: a BYOI image
+// on an exec-less (krun microVM) substrate must never even ATTEMPT the
+// selftest. runAsMainProcess (internal/runner/docker/driver.go) makes the
+// sandbox's container process ITSELF the agent on that substrate — there is
+// no separate exec slot — so byoiSelftest's own Exec would consume the
+// sandbox's one process, guaranteeing the task Exec that follows it fails
+// against an already-exited container (Exec would be called twice: once for
+// the selftest, once for the task). Refuses up front (audit + teardown +
+// FAILED) instead of wasting the slot finding that out the hard way.
+// Capabilities().Resolved[cc] carries an "oci/krun" runtime label on that
+// substrate (Kata/CC3 stays exec-capable: its Resolved label carries no such
+// prefix). Reports whether it refused; the caller must return immediately.
+func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, ref string) bool {
+	caps, cerr := s.cfg.Runner.Capabilities(ctx)
+	if cerr != nil || !strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun") {
+		return false
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+		run.ID.String(), "failure", mustJSON(map[string]any{
+			"confinement_class": run.ConfinementClass,
+			"detail": "BYOI images are refused on an exec-less (krun) runtime: the selftest's own exec " +
+				"would consume the sandbox's only process, guaranteeing the task exec that follows it fails",
+		})))
+	s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
+	s.failAndRevoke(ctx, run.ID, types.RunRunning)
+	return true
 }
 
 // byoiSelftest runs `agent-run --selftest` inside a BYOI sandbox and waits for

@@ -22,6 +22,16 @@ import (
 // resolveLLMTransport, consumed by the CA / grant-authoring / SandboxSpec
 // phases of dispatchRun.
 type llmTransport struct {
+	// modelRun: this dispatch actually invokes the model (see the doc comment
+	// on resolveLLMTransport's local modelRun below) — false for task-mode=exec
+	// and for a non-interactive scan run. W5-S1-5: buildRunMounts reads this to
+	// drop the resident ~/.claude mount (claudeCredTarget/claudeCredJSONTarget)
+	// from a non-model run's spec even when the resolved POLICY still carries
+	// it (e.g. an operator's subscription-blessed default/named policy reused
+	// for a plain exec task with no per-run integration consent) — every OTHER
+	// injection mode below already gates on this same signal; the mount was
+	// the one path that did not.
+	modelRun bool
 	// subscription: the policy bind-mounts the resident ~/.claude (claudeCredTarget).
 	subscription bool
 	// injectSub: subscription AND a live token provider is wired AND the
@@ -67,6 +77,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// the WARDYN_SCAN_ONLY discriminator.
 	modelRun := taskMode != "exec" &&
 		!((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
+	t.modelRun = modelRun
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
 	// INTERACTIVE run never invokes agent-run (the human runs `claude` in the
