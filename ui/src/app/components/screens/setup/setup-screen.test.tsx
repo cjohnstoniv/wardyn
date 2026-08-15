@@ -597,6 +597,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // No early escape any more — the mandatory gate keeps the operator in setup.
     expect(screen.queryByRole("button", { name: /finish later/i })).not.toBeInTheDocument();
 
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2) —
+    // clear it (same helper every other walkthrough in this suite uses) before
+    // jumping to the final (Launch) step.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
+
     // Jump to the final (Launch) step via the rail and complete via "Finish setup".
     await user.click(screen.getByRole("button", { name: /^Launch —/ }));
     await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
@@ -611,6 +617,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     const onDone = vi.fn();
     renderScreen(<SetupScreen onDone={onDone} />);
     await screen.findByText("Fence");
+
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
 
     await user.click(screen.getByRole("button", { name: /^Launch —/ }));
     await user.click(screen.getByRole("button", { name: /^open runs$/i }));
@@ -642,6 +652,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       }),
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
+
     await user.click(await screen.findByRole("button", { name: /^Launch —/ }));
     await user.click(
       (await screen.findAllByRole("button", { name: /^launch your first run$/i }))[0],

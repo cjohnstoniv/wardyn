@@ -318,8 +318,10 @@ describe("Host proxy tab — panel states", () => {
         ],
       }),
     });
-    // The row is still real evidence...
-    expect(screen.getByText("http://127.0.0.1:8080")).toBeInTheDocument();
+    // The row is still real evidence (also shown by the single-candidate
+    // "Use detected proxy" suggestion below it — getAllByText per the same
+    // two-places convention as the differing-candidates case above)...
+    expect(screen.getAllByText("http://127.0.0.1:8080").length).toBeGreaterThan(0);
     // ...but the warn diagnosis sits right beside it, not hidden behind Review.
     expect(screen.getByText(/bound to loopback/i)).toBeInTheDocument();
   });
