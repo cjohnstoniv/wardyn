@@ -51,6 +51,25 @@ type llmTransport struct {
 	injectBedrockBearer bool
 }
 
+// isModelRun reports whether a dispatch actually invokes the model. Two run
+// kinds make NO model call and so must receive NO LLM credential (least
+// privilege): a scan run (execs wardyn-scan — workspaceID/sourceID set,
+// non-interactive), and a task-mode=exec run — the BYOA/CI plain-command lane
+// whose `wardyn run --task-mode exec` contract is literally "no agent, no LLM
+// credentials". Without the exec term, a CI exec job with a connected
+// managed/resident subscription plus any egress (which docs/CI.md itself
+// tells operators to add) silently gets a live Anthropic OAuth token injected
+// proxy-side + api.anthropic.com appended to its allow-list, for a plain
+// shell command that never asked for a model. An INTERACTIVE workspace-linked
+// run (Record Mode) is human-driven, not a scan, so it stays a model run.
+// Mirrors the WARDYN_SCAN_ONLY discriminator. Extracted as its own function
+// (rather than inlined in resolveLLMTransport) so it's independently unit
+// testable — this gate gets it wrong once and every non-model run leaks a
+// live model credential.
+func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive bool) bool {
+	return taskMode != "exec" && !((workspaceID != nil || sourceID != nil) && !interactive)
+}
+
 // resolveLLMTransport decides which LLM transport credentials this run and sets
 // the corresponding sandbox env (ANTHROPIC_BASE_URL / CLAUDE_CONFIG_DIR /
 // placeholders / Bedrock env / the codex-cli OpenAI gateway route). It may
@@ -64,19 +83,8 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 
 	// modelRun gates EVERY proxy-side credential-injection mode below
 	// (subscription, managed, Bedrock) on a run that actually invokes the model.
-	// Two run kinds make NO model call and so must receive NO LLM credential
-	// (least privilege): a scan run (execs wardyn-scan — WorkspaceID/SourceID
-	// set, non-interactive), and a task-mode=exec run — the BYOA/CI plain-command
-	// lane whose `wardyn run --task-mode exec` contract is literally "no agent,
-	// no LLM credentials". Without the exec term, a CI exec job with a connected
-	// managed/resident subscription plus any egress (which docs/CI.md itself tells
-	// operators to add) silently gets a live Anthropic OAuth token injected
-	// proxy-side + api.anthropic.com appended to its allow-list, for a plain shell
-	// command that never asked for a model. An INTERACTIVE workspace-linked run
-	// (Record Mode) is human-driven, not a scan, so it stays a model run. Mirrors
-	// the WARDYN_SCAN_ONLY discriminator.
-	modelRun := taskMode != "exec" &&
-		!((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
+	// See isModelRun's doc comment for the full rationale.
+	modelRun := isModelRun(taskMode, run.WorkspaceID, run.SourceID, interactive)
 	t.modelRun = modelRun
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An

@@ -14,30 +14,34 @@ import (
 // TestIsModelRun_ExcludesExecTaskMode is the W5-S1-5 regression: a
 // task_mode=exec run (the BYOA/CI plain-command lane) execs a bare shell
 // command and never invokes the agent CLI, so it must NOT be treated as a
-// model run — same as an existing verify/scan run.
+// model run — same as an existing non-interactive scan run. (The signature
+// once also took a verifyPlan []byte for a "workspace verify" case — that
+// pipeline is retired, superseded by "workspace record" + confined=true; see
+// runs_create.go's reservedRunTasks doc comment. isModelRun's real
+// discriminators are task_mode and workspace/source-linked-and-non-interactive.)
 func TestIsModelRun_ExcludesExecTaskMode(t *testing.T) {
 	cases := []struct {
 		name        string
-		verifyPlan  string
 		workspaceID *uuid.UUID
+		sourceID    *uuid.UUID
 		interactive bool
 		taskMode    string
 		want        bool
 	}{
-		{"plain agent run", "", nil, false, "", true},
-		{"interactive agent run", "", nil, true, "", true},
-		{"task_mode=exec direct run", "", nil, false, "exec", false},
-		{"task_mode=exec interactive", "", nil, true, "exec", false},
-		{"verify run", `[{"cmd":"x"}]`, nil, false, "", false},
-		{"scan run (workspace, non-interactive)", "", ptr(uuid.New()), false, "", false},
-		{"interactive workspace run (record) IS a model run", "", ptr(uuid.New()), true, "", true},
+		{"plain agent run", nil, nil, false, "", true},
+		{"interactive agent run", nil, nil, true, "", true},
+		{"task_mode=exec direct run", nil, nil, false, "exec", false},
+		{"task_mode=exec interactive", nil, nil, true, "exec", false},
+		{"scan run (workspace, non-interactive)", ptr(uuid.New()), nil, false, "", false},
+		{"scan run (source, non-interactive)", nil, ptr(uuid.New()), false, "", false},
+		{"interactive workspace run (record) IS a model run", ptr(uuid.New()), nil, true, "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := isModelRun([]byte(c.verifyPlan), c.workspaceID, c.interactive, c.taskMode)
+			got := isModelRun(c.taskMode, c.workspaceID, c.sourceID, c.interactive)
 			if got != c.want {
-				t.Errorf("isModelRun(verifyPlan=%q, workspaceID=%v, interactive=%v, taskMode=%q) = %v, want %v",
-					c.verifyPlan, c.workspaceID, c.interactive, c.taskMode, got, c.want)
+				t.Errorf("isModelRun(taskMode=%q, workspaceID=%v, sourceID=%v, interactive=%v) = %v, want %v",
+					c.taskMode, c.workspaceID, c.sourceID, c.interactive, got, c.want)
 			}
 		})
 	}
