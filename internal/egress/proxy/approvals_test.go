@@ -183,6 +183,77 @@ func TestResolveWaitHold(t *testing.T) {
 		}
 	})
 
+	t.Run("concurrent first-touch does not skip the hold", func(t *testing.T) {
+		// W20-hold-fsm-4: concurrent first-touch connections to the SAME new
+		// host. Only ONE goroutine's Resolve wins the raise race and blocks
+		// on the (slow, widened-window) raise() network call; every OTHER
+		// goroutine must observe apPending with the RAISER'S host claimed but
+		// no id recorded yet — and must retry rather than bail out as if the
+		// raise had already failed. Before the fix, those siblings returned
+		// near-instantly with ApprovalID==Nil, skipping the hold entirely
+		// (wait_for_review silently degraded to deny_with_review for them).
+		// This subtest needs its own (larger) poll interval: the retry budget
+		// is concurrentRaiseRetries * holdPollInterval, and it must clear the
+		// raise's simulated network delay below. Save/restore around the
+		// outer test's already-shrunk value.
+		savedPoll := holdPollInterval
+		holdPollInterval = 15 * time.Millisecond // budget = 5*15ms = 75ms > the 30ms raise delay
+		defer func() { holdPollInterval = savedPoll }()
+
+		var raises atomic.Int32
+		cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				raises.Add(1)
+				time.Sleep(30 * time.Millisecond) // widen the race window
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+		}))
+		defer cp.Close()
+
+		ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+		const n = 8
+		ap.configureHold(types.FirstUseWaitForReview, 400*time.Millisecond, n)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		results := make([]resolveResult, n)
+		elapsed := make([]time.Duration, n)
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				t0 := time.Now()
+				results[i] = ap.ResolveWait(context.Background(), "egress.test")
+				elapsed[i] = time.Since(t0)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		if got := raises.Load(); got != 1 {
+			t.Fatalf("concurrent first-touch raised %d approvals, want exactly 1", got)
+		}
+		for i := range results {
+			if results[i].ApprovalID == uuid.Nil {
+				t.Errorf("goroutine %d: ApprovalID = Nil, want the raised approval's real id "+
+					"(it must retry, not treat a sibling's in-flight raise as a failure)", i)
+			}
+			// Every goroutine must actually HOLD roughly the full timeout
+			// (state stays Pending throughout) — not return near-instantly.
+			if elapsed[i] < 200*time.Millisecond {
+				t.Errorf("goroutine %d returned in %v, want it to hold near the 400ms timeout "+
+					"(a near-instant return means it skipped the hold)", i, elapsed[i])
+			}
+			if results[i].State != apPending {
+				t.Errorf("goroutine %d: state = %v, want apPending (never decided)", i, results[i].State)
+			}
+		}
+	})
+
 	t.Run("hold cap saturated -> fails fast pending", func(t *testing.T) {
 		cp := approvalCPStub(apState(types.ApprovalPending), nil, nil)
 		defer cp.Close()

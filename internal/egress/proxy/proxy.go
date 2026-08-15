@@ -367,10 +367,25 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// approval — an approval must never even be raisable for these ranges
 	// (invariant 3: blocked regardless of policy). Hostnames that RESOLVE to
 	// blocked ranges are caught by VetHost at step 4 after policy/approval.
+	//
+	// trustedLiteralIP is the ONE deliberate exception: a literal IP the
+	// operator explicitly typed into an EXACT AllowedDomains entry (e.g. an
+	// egress-redirect "To" target on RFC1918 space — see
+	// Policy.AllowsLiteralIP) carries no DNS-rebinding risk, since there is
+	// no hostname behind it to rebind. Set here, it also skips VetHost at
+	// step 4 below (which would otherwise re-derive and re-deny the same
+	// address) so the operator's own configured destination is actually
+	// reachable instead of always denied with "the customer's network is at
+	// fault" (W13-S1-3).
+	var trustedLiteralIP net.IP
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
 		if blocked, _ := isBlockedIP(ip); blocked {
-			log := decisionLog(req, egress.Deny, "builtin:private-ip")
-			return egress.Deny, "", &log
+			if p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port) {
+				trustedLiteralIP = ip
+			} else {
+				log := decisionLog(req, egress.Deny, "builtin:private-ip")
+				return egress.Deny, "", &log
+			}
 		}
 	}
 
@@ -449,20 +464,42 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// and policy/approval/method above are unchanged. Every DIRECT-dial path
 	// keeps the full VetHost guard. The target carries the HOSTNAME (not an IP)
 	// so egressDial issues CONNECT <real-host> to the corp proxy.
-	if p.upstream != nil {
-		target := net.JoinHostPort(host, strconv.Itoa(port))
+	if trustedLiteralIP != nil {
+		target := net.JoinHostPort(trustedLiteralIP.String(), strconv.Itoa(port))
 		log := p.allowLog(req, approvalID)
 		return egress.Allow, target, &log
 	}
-	guard := VetHost(host, p.res)
-	if guard.Denied {
+	target, terr := p.egressTarget(host, port)
+	if terr != nil {
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
 		return egress.Deny, "", &log
 	}
-
-	target := net.JoinHostPort(guard.IP.String(), strconv.Itoa(port))
 	log := p.allowLog(req, approvalID)
 	return egress.Allow, target, &log
+}
+
+// egressTarget resolves host:port to the dial target a forward-egress call
+// site should use for THIS proxy's mode — hiding the corp-upstream branch so
+// every forward-egress caller (evaluate, serveMITMRequest, proxyLLMRequest,
+// handleGitBroker) makes the SAME choice instead of each re-deriving it. A
+// site that forgot the branch (the brokered LLM routes and the git broker
+// both did, W19-W19d-3 / W23-S1-4) unconditionally required local DNS +ran the
+// full private-IP guard even under an operator upstream — where the sandbox
+// host frequently CANNOT resolve external names at all — and then handed the
+// corp proxy a resolved IP LITERAL to CONNECT instead of the real hostname.
+// With an operator upstream configured, the corp proxy — not this process —
+// resolves and dials, so the target is the real HOSTNAME:port sent by name
+// (see dialThroughUpstream / egressDial); otherwise the full local
+// private-IP-guarded resolve+pin (VetHost) applies as always.
+func (p *Proxy) egressTarget(host string, port int) (string, error) {
+	if p.upstream != nil {
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+	}
+	guard := VetHost(host, p.res)
+	if guard.Denied {
+		return "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
+	}
+	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), nil
 }
 
 // allowLog builds evaluate()'s Allow decision log. When the request's verdict

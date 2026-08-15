@@ -334,7 +334,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, re
 		return
 	}
 
-	target, err := p.vetURL("https://" + host)
+	// egressTarget hides the corp-upstream branch (W23-S1-4 / W19-W19d-3): a
+	// brokered LLM route needs the same corp-proxy-by-name dial the MITM path
+	// (serveMITMRequest) already gets, not the local-DNS-required vetURL below.
+	target, err := p.egressTarget(host, 443)
 	if err != nil {
 		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
 		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)

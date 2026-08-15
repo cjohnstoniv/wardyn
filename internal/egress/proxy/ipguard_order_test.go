@@ -44,3 +44,40 @@ func TestEvaluate_BlockedLiteralIPBeatsFirstUseApproval(t *testing.T) {
 		}
 	}
 }
+
+// Regression (W13-S1-3): an operator-declared egress-redirect target that is
+// itself a private/reserved IP literal (a realistic "To" for an on-prem
+// registry — see docs/OPERATIONS.md "network only" redirects and
+// site_config.go's validSiteURLOrHost, which happily persists one) must
+// actually be reachable, not unconditionally denied by the same guard
+// TestEvaluate_BlockedLiteralIPBeatsFirstUseApproval proves fires for an
+// UNDECLARED private IP above. An EXACT AllowedDomains entry naming the
+// literal address is the one deliberate, narrowly-scoped exception; a
+// sibling private IP the operator never declared must still be denied.
+func TestEvaluate_DeclaredLiteralIPRedirectTargetAllowed(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{"10.40.2.11", "github.com"}}
+	p, buf := newTestProxy(t, spec, "127.0.0.1:1", nil, nil)
+
+	buf.Reset()
+	decision, target, log := p.evaluate(context.Background(), "10.40.2.11", 8443, "GET", "/")
+	if decision != egress.Allow {
+		t.Fatalf("declared literal IP: decision = %q, want allow (rule %q)", decision, log.RuleSource)
+	}
+	if target != "10.40.2.11:8443" {
+		t.Fatalf("declared literal IP: target = %q, want 10.40.2.11:8443", target)
+	}
+	if log.RuleSource == "builtin:private-ip" {
+		t.Fatalf("declared literal IP: rule_source = %q, must not be the unconditional guard", log.RuleSource)
+	}
+
+	// A sibling private IP the operator never declared stays denied — the
+	// exemption is scoped to the exact declared entry, never blanket.
+	buf.Reset()
+	decision, target, log = p.evaluate(context.Background(), "10.40.2.12", 8443, "GET", "/")
+	if decision != egress.Deny || log.RuleSource != "builtin:private-ip" {
+		t.Fatalf("undeclared sibling IP: decision = %q rule = %q, want deny/builtin:private-ip", decision, log.RuleSource)
+	}
+	if target != "" {
+		t.Fatalf("undeclared sibling IP: target must be empty on deny, got %q", target)
+	}
+}

@@ -249,6 +249,88 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 	}
 }
 
+// TestGitBrokerDialsGithubByNameThroughUpstream is the W23-S1-4 / W19-W19d-3
+// regression for the git broker: before egressTarget existed, handleGitBroker
+// called vetURL UNCONDITIONALLY, ignoring p.upstream entirely — requiring
+// local DNS resolution the sandbox host frequently cannot do at all under a
+// corp upstream, and (with a resolver that DOES answer, as here) handing the
+// corp proxy a resolved IP LITERAL to CONNECT instead of "github.com". Many
+// corp proxies allowlist CONNECT targets by hostname, so an IP-literal CONNECT
+// is exactly the shape that breaks the one governed git lane on the network it
+// exists for. This proves the CONNECT the corp proxy actually receives names
+// github.com, not an IP.
+func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
+	f := startFakeUpstream(t)
+	up, err := parseUpstreamProxy("http://" + f.addr())
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"kind":"github_token","token":"gh-tok","username":"x-access-token",`+
+			`"expires_at":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}`)
+	}))
+	defer cp.Close()
+
+	grantID := uuid.New()
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            sink,
+		Resolver:        publicResolver{}, // resolvable: proves the bug is the WRONG target, not a resolve failure
+		Upstream:        up,
+		ControlPlaneURL: cp.URL,
+		RunToken:        newTokenSource("RUNTOK"),
+		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+	// The upstream is a raw CONNECT-and-echo stub, not a real TLS-terminating
+	// github.com — the subsequent TLS handshake over the tunnel fails, so the
+	// broker itself 502s. That failure is expected and irrelevant here: the
+	// CONNECT to the corp proxy has already happened (and been recorded) by
+	// the time the TLS handshake is attempted.
+	gotConnect, _ := f.snapshot()
+	if gotConnect != "CONNECT github.com:443" {
+		t.Fatalf("corp proxy saw %q, want CONNECT github.com:443 (the real hostname, "+
+			"not a resolved IP literal a corp proxy's hostname allowlist would refuse)", gotConnect)
+	}
+}
+
+// TestLLMRouteDialsByNameThroughUpstream is W23-S1-4 / W19-W19d-3's other
+// half: proxyLLMRequest (the /wardyn/llm/anthropic and /wardyn/llm/openai
+// brokered routes) had the SAME unconditional vetURL call as the git broker.
+func TestLLMRouteDialsByNameThroughUpstream(t *testing.T) {
+	f := startFakeUpstream(t)
+	up, err := parseUpstreamProxy("http://" + f.addr())
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:    uuid.New(),
+		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),
+		Sink:     sink,
+		Resolver: publicResolver{},
+		Upstream: up,
+		Injector: anthropicInjector(),
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader("{}"))
+	p.ServeHTTP(rec, req)
+	gotConnect, _ := f.snapshot()
+	if gotConnect != "CONNECT api.anthropic.com:443" {
+		t.Fatalf("corp proxy saw %q, want CONNECT api.anthropic.com:443 (the real hostname)", gotConnect)
+	}
+}
+
 // TestUpstreamCredentialMasked verifies the corp-proxy credential is masked from
 // decision-log/stdout output via the process mask registry.
 func TestUpstreamCredentialMasked(t *testing.T) {
