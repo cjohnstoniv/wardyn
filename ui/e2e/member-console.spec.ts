@@ -76,8 +76,12 @@ test.describe("foreign/unknown run — standard not-found (absence, not refusal)
     await page.goto("/runs/00000000-0000-0000-0000-000000000000");
 
     await expect(page.getByText("Run not found")).toBeVisible();
+    // run-detail.tsx now also names "you don't have access to it" alongside
+    // archived/deleted/stale-link (run-detail.test.tsx: "names lack-of-access
+    // as a real reason") — undifferentiated from the other reasons, so the
+    // anti-enumeration property this spec is about still holds.
     await expect(
-      page.getByText(/this run may have been archived or deleted, or the link is stale/i),
+      page.getByText(/this run may have been archived or deleted, the link is stale, or you don't have access to it/i),
     ).toBeVisible();
     // No denial-flavored copy — the product must never confirm the id was
     // ever real (no existence oracle).

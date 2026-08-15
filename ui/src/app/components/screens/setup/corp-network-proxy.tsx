@@ -501,6 +501,13 @@ export function HostProxyTab({
       setUseSecret(true);
       setDisclosureOpen(true);
       toast.success("Upstream proxy saved as a secret");
+      // The secret above was just created — the orchestrator's secretNames
+      // (last fetched at mount/Re-check) doesn't know about it yet, so
+      // secretRefDangling would otherwise misread this freshly-saved ref as
+      // "no longer exists in the store" the instant it's set. onRecheck
+      // re-fetches secretNames (+ status/siteConfig) so the just-created name
+      // resolves immediately instead of only after a manual Re-check.
+      onRecheck();
     }
   };
 
@@ -509,6 +516,9 @@ export function HostProxyTab({
     if (!trimmed) return;
     if (await mutate({ ...(siteConfig ?? {}), upstream_proxy_secret_ref: trimmed, upstream_proxy_url: undefined }, "Failed to save the proxy secret reference")) {
       toast.success("Upstream proxy saved");
+      // Same staleness gap as saveAsSecret above — most commonly hit right
+      // after the "Add secret…" dialog just created `name` for real.
+      onRecheck();
     }
   };
 

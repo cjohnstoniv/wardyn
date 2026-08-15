@@ -70,12 +70,15 @@ async function switchToTable(page: Page): Promise<void> {
 
 // A table body row scoped by its task text (the header row has no fixture text).
 function runRow(page: Page, task: string): Locator {
-  // A table data row is a clickable <TableRow role="button"> (runs.tsx), not a
-  // role="row" — only the header keeps the row role. Match the button whose
-  // subtree carries the task text, scoped to the table so board-view cards
-  // (also role="button") never match. The nested "Run actions" button doesn't
-  // contain the task text, so the filter selects exactly the row.
-  return page.getByRole("table").getByRole("button").filter({ hasText: task });
+  // fix: TableRow dropped its role="button" override — a role="button" row
+  // wrapping the real per-row action buttons (RunActions) was an invalid
+  // nested-interactive-widget ARIA structure (same fix as the board's
+  // RunCard container; see runs.tsx's RunsTable). A <tr> inside a real
+  // <table> keeps its native "row" role instead. Match the row whose subtree
+  // carries the task text, scoped to the table so board-view cards never
+  // match (they're plain <div>s, not table rows, so getByRole("table") alone
+  // already excludes them).
+  return page.getByRole("table").getByRole("row").filter({ hasText: task });
 }
 
 test.describe("Runs board (default view)", () => {
@@ -305,9 +308,10 @@ test.describe("Killing an active run", () => {
     await page.getByRole("button", { name: "Refresh now" }).click();
     await switchToTable(page);
     // Still nine runs total (a kill changes a state, not the count). Data rows
-    // are role="button" (see runRow), so count those, not role="row".
+    // are role="row" (see runRow) — the header row has no fixture text, so
+    // the filter excludes it without scoping to TableBody.
     await expect(
-      page.getByRole("table").getByRole("button").filter({ hasText: /e2e fixture \d/ }),
+      page.getByRole("table").getByRole("row").filter({ hasText: /e2e fixture \d/ }),
     ).toHaveCount(9);
   });
 });
