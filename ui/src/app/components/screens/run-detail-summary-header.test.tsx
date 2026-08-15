@@ -11,7 +11,7 @@
 // below it (OverviewTab renders <AttachTerminal> whenever `attachable`).
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { SummaryHeader } from "./run-detail";
+import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
 import type { AgentRun } from "../../lib/types";
 
