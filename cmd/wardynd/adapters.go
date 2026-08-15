@@ -197,7 +197,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 
 // maskingRecorder wraps an audit.Recorder and masks verbatim secret values from
 // the ev.Data and ev.Target fields before delegating to the inner recorder. A
-// nil Registry or a missing RunID are safe no-ops (the event is forwarded as-is).
+// nil Registry is a safe no-op (the event is forwarded as-is). A missing RunID
+// still masks against the PROCESS-GLOBAL corpus (see Record) — there is simply
+// no PER-RUN corpus to add on top of it.
 //
 // HONEST RESIDUAL: masking catches verbatim byte-identical leakage only; base64
 // or model-narrated representations of secrets are NOT masked here.
@@ -209,8 +211,24 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	if m.reg != nil && ev.RunID != nil {
-		snap := m.reg.Snapshot(*ev.RunID)
+	if m.reg != nil {
+		// W20-groundtruth-mapper-2: a run-less event (ev.RunID == nil —
+		// policy.inline, secret.*, an admin action) used to short-circuit this
+		// WHOLE block (the old guard was `m.reg != nil && ev.RunID != nil`),
+		// bypassing masking entirely instead of falling back to the
+		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
+		// via AddGlobal). Snapshot(uuid.Nil) returns exactly that — globals
+		// only, since uuid.Nil is never a real run's perRun key — so a
+		// run-less row is now masked against the same globals every real run
+		// already is, just with no per-run corpus layered on top (there is
+		// none to add: masking is per-run, and without a run id there is no
+		// run-scoped snapshot to apply — a registered secret for some OTHER
+		// run must still never leak into a run-less event's masking).
+		runID := uuid.Nil
+		if ev.RunID != nil {
+			runID = *ev.RunID
+		}
+		snap := m.reg.Snapshot(runID)
 		if len(snap) > 0 {
 			masker := secretmask.NewMasker(snap)
 			if len(ev.Data) > 0 {

@@ -71,7 +71,12 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //   - llm_inspection: when the ceiling sets one, the proposal unconditionally
 //     inherits it — nil means OFF, so an omitted/weaker proposal is exactly the
 //     "disable the operator's prompt-inspection guardrail" escalation, not "no
-//     opinion";
+//     opinion". A ceiling that sets NONE is likewise the FLOOR (nil), not "no
+//     opinion" — symmetric with the workspace_mounts drop below: a member's own
+//     hand-authored llm_inspection (detector_sidecar_url, intercept_tls, ...)
+//     must never survive a nil ceiling unclamped. The inherited copy's
+//     workspace_secret_values is always zeroed — a proposal/audit event never
+//     needs resolved secret values, only the names (see types.LLMInspectionSpec);
 //   - allowed_methods: empty means "all" (unlike allowed_domains' default-deny),
 //     so an empty proposal ADOPTS the ceiling's list when the ceiling sets one,
 //     and a non-empty proposal is intersected down to it;
@@ -142,10 +147,37 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	// operator's guardrail" whenever the ceiling turns one on. Unconditional
 	// inherit, not a merge: this is a visibility/detection control, not
 	// something a member's own choice should ever weaken.
+	//
+	// W12-A-1 (CRIT) / W14-S1-1: the mirror case matters just as much — a
+	// ceiling that sets NONE (the shipped default.json's own posture) is the
+	// FLOOR for this field too, not "no opinion". Before this fix the block
+	// below only fired when the ceiling had an opinion, so under a nil ceiling
+	// a member's own hand-authored inline_policy.llm_inspection passed straight
+	// through unclamped — able to point detector_sidecar_url at any URL the
+	// wardyn-proxy process can reach (a surface the sandbox's OWN confinement
+	// class never bounds — see contentscan/sidecar.go) or flip intercept_tls,
+	// with zero operator opinion in the way. Symmetric with the
+	// workspace_mounts drop below: drop, don't pass through.
 	if ceiling.LLMInspection != nil {
 		warns = append(warns, "llm_inspection set to the operator's configured mode: "+ceiling.LLMInspection.Mode)
 		cp := *ceiling.LLMInspection
+		// W12-A-3: the inherited copy never carries resolved secret VALUES — a
+		// compose/profile proposal is advisory output handed straight back to
+		// the caller (and, before this fix, also embedded verbatim in the
+		// run.compose audit event), and neither ever needs more than the
+		// NAMES a reviewer needs to see which secrets are covered. Only
+		// dispatch ever resolves names -> values, in memory, for the proxy
+		// sidecar (runs_dispatch.go). Deep-copy the slices so this clamp never
+		// aliases the ceiling's own backing arrays (types.RunPolicySpec.Clone's
+		// same discipline).
+		cp.WorkspaceSecretNames = append([]string(nil), ceiling.LLMInspection.WorkspaceSecretNames...)
+		cp.WorkspaceSecretValues = nil
+		cp.ClassifiedMarkers = append([]string(nil), ceiling.LLMInspection.ClassifiedMarkers...)
 		out.LLMInspection = &cp
+	} else if out.LLMInspection != nil {
+		warns = append(warns, "llm_inspection dropped: operator policy sets none, so a proposal/inline llm_inspection "+
+			"(incl. detector_sidecar_url/intercept_tls) can never survive the clamp")
+		out.LLMInspection = nil
 	}
 
 	// Allowed methods: empty means "all" for THIS field (unlike AllowedDomains'
@@ -299,20 +331,29 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	if len(ceiling) > 0 {
 		_ = json.Unmarshal(ceiling, &c)
 	}
-	// Repos: intersect to the ceiling ONLY when the ceiling lists repos. An empty
-	// ceiling repo list is "no repo ALLOWLIST" (any repo), not deny-all — the
-	// proposal's repos are already ground to the workspace's ACTUAL detected remote
-	// by groundGitHubGrants before the clamp, so the repo identity is controlled by
-	// detection, and the operator restricts by PERMISSIONS (below), not by repo list.
-	// (Denying on an empty repo list would drop the legitimately-detected repo.)
-	if len(c.Repos) > 0 {
-		allowed := toSet(c.Repos)
-		kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
-		if len(dropped) > 0 {
-			*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
-		}
-		p.Repos = kept
+	// Repos: intersect to the ceiling. W23-S1-3 (RBAC-bypass): an EMPTY ceiling
+	// repo list is DENY-ALL, not "any repo" — it used to skip this block
+	// entirely on the theory that the proposal's repos are already grounded to
+	// the workspace's ACTUAL detected remote by groundGitHubGrants before the
+	// clamp, so an empty ceiling only ever restricts by PERMISSIONS (below).
+	// That holds for the composer/profile pipelines, which DO ground a
+	// proposal's repos to something real (an actually-detected git remote, an
+	// operator-selected git workspace, or a prior run's already-clamped grant)
+	// before calling Clamp — and which now widen their OWN ceiling copy to
+	// that grounded set first (widenCeilingRepoAllowlist, internal/api/
+	// compose.go) so this unconditional intersection never drops their
+	// legitimate access. It does NOT hold for a hand-authored spec (a member's
+	// own inline_policy, clamped with no grounding step ahead of it): under
+	// the shipped default.json ceiling (github_token with "repos": []) the old
+	// skip let a member's own arbitrary repo list survive verbatim — an
+	// unbounded RBAC escalation. Always intersecting closes that gap: an empty
+	// ceiling now denies everything for anything nothing has grounded.
+	allowed := toSet(c.Repos)
+	kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
+	if len(dropped) > 0 {
+		*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
 	}
+	p.Repos = kept
 	// Permissions: keep only those the ceiling allows, never above the ceiling
 	// level. Deny-by-default (M6): an absent/empty ceiling permission map grants NO
 	// permissions, so every proposed permission (incl. write/admin) is dropped —

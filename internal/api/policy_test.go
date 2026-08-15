@@ -90,35 +90,48 @@ func TestBestClass(t *testing.T) {
 }
 
 func TestValidateLLMInspection(t *testing.T) {
-	base := func(li *types.LLMInspectionSpec) types.RunPolicySpec {
-		return types.RunPolicySpec{MinConfinementClass: types.CC2, LLMInspection: li}
+	base := func(li *types.LLMInspectionSpec, domains []string) types.RunPolicySpec {
+		return types.RunPolicySpec{MinConfinementClass: types.CC2, LLMInspection: li, AllowedDomains: domains}
 	}
+	presidio := []string{"presidio"}
 	cases := []struct {
-		name string
-		li   *types.LLMInspectionSpec
-		ok   bool
+		name    string
+		li      *types.LLMInspectionSpec
+		domains []string
+		ok      bool
 	}{
-		{"nil is off (valid)", nil, true},
-		{"explicit off", &types.LLMInspectionSpec{Mode: "off"}, true},
-		{"alert + secrets", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true}, true},
-		{"block + secrets + opts", &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, OnScannerError: "block", BlockMinSeverity: "high", MaxScanBytes: 4096}, true},
-		{"mode set but no detector", &types.LLMInspectionSpec{Mode: "alert"}, false},
-		{"unknown mode", &types.LLMInspectionSpec{Mode: "redact", DetectSecrets: true}, false},
-		{"secret patterns ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecretPatterns: true}, true},
-		{"entropy ok", &types.LLMInspectionSpec{Mode: "alert", DetectEntropy: true}, true},
-		{"pii ok", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true}, true},
-		{"sidecar url is a detector", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, true},
-		{"bad sidecar url", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "presidio:8080"}, false},
-		{"negative max_scan_bytes", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, MaxScanBytes: -1}, false},
-		{"bad on_scanner_error", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, OnScannerError: "explode"}, false},
-		{"bad block_min_severity", &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, BlockMinSeverity: "ultra"}, false},
-		{"require_inspectable needs intercept_tls", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true}, false},
-		{"require_inspectable with intercept_tls ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true}, true},
-		{"intercept_tls alone ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InterceptTLS: true}, true},
+		{"nil is off (valid)", nil, nil, true},
+		{"explicit off", &types.LLMInspectionSpec{Mode: "off"}, nil, true},
+		{"alert + secrets", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true}, nil, true},
+		{"block + secrets + opts", &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, OnScannerError: "block", BlockMinSeverity: "high", MaxScanBytes: 4096}, nil, true},
+		{"mode set but no detector", &types.LLMInspectionSpec{Mode: "alert"}, nil, false},
+		{"unknown mode", &types.LLMInspectionSpec{Mode: "redact", DetectSecrets: true}, nil, false},
+		{"secret patterns ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecretPatterns: true}, nil, true},
+		{"entropy ok", &types.LLMInspectionSpec{Mode: "alert", DetectEntropy: true}, nil, true},
+		{"pii ok", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true}, nil, true},
+		{"sidecar url is a detector, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, presidio, true},
+		// W12-A-1 belt-and-braces: a well-formed http(s) sidecar URL is STILL
+		// refused when its host is not in the SAME policy's own egress
+		// allowlist — the operator must explicitly bless it, exactly like a
+		// brokered api_key injection requires an exact allowlist entry
+		// (domainAllowedExact). Before this, only the http(s) prefix was
+		// checked, so an operator-authored (or, pre-clamp-fix, a
+		// member-smuggled) ceiling could point the sidecar at an unlisted host.
+		{"sidecar url host NOT in operator allowlist is rejected", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, nil, false},
+		{"bad sidecar url (no scheme, rejected before the allowlist check)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "presidio:8080"}, nil, false},
+		{"negative max_scan_bytes", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, MaxScanBytes: -1}, nil, false},
+		{"bad on_scanner_error", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, OnScannerError: "explode"}, nil, false},
+		{"bad block_min_severity", &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, BlockMinSeverity: "ultra"}, nil, false},
+		{"require_inspectable needs intercept_tls", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true}, nil, false},
+		{"require_inspectable with intercept_tls ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true}, nil, true},
+		{"intercept_tls alone ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InterceptTLS: true}, nil, true},
+		// W12-A-2/W12-S1-1: a raw VALUE can never be authored — only NAMES.
+		{"workspace_secret_values rejected on write; author workspace_secret_names instead", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretValues: []string{"super-secret-value"}}, nil, false},
+		{"workspace_secret_names ok (the field an operator actually authors)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{"prod-db-password"}}, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validatePolicySpec(base(tc.li))
+			err := validatePolicySpec(base(tc.li, tc.domains))
 			if tc.ok && err != nil {
 				t.Fatalf("expected valid, got %v", err)
 			}

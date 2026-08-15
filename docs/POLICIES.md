@@ -379,15 +379,26 @@ unioned into a confined replay's allowlist.
 A guardrail and visibility layer, **not** exfiltration prevention (see
 `threatmodel/THREAT-MODEL.md` §5.1). Omitting the block, or `mode: "off"`, is off.
 
+**Author names, never values.** `workspace_secret_names` is the field you set —
+`workspace_secret_values` is not an authoring surface at all: `validatePolicySpec`
+refuses a non-empty value here on every policy write (stored, inline, or
+`WARDYN_DEFAULT_POLICY`), so a raw secret value can never enter a policy row.
+Dispatch alone resolves names→values, in memory, on the ephemeral copy of the
+spec handed to the proxy sidecar — every other copy (the stored row, a `GET
+/policies` response, a compose/profile proposal, the `run.policy.effective`
+audit event) carries names only, with `workspace_secret_values` redacted to a
+count if it ever appears at all.
+
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `mode` | `string` | `off` | `off`, `alert` (scan + audit, forward unchanged), or `block` (a qualifying finding refuses the request). When not off, at least one detector — a `detect_*`, a sidecar URL, or `classified_markers` — must be enabled. |
-| `workspace_secret_values` | `[]string` | `[]` | Operator-declared known secret **values** the run must not leak into a prompt. The v1 detection corpus. Never logged; values below the masking floor are ignored. |
-| `detect_secrets` | `bool` | `false` | Exact match against `workspace_secret_values`. |
+| `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store. This is what you author — the storable form of the detection corpus. A name is not sensitive the way a value is, so it round-trips freely through a stored policy, a read, or a proposal. |
+| `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names`, only in memory, only for the proxy sidecar. Never stored, never read back, never logged (a stray value is redacted to a count wherever the spec is otherwise echoed). Values shorter than the masking floor are ignored. |
+| `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus. |
 | `detect_secret_patterns` | `bool` | `false` | Regex catalog of well-known secret *formats* (AWS/GitHub/Slack/Google keys, PEM, JWTs, Stripe). Higher precision than entropy; false-positives on example keys in code. |
 | `detect_entropy` | `bool` | `false` | Shannon-entropy detector. High false-positive rate in code; emits medium severity so a strict `block_min_severity` can exclude it. |
 | `detect_pii` | `bool` | `false` | Regex/Luhn PII detector. Best-effort visibility signal, never a control. |
-| `detector_sidecar_url` | `string` | (unset) | Out-of-process detector the proxy POSTs each span to (e.g. Presidio, LLM-Guard). Must be an `http(s)://` URL. A sidecar error respects `on_scanner_error` like any other scanner error. |
+| `detector_sidecar_url` | `string` | (unset) | Out-of-process detector the proxy POSTs each span to (e.g. Presidio, LLM-Guard). Must be an `http(s)://` URL **whose host is also in this SAME policy's `allowed_domains`** (or `allow_all_egress`) — an operator allowlist, not a bare scheme check, since the sidecar is dialed proxy-side with span text on a surface the sandbox's own confinement class never bounds. A sidecar error respects `on_scanner_error` like any other scanner error. |
 | `classified_markers` | `[]string` | `[]` | Literal markers (`INTERNAL ONLY`, `CONFIDENTIAL//NOFORN`) whose presence flags a classified-content leak. Case-insensitive substring match. |
 | `scan_attachments` | `bool` | `false` | Decode and scan base64 image/document attachment bytes. Off by default: binary, large, high-FP. |
 | `inspect_forward_egress` | `bool` | `false` | Extend inspection from the LLM routes to the generic plaintext-HTTP forward path. HTTPS connectors tunnel via opaque CONNECT and stay uninspected unless MITM'd. |

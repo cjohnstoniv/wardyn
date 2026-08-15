@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"path"
 	"slices"
 	"strings"
@@ -324,11 +325,22 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// github_token to the detected repos, or drop it when the dir has no GitHub
 	// remote ("no remote -> no token"). The LLM's repo guess never survives.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "ground"})
-	var groundWarns []string
-	if req.Workspace.Kind == composer.WorkspaceLocal {
-		groundWarns = groundGitHubGrants(&prop.InlinePolicy, detectedGitHub, detectedOther)
-		groundWarns = append(groundWarns, groundGitPATGrants(&prop.InlinePolicy, detectedOther)...)
-	}
+	// W15-b: fold the operator's EXPLICIT git-workspace selections into the SAME
+	// grounding set local-dir detection uses (composeWorkspaceGitRepos) — a
+	// composed run whose workspace is a DIRECT git pick (composer.WorkspaceGit),
+	// not a local directory Wardyn can `git remote -v` inspect, never ran
+	// grounding at all before this: the analyzer's OWN repo guess for a
+	// github_token grant reached composer.Clamp ungrounded, while Clamp's
+	// any-repo-when-ceiling-is-empty behavior assumed every proposal reaching it
+	// was already grounded to reality. groundGitHubGrants/groundGitPATGrants now
+	// always run (not gated to WorkspaceLocal): a pure-ephemeral workspace
+	// correctly grounds to nothing, dropping any github_token grant ("no remote
+	// -> no token"), exactly as it already does for a local dir with none.
+	selGitHub, selOther := composeWorkspaceGitRepos(req.Workspaces)
+	detectedGitHub = append(detectedGitHub, selGitHub...)
+	detectedOther = append(detectedOther, selOther...)
+	groundWarns := groundGitHubGrants(&prop.InlinePolicy, detectedGitHub, detectedOther)
+	groundWarns = append(groundWarns, groundGitPATGrants(&prop.InlinePolicy, detectedOther)...)
 	// ALL workspace kinds: api_key secret names must be storable, or the setup
 	// checklist's add-secret fix and the launch gate both dead-end (see
 	// groundAPIKeySecretNames).
@@ -412,6 +424,17 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	}
 	ceiling.MinConfinementClass = composer.EffectiveConfinementFloor(
 		s.cfg.DefaultPolicy.MinConfinementClass, req.ConfinementFloor, runnerBest)
+	// W23-S1-3: composer.Clamp now treats an EMPTY ceiling github_token repo
+	// list as deny-all (the RBAC floor a hand-authored/member inline_policy
+	// needs). This proposal's own github_token grant was already grounded to
+	// REALITY above (detectedGitHub: an actually-detected local remote, or an
+	// operator-selected git workspace) — not the analyzer's guess — so widen
+	// THIS pipeline's own ceiling copy to that grounded set when the operator's
+	// ceiling itself sets no repo allowlist (the shipped default.json shape),
+	// or the new deny-all floor would strip the very access grounding just
+	// proved legitimate. widenCeilingRepoAllowlist never mutates the shared
+	// s.cfg.DefaultPolicy — it returns a Clone()'d copy.
+	ceiling = widenCeilingRepoAllowlist(ceiling, detectedGitHub)
 	clamped, clampWarns := composer.Clamp(prop.InlinePolicy, ceiling)
 	// Pre/post-clamp egress diff for the setup checklist's dropped-domain rows
 	// (no Clamp signature change — Clamp already returns this as a joined prose
@@ -912,6 +935,108 @@ func groundGitPATGrants(spec *types.RunPolicySpec, detectedOther []string) []str
 	}
 	spec.EligibleGrants = kept
 	return warns
+}
+
+// composeWorkspaceGitRepos splits req.Workspaces' explicit WorkspaceGit-kind
+// selections into GitHub-shaped ("owner/repo", case PRESERVED) and other
+// entries — the same (github, other) shape gitremote.DetectGitHubRepos
+// returns for a local directory's detected remotes — so groundGitHubGrants
+// can ground a composed run's github_token grant on an EXPLICIT operator
+// selection exactly like it already grounds one on a DETECTED local remote.
+// See the "ground" stage call site (W15-b) for why this must feed the SAME
+// grounding set.
+//
+// Deliberately does NOT reuse gitBrokerKeyFromSlug (workspace_run.go): that
+// helper recognizes github.com the same way but LOWERCASES the result for its
+// own purpose (a git-broker MAP KEY) — wrong here, where the value rides
+// straight into a github_token grant's scope.repos.
+func composeWorkspaceGitRepos(wss []composer.Workspace) (github, other []string) {
+	for _, ws := range wss {
+		if ws.Kind != composer.WorkspaceGit {
+			continue
+		}
+		repo := strings.TrimSpace(ws.Repo)
+		if repo == "" || !repoFieldSafe(repo) {
+			continue
+		}
+		if cloneURL := repoCloneURL(repo); cloneURL != "" {
+			if u, err := neturl.Parse(cloneURL); err == nil && strings.EqualFold(u.Hostname(), "github.com") {
+				if slug := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git"); strings.Count(slug, "/") == 1 {
+					github = append(github, slug)
+					continue
+				}
+			}
+		}
+		other = append(other, repo)
+	}
+	return github, other
+}
+
+// widenCeilingRepoAllowlist returns a ceiling copy whose github_token grant's
+// repo scope is widened to repos when the ceiling's OWN grant sets none.
+// composer.Clamp treats an empty ceiling repo list as DENY-ALL (W23-S1-3's
+// RBAC floor for a hand-authored/ungrounded proposal) — but the compose and
+// profile-synthesis pipelines (the two callers) have ALREADY grounded their
+// own proposal's repos to something provably real (a detected git remote, an
+// operator-selected git workspace, or a prior run's already-clamped grant)
+// before calling Clamp, so widening the ceiling copy here keeps that
+// legitimate access instead of silently dropping it. Never mutates the
+// shared ceiling passed in (types.RunPolicySpec.Clone gives an independent
+// copy first) — ceiling is commonly s.cfg.DefaultPolicy, the process-global
+// default every run resolves against.
+func widenCeilingRepoAllowlist(ceiling types.RunPolicySpec, repos []string) types.RunPolicySpec {
+	if len(repos) == 0 {
+		return ceiling
+	}
+	// Clone unconditionally (cheap, off the hot path — one call per compose/
+	// profile request): ceiling.EligibleGrants[i].Scope is a shared backing
+	// array whenever ceiling is s.cfg.DefaultPolicy itself, and writing into it
+	// in place would corrupt the process-global default for every later run.
+	out := ceiling.Clone()
+	for i, g := range out.EligibleGrants {
+		if g.Kind != types.GrantGitHubToken || len(ghScopeRepos(g.Scope)) > 0 {
+			continue
+		}
+		var sc struct {
+			Repos       []string          `json:"repos"`
+			Permissions map[string]string `json:"permissions"`
+		}
+		_ = json.Unmarshal(g.Scope, &sc)
+		sc.Repos = repos
+		if b, err := json.Marshal(sc); err == nil {
+			out.EligibleGrants[i].Scope = b
+		}
+	}
+	return out
+}
+
+// ghScopeRepos decodes a github_token grant scope's repos list ("" fields
+// tolerated — an undecodable/absent scope simply has no repos).
+func ghScopeRepos(scope json.RawMessage) []string {
+	var sc struct {
+		Repos []string `json:"repos"`
+	}
+	_ = json.Unmarshal(scope, &sc)
+	return sc.Repos
+}
+
+// synthGitHubRepos collects every repo a synthesized Recording-Mode profile's
+// own github_token grant(s) already carry (internal/api/profile.go). They are
+// provably real: recordmode.Synthesize derives them from grants the SOURCE
+// run actually held, and that run's own grant was itself already clamped once
+// at creation — never a raw, ungrounded guess the way a hand-authored
+// inline_policy's would be. widenCeilingRepoAllowlist uses this to keep that
+// access under an operator ceiling that places no repo allowlist, without
+// reopening the deny-all floor Clamp now applies to a genuinely ungrounded
+// proposal.
+func synthGitHubRepos(spec types.RunPolicySpec) []string {
+	var repos []string
+	for _, g := range spec.EligibleGrants {
+		if g.Kind == types.GrantGitHubToken {
+			repos = append(repos, ghScopeRepos(g.Scope)...)
+		}
+	}
+	return repos
 }
 
 // groundAPIKeySecretNames rewrites LLM-proposed api_key secret names that can

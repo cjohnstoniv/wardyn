@@ -228,6 +228,60 @@ func TestFilterMemberGrants(t *testing.T) {
 	}
 }
 
+// TestFilterMemberGrants_SSHKeyKnownHostsPairing is the W12-B-2 regression: an
+// ssh_key grant's known_hosts_secret_ref must match the ceiling's OWN
+// known_hosts_secret_ref for that exact (host, key_secret_ref) pairing — a
+// member must not be able to reuse an operator-approved key pairing while
+// attaching a DIFFERENT known_hosts_secret_ref of their own choosing. Before the
+// fix, storedSecretGrantPairing ignored known_hosts_secret_ref entirely, so a
+// mismatched/added ref here was wrongly KEPT (it would let mintSSHKey, broker.go,
+// return an arbitrary stored secret's value as Minted.KnownHosts, escaping this
+// gate). Fails on base 6d76911; passes once known_hosts_secret_ref is part of
+// the pairing comparison.
+func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
+	h := newHarness(t)
+	sshKey := func(host, keyRef, khRef string) types.GrantSpec {
+		sc := map[string]any{"host": host, "key_secret_ref": keyRef}
+		if khRef != "" {
+			sc["known_hosts_secret_ref"] = khRef
+		}
+		return types.GrantSpec{Kind: types.GrantSSHKey, Scope: mustJSON(sc)}
+	}
+
+	// Operator ceiling: github.com/gh-ssh-key pinned to gh-known-hosts.
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		EligibleGrants: []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "gh-known-hosts")},
+	}
+
+	// Exact pairing (same host, key, known_hosts) is kept.
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "gh-known-hosts")}); len(kept) != 1 {
+		t.Fatalf("exact ssh_key pairing incl. known_hosts: kept=%d, want 1", len(kept))
+	}
+	// Same host+key, but a DIFFERENT known_hosts_secret_ref of the member's own
+	// choosing: dropped. This is the W12-B-2 bypass case.
+	if kept, warns, code, err := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "attacker-secret")}); len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
+		t.Fatalf("mismatched known_hosts_secret_ref: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) - member must not smuggle a different known_hosts ref", len(kept), len(warns), code, err)
+	}
+	// Same host+key, known_hosts_secret_ref OMITTED where the ceiling names one:
+	// also not an exact match, dropped.
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "")}); len(kept) != 0 {
+		t.Fatalf("omitted known_hosts_secret_ref vs ceiling's set one: kept=%d, want 0", len(kept))
+	}
+
+	// Ceiling with NO known_hosts_secret_ref (the common case: the image-baked
+	// known_hosts covers github.com/ADO). A member's grant must also omit it to
+	// match (empty==empty); naming ANY known_hosts_secret_ref is a mismatch.
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		EligibleGrants: []types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "")},
+	}
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "")}); len(kept) != 1 {
+		t.Fatalf("both empty known_hosts_secret_ref: kept=%d, want 1", len(kept))
+	}
+	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "some-secret")}); len(kept) != 0 {
+		t.Fatalf("member-added known_hosts_secret_ref where ceiling has none: kept=%d, want 0", len(kept))
+	}
+}
+
 // TestCreateRun_MemberInlineGrantExfilDropped proves the gate is wired into the
 // create-run inline path and is member-only: a member's unmatched stored-secret
 // pairing is dropped from the resolved policy (eligible_grants=0), while an

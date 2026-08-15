@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -277,6 +278,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
 	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr)
 
+	// LLM-inspection detection corpus: resolve WorkspaceSecretNames -> VALUES
+	// from the secret store onto THIS dispatch's local policy copy only (never
+	// a stored/ceiling spec) — see resolveLLMInspectionSecrets. Last-mile,
+	// right before the ProxyConfig snapshot below captures policy: the proxy
+	// sidecar is the only consumer that ever needs the resolved values.
+	s.resolveLLMInspectionSecrets(ctx, run, &policy)
+
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            image,
@@ -339,10 +347,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// the envelope the proxy really enforces (ProxyConfig.Policy below), never a
 	// pre-union guess. One snapshot covers egress + first_use_approval +
 	// LLMInspection + mount read-only flags + resource caps. The spec carries
-	// secret NAMES/refs only, never values (types.GrantSpec.Scope), so this leaks
-	// nothing the audit log does not already hold.
+	// secret NAMES/refs only, never values (types.GrantSpec.Scope) — EXCEPT
+	// LLMInspection.WorkspaceSecretValues, which resolveLLMInspectionSecrets just
+	// populated with the REAL resolved corpus for the proxy above. That field's own
+	// doc comment says NEVER logged (W12-A-2), so the audited copy is built from a
+	// Clone() (never the live `policy` the ProxyConfig snapshot below still
+	// references) with the values replaced by a count — the proxy still gets the
+	// real values, the audit log never does.
+	auditPolicy := policy.Clone()
+	if auditPolicy.LLMInspection != nil && len(auditPolicy.LLMInspection.WorkspaceSecretValues) > 0 {
+		auditPolicy.LLMInspection.WorkspaceSecretValues = []string{
+			fmt.Sprintf("<%d value(s) redacted>", len(auditPolicy.LLMInspection.WorkspaceSecretValues)),
+		}
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
-		run.ID.String(), "success", mustJSON(policy)))
+		run.ID.String(), "success", mustJSON(auditPolicy)))
 
 	// Stamped BEFORE CreateSandbox, not after (review round 2, L7): the row
 	// still carries the heartbeat it was born with, which any image
@@ -584,6 +603,60 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 		runID.String(), "success", mustJSON(detail)))
 	return resolved
+}
+
+// resolveLLMInspectionSecrets resolves the llm_inspection detection corpus
+// store->proxy AT DISPATCH: WorkspaceSecretNames (the field a policy is
+// actually allowed to author — see types.LLMInspectionSpec, validatePolicySpec
+// refuses a raw value on any write) is looked up in the secret store and
+// appended to WorkspaceSecretValues on THIS dispatch's local policy copy only
+// — never a stored/ceiling spec, never re-read, never logged (the
+// run.policy.effective audit above redacts it to a count).
+//
+// Belt-and-braces (W12-A-2): every resolved value is ALSO registered with the
+// run's mask registry, so a verbatim leak into PTY capture, a session
+// recording, or any OTHER audit event's Data/Target is scrubbed the same way
+// any other run secret is (cmd/wardynd's maskingRecorder) — not merely kept
+// out of this one event.
+//
+// Fail-open per name: a name that no longer resolves (deleted secret, no
+// store configured) is skipped and audited by NAME only (never a value), and
+// dispatch continues — this is a detection guardrail, not an access-control
+// gate (types.LLMInspectionSpec's own doc: "a guardrail + visibility layer,
+// NOT exfiltration prevention").
+func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec) {
+	li := policy.LLMInspection
+	if li == nil || len(li.WorkspaceSecretNames) == 0 {
+		return
+	}
+	if s.cfg.Secrets == nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"reason": "no secret store configured", "names": li.WorkspaceSecretNames,
+			})))
+		return
+	}
+	var resolved, missing int
+	for _, name := range li.WorkspaceSecretNames {
+		val, err := s.cfg.Secrets.Get(ctx, name)
+		if err != nil || len(val) == 0 {
+			missing++
+			continue
+		}
+		resolved++
+		li.WorkspaceSecretValues = append(li.WorkspaceSecretValues, string(val))
+		if s.cfg.MaskRegistry != nil {
+			s.cfg.MaskRegistry.Add(run.ID, val)
+		}
+	}
+	outcome := "success"
+	if missing > 0 {
+		outcome = "failure"
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+		run.ID.String(), outcome, mustJSON(map[string]any{
+			"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
+		})))
 }
 
 // toolchainNeeds is dispatchParams.Toolchains' shape: which of the two

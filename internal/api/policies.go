@@ -4,6 +4,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -48,9 +49,15 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 	var pageFn func(store.Page) ([]types.RunPolicy, error)
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
-		pageFn = func(p store.Page) ([]types.RunPolicy, error) { return pg.ListPoliciesPage(r.Context(), p) }
+		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
+			ps, err := pg.ListPoliciesPage(r.Context(), p)
+			return redactPoliciesForRead(ps), err
+		}
 	}
-	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) { return s.cfg.Store.ListPolicies(r.Context()) })
+	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) {
+		ps, err := s.cfg.Store.ListPolicies(r.Context())
+		return redactPoliciesForRead(ps), err
+	})
 }
 
 // handleGetPolicy returns one policy by id (404 when unknown).
@@ -67,7 +74,36 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get policy: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, redactPolicyForRead(p))
+}
+
+// redactPolicyForRead returns p with any llm_inspection.workspace_secret_values
+// replaced by a count before it is ever serialized back to a caller. Belt-and-
+// braces (W12-S1-1): validatePolicySpec already refuses a WRITE that sets a raw
+// value (an operator authors workspace_secret_names instead — see
+// types.LLMInspectionSpec), so a stored row should never carry one — but a READ
+// path must never re-expose it if that invariant is ever violated (a migration,
+// a direct DB edit, ...). Mirrors the run.policy.effective audit redaction
+// (runs_dispatch.go) — same shape, different chokepoint. Does not mutate p's
+// own LLMInspection (a fresh copy is substituted), so a caller holding the
+// original is never surprised by an in-place edit.
+func redactPolicyForRead(p types.RunPolicy) types.RunPolicy {
+	li := p.Spec.LLMInspection
+	if li == nil || len(li.WorkspaceSecretValues) == 0 {
+		return p
+	}
+	cp := *li
+	cp.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
+	p.Spec.LLMInspection = &cp
+	return p
+}
+
+// redactPoliciesForRead maps redactPolicyForRead over a list read (handleListPolicies).
+func redactPoliciesForRead(ps []types.RunPolicy) []types.RunPolicy {
+	for i := range ps {
+		ps[i] = redactPolicyForRead(ps[i])
+	}
+	return ps
 }
 
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201

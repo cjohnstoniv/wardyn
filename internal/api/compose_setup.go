@@ -440,12 +440,22 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 				continue
 			}
 			seenGH = true
+			// W15-b: name the repo(s) this grant is actually SCOPED to (the
+			// grounded reality groundGitHubGrants set — never the analyzer's
+			// guess) so a reviewer can see it agrees with the workspace they
+			// selected, instead of trusting an opaque "minted at run start".
+			detail := "minted at run start by the broker; there is nothing to check pre-launch"
+			if repos := ghScopeRepos(g.Scope); len(repos) > 0 {
+				detail += " — scoped to " + strings.Join(repos, ", ")
+			} else {
+				detail += " — no repo named in scope (nothing to clone/push against)"
+			}
 			items = append(items, SetupItem{
 				Kind: "repo_credential", ID: "repo_credential:github_token",
 				Label:      "GitHub repository access",
 				RequiredBy: "cloning/pushing the workspace's GitHub remote",
 				Status:     "unverified",
-				Detail:     "minted at run start by the broker; there is nothing to check pre-launch",
+				Detail:     detail,
 				Residency:  "brokered_mint",
 			})
 		case types.GrantGitPAT:

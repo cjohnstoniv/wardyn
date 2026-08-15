@@ -193,11 +193,13 @@ func TestMaskingRecorder_NilRegistryIsNoOp(t *testing.T) {
 	}
 }
 
-// TestMaskingRecorder_NilRunIDIsNoOp verifies an event with no RunID is
-// forwarded unchanged: masking is per-run, so without a run id there is no
-// snapshot to apply (and a registered secret for some other run must not leak
-// into a runless event's masking — it simply isn't masked here).
-func TestMaskingRecorder_NilRunIDIsNoOp(t *testing.T) {
+// TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak verifies an event
+// with no RunID is NOT masked against another run's PER-RUN secret: masking
+// is per-run, so without a run id there is no run-scoped snapshot to apply,
+// and a secret registered for some OTHER run must never leak into a run-less
+// event's masking. (A run-less event IS still masked against the
+// PROCESS-GLOBAL corpus — see TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies.)
+func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	other := uuid.New()
 	const secret = "ghp_supersecrettoken123"
@@ -212,7 +214,36 @@ func TestMaskingRecorder_NilRunIDIsNoOp(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 	if inner.last.Target != target {
-		t.Fatalf("runless event should pass through unchanged, got %q", inner.last.Target)
+		t.Fatalf("a run-less event must not be masked against ANOTHER run's per-run secret, got %q", inner.last.Target)
+	}
+}
+
+// TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
+// W20-groundtruth-mapper-2: a run-less audit row (ev.RunID == nil —
+// policy.inline, secret.*, an admin action) used to bypass masking ENTIRELY,
+// because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
+// the whole block whenever RunID was nil. It must still be masked against the
+// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered via
+// AddGlobal) — Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil
+// is never a real run's perRun key).
+func TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies(t *testing.T) {
+	reg := secretmask.NewRegistry()
+	const secret = "ghp_supersecrettoken123"
+	reg.AddGlobal([]byte(secret))
+
+	inner := &fakeAuditRecorder{}
+	rec := maskingRecorder{inner: inner, reg: reg}
+
+	target := "token=" + secret
+	ev := types.AuditEvent{RunID: nil, Target: target} // run-less event
+	if err := rec.Record(context.Background(), ev); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if strings.Contains(inner.last.Target, secret) {
+		t.Fatalf("W20-groundtruth-mapper-2: a global secret leaked verbatim in a run-less event's Target: %q", inner.last.Target)
+	}
+	if !strings.Contains(inner.last.Target, "<secret-hidden>") {
+		t.Fatalf("expected the placeholder in a run-less event's masked Target, got %q", inner.last.Target)
 	}
 }
 

@@ -62,6 +62,16 @@ func reservedSecret(name string) bool {
 // the Bedrock BEARER path authors a host-pinned api_key grant that legitimately
 // resolves it through the injection sink (see runs.go), so reserving it here
 // would break that path.
+//
+// This is NOT the guard for the broker's git_pat/ssh_key mint paths
+// (mintGitPAT/mintSSHKey). Those return a secret's raw VALUE into the sandbox
+// (unlike api_key, whose value never leaves the broker), so they need a
+// STRICTLY WIDER guard — internal/broker.reservedBrokerSecretNames — that also
+// refuses github-app-key/github-app-id, wardyn-ssh-host-key, and
+// bedrock-api-key (W12-B-1). The broker cannot import this package, so the two
+// lists are related but deliberately not identical; do not "fix" that by
+// widening sinkReservedSecret itself — the api_key path is fine with the
+// narrower set.
 func sinkReservedSecret(name string) bool {
 	return reservedSecret(name) ||
 		name == bedrockAccessKeyIDSecret ||

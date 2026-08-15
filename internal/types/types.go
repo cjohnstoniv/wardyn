@@ -360,6 +360,12 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
+		// Deep-copy the nested slice fields too, or this "clone" still aliases
+		// the receiver's backing arrays through the copied pointer — exactly the
+		// hazard this whole method exists to prevent (see the doc comment above).
+		li.WorkspaceSecretNames = append([]string(nil), s.LLMInspection.WorkspaceSecretNames...)
+		li.WorkspaceSecretValues = append([]string(nil), s.LLMInspection.WorkspaceSecretValues...)
+		li.ClassifiedMarkers = append([]string(nil), s.LLMInspection.ClassifiedMarkers...)
 		out.LLMInspection = &li
 	}
 	if s.Resources != nil {
@@ -375,13 +381,28 @@ type LLMInspectionSpec struct {
 	// Mode is "off" (default), "alert" (scan + audit, forward unchanged), or
 	// "block" (a qualifying finding refuses the request). "" == "off".
 	Mode string `json:"mode"`
-	// WorkspaceSecretValues are operator-declared known secret VALUES (e.g. the
-	// contents of a mounted .env) that the run must not leak into a prompt. They
-	// are the v1 detection corpus and are NEVER logged. Values shorter than the
-	// masking floor are ignored.
+	// WorkspaceSecretNames are operator-declared secret NAMES, resolved against
+	// the at-rest secret store — the field an operator/admin actually AUTHORS
+	// (on a stored policy or an inline_policy). This is the storable form of the
+	// detection corpus: a name is not sensitive the way a value is, so it may
+	// freely appear in a stored policy row, a policy read, or a compose/profile
+	// proposal returned to a caller. Resolved to WorkspaceSecretValues ONLY at
+	// dispatch (resolveLLMInspectionSecrets, internal/api/runs_dispatch.go), in
+	// memory, on the per-dispatch policy copy handed to the proxy sidecar.
+	WorkspaceSecretNames []string `json:"workspace_secret_names,omitempty"`
+	// WorkspaceSecretValues are the RESOLVED secret VALUES (e.g. the contents of
+	// a mounted .env) the run must not leak into a prompt — the v1 detection
+	// corpus the proxy sidecar actually matches against. NOT an authoring
+	// field: validatePolicySpec refuses a non-empty value here on every policy
+	// write (stored, inline, or WARDYN_DEFAULT_POLICY) — author
+	// WorkspaceSecretNames instead. Populated ONLY by dispatch, in memory, on
+	// the ephemeral copy of the spec sent to the proxy; every other copy (the
+	// stored row, a policy read DTO, a compose/profile proposal, the
+	// run.policy.effective audit event) carries names only, values redacted to
+	// a count. NEVER logged. Values shorter than the masking floor are ignored.
 	WorkspaceSecretValues []string `json:"workspace_secret_values,omitempty"`
-	// DetectSecrets enables the known-secret detector (exact match against
-	// operator-declared WorkspaceSecretValues). At least one Detect* must be true
+	// DetectSecrets enables the known-secret detector (exact match against the
+	// resolved WorkspaceSecretValues corpus). At least one Detect* must be true
 	// when Mode != off.
 	DetectSecrets bool `json:"detect_secrets,omitempty"`
 	// DetectSecretPatterns enables the regex catalog of well-known secret FORMATS

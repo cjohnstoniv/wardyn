@@ -144,8 +144,13 @@ type Minted struct {
 	Username string `json:"username,omitempty"`
 	// KnownHosts is the OpenSSH known_hosts material for an ssh_key grant whose
 	// scope named a known_hosts_secret_ref. Empty otherwise (ssh_key runs fall back
-	// to the image-baked /etc/ssh/ssh_known_hosts for github.com / ADO). It is
-	// public host-key data, not a secret, so it is NOT mask-registered.
+	// to the image-baked /etc/ssh/ssh_known_hosts for github.com / ADO). Nominally
+	// public host-key data, not a secret — but mask-registered by mint() anyway
+	// (W12-B-2), as defense in depth: storedSecretGrantPairing (internal/api)
+	// now pins a MEMBER's known_hosts_secret_ref to exactly the operator's own
+	// ceiling pairing, but an unclamped (operator-authored) grant could still
+	// name an unexpected secret here, and this was the one mint output never
+	// mask-registered at all.
 	KnownHosts string `json:"known_hosts,omitempty"`
 	// Injection is the proxy-side rule for api_key. Nil for github_token/git_pat.
 	Injection *egress.InjectionRule `json:"injection,omitempty"`
@@ -469,12 +474,20 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 
 	b.auditMint(ctx, caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
 
-	// Register the minted token in the mask registry so PTY/asciicast streams
-	// can mask verbatim occurrences of the credential. A nil registry is a
-	// no-op; only value-bearing kinds (github_token, git_pat) set Token — api_key
-	// never does (its value stays proxy-side).
-	if minted.Token != "" && b.maskReg != nil {
-		b.maskReg.Add(caller.RunID, []byte(minted.Token))
+	// Register the minted token — and, for ssh_key, its known_hosts material —
+	// in the mask registry so PTY/asciicast streams can mask verbatim
+	// occurrences of the credential. A nil registry is a no-op; only
+	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
+	// never does (its value stays proxy-side). KnownHosts is mask-registered too
+	// (W12-B-2): see the Minted.KnownHosts doc comment for why a nominally
+	// public field still gets this treatment.
+	if b.maskReg != nil {
+		if minted.Token != "" {
+			b.maskReg.Add(caller.RunID, []byte(minted.Token))
+		}
+		if minted.KnownHosts != "" {
+			b.maskReg.Add(caller.RunID, []byte(minted.KnownHosts))
+		}
 	}
 
 	return minted, nil
@@ -638,24 +651,48 @@ type gitPATScope struct {
 	Username   string `json:"username"`
 }
 
-// reservedBrokerSecretNames mirrors internal/api.sinkReservedSecret at the broker
-// SINK: names that must never be resolved into a credential VALUE. Returning
-// wardyn-signing-key / wardyn-session-key as a git password would let a policy
-// exfiltrate the identity-signing or session-HMAC key. The three resident AWS
-// Bedrock SigV4 credentials (aws-access-key-id / aws-secret-access-key /
-// aws-session-token) are here for the same reason: resolveBedrockAuth reads them
-// DIRECTLY to sign requests, never via a grant, so a git_pat/ssh_key grant naming
-// one is only an exfil attempt. bedrock-api-key is intentionally ABSENT — the
-// Bedrock BEARER path authors a host-pinned api_key grant that legitimately
-// resolves it, and api_key values never leave the broker anyway (resolved at the
-// injection sink, not here). The broker cannot import the api package, so this
-// list is kept in sync by hand; the policy validator rejects these at write time.
+// reservedBrokerSecretNames is the reserved-name guard for the git_pat/ssh_key
+// mint paths (mintGitPAT/mintSSHKey below) — the ONLY broker lanes that hand a
+// stored secret's raw VALUE to the sandbox (Minted.Token / Minted.KnownHosts,
+// read by agent-run). It contains internal/api.sinkReservedSecret's full set —
+// wardyn-signing-key / wardyn-session-key (would leak the identity-signing /
+// session-HMAC key as a git password) and the three resident AWS Bedrock SigV4
+// credentials aws-access-key-id / aws-secret-access-key / aws-session-token
+// (resolveBedrockAuth reads them DIRECTLY to sign requests, never via a grant,
+// so a git_pat/ssh_key grant naming one is only an exfil attempt) — PLUS names
+// that are safe at the api_key sink (never sandbox-visible: resolved proxy-side
+// by name, or for bedrock-api-key, legitimately injected as a header by the
+// host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE
+// (W12-B-1):
+//   - github-app-id / github-app-key: the GitHub App's numeric id and PEM
+//     private key (cmd/wardynd's secretGitHubAppID / secretGitHubAppKey), read
+//     server-side ONLY by githubMinter.client (github.go) to mint short-lived
+//     installation tokens — never via reservedBrokerSecret, so widening this map
+//     cannot affect that path. A git_pat/ssh_key grant naming github-app-key
+//     would hand the long-lived App key itself to the sandbox.
+//   - wardyn-ssh-host-key: the SSH gateway's ed25519 host key PEM (cmd/wardynd's
+//     secretSSHHostKey).
+//   - bedrock-api-key: has no legitimate git_pat/ssh_key use (unlike its
+//     api_key-grant use), so naming it here can only be an attempt to return the
+//     Bedrock bearer token to the sandbox disguised as a PAT/SSH key.
+//
+// This makes reservedBrokerSecretNames STRICTLY WIDER than sinkReservedSecret —
+// deliberately: a name can be fine to resolve server-side/proxy-side (api_key)
+// while still being unsafe to hand back as a raw mint VALUE. The broker cannot
+// import the api package, so the shared names are kept in sync by hand; the
+// shared names are ALSO rejected by the policy validator at write time, but the
+// four extra names above are enforced ONLY here — the actual mint chokepoint a
+// git_pat/ssh_key value would otherwise cross into the sandbox.
 var reservedBrokerSecretNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,
 	"aws-access-key-id":     true,
 	"aws-secret-access-key": true,
 	"aws-session-token":     true,
+	"github-app-id":         true,
+	"github-app-key":        true,
+	"wardyn-ssh-host-key":   true,
+	"bedrock-api-key":       true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the

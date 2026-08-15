@@ -188,7 +188,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	ceiling := s.cfg.DefaultPolicy.EligibleGrants
 	for _, g := range grants {
-		host, secretRef, covered, derr := storedSecretGrantPairing(g)
+		host, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
 		if !covered {
 			kept = append(kept, g) // github_token (scope-intersected by the clamp), cloud_sts, …
 			continue
@@ -202,7 +202,7 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 				continue
 			}
 		}
-		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, ceiling) {
+		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, ceiling) {
 			warns = append(warns, fmt.Sprintf(
 				"dropped %s grant pairing secret %q with host %q: not in the operator's eligible grants (the run's own model access is provisioned by the platform)",
 				g.Kind, secretRef, host))
@@ -213,43 +213,59 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 	return kept, warns, 0, nil
 }
 
-// storedSecretGrantPairing returns the (host, secretRef) a stored-secret grant
-// pairs and whether the kind is one enforceMemberGrantScope covers. An
-// undecodable scope returns covered=true WITH the error (fail closed — an
-// unreadable stored-secret grant is rejected, never skipped).
-func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef string, covered bool, err error) {
+// storedSecretGrantPairing returns the (host, secretRef, knownHostsRef) a
+// stored-secret grant pairs and whether the kind is one enforceMemberGrantScope
+// covers. knownHostsRef is populated only for ssh_key (empty — and compared as
+// such — for every other kind; see storedSecretPairingInCeiling). An undecodable
+// scope returns covered=true WITH the error (fail closed — an unreadable
+// stored-secret grant is rejected, never skipped).
+func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered bool, err error) {
 	switch g.Kind {
 	case types.GrantAPIKey:
 		r, e := injectionRuleFromScope(g.Scope)
-		return r.Host, r.SecretName, true, e
+		return r.Host, r.SecretName, "", true, e
 	case types.GrantGitPAT:
 		h, sn, _, e := gitPATScopeFields(g.Scope)
-		return h, sn, true, e
+		return h, sn, "", true, e
 	case types.GrantSSHKey:
-		h, kr, _, _, e := sshKeyScopeFields(g.Scope)
-		return h, kr, true, e
+		h, kr, _, khr, e := sshKeyScopeFields(g.Scope)
+		return h, kr, khr, true, e
 	default:
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
 }
 
 // storedSecretPairingInCeiling reports whether some operator eligible-grant of
 // the same kind pairs the SAME host with the SAME secret (host case-insensitive)
-// — an exact-pairing match, so a member may only reuse a pairing the operator
-// explicitly listed, never invent one. An operator ceiling grant with a wildcard
-// (empty/undecodable) scope carries no pairing and matches nothing here, so it
-// authorizes the kind for the composer's own (sentinel, host-pinned) grants
-// without empowering a member to pick the secret and host.
-func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef string, ceiling []types.GrantSpec) bool {
+// AND, for ssh_key, the SAME known_hosts_secret_ref (empty included) — an
+// exact-pairing match, so a member may only reuse a pairing the operator
+// explicitly listed, never invent one.
+//
+// known_hosts_secret_ref is part of this match (W12-B-2): before this it was
+// left out of the comparison entirely, so a member could reuse an
+// operator-approved (host, key_secret_ref) pairing while attaching ANY
+// known_hosts_secret_ref of their own choosing — including one naming a stored
+// secret with no relation to SSH host keys — and mintSSHKey (broker.go) would
+// return that secret's raw value as Minted.KnownHosts, an rbac-bypass escaping
+// this gate entirely. Requiring an exact match (including the common
+// empty==empty case, where the operator named no known_hosts_secret_ref at all)
+// closes that: a member can only obtain known_hosts material the operator's OWN
+// ceiling grant already named for that exact pairing.
+//
+// An operator ceiling grant with a wildcard (empty/undecodable) scope carries no
+// pairing and matches nothing here, so it authorizes the kind for the
+// composer's own (sentinel, host-pinned) grants without empowering a member to
+// pick the secret and host.
+func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef, knownHostsRef string, ceiling []types.GrantSpec) bool {
 	for _, cg := range ceiling {
 		if cg.Kind != kind {
 			continue
 		}
-		ch, cs, covered, err := storedSecretGrantPairing(cg)
+		ch, cs, ckhr, covered, err := storedSecretGrantPairing(cg)
 		if !covered || err != nil {
 			continue
 		}
-		if cs == secretRef && hostEqual(ch, host) {
+		if cs == secretRef && hostEqual(ch, host) && ckhr == knownHostsRef {
 			return true
 		}
 	}
