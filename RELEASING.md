@@ -12,7 +12,7 @@ document is that process, written down.
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
   `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
-  `helm`, `helm-install-test`, `compose`, `conformance`,
+  `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
   `license-headers`, `gitleaks`), `dco` (plus `sbom-stub`, which runs
@@ -29,10 +29,13 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
                                                    # lane and the `## [Unreleased]` check
 ```
 
-Three CI jobs cannot run locally at all, because they need a live daemon or
-service: `conformance` (`make test-conformance-docker`), `envbuild-integration`
-(`make test-envbuild-integration`), and the Playwright `ui-e2e` job. Without
-`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
+Five CI jobs cannot run locally at all, because they need a live daemon or
+service: `conformance` (`make test-conformance-docker`), `conformance-k8s`
+(`make test-conformance-k8s`, needs a local `kind` cluster + a registered
+`k8s`-tagged build), `envbuild-integration` (`make test-envbuild-integration`),
+`helm-install-test` (`make helm-install-test`, also needs a local `kind`
+cluster), and the Playwright `ui-e2e` job. Without `WARDYN_TEST_PG` the
+Postgres suite prints a loud SKIPPED line.
 
 Screenshot freshness is CI-only for a different reason: `ci.yml`'s
 `screenshots-fresh` job compares the PR diff, so it can tell "you changed the
@@ -62,7 +65,18 @@ before step 3.
    not restoring it leaves the gate red for the *next* release — which is a
    confusing failure to debug from the tag commit backwards. Restore it in the same
    commit as the rename.
-2. **Commit** the CHANGELOG bump, DCO-signed: `git commit -s -m "release: X.Y.Z"`.
+1b. **Bump the shipped version strings** to `X.Y.Z`, in the same commit as the
+   CHANGELOG rename: `internal/version/version.go` (`const Version`),
+   `deploy/helm/wardyn/Chart.yaml` (both `version:` AND `appVersion:`), and
+   `ui/package.json` (`"version"`). `cmd/wardyn/version_test.go`'s
+   `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
+   all four agree with the CHANGELOG's newest section — but only catch a
+   missed bump if `make release-check` runs AFTER this commit; the
+   Prerequisites run above only sees the previous release's already-consistent
+   versions and passes either way. **Re-run `make release-check` after this
+   commit** before tagging.
+2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
+   `git commit -s -m "release: X.Y.Z"`.
 3. **Tag** the release commit: `git tag vX.Y.Z` (tags are `v`-prefixed —
    `v0.1.0` … `v0.4.3`).
 4. **Push** the commit and the tag: `git push origin main && git push origin vX.Y.Z`.
@@ -122,10 +136,11 @@ the other:
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). Unsigned. The
   compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
-  pushes all FOUR images a release ships —
+  pushes all FIVE images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
   `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
-  `ghcr.io/cjohnstoniv/agent-claude-code`, `ghcr.io/cjohnstoniv/agent-codex-cli`
+  `ghcr.io/cjohnstoniv/agent-claude-code`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
+  `ghcr.io/cjohnstoniv/agent-aws-sso`
   — each tagged with the bare semver (e.g. `0.4.5`, matching `Chart.yaml`'s
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 4's tag push
   is what triggers it. It also generates the release CycloneDX SBOM
