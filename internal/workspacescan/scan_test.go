@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -303,6 +304,41 @@ func TestScan_ManifestCapTruncatesToLowConfidence(t *testing.T) {
 	got := Scan(root)
 	if got.Confidence != ConfidenceLow || !got.NeedsReview {
 		t.Errorf("hitting the manifest cap should force low confidence + NeedsReview, got Confidence=%v NeedsReview=%v",
+			got.Confidence, got.NeedsReview)
+	}
+}
+
+// TestScan_SourceFileBudgetTruncatesToLowConfidence is W9-S1-4: past the
+// per-scan source-file budget (maxSourceFilesScanned), extra files used to
+// be silently skipped — the scan then reported confidence=high over a tree
+// it never fully walked, contradicting the package's own bound-lowers-
+// confidence promise (scan.go's lowConfidence := facts.Truncated || ...).
+func TestScan_SourceFileBudgetTruncatesToLowConfidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module x\n\ngo 1.22\n") // gives Scan something to detect at all
+	for i := 0; i < maxSourceFilesScanned+5; i++ {
+		writeFile(t, root, fmt.Sprintf("pkg%d/f.go", i), "package pkg\n")
+	}
+	got := Scan(root)
+	if got.Confidence != ConfidenceLow || !got.NeedsReview {
+		t.Errorf("hitting the source-file scan budget should force low confidence + NeedsReview, got Confidence=%v NeedsReview=%v",
+			got.Confidence, got.NeedsReview)
+	}
+}
+
+// TestScan_OverlongLineTruncatesToLowConfidence is W9-S1-4's other half: a
+// line over eachLine's 64 KiB Buffer cap makes bufio.Scanner.Scan() stop with
+// ErrTooLong — silently, exactly like a clean EOF, unless the caller checks
+// Err(). A minified bundle or a base64 blob past the cutoff must not scan as
+// complete.
+func TestScan_OverlongLineTruncatesToLowConfidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module x\n\ngo 1.22\n")
+	huge := strings.Repeat("x", 128*1024) // well past the 64 KiB Buffer cap
+	writeFile(t, root, "main.go", "package main\n\n// "+huge+"\n")
+	got := Scan(root)
+	if got.Confidence != ConfidenceLow || !got.NeedsReview {
+		t.Errorf("an over-64KiB line should force low confidence + NeedsReview, got Confidence=%v NeedsReview=%v",
 			got.Confidence, got.NeedsReview)
 	}
 }

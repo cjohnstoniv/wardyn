@@ -47,6 +47,47 @@ auto_stop_after_sec: 900
 	}
 }
 
+// TestReadPolicyFile_RejectsUnknownSpecField is the W14-S1-2 regression:
+// readPolicyFile (backing `policy create -f` / `policy update -f`) used to
+// json.Unmarshal the spec leniently, so a misspelled field silently vanished
+// instead of failing at authoring time. Covers both the bare-spec shape and
+// the full-body {"name":...,"spec":{...}} shape.
+func TestReadPolicyFile_RejectsUnknownSpecField(t *testing.T) {
+	dir := t.TempDir()
+
+	bareSpec := dir + "/bare.json"
+	writeFile(t, bareSpec, `{"allowed_domains":["example.com"],"min_confinement_klass":"CC1"}`)
+	if _, err := readPolicyFile(bareSpec, "my-policy"); err == nil {
+		t.Fatal("bare spec with unknown field: expected an error, got nil")
+	}
+
+	fullBody := dir + "/full.json"
+	writeFile(t, fullBody, `{"name":"my-policy","spec":{"allowed_domains":["example.com"],"min_confinement_klass":"CC1"}}`)
+	if _, err := readPolicyFile(fullBody, ""); err == nil {
+		t.Fatal("full body with unknown spec field: expected an error, got nil")
+	}
+}
+
+// TestReadPolicyFile_ToleratesStrayTopLevelKeys guards the negative: a file
+// produced by `policy get --json` (id/created_at/updated_at alongside
+// name/spec) must still round-trip into `policy update -f` — only the SPEC is
+// decoded strict, not the enclosing body.
+func TestReadPolicyFile_ToleratesStrayTopLevelKeys(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/dump.json"
+	writeFile(t, file, `{"id":"11111111-1111-1111-1111-111111111111","name":"my-policy",`+
+		`"spec":{"allowed_domains":["example.com"],"min_confinement_class":"CC1"},`+
+		`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
+
+	body, err := readPolicyFile(file, "")
+	if err != nil {
+		t.Fatalf("readPolicyFile: %v", err)
+	}
+	if body.Name != "my-policy" || body.Spec.MinConfinementClass != types.CC1 {
+		t.Errorf("body = %+v, want name=my-policy min_confinement_class=CC1", body)
+	}
+}
+
 func decodeSpec(t *testing.T, doc string) types.RunPolicySpec {
 	t.Helper()
 	j, err := policyToJSON([]byte(doc))

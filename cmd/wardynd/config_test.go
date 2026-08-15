@@ -207,6 +207,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 		oidcConfigured bool
 		operatorEmails []string
 		allowNoList    bool
+		hasRoleMap     bool
 		wantErr        bool
 	}{
 		{
@@ -225,6 +226,13 @@ func TestValidateOperatorPosture(t *testing.T) {
 			name: "override with a list set is still fine", oidcConfigured: true, operatorEmails: []string{"ops@corp.example"}, allowNoList: true,
 		},
 		{
+			// W25-S1-1: the in-repo Entra recipe (SKILL.md step 3) sets
+			// WARDYN_OIDC_ROLE_MAP and nothing else — deriveRole switches to
+			// claim-based admin/member and no longer needs the allowlist, so
+			// this must boot, not crash-loop.
+			name: "oidc with a role map and no operator list boots", oidcConfigured: true, hasRoleMap: true,
+		},
+		{
 			// No SSO => the admin token / local mode, one shared credential with no
 			// human identity to demote. Nothing to decide, so the rule never fires
 			// and the default single-operator deployment is untouched.
@@ -237,7 +245,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateOperatorPosture(tc.oidcConfigured, tc.operatorEmails, tc.allowNoList)
+			err := validateOperatorPosture(tc.oidcConfigured, tc.operatorEmails, tc.allowNoList, tc.hasRoleMap)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validateOperatorPosture(%v, %v, %v): want error, got nil", tc.oidcConfigured, tc.operatorEmails, tc.allowNoList)

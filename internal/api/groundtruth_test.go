@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestGroundtruthHeartbeatAcceptedNullRun(t *testing.T) {
 	// only called for non-NULL run ids), and recorded with forced attribution.
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil)
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code != http.StatusAccepted {
@@ -191,7 +192,7 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 	fail := &failingRecorder{err: errors.New("audit store down")}
 	h.srv.cfg.Audit = fail
 
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0) // kernel.* + NULL run_id => no DB needed
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // kernel.* + NULL run_id => no DB needed
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code/100 == 2 {
@@ -209,8 +210,8 @@ func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
 
-	future := time.Now().Add(100 * 24 * time.Hour)    // ~100 days ahead
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0) // kernel.* + NULL run_id => no DB needed
+	future := time.Now().Add(100 * 24 * time.Hour)         // ~100 days ahead
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // kernel.* + NULL run_id => no DB needed
 	hb.Time = future
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
@@ -299,7 +300,7 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 // "healthy" — "heartbeat arriving" is not "kernel ground truth arriving".
 func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0) // fresh beat, observed_total==0
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // fresh beat, observed_total==0
 	hb.Time = time.Now()
 	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
 
@@ -314,13 +315,132 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 // genuinely healthy.
 func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 5)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 5, nil)
 	hb.Time = time.Now()
 	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
 
 	gt := healthzEbpf(t, h)
 	if gt["state"] != "healthy" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want healthy (events observed within TTL)", gt["state"])
+	}
+}
+
+// TestHealthzEbpfPartialWhenOneKindNeverArrives is W20-W20-groundtruth-
+// mapper-4: a sensor that has mapped real events (observed_total>0) but only
+// EVER for one kind (a mis-scoped TracingPolicy that never fires for
+// network.connect or file.write, say) used to read "healthy" identically to
+// one seeing all three kinds — the aggregate alone cannot tell them apart.
+// With the per-kind breakdown published, this must report "partial" and name
+// the missing kinds, not the "healthy" overclaim.
+func TestHealthzEbpfPartialWhenOneKindNeverArrives(t *testing.T) {
+	h := newHarness(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{
+		groundtruth.ActionProcessExec: 9, // network.connect and file.write NEVER arrived
+	})
+	hb.Time = time.Now()
+	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
+
+	gt := healthzEbpf(t, h)
+	if gt["state"] != "partial" {
+		t.Fatalf("ebpf_groundtruth.state = %v, want partial (one kernel event kind never arrived)", gt["state"])
+	}
+	missing, ok := gt["missing_kinds"].([]any)
+	if !ok || len(missing) != 2 {
+		t.Fatalf("missing_kinds = %v, want the 2 kinds that never arrived", gt["missing_kinds"])
+	}
+}
+
+// TestHealthzEbpfHealthyWhenAllKindsArrive is the companion: once every
+// known kernel event kind has been observed at least once, the stream is
+// genuinely healthy — not merely "some events flowed".
+func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
+	h := newHarness(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 3, map[string]uint64{
+		groundtruth.ActionProcessExec:    1,
+		groundtruth.ActionNetworkConnect: 1,
+		groundtruth.ActionFileWrite:      1,
+	})
+	hb.Time = time.Now()
+	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
+
+	gt := healthzEbpf(t, h)
+	if gt["state"] != "healthy" {
+		t.Fatalf("ebpf_groundtruth.state = %v, want healthy (every kind has arrived)", gt["state"])
+	}
+}
+
+// TestEbpfGroundtruthCaveat_OneLinePerState is W20-W20-groundtruth-mapper-4's
+// other half: before this, the per-kind coverage state ebpfGroundtruthStatus
+// computes existed ONLY on the admin-only /healthz endpoint — nowhere a
+// Record Mode capture or a synthesized profile (the surfaces an operator
+// actually reviews) would ever show it. ebpfGroundtruthCaveat is the shared
+// one-liner reconcileRecordRun (RecordTaskResult.Caveats) and
+// handleSynthesizeProfile (profileResponse.Warnings) each stamp — reading the
+// SAME state ebpfGroundtruthStatus reports, so the two surfaces can never
+// disagree about what "healthy" means. Only "healthy" (or no Store at all,
+// though that path is untestable via the harness) omits a caveat.
+func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
+	cases := []struct {
+		name      string
+		noStore   bool // leave h.srv.cfg.Store nil (no sensor ever configured)
+		hb        types.AuditEvent
+		wantEmpty bool
+		wantState string // substring the caveat must name
+	}{
+		{
+			name:      "unavailable (no sensor configured at all)",
+			noStore:   true,
+			wantState: "unavailable",
+		},
+		{
+			name: "idle (fresh heartbeat, zero events)",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 0, nil)
+				e.Time = time.Now()
+				return e
+			}(),
+			wantState: "idle",
+		},
+		{
+			name: "partial (one kind never arrived)",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9})
+				e.Time = time.Now()
+				return e
+			}(),
+			wantState: "partial",
+		},
+		{
+			name: "healthy (every kind arrived) -> no caveat",
+			hb: func() types.AuditEvent {
+				e := groundtruth.HeartbeatEventWithDropped(0, 3, map[string]uint64{
+					groundtruth.ActionProcessExec:    1,
+					groundtruth.ActionNetworkConnect: 1,
+					groundtruth.ActionFileWrite:      1,
+				})
+				e.Time = time.Now()
+				return e
+			}(),
+			wantEmpty: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			if !c.noStore {
+				h.srv.cfg.Store = stubHeartbeatStore{ev: c.hb}
+			}
+			got := h.srv.ebpfGroundtruthCaveat(context.Background())
+			if c.wantEmpty {
+				if got != "" {
+					t.Fatalf("ebpfGroundtruthCaveat = %q, want empty (healthy sensor has nothing to caveat)", got)
+				}
+				return
+			}
+			if got == "" || !strings.Contains(got, "kernel ground truth") || !strings.Contains(got, c.wantState) {
+				t.Fatalf("ebpfGroundtruthCaveat = %q, want a one-line note naming %q", got, c.wantState)
+			}
+		})
 	}
 }
 

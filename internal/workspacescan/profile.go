@@ -8,8 +8,9 @@
 // what's ACTUALLY in the tree, not an LLM guess.
 //
 // It clones internal/gitremote's conventions: read-only, bounded
-// filepath.WalkDir (depth<=4), a manifest-count cap and a 1 MiB per-file read
-// cap, NO symlink following, a control-char scrub on any string that crosses
+// filepath.WalkDir (depth<=6, see scan.go's maxDepth), a manifest-count cap
+// and a 1 MiB per-file read cap, NO symlink following, a control-char scrub
+// on any string that crosses
 // out of the scan, sorted+deduped output, NO subprocess/exec, and
 // fail-safe-to-empty — Scan and DeriveProfile never return an error; a scan
 // that hits a bound or an unrecognized build system just yields a

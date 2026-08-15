@@ -574,3 +574,91 @@ func TestBrokerMintRefusesBrokeredGitGrant(t *testing.T) {
 		t.Fatalf("mintCalls = %d, want 2 (the undecodable body must still be forwarded)", up.mintCalls)
 	}
 }
+
+// gitBrokerApprovalUpstream stands in for the control plane's mint + approval
+// routes for the 409-approval-pending case: the FIRST mint 409s with an
+// approval_id, GET /internal/approvals/{id} reports PENDING approvePollsBefore
+// times and then APPROVED, and the SECOND mint (the broker's own re-mint after
+// approval) succeeds. Every other path (github re-origination) behaves like
+// gitBrokerUpstream.
+type gitBrokerApprovalUpstream struct {
+	srv               *httptest.Server
+	approvalID        uuid.UUID
+	approvePollsAfter int // polls before the approval flips to APPROVED
+
+	mu        sync.Mutex
+	mintCalls int
+	pollCalls int
+	gitAuth   string // Authorization the re-originated github request carried
+}
+
+func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UUID, approvePollsAfter int) *gitBrokerApprovalUpstream {
+	t.Helper()
+	u := &gitBrokerApprovalUpstream{approvalID: approvalID, approvePollsAfter: approvePollsAfter}
+	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		switch {
+		case r.URL.Path == "/api/v1/internal/credentials/mint":
+			u.mintCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if u.mintCalls == 1 {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(w, `{"approval_id":"`+u.approvalID.String()+`"}`)
+				return
+			}
+			exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+			_, _ = io.WriteString(w, `{"kind":"github_token","token":"`+token+`","username":"x-access-token","expires_at":"`+exp+`"}`)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/internal/approvals/"):
+			u.pollCalls++
+			state := "PENDING"
+			if u.pollCalls > u.approvePollsAfter {
+				state = "APPROVED"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"`+u.approvalID.String()+`","state":"`+state+`"}`)
+		default:
+			u.gitAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			_, _ = io.WriteString(w, "git-pack-data")
+		}
+	}))
+	t.Cleanup(u.srv.Close)
+	return u
+}
+
+// TestGitBrokerPollsPendingApproval is the regression for W23-S1-1 /
+// W19-W19a-1: the FIRST clone against an approval-gated github_token grant
+// used to 502 outright on the control plane's 409 (no wait, no retry) — the
+// documented quickstart's first clone always failed before a human could
+// possibly have approved it. The broker must now poll the SAME approval
+// server-side and re-mint once it clears, succeeding the original request.
+func TestGitBrokerPollsPendingApproval(t *testing.T) {
+	orig := gitApprovalPollInterval
+	gitApprovalPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { gitApprovalPollInterval = orig })
+
+	grantID := uuid.New()
+	approvalID := uuid.New()
+	up := newGitBrokerApprovalUpstream(t, "gh-inst-token-after-approval", approvalID, 2 /* PENDING twice, then APPROVED */)
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": grantID}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/Hello-World.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 once the approval clears (body=%q)", rec.Code, rec.Body.String())
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:gh-inst-token-after-approval"))
+	if up.gitAuth != wantAuth {
+		t.Fatalf("upstream Authorization = %q, want %q (the post-approval token)", up.gitAuth, wantAuth)
+	}
+	if up.mintCalls != 2 {
+		t.Fatalf("mintCalls = %d, want 2 (initial 409 + re-mint after approval)", up.mintCalls)
+	}
+	if up.pollCalls < 3 {
+		t.Fatalf("pollCalls = %d, want >= 3 (two PENDING + the APPROVED that releases it)", up.pollCalls)
+	}
+}

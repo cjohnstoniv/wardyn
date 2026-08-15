@@ -609,7 +609,14 @@ common state: a host with direct internet access needs none of this. Because
 it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
 site-config get > corp-baseline.json` before a reset and `wardyn site-config
 apply corp-baseline.json` after is the round-trip — the document carries
-secret **names**, never values, so it's safe to keep beside the repo.
+secret **names**, never values, so it's safe to keep beside the repo. Because
+values never round-trip, `apply` re-attaches the *names* unconditionally even
+when a named secret was never restored into the fresh store (e.g. `wardyn
+secret set` for it was skipped) — `apply` prints a warning naming every such
+dangling ref, and the setup checklist's "Site config" row grades `warn` (never
+the plain `info` of a fully-live config) for as long as one remains, so a
+reset+apply that leaves a credentialed path dead never reads as fully
+configured.
 
 ### Upstream proxy: plain URL vs. secret
 
@@ -635,6 +642,18 @@ wardyn secret set upstream-proxy-url          # paste the full, credentialed URL
 
 If both fields are set, `upstream_proxy_url` wins — harmless mid-migration
 from one to the other, but don't rely on it; clear whichever you're not using.
+
+**`http://` only — an `https://` upstream proxy URL is rejected server-side,
+always** (`validateSiteConfig`, same file). The hop from wardyn-proxy to your
+corporate proxy is a plaintext CONNECT + `Proxy-Authorization` header; an
+`https://` URL would need a TLS wrap the sidecar doesn't do, or would leak
+that Basic credential in cleartext. This is the SAME gate dispatch itself
+applies (`resolveUpstreamProxyURL`, `internal/api/runs_bedrock.go`) — before
+this write-time check existed, an `https://` URL saved clean, displayed as
+the live chain, and was silently dropped at dispatch: every run went direct
+with no signal anywhere. A secret referenced via `upstream_proxy_secret_ref`
+carries the same restriction; store the plain `http://` proxy URL in the
+secret even when it embeds a credential.
 
 ### Egress redirects: two tiers
 
@@ -970,6 +989,12 @@ rather than a preference:
   cleartext — with a `success` audit event, because nothing in the path can tell
   "no secrets for this run" from "not my run". There is no cross-replica fix
   short of moving the registry into shared storage, which has not been built.
+  **This is not bounded to two replicas either.** A single `wardynd` process
+  restarting mid-run (upgrade, crash-restart, OOM) wipes the same in-memory
+  map, so a run whose secrets were registered before the restart and whose
+  cast uploads after it hits the identical empty-snapshot fail-open — with
+  `replicas: 1` throughout. The pin removes the *cross-replica* case; it does
+  not remove this one.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: it is the fallback
   for a failed Postgres write, and each pod drains its own back into the

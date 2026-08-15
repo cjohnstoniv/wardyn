@@ -67,4 +67,37 @@ describe("LiveApprovals", () => {
     await user.click(within(panel).getByRole("button", { name: /approve/i }));
     expect(approveMock).toHaveBeenCalledWith("held", expect.any(String));
   });
+
+  // W20-W20-hold-fsm-6: a Deny click on the live strip must not go straight to
+  // the API — it permanently poisons the host for the rest of the session, so
+  // one misclick must be recoverable via Cancel, not just fast.
+  it("Deny opens a confirm dialog and does NOT call the API until confirmed", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    expect(denyMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/blocks this host for the rest of the session/i)).toBeInTheDocument();
+
+    // Cancel backs out with no API call and no lingering dialog.
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(denyMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/blocks this host for the rest of the session/i)).not.toBeInTheDocument();
+  });
+
+  it("confirming the Deny dialog calls the API exactly once", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^deny$/i }));
+
+    expect(denyMock).toHaveBeenCalledTimes(1);
+    expect(denyMock).toHaveBeenCalledWith("a1", expect.any(String));
+  });
 });

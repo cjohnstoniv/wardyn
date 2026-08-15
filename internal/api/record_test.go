@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -63,6 +66,23 @@ type recordStore struct {
 	saved         json.RawMessage // current record_results blob (per-key upserts land here)
 	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
 	clearedActive bool            // ClearWorkspaceActiveRun called
+	// heartbeat backs LatestAuditEventByAction — reconcileRecordRun's
+	// ebpfGroundtruthCaveat call (W20-W20-groundtruth-mapper-4) reads this to
+	// stamp the sensor's coverage state onto the capture. nil (the default)
+	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
+	heartbeat *types.AuditEvent
+}
+
+// LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
+// Every recordStore-based test now exercises this (reconcileRecordRun calls
+// it unconditionally on every capture) — default to "no heartbeat ever" so
+// the many existing tests that don't care about sensor health stay
+// unaffected; a test that DOES sets s.heartbeat first.
+func (s *recordStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	if s.heartbeat != nil {
+		return *s.heartbeat, nil
+	}
+	return types.AuditEvent{}, store.ErrNotFound
 }
 
 func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
@@ -225,6 +245,62 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 	}
 }
 
+// TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess is
+// W20-W20-capture-store-4: a record run whose SandboxRef is EMPTY never
+// reached CreateSandbox at all — it failed on the dispatch side (image build,
+// resource limits, a concurrent kill racing dispatch), never got a chance to
+// observe egress. Blaming the operator's proxy/WSL2 networking
+// (recordEmptyCaptureHint) sends them on a wasted mirrored-networking detour
+// for a session that never even tried to reach the control plane; the hint
+// must instead name the actual dispatch-side failure.
+func TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunFailed}, // SandboxRef: "" (never dispatched)
+		events: []types.AuditEvent{
+			{RunID: &runID, Action: "run.dispatch", Outcome: "failure",
+				Data: mustJSON(map[string]any{"error": "resolve workspace image: build timed out"})},
+		},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	if res.Status != recordStatusFailed {
+		t.Fatalf("status = %q, want record_failed", res.Status)
+	}
+	if res.FailureHint == recordEmptyCaptureHint {
+		t.Fatalf("a run that never started got the networking-guess hint instead of the dispatch failure reason: %q", res.FailureHint)
+	}
+	if !strings.Contains(res.FailureHint, "build timed out") {
+		t.Errorf("failure_hint = %q, want it to name the audited dispatch failure (%q)", res.FailureHint, "build timed out")
+	}
+}
+
+// TestReconcileRecordRun_ReachedRunningKeepsNetworkingHint is the
+// counterpart: a run that actually got a sandbox (SandboxRef set) and STILL
+// captured zero egress evidence keeps the networking-reachability hint — that
+// guess is honest for a run that reached RUNNING.
+func TestReconcileRecordRun_ReachedRunningKeepsNetworkingHint(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted, SandboxRef: "agent-run-abc"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	if res.FailureHint != recordEmptyCaptureHint {
+		t.Errorf("failure_hint = %q, want the networking-reachability hint for a run that reached RUNNING", res.FailureHint)
+	}
+}
+
 func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID, grantID := uuid.New(), uuid.New(), uuid.New()
@@ -260,6 +336,41 @@ func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	}
 	if !res.KernelSensorBlind {
 		t.Error("CC3 run must surface kernel_sensor_blind")
+	}
+}
+
+// TestReconcileRecordRun_StampsEbpfGroundtruthCaveat is
+// W20-W20-groundtruth-mapper-4: before this, a capture's Caveats never said
+// anything about the host eBPF sensor's own coverage — that state lived only
+// on the admin-only /healthz endpoint, nowhere an operator reviewing a
+// recording would see it. reconcileRecordRun must stamp the SAME state
+// ebpfGroundtruthCaveat computes (which /healthz's ebpfGroundtruthStatus also
+// reads) onto RecordTaskResult.Caveats for every non-healthy sensor state.
+func TestReconcileRecordRun_StampsEbpfGroundtruthCaveat(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
+	hb.Time = time.Now()
+	fake := &recordStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record",
+			State: types.RunCompleted, ConfinementClass: types.CC1},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
+		events:          []types.AuditEvent{egressAllowEvent(runID, "registry.npmjs.org")},
+		heartbeat:       &hb,
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	found := false
+	for _, c := range res.Caveats {
+		if strings.Contains(c, "kernel ground truth") && strings.Contains(c, "partial") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("caveats = %v, want one naming the partial eBPF sensor coverage", res.Caveats)
 	}
 }
 
@@ -316,6 +427,37 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	// silently breaking the confined-verify path.
 	if w := do(t, srv, http.MethodPost, url, adminToken, `{"name":"verify build & test","confined":true}`); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("confined request: code = %d, want 503 (parsed, no runner); body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy is W20-W20-capture-
+// store-5: ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace
+// BEFORE Store.CreateRun persists the claiming run's own row (the clone-grant
+// FK needs the run row first). A second record request landing in that
+// window used to see GetRun(ActiveRunID) => ErrNotFound and read the old
+// `gerr == nil && !isTerminalRunState(...)` busy-check as "not busy" — an
+// indeterminate GetRun error must be treated as busy (only a CONFIRMED
+// terminal run may proceed), or the serial import-step gate is jumped into
+// two concurrent open-egress sandboxes.
+func TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy(t *testing.T) {
+	wsID, claimingRunID := uuid.New(), uuid.New()
+	ws := types.Workspace{
+		ID:          wsID,
+		Sources:     []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:      types.WorkspaceScanned,
+		ActiveRunID: &claimingRunID, // claimed, but its run row doesn't exist yet
+	}
+	// fake.run stays the zero value: GetRun(claimingRunID) => ErrNotFound,
+	// exactly the "claimed but not yet CreateRun'd" window.
+	fake := &recordStore{importStateFake: importStateFake{ws: ws}}
+	srv := newTestSrv(t, fake)
+	srv.cfg.Runner = &fakeRunner{} // reach the busy-check, not the no-runner 503
+	url := "/api/v1/workspaces/" + wsID.String() + "/record"
+
+	w := do(t, srv, http.MethodPost, url, adminToken, `{"name":"second session"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second request against a claimed-but-not-yet-created run: code = %d, want 409 (busy) — "+
+			"an indeterminate GetRun must not read as 'not busy'; body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -498,6 +640,83 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	}
 	if row := fake.ws.Requirements["egress:api.stripe.com"]; row.Level != "required" || row.Provenance != "operator_set" {
 		t.Errorf("egress:api.stripe.com = %+v, want required/operator_set", row)
+	}
+}
+
+// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted is W20-S1-1:
+// EgressPromoted used to be an unconditional `true` on every promote-egress
+// call, even one whose entire observed-allowed set is plumbing (never a
+// promotable candidate — see promotableHosts) or already covered, so
+// `promoted` stays empty. The card renders "Promoted" purely off this flag
+// (record-pane.tsx), so that used to claim success for a click that changed
+// nothing.
+func TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	// Every observed+allowed host is either model-provider plumbing or
+	// already approved — promotableHosts excludes the former, the dedup
+	// excludes the latter, so `promoted` is empty either way.
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.anthropic.com", AllowCount: 5},
+		{Host: "already.example.com", AllowCount: 1},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
+		})}}}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.Requirements) != 0 {
+		t.Fatalf("requirements = %v, want none (nothing was actually promotable)", fake.ws.Requirements)
+	}
+	if res := fake.savedResult(t, "build"); res.EgressPromoted {
+		t.Error("egress_promoted marker set on a click that promoted zero rows — the exact false-success this finding closes")
+	}
+}
+
+// TestPromoteRecordEgress_EgressPromotedStaysStickyAcrossANoOpClick pins the
+// OTHER direction of the same fix: EgressPromoted must not FLIP BACK to
+// false on a later no-op click against the same (immutable-once-recorded)
+// observations, once a genuine promotion already landed — it means "this
+// session HAS ever promoted something real", not "this specific click did".
+func TestPromoteRecordEgress_EgressPromotedStaysStickyAcrossANoOpClick(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned,
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
+		})}}}
+	srv := newTestSrv(t, fake)
+	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
+
+	// First click: a genuine promotion.
+	if w := do(t, srv, http.MethodPost, url, adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("first click: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if res := fake.savedResult(t, "build"); !res.EgressPromoted {
+		t.Fatal("first click should have set egress_promoted")
+	}
+
+	// Second click against the SAME (settled) observations: api.stripe.com is
+	// now already in the requirements overlay, so this click's own `promoted`
+	// is empty — but the marker must stay true.
+	if w := do(t, srv, http.MethodPost, url, adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("second click: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if res := fake.savedResult(t, "build"); !res.EgressPromoted {
+		t.Error("egress_promoted must stay true — a later no-op click must not un-promote an earlier real one")
 	}
 }
 

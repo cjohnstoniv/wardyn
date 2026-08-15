@@ -329,15 +329,28 @@ export function resolveModelAccess(
     !!r.serverId && !!integrations?.find((w) => w.id === r.serverId)?.default_for?.includes("agent_runs");
 
   if (integrationId) {
-    const row = ai.find((r) => r.id === integrationId);
+    // integrationId is the SERVER-side id the override peek commits
+    // (row.serverId — see OverridePeek below); r.id === integrationId stays as
+    // a fallback for any pre-fix caller that still names the client display id.
+    const row = ai.find((r) => r.serverId === integrationId || r.id === integrationId);
     if (row) return { row, because: "you overrode it for this run." };
   }
-  // llm_cred names an Integration by id now — the binding IS the
-  // cross-reference (the old aiType best-effort match died with the mode shape).
+  // llm_cred names an Integration by its SERVER-side id — the same id
+  // resolveIntegrationRef matches server-side (see workspace-llm-cred.tsx's
+  // picker); r.id is kept as a fallback for the same pre-fix reason as above.
   const ref = primaryWorkspace?.llm_cred?.integration_ref;
   if (ref) {
-    const pinned = ai.find((r) => r.id === ref);
+    const pinned = ai.find((r) => r.serverId === ref || r.id === ref);
     if (pinned) return { row: pinned, because: "this workspace pins it." };
+    // W15-W15e-wizard-roundtrip-5: a SET-but-unresolvable pin must refuse
+    // here, not cascade to the server-default/global-fallback tiers below —
+    // mirroring resolveRunIntegration server-side (internal/api/
+    // llmcred.go), which returns "no binding" the instant a set workspace
+    // ref fails to resolve rather than falling through to tier 3. Without
+    // this, Access/Review would preview a DIFFERENT provider than the one
+    // the actual launch resolves to (none) — naming a provider the run will
+    // not use.
+    return null;
   }
   const marked = ai.find((r) => compatible(r) && isServerDefault(r));
   if (marked) return { row: marked, because: "it's the server default for agent runs." };
@@ -574,27 +587,33 @@ function OverridePeek({
             selected={draft === DEFAULT_OPTION}
             onSelect={() => setDraft(DEFAULT_OPTION)}
           />
-          {ai.map((row) => {
-            const reason = incompatibleReason(row, capability);
-            return (
-              <PeekRow
-                key={row.id}
-                title={row.name}
-                type={row.typeLabel}
-                chip={
-                  !reason && (
-                    <Chip tone={RESIDENCY_META[row.residency].tone} className="text-[0.6875rem]">
-                      {RESIDENCY_META[row.residency].label}
-                    </Chip>
-                  )
-                }
-                selected={draft === row.id}
-                muted={!!reason}
-                reason={reason}
-                onSelect={reason ? undefined : () => setDraft(row.id)}
-              />
-            );
-          })}
+          {ai
+            // Skip rows with no server-side identity to commit — a resident CLI
+            // login detection (ai:anthropic_cli_login) and Azure OpenAI today
+            // (see aiServerId) have no adoptable Integration id at all, so there
+            // is nothing valid this peek could ever send as run.integration_id.
+            .filter((row) => row.serverId)
+            .map((row) => {
+              const reason = incompatibleReason(row, capability);
+              return (
+                <PeekRow
+                  key={row.id}
+                  title={row.name}
+                  type={row.typeLabel}
+                  chip={
+                    !reason && (
+                      <Chip tone={RESIDENCY_META[row.residency].tone} className="text-[0.6875rem]">
+                        {RESIDENCY_META[row.residency].label}
+                      </Chip>
+                    )
+                  }
+                  selected={draft === row.serverId}
+                  muted={!!reason}
+                  reason={reason}
+                  onSelect={reason ? undefined : () => setDraft(row.serverId!)}
+                />
+              );
+            })}
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Muted rows are facts, not absences — the reason is the cell copy from Integrations,
             verbatim.

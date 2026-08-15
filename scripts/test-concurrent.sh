@@ -33,10 +33,15 @@ pass() { note "[pass]" "$1"; }
 fail() { note "[FAIL]" "$1"; FAILED=1; }
 
 # compose_ns PROJECT -- run compose for a job with its own project + namespace +
-# ephemeral host ports (so the two jobs never fight over 8080/5432).
+# ephemeral host ports (so the two jobs never fight over 8080/5432/5010).
+# WARDYN_REGISTRY_PORT included: `up -d postgres wardynd` always starts the
+# devcontainer-build registry sidecar too (a wardynd dependency), so leaving it
+# at its fixed default collides the two concurrent stacks on that bind —
+# mirrors ci-run.sh's identical WARDYN_UP_PORT/WARDYN_PG_PORT/WARDYN_REGISTRY_PORT trio.
 compose_ns() {
   local proj="$1"; shift
-  COMPOSE_PROJECT_NAME="${proj}" WARDYN_NS="${proj}" WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
+  COMPOSE_PROJECT_NAME="${proj}" WARDYN_NS="${proj}" \
+    WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 WARDYN_REGISTRY_PORT=0 \
     docker compose -p "${proj}" -f "${COMPOSE_FILE}" "$@"
 }
 

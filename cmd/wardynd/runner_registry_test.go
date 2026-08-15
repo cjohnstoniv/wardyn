@@ -14,6 +14,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
 func rrFlags(runnerSel string) *bootFlags {
@@ -49,5 +51,31 @@ func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `-runner "bogus"`) || !strings.Contains(err.Error(), "not registered") {
 		t.Fatalf("want fail-closed registry-miss error naming -runner, got: %v", err)
+	}
+}
+
+// /healthz must report what recording ACTUALLY does, not what the flag says.
+// The stock Helm install sets WARDYN_RECORDING_STORE=fs with an empty dir
+// (persistence.enabled=false by default), which recording.New resolves to a
+// nil Store per its own "disabled" contract — but componentsInfo used to keep
+// echoing *f.recordingSel regardless, so /healthz advertised a live "fs" store
+// while every run silently recorded nothing.
+func TestComponentsInfo_RecordingReflectsActualStore(t *testing.T) {
+	f := rrFlags("none")
+	sel := "fs" // the stock Helm chart's pin (see deploy/helm/wardyn/templates/deployment.yaml)
+	f.recordingSel = &sel
+
+	got := componentsInfo(f, "none", nil)["recording"]
+	if got.Selected != "none" || got.Source != "disabled" {
+		t.Fatalf("nil recStore: want Selected=none Source=disabled, got %+v", got)
+	}
+
+	store, err := recording.New("fs", recording.Deps{Dir: t.TempDir()})
+	if err != nil || store == nil {
+		t.Fatalf("recording.New(fs, non-empty dir): %v / %v", store, err)
+	}
+	got = componentsInfo(f, "none", store)["recording"]
+	if got.Selected != "fs" || got.Source != "configured" {
+		t.Fatalf("live recStore: want Selected=fs Source=configured, got %+v", got)
 	}
 }

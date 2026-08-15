@@ -192,7 +192,22 @@ export const workspaces = {
     id: string,
     name: string,
     confined = false,
-  ): Promise<{ ok: boolean; status: number; record_run_id?: string; detail?: string }> {
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    record_run_id?: string;
+    detail?: string;
+    // The launched run's REAL confinement class (handleRecordWorkspace's own
+    // `run.ConfinementClass`) — the caller's honest source for e.g. a CC1
+    // open-egress banner, instead of guessing from the operator's persisted
+    // default tier (which can disagree with what this particular runner/run
+    // actually resolved to).
+    confinement_class?: string;
+    // Server-stated caveats about THIS launch (open-egress exfiltration
+    // window on weak confinement, the masking caveat) — always present on a
+    // 202, never silently dropped.
+    warnings?: string[];
+  }> {
     // Named interactive session (the server slugs `name` → the record_results key).
     // The operator drives the real activity in the attach shell. `confined` picks a
     // VERIFY session (default-deny egress, limited to the approved set) over an open
@@ -202,8 +217,14 @@ export const workspaces = {
       body: JSON.stringify({ name, confined }),
     });
     if (res.status === 202) {
-      const body = await asJson<{ record_run_id?: string }>(res);
-      return { ok: true, status: 202, record_run_id: body?.record_run_id };
+      const body = await asJson<{ record_run_id?: string; confinement_class?: string; warnings?: string[] }>(res);
+      return {
+        ok: true,
+        status: 202,
+        record_run_id: body?.record_run_id,
+        confinement_class: body?.confinement_class,
+        warnings: body?.warnings,
+      };
     }
     if (res.status === 422 || res.status === 503 || res.status === 409) {
       return { ok: false, status: res.status, detail: await errText(res) };

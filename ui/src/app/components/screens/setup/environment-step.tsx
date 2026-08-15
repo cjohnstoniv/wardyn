@@ -40,7 +40,7 @@ import {
 } from "../../wardyn/cc-meta";
 import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
-import { TIER_GUIDES } from "./setup-guide";
+import { TIER_GUIDES, K8S_TIER_GUIDES, type SetupGuide } from "./setup-guide";
 import { CopyButton } from "../../wardyn/copy-button";
 import { CC_ORDER, type ConfinementClass, type SetupCheck, type SetupStatus } from "../../../lib/types";
 import { CheckRow } from "./step-bodies";
@@ -82,6 +82,13 @@ const PICK_WHEN: Record<ConfinementClass, string> = {
 const NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
   CC2: "Still not detected — gVisor's runsc runtime isn't listed in `docker info` runtimes yet.",
   CC3: "Still not detected — no kata runtime in `docker info` yet.",
+};
+
+// W4-S1-5/W27-S1-4: `docker info` has no meaning on a k8s runner — the same
+// "still not detected" fact, said in RuntimeClass terms instead.
+const K8S_NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
+  CC2: "Still not detected — no RuntimeClass is pinned to CC2 yet (k8s.runtimeClasses.CC2).",
+  CC3: "Still not detected — no RuntimeClass is pinned to CC3 yet (k8s.runtimeClasses.CC3).",
 };
 
 // ---------------------------------------------------------------------------
@@ -179,10 +186,19 @@ export function EnvironmentStep({
   const available = new Set(classes);
   const rec = recommendedTier(status);
   const k8s = status.runner.driver === "k8s";
+  // W4-S1-5/W27-S1-4: TIER_GUIDES/NOT_DETECTED are docker-shaped (`wardyn setup
+  // wall`, `docker info` runtimes) — meaningless on a k8s runner, where the
+  // real lever is a Helm-pinned RuntimeClass (K8S_TIER_GUIDES/K8S_NOT_DETECTED
+  // above). One driver-aware pick, read by every column below.
+  const guides = k8s ? K8S_TIER_GUIDES : TIER_GUIDES;
+  const notDetected = k8s ? K8S_NOT_DETECTED : NOT_DETECTED;
 
-  // Incompatible vs needs-setup is a HARDWARE fact (the backend probes /dev/kvm).
-  // Only a genuinely KVM-less host marks Vault incompatible; an old daemon without
-  // the kvm field falls back to the WSL/macOS heuristic rather than overclaiming.
+  // Incompatible vs needs-setup is a HARDWARE fact (the backend probes /dev/kvm)
+  // — and that probe is about wardynd's OWN host, which on k8s is not where
+  // Vault would even run (agent pods land on whatever node the cluster
+  // schedules, a fact this daemon can't see). Only a genuinely KVM-less DOCKER
+  // host marks Vault incompatible; k8s never does — it stays "todo" (register
+  // a Kata RuntimeClass), the same needs-setup story CC2 already tells there.
   const kvmProbed = typeof status.platform.kvm === "boolean";
   const kvm =
     status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
@@ -192,7 +208,7 @@ export function EnvironmentStep({
 
   const tierState = (cc: ConfinementClass): TierState => {
     if (available.has(cc)) return "ready";
-    if (cc === "CC3" && !kvm) return "incompatible";
+    if (cc === "CC3" && !k8s && !kvm) return "incompatible";
     return "todo";
   };
   const selectable = (cc: ConfinementClass) => !noRunner && tierState(cc) === "ready";
@@ -352,7 +368,6 @@ export function EnvironmentStep({
                     </button>
 
                     <ColumnState
-                      cc={cc}
                       state={st}
                       recommended={cc === rec}
                       rechecking={rechecking}
@@ -360,6 +375,8 @@ export function EnvironmentStep({
                       incompatibleReason={st === "incompatible" ? vaultIncompatibleReason : undefined}
                       substrate={status.runner.confinement_substrates?.[cc]}
                       recheckToken={recheckToken}
+                      guide={guides[cc]}
+                      notDetected={notDetected[cc]}
                     />
                   </th>
                 );
@@ -482,7 +499,6 @@ function MatrixCell({ mark, cc }: { mark: CCMark; cc: ConfinementClass }) {
 // reveals the `wardyn setup <tier>` command (+ still-not-detected after a
 // re-check), incompatible shows the concrete /dev/kvm reason.
 function ColumnState({
-  cc,
   state,
   recommended,
   rechecking,
@@ -490,8 +506,9 @@ function ColumnState({
   incompatibleReason,
   substrate,
   recheckToken,
+  guide,
+  notDetected,
 }: {
-  cc: ConfinementClass;
   state: TierState;
   recommended: boolean;
   /** A host re-check is in flight — chip shows "Checking…", detail lines suppressed. */
@@ -501,12 +518,15 @@ function ColumnState({
   incompatibleReason?: string;
   substrate?: string;
   recheckToken: number;
+  /** W4-S1-5/W27-S1-4: driver-picked by the caller (TIER_GUIDES vs K8S_TIER_GUIDES) — this component renders whichever it's handed, never chooses. */
+  guide?: SetupGuide;
+  /** Same driver-picked story as `guide` (NOT_DETECTED vs K8S_NOT_DETECTED). */
+  notDetected?: string;
 }) {
   const [cmdOpen, setCmdOpen] = React.useState(false);
   // The recheckToken captured when the command was revealed — a later bump means
   // a host re-check completed while the panel was open, so it's "still not detected".
   const [openedAt, setOpenedAt] = React.useState(0);
-  const guide = TIER_GUIDES[cc];
   // Mirror RunnerTiers' rowStatus: a re-check in flight reads "Checking…" for any
   // not-yet-ready tier, overriding needs-setup/incompatible until it resolves.
   const chipStatus: StatusKind =
@@ -518,9 +538,7 @@ function ColumnState({
           ? "incompatible"
           : "needs-setup";
   const stillNotDetected =
-    !rechecking && cmdOpen && recheckToken > openedAt && state === "todo"
-      ? NOT_DETECTED[cc]
-      : undefined;
+    !rechecking && cmdOpen && recheckToken > openedAt && state === "todo" ? notDetected : undefined;
 
   return (
     <div className="mt-3 space-y-2">

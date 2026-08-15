@@ -90,6 +90,40 @@ jobs:
           path: test/reports/e2e/task-e2e.log
           if-no-files-found: error
 
+  # Live SSH gateway e2e (C5): exec/sftp/-L forward/recording/denial/concurrency
+  # against a real `ssh`/`sftp` client. Ran in NO CI workflow before this job —
+  # `make test-e2e-ssh` / scripts/run-e2e-ssh.sh existed but nothing invoked
+  # them on a schedule, so a regression here could ship silently. Its own job,
+  # like test-drive below: the script brings up its own dedicated,
+  # uniquely-namespaced compose stack and builds its own agent image, so it
+  # must not share a runner with the e2e jobs above.
+  ssh-e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Docker available
+        run: docker --version
+      # Same evidence problem as e2e-live above: run-e2e-ssh.sh writes no
+      # report file, so capture the transcript here rather than uploading a
+      # path nothing produces. `shell: bash` — see the e2e-live job above.
+      - name: Live SSH gateway e2e (dedicated compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ssh 2>&1 | tee test/reports/e2e/ssh-e2e.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ssh-e2e-live-results
+          path: test/reports/e2e/ssh-e2e.log
+          if-no-files-found: error
+
   # The guided governance test-drive — the walkthrough the docs point a new
   # operator at (clone + governed egress, egress deny, metadata block, first-use
   # approval, brokered git, kill cascade, recording). It ran in NO automation, so

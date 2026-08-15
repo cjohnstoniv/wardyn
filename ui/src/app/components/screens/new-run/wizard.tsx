@@ -44,6 +44,7 @@ import {
   applyProfileSpecToState,
   buildSpec,
   initialWizardState,
+  primaryWorkspaceId,
   validateStep,
   type RunWorkspaceSelection,
   type WizardState,
@@ -317,9 +318,20 @@ export function PermissionWizard({
   // server enforces the stored spec; everything else sends the composed one.
   const runRequest = React.useCallback(() => {
     const { run, inline_policy } = buildSpec(state, workspaces);
-    return state.selectedPolicyId
-      ? { ...run, policy_id: state.selectedPolicyId }
-      : { ...run, inline_policy };
+    // W15-W15e-wizard-roundtrip-1: policy_id/inline_policy are XOR on the
+    // wire — attaching a saved policy means inline_policy (and with it,
+    // buildSpec's workspace_mounts/workspace_repos, which live ONLY on
+    // inline_policy) is never sent at all, so a workspace picked in this
+    // wizard would otherwise vanish and the run launches on an empty
+    // scratch dir while Review still names the workspace. workspace_id is a
+    // SEPARATE top-level field the server's seedRequestWorkspace applies
+    // AFTER resolving the stored policy — prepending the workspace's
+    // sources onto it — so it's the one carrier that survives this branch.
+    if (state.selectedPolicyId) {
+      const workspace_id = primaryWorkspaceId(state.workspaces, workspaces);
+      return { ...run, policy_id: state.selectedPolicyId, ...(workspace_id ? { workspace_id } : {}) };
+    }
+    return { ...run, inline_policy };
   }, [state, workspaces]);
 
   // A DRY-RUN of launch with the SAME body createRun would send: it resolves the

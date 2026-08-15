@@ -213,9 +213,9 @@ func TestCapabilitiesFor(t *testing.T) {
 
 		// ---------------- bedrock ----------------
 		{
-			name: "bedrock: bearer lane, region+model set",
+			name: "bedrock: bearer lane, region+model set, credential present",
 			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "bearer"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
+			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
 				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
@@ -224,9 +224,9 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			name: "bedrock: auto lane (resident, not bearer), region+model set",
+			name: "bedrock: auto lane (resident, not bearer), region+model set, credential present",
 			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "auto"}},
-			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true},
+			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
 				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
@@ -239,10 +239,10 @@ func TestCapabilitiesFor(t *testing.T) {
 			// bug): resolveBedrockAuth resolves the row's own region/model over
 			// the boot config, so a deployment that never set WARDYN_BEDROCK_*
 			// must NOT report needs_setup for a row that carries both.
-			name: "bedrock: region+model on the INTEGRATION, boot flags unset",
+			name: "bedrock: region+model on the INTEGRATION, boot flags unset, credential present",
 			in: types.Integration{Kind: "bedrock", Config: map[string]any{
 				"auth_lane": "bearer", "region": "us-east-1", "model": "us.anthropic.claude-x"}},
-			env: capEnv{BedrockRegionSet: false, BedrockModelSet: false},
+			env: capEnv{BedrockRegionSet: false, BedrockModelSet: false, BedrockCredentialPresent: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "proxy_injected"},
 				{ID: "tool:claude-code", State: CapAvailable, Residency: "proxy_injected"},
@@ -254,10 +254,10 @@ func TestCapabilitiesFor(t *testing.T) {
 			// The other half of the same precedence: the boot config is the
 			// FALLBACK for whatever the row leaves unset ("a selection wins only
 			// the fields it sets" — runs_bedrock.go).
-			name: "bedrock: region on the integration, model from the boot fallback",
+			name: "bedrock: region on the integration, model from the boot fallback, credential present",
 			in: types.Integration{Kind: "bedrock", Config: map[string]any{
 				"auth_lane": "auto", "region": "eu-west-1"}},
-			env: capEnv{BedrockRegionSet: false, BedrockModelSet: true},
+			env: capEnv{BedrockRegionSet: false, BedrockModelSet: true, BedrockCredentialPresent: true},
 			want: []Capability{
 				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
 				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
@@ -285,6 +285,23 @@ func TestCapabilitiesFor(t *testing.T) {
 				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
 				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+			},
+		},
+		{
+			// W5-S1-1 regression: region+model set but NO credential anywhere in
+			// resolveBedrockAuth's ladder (bearer / SSO / mount / resident keys) —
+			// the matrix must not read "available" off region+model alone. On the
+			// pre-fix code this returned CapAvailable for every cell (the bug: three
+			// readiness surfaces believing a run that would silently get no Bedrock
+			// transport at all).
+			name: "bedrock: region+model set, ZERO credentials — needs setup, not available",
+			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
+			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: false},
+			want: []Capability{
+				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
+				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
 			},
 		},
 

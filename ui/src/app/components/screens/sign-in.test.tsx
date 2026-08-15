@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "../wardyn/theme-provider";
+import { getToken } from "../../lib/api/core";
 
 // The server-side OIDC flow (GET /auth/login) ships whenever WARDYN_OIDC_* is
 // set, and its session cookie authenticates the whole API — but the console used
@@ -42,5 +44,131 @@ describe("SignIn — SSO entry point", () => {
     renderSignIn();
     expect(await screen.findByRole("button", { name: /sign in with sso/i })).toBeDisabled();
     expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
+  });
+});
+
+// W31-S1-2 regression: wardynd never prints an admin token on startup — it
+// only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
+// boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
+// only instruction AND part of the threat model's own token-provenance claim
+// (THREAT-MODEL.md's "Console auth token storage" section, fixed alongside
+// this file); a false instruction here is a bad-first-run trap that sends an
+// operator hunting server logs for output that will never appear.
+describe("SignIn — admin token instructions are honest about provenance", () => {
+  it("tells the operator to paste the token the control plane was STARTED WITH, not one wardynd printed", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(
+      await screen.findByText(/paste the token this control plane was started with/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
+    expect(screen.queryByText(/wardynd printed/i)).not.toBeInTheDocument();
+  });
+
+  it("the token input's placeholder carries no fake fixed-prefix format", () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    const input = screen.getByLabelText(/admin token/i);
+    // Real admin tokens are whatever the operator set WARDYN_ADMIN_TOKEN to
+    // (e.g. openssl rand -hex 32) — there is no "wardyn_admin_" value prefix;
+    // that string is only the UNRELATED localStorage key name (core.ts).
+    expect(input).toHaveAttribute("placeholder", "demo-admin-token");
+  });
+});
+
+// W31-S1-4: every submitToken failure used to collapse to probeAuth's plain
+// boolean, so a daemon 5xx and an unreachable control plane both rendered the
+// SAME "That admin token was rejected" copy as an actually-bad token — and
+// cleared a token that may have been perfectly valid.
+describe("SignIn — submitToken tells a rejected token apart from a reachability failure", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function submit(token = "sometoken") {
+    sessionStorage.clear();
+    localStorage.clear();
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    await userEvent.type(screen.getByLabelText(/admin token/i), token);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  }
+
+  it("a real 401 shows the rejected-token copy and clears the stored token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 401, statusText: "Unauthorized" })),
+    );
+    await submit();
+    expect(await screen.findByText(/that admin token was rejected/i)).toBeInTheDocument();
+    expect(getToken()).toBeNull();
+  });
+
+  it("a 500 from a live daemon shows the server's OWN message, not the rejected-token copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "database unavailable" }), { status: 500 }),
+      ),
+    );
+    await submit();
+    expect(await screen.findByText("database unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
+    // A 5xx is not proof the token is bad — keep it.
+    expect(getToken()).toBe("sometoken");
+  });
+
+  it("a network error (daemon down / unreachable) shows a reachability message, not the rejected-token copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await submit();
+    expect(await screen.findByText(/could not reach the control plane/i)).toBeInTheDocument();
+    expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
+    expect(getToken()).toBe("sometoken");
+  });
+});
+
+// W31-S1-5 (re-fix): the OIDC callback redirects a user-actionable login
+// denial to "/?auth_error=<code>" instead of a bare http.Error text page —
+// but that redirect lands right back on THIS screen, so if nothing here reads
+// the code the user sees a plain sign-in form with zero explanation, no
+// better than the dead end it replaced. SignIn must render the mapped
+// message inline.
+describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-S1-5)", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("renders the no_role message and strips the param from the URL", async () => {
+    window.history.pushState({}, "", "/?auth_error=no_role");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no wardyn role assigned/i);
+    expect(window.location.search).toBe("");
+  });
+
+  it("renders the email_domain message", async () => {
+    window.history.pushState({}, "", "/?auth_error=email_domain");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/domain isn't allowed/i);
+  });
+
+  it("renders the email_unverified message", async () => {
+    window.history.pushState({}, "", "/?auth_error=email_unverified");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/unverified/i);
+  });
+
+  it("falls back to a generic message for an unrecognized code", async () => {
+    window.history.pushState({}, "", "/?auth_error=something_new");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/sign-in failed/i);
+  });
+
+  it("shows no error banner when the URL carries no auth_error", () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

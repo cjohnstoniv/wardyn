@@ -287,6 +287,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
   });
 
+  // W2-S1-2: a deep link past corp_network is the same click-past the rail
+  // guards — a bookmarked/pasted `?step=` must not skip the mandatory proof
+  // any more than a rail click can. Once status (and so the gate) loads, an
+  // over-reaching initial step gets pulled back to corp_network.
+  it("a ?step= deep link past the unproven corp_network gate is corrected back to it", async () => {
+    renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=integrations");
+    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+  });
+
   // UI-SETUP-1: recheck() used to refresh status+site-config only — secret
   // names were fetched once at mount and never again, so the Integrations
   // rail badge (which derives from them) couldn't see a secret-backed
@@ -423,6 +432,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // Backward is never gated — only forward click-PAST is what the rule guards.
       await user.click(within(nav).getByRole("button", { name: /environment/i }));
       expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+
+      // W2-S1-2: the SAME jump is blocked from an EARLIER step too — not just
+      // while sitting on corp_network itself. A rail click straight from
+      // Environment to Integrations (skipping over corp_network entirely,
+      // never having visited it this render) must be a no-op just the same.
+      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
+      expect(screen.getByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+
       await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
       await screen.findByRole("heading", { name: /^corporate network$/i });
 
@@ -580,9 +597,33 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // No early escape any more — the mandatory gate keeps the operator in setup.
     expect(screen.queryByRole("button", { name: /finish later/i })).not.toBeInTheDocument();
 
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2) —
+    // clear it (same helper every other walkthrough in this suite uses) before
+    // jumping to the final (Launch) step.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
+
     // Jump to the final (Launch) step via the rail and complete via "Finish setup".
     await user.click(screen.getByRole("button", { name: /^Launch —/ }));
     await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
+    expect(setupDismissed()).toBe(true);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  // W2-S1-1: "Open Runs" is a second exit from the Launch step (alongside
+  // "Finish setup") — it must dismiss setup too, or RequireSetupComplete
+  // bounces the operator right back to step 1 the moment they land on /runs.
+  it("Launch step's 'Open Runs' also dismisses setup (not just 'Finish setup')", async () => {
+    const onDone = vi.fn();
+    renderScreen(<SetupScreen onDone={onDone} />);
+    await screen.findByText("Fence");
+
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
+
+    await user.click(screen.getByRole("button", { name: /^Launch —/ }));
+    await user.click(screen.getByRole("button", { name: /^open runs$/i }));
     expect(setupDismissed()).toBe(true);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
@@ -611,6 +652,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       }),
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+
+    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await clearCorpNetworkGate();
+
     await user.click(await screen.findByRole("button", { name: /^Launch —/ }));
     await user.click(
       (await screen.findAllByRole("button", { name: /^launch your first run$/i }))[0],

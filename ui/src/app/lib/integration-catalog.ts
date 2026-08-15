@@ -531,7 +531,13 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "other",
     powers: "Whatever your run does with it — Wardyn opens the path and presents the credential.",
-    lead: "A name, its hosts, an optional credential and how to present it. Anything Wardyn hasn't listed is this — and it works today, because the proxy can inject a header for a host it has never heard of.",
+    // W11-S1-1: "it works today" over-promised the https case — which is the
+    // whole shipped catalog. The proxy only reads plaintext to inject a header
+    // on plain HTTP, or inside a TLS-MITM'd tunnel — and MITM only ever opens
+    // for the built-in LLM hosts or a host an admin separately allow-listed
+    // in Corporate network (internal/api/integrations_run.go's HONEST CEILING
+    // doc, internal/egress/proxy/mitm.go's isMITMHost). Named honestly instead.
+    lead: "A name, its hosts, an optional credential and how to present it. Anything Wardyn hasn't listed is this. The credential injects on plain HTTP; over HTTPS it only reaches a host an admin has separately allow-listed for MITM in Corporate network — otherwise the connection stays opaque and no header is added.",
   },
 ];
 

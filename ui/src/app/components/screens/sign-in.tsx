@@ -21,8 +21,27 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
-import { setToken, probeAuth } from "../../lib/api/core";
+import { errText, HttpError, setToken, wfetch, withLimit } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
+
+// W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
+// redirects a user-actionable login denial to "/?auth_error=<code>" instead
+// of dead-ending the browser on a bare http.Error text page — but a redirect
+// nobody reads is no better: it silently bounces back to this exact screen
+// with zero explanation. These are the stable, machine-readable codes
+// redirectAuthError sends; keep in sync with oidc.go's authError* consts.
+function authErrorMessage(code: string): string {
+  switch (code) {
+    case "email_unverified":
+      return "Your identity provider reports this email as unverified. Verify your email with your identity provider, then try again.";
+    case "email_domain":
+      return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_ALLOWED_EMAIL_DOMAINS.";
+    case "no_role":
+      return "Your account has no Wardyn role assigned. Ask an operator to map your role (WARDYN_OIDC_ROLE_MAP) or add your email to WARDYN_OIDC_OPERATOR_EMAILS.";
+    default:
+      return "Sign-in failed. Try again, or contact an operator.";
+  }
+}
 
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const { theme, toggle } = useTheme();
@@ -50,6 +69,29 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     });
   }, []);
 
+  // W31-S1-5: render the OIDC callback's ?auth_error=<code> (see
+  // authErrorMessage above) inline, reusing the same alert box submitToken's
+  // own failures render below — a redirect back to this screen with no
+  // explanation is the same dead end the bare http.Error page used to be.
+  // Runs once on mount; strips the param from the URL bar so a refresh (or
+  // the user navigating away and back) doesn't keep re-showing a stale error.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("auth_error");
+    if (!code) return;
+    setError(authErrorMessage(code));
+    params.delete("auth_error");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, []);
+
+  // W31-S1-4: probeAuth collapsed every failure — a rejected token (401), a
+  // daemon 5xx, and an unreachable control plane (network error) — to the
+  // same boolean `false`, so every one of them rendered "That admin token
+  // was rejected", even when the token was fine and the daemon just wasn't
+  // up yet. Call wfetch directly so the three cases can be told apart, and
+  // only clear the stored token on a REAL 401 (a 5xx/network blip shouldn't
+  // discard a token that may be perfectly valid).
   const submitToken = async () => {
     if (!token) return;
     setLoading("token");
@@ -57,14 +99,22 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     // Store the admin token (sessionStorage, or localStorage when "remember" is
     // checked), then verify it against a protected endpoint.
     setToken(token, remember);
-    const ok = await probeAuth();
-    if (ok) {
-      onSignIn();
-    } else {
-      // Bad token — clear it so subsequent requests don't carry it.
-      setToken(null);
+    try {
+      const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
+      if (res.ok) {
+        onSignIn();
+        return;
+      }
+      setError(await errText(res));
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 401) {
+        setToken(null); // a real rejection — don't keep carrying a bad token
+        setError("That admin token was rejected. Check the value and try again.");
+      } else {
+        setError("Could not reach the control plane.");
+      }
+    } finally {
       setLoading(null);
-      setError("That admin token was rejected. Check the value and try again.");
     }
   };
 
@@ -144,7 +194,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
               <Input
                 id="token"
                 type="password"
-                placeholder="wardyn_admin_••••••••••••••••"
+                placeholder="demo-admin-token"
                 value={token}
                 onChange={(e) => {
                   setTokenValue(e.target.value);
@@ -155,7 +205,8 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Paste the admin token wardynd printed on startup.
+              Paste the token this control plane was started with (WARDYN_ADMIN_TOKEN; the
+              compose demo uses demo-admin-token).
             </p>
             <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox

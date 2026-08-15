@@ -24,9 +24,10 @@
 #    re-login), and proxy-injects your live token (never a stale copy). Skips the
 #    container; not recommended on Docker Desktop + WSL2 (Record/replay won't route).
 #
-# TEAM mode (that same compose control plane as a shared MULTI-USER service —
-# SSO logins, per-user identity/RBAC) is a COMING-SOON feature;
-# WARDYN_SETUP_MODE=team prints a notice and exits.
+# TEAM mode: a packaged one-command team setup does not exist, but admin/member
+# RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user and
+# deploy/compose/README.md for the recipe (Dex/OIDC + WARDYN_OIDC_ROLE_MAP).
+# WARDYN_SETUP_MODE=team prints that notice and exits.
 #
 # Barriers (Fence/Wall/Vault) that need a package install (gVisor, Kata) require sudo —
 # this script NEVER runs sudo silently. It detects what's present and prints the exact
@@ -35,7 +36,7 @@
 # Usage:  ./scripts/setup.sh                 (asks containerized vs host; headless = containerized)
 #         WARDYN_SETUP_MODE=local ...        (host mode, no prompt)
 #         WARDYN_SETUP_MODE=container ...    (containerized single-user stack, no prompt)
-#         WARDYN_SETUP_MODE=team ...         (errors: team mode does not exist and is not scheduled)
+#         WARDYN_SETUP_MODE=team ...         (prints the admin/member RBAC + SSO recipe, exits)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -201,7 +202,8 @@ fi
 # (wardynd runs as you; uses your resident Claude login directly) is an advanced
 # escape hatch. ONE front door: with a TTY and no explicit WARDYN_SETUP_MODE we
 # ask (Enter = containerized); headless defaults to containerized too. TEAM (a
-# shared MULTI-USER service: SSO/RBAC) does not exist yet and is not scheduled.
+# packaged one-command team setup) does not exist, but admin/member RBAC + SSO
+# shipped in v0.5 — see docs/OPERATIONS.md §Multi-user for the recipe.
 if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
   say "    1) containerized — the compose stack (default, recommended)"
@@ -270,23 +272,27 @@ case "${WARDYN_SETUP_MODE:-container}" in
     ;;
   local|host) ;;
   team)
-    hd "Team mode does not exist yet"
-    warn "Team mode — this compose control plane as a shared MULTI-USER service (SSO logins,"
-    warn "per-user identity/RBAC) — does not exist yet and is not scheduled (see ROADMAP.md)."
-    warn "What works today, both single-user: CONTAINERIZED mode ('make setup' / Enter at the"
-    warn "prompt — the compose stack, the default) and HOST mode (WARDYN_SETUP_MODE=local —"
-    warn "advanced: wardynd runs as you, your Claude login injected per-request at the proxy)."
+    hd "A packaged one-command team setup does not exist"
+    warn "There is no team-mode installer here — but admin/member RBAC + SSO (Dex/OIDC,"
+    warn "WARDYN_OIDC_ROLE_MAP) shipped in v0.5 on top of the same compose control plane."
+    warn "See docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the recipe."
+    warn "What this script sets up today, both single-user: CONTAINERIZED mode ('make setup' /"
+    warn "Enter at the prompt — the compose stack, the default) and HOST mode"
+    warn "(WARDYN_SETUP_MODE=local — advanced: wardynd runs as you, your Claude login injected"
+    warn "per-request at the proxy)."
     exit 2
     ;;
   *)
     warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid. Supported: container (the"
-    warn "compose stack — the default), or local/host (advanced host mode). Team mode is not scheduled."
+    warn "compose stack — the default), or local/host (advanced host mode). 'team' prints the"
+    warn "admin/member RBAC + SSO recipe (docs/OPERATIONS.md §Multi-user) instead of installing anything."
     exit 2
     ;;
 esac
 ok "Mode: host (local) — advanced; containerized is the default"
 
-# ── ACT (host mode only; team mode does not exist, so there is no team branch) ──────
+# ── ACT (host mode only; no packaged team installer, so there is no team branch here —
+# admin/member RBAC + SSO run on the same compose stack, see docs/OPERATIONS.md §Multi-user) ──
 # local / host mode
 hd "Setting up local (host) mode"
 

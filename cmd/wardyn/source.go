@@ -107,6 +107,10 @@ func sourceCmd(client clientFn) *cobra.Command {
 	create.Flags().StringVar(&req.Ref, "ref", "", "git ref (branch/tag/sha); repo kind only — part of the identity")
 	create.Flags().StringVar(&req.Name, "name", "", "human-readable name (defaults to the locator's last path segment)")
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the source as JSON")
+	// W6-S1-6: fail locally with cobra's own "required flag(s)" message
+	// instead of round-tripping an empty locator to the server for a 400.
+	_ = create.MarkFlagRequired("kind")
+	_ = create.MarkFlagRequired("locator")
 
 	scan := &cobra.Command{
 		Use:   "scan <source-id>",
@@ -138,14 +142,19 @@ func sourceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := client().DeleteSource(cmd.Context(), id, delForce); err != nil {
+			detachedFrom, err := client().DeleteSource(cmd.Context(), id, delForce)
+			if err != nil {
 				return err
 			}
 			fmt.Printf("source %s deleted\n", args[0])
+			if len(detachedFrom) > 0 {
+				fmt.Printf("  detached from: %s (those workspaces stop mounting this source; their next runs succeed without it)\n",
+					strings.Join(detachedFrom, ", "))
+			}
 			return nil
 		},
 	}
-	del.Flags().BoolVar(&delForce, "force", false, "detach from every workspace still using it (their runs then fail LOUDLY at the mount gate)")
+	del.Flags().BoolVar(&delForce, "force", false, "detach from every workspace still using it (those workspaces stop mounting this source; their next runs succeed without it)")
 
 	cmd.AddCommand(list, create, scan, del)
 	return cmd

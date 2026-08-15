@@ -57,3 +57,29 @@ export const TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
     ],
   },
 };
+
+// W4-S1-5/W27-S1-4: the k8s runner substrate isn't a `docker info` host at
+// all — there's no daemon.json to edit and no `wardyn setup wall/vault`
+// command for wardynd to run against ITSELF. The actual lever is a
+// cluster-registered RuntimeClass, pinned to a Confinement Class via Helm
+// (deploy/helm/wardyn/README.md's k8s.runtimeClasses.CC2/.CC3) — a value only
+// the cluster operator can set, so the "command" here is the `helm upgrade`
+// invocation, not something Re-check can ever satisfy on its own.
+export const K8S_TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
+  CC2: {
+    title: "Enable the Wall tier",
+    description:
+      "Wall runs the agent inside gVisor — a userspace kernel that intercepts every syscall so nothing touches the node's kernel.",
+    command: "helm upgrade --set k8s.runtimeClasses.CC2=<runtimeclass-name> ...",
+    docNote:
+      "Register a gVisor RuntimeClass in the cluster (its object name is operator-chosen — Wardyn can't guess it), then pin it here. Then Re-check.",
+  },
+  CC3: {
+    title: "Enable the Vault tier",
+    description:
+      "Vault runs the agent in its own hardware-virtualized microVM with its own kernel — the strongest isolation.",
+    command: "helm upgrade --set k8s.runtimeClasses.CC3=<runtimeclass-name> ...",
+    docNote:
+      "Register a Kata RuntimeClass on a KVM-capable node pool, then pin it here. Then Re-check.",
+  },
+};

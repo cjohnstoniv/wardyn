@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 const createWorkspaceMock = vi.fn();
 const updateWorkspaceMock = vi.fn();
@@ -351,6 +352,19 @@ describe("WorkspaceWizard — edit hydration via the `initial` prop (Fix B)", ()
     // scanned + no image_ref yet -> lands on Base image, not Sources.
     expect(await screen.findByText("Recommended — built for this workspace")).toBeInTheDocument();
     expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  // W8-S1-6: a workspace whose last scan FAILED (status "error") lands on
+  // Base image (same heuristic as the no-image-yet case above) but must show
+  // the failed-card + Rescan affordance, not an empty "what the image needs"
+  // card with no error and no way to retry.
+  it("a workspace whose last scan failed re-enters onto the failed-card, not an empty needs card", async () => {
+    const ws = editableWorkspace({ status: "error", image_ref: "" });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Scan failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeInTheDocument();
+    expect(screen.queryByText("Recommended — built for this workspace")).not.toBeInTheDocument();
   });
 
   it("a not-yet-scanned workspace lands on Sources instead", async () => {
@@ -816,5 +830,47 @@ describe("WorkspaceWizard — Integrations' adopt-then-name doesn't drop a row n
     });
 
     await waitFor(() => expect(screen.getAllByRole("button", { name: /not used/i })).toHaveLength(2));
+  });
+});
+
+// W25-W25.2-2: every mutation this wizard makes (create, update, scan,
+// build, requirements, …) is operator-only server-side (internal/api/
+// routes.go), but the wizard itself had no client-side gate — a member
+// reaches Continue and gets a raw 403 toast. One check at the wizard's own
+// entry must cover every mount point (new-run's "Add a workspace",
+// Workspaces, workspace-detail's Edit, setup), so it's tested here rather
+// than at each trigger.
+describe("WorkspaceWizard — operator gate (W25-W25.2-2)", () => {
+  it("a non-operator sees the reason, not the step form, and never calls createWorkspace", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <WorkspaceWizard onClose={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue →" })).not.toBeInTheDocument();
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("a non-operator sees the same reason editing an existing workspace", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "wardyn-workspace/ws-1:abc123" });
+    render(
+      <OperatorProvider operator={false}>
+        <WorkspaceWizard initial={ws} onClose={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.queryByText(C.S3_BLURB)).not.toBeInTheDocument();
+  });
+
+  it("an operator still sees the real wizard (no over-gating)", async () => {
+    render(
+      <OperatorProvider operator>
+        <WorkspaceWizard onClose={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
   });
 });

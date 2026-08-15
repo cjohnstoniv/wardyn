@@ -197,7 +197,7 @@ the canary, never merely claimed because a policy object was applied.
 
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
-| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only — on the recording-upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`appendJSONEscapedVariants`), which covers multi-line keys and quote/backslash-bearing values; a secret SPLIT across two output events by the recorder's PTY read boundaries stays a residual the verbatim match cannot close, since the `"],[t,"o","` event framing interrupts the byte run — the live-attach path masks raw PTY bytes and is unaffected). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. | B1, B2, B4 |
+| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only — on the recording-upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`appendJSONEscapedVariants`), which covers multi-line keys and quote/backslash-bearing values; a secret SPLIT across two output events by the recorder's PTY read boundaries stays a residual the verbatim match cannot close, since the `"],[t,"o","` event framing interrupts the byte run — the live-attach path masks raw PTY bytes and is unaffected). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes the CROSS-REPLICA form of this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. **The single-process case is not inert**: a `wardynd` restart (upgrade, crash) mid-run empties the same in-memory map, so a run whose secrets registered pre-restart and whose cast uploads post-restart hits the identical empty-snapshot fail-open at `replicas: 1`. | B1, B2, B4 |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Two independent layers already close this — L1 below adds depth, it is not what this residual is waiting on. **L0 [shipped]:** each run's Docker network is `Internal:true` (gatewayless), so the sandbox has no off-host route at all; 169.254.169.254 is structurally unreachable regardless of what runs inside it. **L2 [shipped]:** even a request that DOES reach the proxy is independently checked against an unconditional IP guard — a literal-IP target is denied before policy or approval ever run (`evaluate` step 0, `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`, `policy.go:342,385`) against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved, and NAT64-embedded-v4 ranges — a check that runs AFTER, and is unaffected by, the policy verdict, so a host that `allow_all_egress` would otherwise pass is still denied if it resolves into one of those ranges (the one hop that defers this post-resolution re-check — the opt-in upstream corp-proxy lane, where the corp proxy performs its own DNS+dial — is §5's disclosed TOCTOU residual, and the step-0 literal-IP denial still holds there). L2's guard lives in the proxy's own code, not the network topology, so — unlike L0 — it does not depend on Docker's gatewaylessness to hold. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]** is a third, kernel-level layer for defense-in-depth (chiefly: a non-HTTP path that bypasses the proxy process entirely, and parity on the v0.5 Kubernetes topology, where a pod is not gatewayless by default the way a Docker `Internal:true` network is) — not a precondition for the metadata block itself. | L0, L2 (L1 v0.5 adds depth) |
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5+ — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
@@ -213,7 +213,7 @@ the canary, never merely claimed because a policy object was applied.
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
 | Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin reaching another human's run still uses the web terminal (owner-or-admin attach ticket), never SSH; a member has no path to another human's run over either transport. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B9 |
 | Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B9 |
 | SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B9 |
@@ -410,24 +410,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set, so an operator either names the
     operators or explicitly accepts all-admin. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
     to a list of operator addresses makes every other signed-in human a
-    **viewer**: 403 on the mutating routes of nine clusters — the managed
+    **viewer**: 403 on the mutating routes of eight clusters — the managed
     harness credential, policy CRUD, workspace CRUD (including the scoped
     widening writes below), `PUT /site-config` and its two connectivity
     probes (each launches a sandbox on the operator's behalf), secret
-    write/delete, deciding an approval (`POST /approvals/{id}/approve|deny`),
-    attaching to a running sandbox — both the ticket mint (`POST
-    /runs/{id}/attach-ticket`) and the WebSocket itself (`GET
-    /runs/{id}/attach`), since the socket falls back to session-cookie auth
-    when no ticket is presented and a browser attaches that cookie to a
-    same-origin handshake on its own; gating only the mint would leave the PTY
-    reachable — the source-library and base-image catalog CRUD, and
-    integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
-    /integrations/{id}/adopt`). Reads are never gated, the admin token and local mode are always
+    write/delete, the attach WebSocket's ticket-LESS fallback lane (`GET
+    /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=`
+    is presented, since a browser attaches that cookie to a same-origin
+    handshake on its own), the source-library and base-image catalog CRUD,
+    and integration writes (`PUT`/`DELETE /integrations/{id}`, `POST
+    /integrations/{id}/adopt`). **Two acts moved DOWN to owner-or-admin since
+    v0.5 and are deliberately NOT in this list**: minting an attach ticket
+    (`POST /runs/{id}/attach-ticket` — a member may still hold one for a run
+    THEY created; the WebSocket then re-checks the ticket's own stamped
+    role/principal at consume time, since the ticket-bearing lane never runs
+    this gate at all — `handleAttachWS`) and deciding an `egress_domain`
+    approval (a member may decide one raised by a run they own; `credential`
+    and `tool_call` approvals stay admin-only regardless of ownership — see
+    residual #17). Reads are never gated, the admin token and local mode are always
     operators (one shared credential carries no human to demote), and NOTHING
     ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
-    open to any signed-in human: launching and stopping a run is a viewer act
-    by design, and a viewer's own run that trips an approval simply blocks
-    until an operator decides it. Leave the list unset and the paragraph below
+    open to any signed-in human: launching, killing and deciding an
+    `egress_domain` approval on one's OWN run is a viewer/member act by
+    design. Leave the list unset and the paragraph below
     is the whole truth. Policy
     CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
     `requirements` writes that widen what a run may do), secret write/delete,
@@ -453,23 +458,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
 
-15. **SSH gateway authorization has no operator override.** Unlike the browser
-    terminal (`GET /runs/{id}/attach`, gated by `requireOperator` when
-    `WARDYN_OIDC_OPERATOR_EMAILS` is set — an operator may attach to *any* run),
-    SSH gateway (`docs/SSH.md`) authorization is exactly one check:
-    `run.created_by == the connecting key's registered principal`. There is no
-    role column an operator's key could satisfy instead, so an operator who
-    needs to reach a run they did not create has exactly one path today — the
-    web terminal, same as a viewer. This is a *narrower*, not a wider, gap than
-    #14 (SSH grants an operator strictly LESS reach than the browser terminal
-    already does) — named here because a reader auditing "who can reach a live
-    shell in MY run" should not have to infer that SSH and the browser terminal
-    answer the question differently. The upgrade path (a role column, so an
-    operator's own registered key could satisfy an "operator OR owner" check)
-    is marked with a `ponytail:` comment at the authorization check
-    (`internal/api/sshgateway.go`'s `sshAuth`) rather than built now — no
-    deployment has asked for it, and the narrower behavior is safe by
-    construction, not merely unfinished.
+15. **SSH gateway authorization has no admin override.** Unlike the browser
+    terminal (`GET /runs/{id}/attach` — owner-or-admin via a minted attach
+    ticket, since v0.5 a member may attach to a run THEY OWN this way;
+    admin-only via the ticket-LESS session-cookie fall-through), SSH gateway
+    (`docs/SSH.md`) authorization is exactly one check:
+    `run.created_by == the connecting key's registered principal`, with no
+    admin-or-owner alternative. So an admin reaching another human's run uses
+    the web terminal (owner-or-admin attach ticket); a member has no path to
+    another human's run over either transport — SSH's owner-only check
+    refuses them the same as it refuses everyone else, and the web
+    terminal's ticket mint is itself owner-or-admin-gated
+    (`handleAttachTicket`'s `getRunAuthorized`). This is a *narrower*, not a
+    wider, gap than #14 (SSH grants an admin strictly LESS reach than the
+    browser terminal already does) — named here because a reader auditing
+    "who can reach a live shell in MY run" should not have to infer that SSH
+    and the browser terminal answer the question differently. The upgrade
+    path (a role column, so an admin's own registered key could satisfy an
+    "admin OR owner" check) is marked with a `ponytail:` comment at the
+    authorization check (`internal/api/sshgateway.go`'s `sshAuth`) rather
+    than built now — no deployment has asked for it, and the narrower
+    behavior is safe by construction, not merely unfinished.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given
@@ -548,7 +557,7 @@ says so.
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
 | `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time and shredded right after the clone (`wipe_ssh_grants`, before the agent process starts); mask-registered at mint. **On an UNBROKERED forge** (`dev.azure.com`, or a `github.com` grant with no co-granted `github_token`) that window is a narrowing, not a bound: the grant id rides `WARDYN_SSH_GRANTS` in the sandbox env, an auto-mintable grant is re-mintable by design (`MintForGrant`), and the proxy's mint route refuses only brokered *GitHub* grant ids (`isBrokeredGitGrant`) — so the agent process can re-mint the same key at any point in the run. **On a BROKERED forge this no longer applies:** `validateGrantLaneExclusivity` (`internal/api/policy.go`) refuses a policy declaring both a `github_token` and an `ssh_key` grant for the same forge at write time, and for anything already stored, dispatch's `dropBrokeredGrants` withholds the grant from `WARDYN_SSH_GRANTS` entirely — no grant id reaches the sandbox, so there is nothing to re-mint — while `confineGitBrokerEgress` denies `ssh.<forge>` alongside the four HTTPS hosts. Wardyn cannot down-scope or expire an SSH private key in the cases it does remain resident (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). |
-| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants, so there is no direct route either. On a **brokered** run — one the broker actually serves at least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty, the same map that drives the deny) — the helper REFUSES every GitHub host **and** the proxy's mint route refuses that grant id, so the installation token is not obtainable from inside the sandbox even though the grant id itself rides the agent env: the contrast with the ADO PAT is structural there, not just scope+TTL. A `github_token` grant that covers **no** repo is NOT brokered — no `/wardyn/gh/` route, no injected deny — and it also mints nothing by any path: `MintInstallationToken` refuses an empty repo list outright (`broker: github token requires at least one repo`), so the helper's mint returns an error and no token reaches the sandbox. That shape is an inert grant, not a `git_pat`-grade resident credential. |
+| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. That gate binds a caller going through `wardyn-git-helper` itself — it does not bind the credential at its source: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants, so there is no direct route either. On a **brokered** run — one the broker actually serves at least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty, the same map that drives the deny) — the helper REFUSES every GitHub host **and** the proxy's mint route refuses that grant id, so the installation token is not obtainable from inside the sandbox even though the grant id itself rides the agent env: the contrast with the ADO PAT is structural there, not just scope+TTL. A `github_token` grant that covers **no** repo is NOT brokered — no `/wardyn/gh/` route, no injected deny — and it also mints nothing by any path: `MintInstallationToken` refuses an empty repo list outright (`broker: github token requires at least one repo`), so the helper's mint returns an error and no token reaches the sandbox. That shape is an inert grant, not a `git_pat`-grade resident credential. |
 | Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — there is no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
 | Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | A minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — this is a **not-yet-built** gap, not an impossibility. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative, mirroring Bedrock bearer mode). Until that ships, the token is written into the sandbox. | Files written `0600`; the token values are mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh + client secret again at use; a lapsed token is detected before dispatch and the run falls through to the next credential mode rather than being handed a dead token; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy carried in the env var is not matched, and Wardyn cannot revoke an SSO session. |
 | **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
@@ -716,8 +725,10 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 **different at-rest posture**:
 
 - **Admin token (the single-operator local path, shipped today).** `wardynd`
-  prints a full-admin bearer on startup; you paste it into the sign-in screen and
-  it is attached as an `Authorization: Bearer` header on every `/api/v1` request.
+  never generates or prints this token — it is the value you (or the compose
+  demo, `demo-admin-token`) started it with, `WARDYN_ADMIN_TOKEN`. You paste it
+  into the sign-in screen and it is attached as an `Authorization: Bearer`
+  header on every `/api/v1` request.
   This token is a full-admin credential held in browser storage, so it carries
   **XSS-equivalent risk**: any script that runs in the console origin can read it.
   By default it is kept in **`sessionStorage`** and is gone when the tab/browser
@@ -725,10 +736,12 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
   `localStorage` instead (survives restart, larger exposure window). Both stores
   are same-origin and readable by injected script — the checkbox trades restart
   convenience for a shorter at-rest window, not for a stronger boundary.
-- **SSO session (the hardened path, `[multi-user — not yet built, unscheduled]`).** The session
+- **SSO session (the hardened path, shipped v0.5).** The session
   is carried in an **`HttpOnly` cookie** that page script cannot read, so an
   injected script cannot exfiltrate it. This is the stronger posture; the
   admin-token path above is the local/single-operator convenience alternative.
+  See `docs/OPERATIONS.md` "Multi-user: who can change what" for the
+  admin/member contract this session carries.
 
 **Mitigations that exist:** the token is never written to `localStorage` unless
 you opt in; the console is served same-origin (no cross-origin token leak); the
@@ -929,6 +942,15 @@ multi-tenant deployment.
 **What it does not stop:**
 - A hypervisor 0-day / VM-escape (rare; hardware-virt boundary is historically
   the most stable boundary in the stack, but not absolute).
+- The Kata v3.31.0 install floor above is enforced install-time only, by
+  `wardyn setup vault`'s installer. Once a `kata*` runtime is registered with
+  the Docker daemon, `pickRuntime` grants CC3 to it on name alone — there is no
+  running-daemon version probe, so a `kata*` runtime that reached the host by
+  any OTHER path (a pre-existing install, a manual downgrade, a golden image
+  built before v3.31.0) is granted CC3 with the CVE-2026-44210/-47243 gap
+  still open. The floor is a property of how Vault was installed, not a
+  property of the tier itself; a version probe in the runtime-selection path
+  is the closing fix (tracked, not yet built).
 - Host eBPF is blind to in-guest syscalls. Wardyn's eBPF/Tetragon
   ground-truth audit stream **[shipped]** is a HOST sensor; for CC3/Kata
   workloads it cannot see inside the guest and `wardyn-tetragon-ingest` emits a
@@ -953,7 +975,7 @@ The following controls apply regardless of Confinement Class:
 | Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 **[shipped]** + L3 **[v0.5+ — planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
 | Approval mints credential | B5 coupling, ID + AU | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; the explicit-kill path teardown-first, non-kill stops win the state CAS first then revoke — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5+ — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5+ — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU | Insider hiding behind agent identity |
 | Tamper-evident, free SIEM export | AU: Postgres log + PTY replay **[shipped]**, eBPF/Tetragon ground-truth stream **[shipped]** (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.blind`) | In-sandbox log tampering; audit vendor lock-in |
 | Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]** | Policy disablement before malicious action |
@@ -987,22 +1009,35 @@ the CC3 host-eBPF blind spot surfaced explicitly rather than hidden.
 
 The **explicit kill** path (`handleKillRun`) runs this fixed order:
 
-1. **Sandbox teardown** — runner `KillSandbox`.
-2. **Run-token deny-list** — embedded identity revocation.
-3. **Broker credential revoke** — every minted credential for the run.
-4. **Durable state transition** — compare-and-swap, so a finished run cannot be
-   resurrected.
+1. **Durable state transition** — compare-and-swap to KILLED from the state
+   just read. This runs FIRST (C002): a kill that loses the race to a
+   concurrent forward transition (e.g. a dispatch PENDING→STARTING) 409s
+   WITHOUT touching the runner or revoking anything, so it can never strip a
+   still-live run's credentials. Only the transition that actually WINS
+   KILLED proceeds to the steps below. An already-KILLED run is the one
+   exception to the terminal guard: re-kill CASes KILLED→KILLED (a value
+   no-op) and re-runs the idempotent steps below, so a first kill whose
+   teardown/revoke partially failed can be retried to actually free the
+   sandbox/credentials.
+2. **Sandbox teardown** — runner `KillSandbox`.
+3. **Run-token deny-list** — embedded identity revocation.
+4. **Broker credential revoke** — every minted credential for the run.
 
-Any step that fails is audited loudly (`run.kill`/`run.revoke` failure) instead
-of reporting containment — NOT fully contained, retry the kill. SPIRE entry
+Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the
+aggregate outcome, plus a distinct `run.revoke` failure event) instead of
+reporting containment — NOT fully contained, retry the kill. SPIRE entry
 deletion arrives with SPIRE **[v0.5+ — planned]**; GitHub installation tokens
 are TTL-bound (no per-token revoke API) — residual #7.
 
-Non-kill stops (completion, failure, idle auto-stop) run the **same set** of
-revocation+teardown steps and are equally fail-loud, but win the durable-state
-compare-and-swap *first* (the gate that prevents a double-finalize) and then
-revoke and tear down — and audit `run.complete`/`run.reconcile` rather than
-`run.kill`.
+Non-kill stops (completion, failure, idle auto-stop) also win the durable-state
+compare-and-swap *first* — same C002 invariant, a lost CAS never revokes a
+still-live run — but the caller wins it BEFORE calling the shared
+`finalizeRunTail`, whose own internal order is audit → revoke → teardown (the
+REVERSE of explicit kill's teardown-before-revoke), and which audits
+`run.complete`/`run.reconcile` rather than `run.kill`. Unlike an explicit
+kill, a non-kill stop has no re-kill-style retry lane: a failed teardown/revoke
+step there is not automatically retried today (`SweepTerminalSandboxes` is an
+unwired primitive for exactly this gap — nothing calls it yet).
 
 **Verification note (2026-07-06):** re-checked against the shipped Docker
 driver to confirm the "egress enforced outside the sandbox" / "env-var proxy
@@ -1020,7 +1055,7 @@ the files were split. The actual mechanism is structural and tier-independent:
 2. The agent joins ONLY that network — `CreateSandbox` step (3) attaches it at
    create time via `NetworkMode` + `NetworkingConfig`, never the host bridge
    (same file); `HTTP_PROXY`/`HTTPS_PROXY` (`buildBaseSandboxEnv`,
-   `internal/api/runs_dispatch.go`) are set for proxy-aware clients as a
+   `internal/api/runs_dispatch_mounts.go`) are set for proxy-aware clients as a
    convenience, not the enforcement boundary.
 3. Under gVisor (CC2/`runsc`), Docker's embedded DNS resolver (127.0.0.11) is
    not reachable from the sandbox's netstack, so the `wardyn-proxy` alias is

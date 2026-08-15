@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -74,19 +75,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	profile := workspacescan.DeriveProfile(facts)
-
-	// ADVISORY AI fallback (opt-in; nil advisor = OFF, byte-identical behavior).
-	// Only when the deterministic pass is unsure (ShouldAdvise). AdviseProfile
-	// gap-fills EMPTY fields, can only RAISE NeedsReview, and FAILS OPEN — any
-	// advisor error (incl. a bounded CLI timeout) keeps `profile` unchanged, so it
-	// can never fail the sidecar's upload. It flips Source to SourceAIAssisted iff
-	// it actually changed something (our audit discriminator below).
-	aiRan, aiChanged := false, false
-	if s.cfg.ScanAIAdvisor != nil && workspacescan.ShouldAdvise(profile, facts) {
-		aiRan = true
-		profile = s.cfg.ScanAIAdvisor(r.Context(), facts, profile)
-		aiChanged = profile.Source == workspacescan.SourceAIAssisted
-	}
+	profile, aiRan, aiChanged := s.applyScanAIAdvisor(r.Context(), facts, profile)
 
 	// The scan's discoveries land on the SOURCE's own contract in the same
 	// fenced write — a repo source has no host write path, so its seed is
@@ -111,4 +100,25 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 			"ai_advisor": aiRan, "ai_changed": aiChanged,
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"source_id": src.ID, "status": src.Status})
+}
+
+// applyScanAIAdvisor runs the opt-in ADVISORY AI gap-fill (nil advisor = OFF,
+// byte-identical behavior) on facts/profile, only when the deterministic pass
+// is unsure (ShouldAdvise). AdviseProfile gap-fills EMPTY fields, can only
+// RAISE NeedsReview, and FAILS OPEN — any advisor error (incl. a bounded CLI
+// timeout) keeps profile unchanged, so a caller's own persist/upload can never
+// fail because of it. aiChanged reports whether it actually flipped Source to
+// SourceAIAssisted (the audit discriminator every caller records).
+//
+// Shared by every scan LANE (W9-S1-6): the sandboxed repo-scan upload
+// (uploadSourceScanResult) and the host-side local_dir scan
+// (scanLocalDirSource) both derive a profile from ScanFacts, so both get the
+// SAME advisory gap-fill on the SAME gate — a local_dir source is not a
+// second-class scan lane the flag quietly skips.
+func (s *Server) applyScanAIAdvisor(ctx context.Context, facts workspacescan.ScanFacts, profile workspacescan.WorkspaceProfile) (result workspacescan.WorkspaceProfile, aiRan, aiChanged bool) {
+	if s.cfg.ScanAIAdvisor == nil || !workspacescan.ShouldAdvise(profile, facts) {
+		return profile, false, false
+	}
+	advised := s.cfg.ScanAIAdvisor(ctx, facts, profile)
+	return advised, true, advised.Source == workspacescan.SourceAIAssisted
 }

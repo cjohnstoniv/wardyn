@@ -277,11 +277,15 @@ if run_section 1; then
         ok "section 1: workspace cloned (ls ${S1_REPO_DIR}: ${S1_LS//$'\n'/ | })"
       fi
     else
-      # Check whether the dir itself exists at all as a partial indicator
-      if docker exec "${S1_CTR}" test -d "${S1_REPO_DIR}" 2>/dev/null; then
+      # ls showed nothing README/.git-like. Do NOT fall back to `test -d
+      # ${S1_REPO_DIR}` here: clone_one() in agent-run-lib.sh unconditionally
+      # `mkdir -p`s the dest before attempting `git clone`, so the bare dir
+      # exists even when the clone failed — that used to report a false
+      # green. clone_present checks for a populated .git instead.
+      if clone_present "${S1_CTR}" "${S1_REPO_DIR}"; then
         ok "section 1: clone dir exists (${S1_REPO_DIR}); ls: ${S1_LS//$'\n'/ | }"
       else
-        bad "section 1: clone dir absent (${S1_REPO_DIR}); check proxy egress + agent-run clone step"
+        bad "section 1: clone did not happen (${S1_REPO_DIR}/.git absent); check proxy egress + agent-run clone step"
         note "section 1: ls: ${S1_LS}"
         note "section 1: the current agent-run does not auto-clone; see docs/TRY-IT.md for the"
         note "section 1: wardyn-git-helper-based clone path (section 5 proves that chain)"

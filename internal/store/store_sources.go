@@ -131,9 +131,10 @@ func (s PG) UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, r
 
 // WorkspacesAttaching returns the names of workspaces whose attachments
 // reference source id — the loud half of delete-in-use. One GIN probe
-// (workspaces_attachments_gin). A dangling attachment would silently un-mount
-// code and turn runs into unexplained 422s at the mount gate, so DELETE
-// refuses with these names rather than orphaning.
+// (workspaces_attachments_gin). A dangling attachment would silently narrow a
+// workspace to its remaining sources (no error, no mount-gate check for a
+// source that used to be there), so DELETE refuses with these names rather
+// than orphaning silently.
 func (s PG) WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error) {
 	return collect(ctx, s.Pool, "list", "workspaces attaching", `
 		SELECT name FROM workspaces
@@ -334,6 +335,16 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // identity (kind, image, steps) — the identity index is the dedupe rule. The
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
+//
+// An identity hit does NOT touch name (same as UpsertSource's conflict
+// clause below) — on purpose. This upsert is also the PASSTHROUGH path a
+// workspace/run resolves its declared base-image spec through (sources.go's
+// attachSourcesAndBaseImage-shaped callers), which always derives an
+// auto-placeholder name (lastPathSegment(image)) with no rename intent
+// whatsoever; if this conflict clause applied EXCLUDED.name unconditionally,
+// every such passthrough call would silently rename an operator's
+// custom-named catalog row back to that placeholder. See
+// UpdateBaseImageName for the actual rename path (W7-S1-3).
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -346,6 +357,19 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 		RETURNING ` + baseImageCols
 	return scanBaseImage(s.Pool.QueryRow(ctx, q,
 		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt))
+}
+
+// UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
+// rename path (W7-S1-3), mirroring UpdateSourceConfig above. handleCreateBaseImage
+// is the only caller: on an identity hit where the REQUEST carried an explicit
+// name (the Add dialog's re-POST-to-rename shape), never from UpsertBaseImage's
+// own conflict clause, which passthrough callers share and must never let rename
+// an operator's chosen name away from under them (see UpsertBaseImage's doc).
+func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
+	return scanBaseImage(s.Pool.QueryRow(ctx, `
+		UPDATE base_images SET name=$1, updated_at=now()
+		WHERE id=$2 RETURNING `+baseImageCols,
+		name, id))
 }
 
 // GetBaseImage returns the catalog row for id, or ErrNotFound.

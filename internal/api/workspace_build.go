@@ -203,8 +203,16 @@ type buildResponse struct {
 // standard agent-tool install is unconditional rather than derived from the
 // workspace's named integrations.
 func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
-	// An explicit image choice boots verbatim — there is nothing to build.
-	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" {
+	// An explicit image CHOICE (registry/byo) boots verbatim ONLY once an image
+	// builder has wrapped it with the agent runtime — resolveWorkspaceImage's
+	// FinalizeBase call, the SAME wrap a devcontainer build needs. W7-S1-2: this
+	// used to report "nothing_to_build ... no build involved" unconditionally,
+	// which is false on a builder-less host (the default bare binary AND every
+	// Helm/k8s install unless WARDYN_ENVBUILD is set) — a run against this
+	// workspace is refused there (runs_create.go's wsRefs door), not booted
+	// as-is. Gate on the builder so a builder-less host instead falls through
+	// to the same honest report "custom" already gets below.
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil {
 		return buildResponse{State: "nothing_to_build", Image: b.Image,
 			Detail: "this image boots as-is — no build involved"}
 	}
@@ -223,6 +231,14 @@ func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 		}
 	}
 	if s.cfg.ImageBuilder == nil {
+		if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Image != "" {
+			// Explicit base image (registry/byo/custom), no builder wired: unlike
+			// the generic "sessions boot the stock agent image" fallback below,
+			// this workspace's chosen image is refused outright at run creation
+			// rather than silently substituted (PARITY-4, runs_create.go).
+			return buildResponse{State: "none", Image: b.Image,
+				Detail: "the sandbox image builder is not wired on this host, so this base image cannot be wrapped with the agent runtime — a run against this workspace is REFUSED, not silently substituted; set WARDYN_ENVBUILD on a wardynd built with -tags docker to enable it, or drop the base image"}
+		}
 		return buildResponse{State: "none",
 			Detail: "devcontainer builds are not enabled on this host — sessions boot the stock agent image"}
 	}

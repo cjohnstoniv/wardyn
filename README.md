@@ -146,7 +146,10 @@ checks it.
 - **Confinement Classes.** Friendly UI names — **Fence** = CC1 (hardened
   shared-kernel runc) **[shipped]**, **Wall** = CC2 (gVisor userspace kernel)
   **[shipped]**, CC3/Vault (Kata microVM) **[experimental]** (needs `/dev/kvm` +
-  a registered Kata runtime; not on Docker Desktop). CC1/Fence needs only
+  a registered Kata runtime; not on Docker Desktop; the CVE-2026-44210/-47243
+  version floor is enforced by `wardyn setup vault`'s installer, not re-checked
+  against an already-registered `kata*` runtime — see THREAT-MODEL.md §7 CC3).
+  CC1/Fence needs only
   Docker; CC2/Wall adds gVisor's `runsc` and is the strongest tier `wardyn setup
   wall` can unlock without virtualization. `make setup` auto-picks a policy
   (`scripts/up.sh` `pick_policy`): `default.json` (CC2) on a runsc-registered

@@ -18,7 +18,7 @@ export const C = {
   LOCATION_ONLY:
     "Only the location and detector are flagged — the secret value itself is never shown or stored.",
   BLIND_SPOT:
-    "Detected from committed files only — runtime hosts hidden behind env-var defaults, secrets mentioned only in docs, and files deeper than 4 levels are not visible to the scan.",
+    "Detected from committed files only — runtime hosts hidden behind env-var defaults, secrets mentioned only in docs, files deeper than 6 levels, and anything past the scan's per-run file budget (a few hundred files) or a file's first 1 MB/4,000 lines are not visible to the scan.",
   REQ_DEF: "Required — attached to every run that uses this workspace, no prompting.",
   OPT_DEF: "Optional — off by default; a run can switch it on when it needs it.",
   SEEDED: "Defaults below came from the scan. You decide.",

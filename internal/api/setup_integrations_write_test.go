@@ -117,6 +117,31 @@ func TestHandlePutIntegration_UpdatesExistingRow_PreservesCreatedAt(t *testing.T
 	}
 }
 
+// W11-S1-2: a stale cached "passed" chip must not survive an edit to the row
+// it was probed against — the credential/config it claims to vouch for is no
+// longer the credential/config the row now has.
+func TestHandlePutIntegration_InvalidatesCachedProbeStatus(t *testing.T) {
+	existing := types.Integration{
+		ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
+	}
+	srv, _, _ := integrationWriteHarness(t, []types.Integration{existing})
+	srv.setProbeStatus("acme-anthropic", types.IntegrationProbeStatus{State: "passed", CheckedAt: srv.cfg.Now().UTC()})
+	if st := srv.probeStatus("acme-anthropic"); st == nil || st.State != "passed" {
+		t.Fatalf("precondition: probeStatus = %+v, want the seeded passed result", st)
+	}
+
+	body := `{"name":"Acme Anthropic (rotated)","kind":"anthropic_api_key",` +
+		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if st := srv.probeStatus("acme-anthropic"); st != nil {
+		t.Errorf("probeStatus after PUT = %+v, want nil — the edit must invalidate the cached probe result", st)
+	}
+}
+
 func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	cases := []struct {
 		name, id, body string
@@ -405,6 +430,22 @@ func TestHandleDeleteIntegration_RemovesStoredRow(t *testing.T) {
 	}
 	if n := auditCount(audit, "integration.delete"); n != 1 {
 		t.Errorf("integration.delete audit events = %d, want 1", n)
+	}
+}
+
+// W11-S1-2: a deleted row's last probe result must not keep reading as
+// current — the row it describes no longer exists.
+func TestHandleDeleteIntegration_InvalidatesCachedProbeStatus(t *testing.T) {
+	existing := types.Integration{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey}
+	srv, _, _ := integrationWriteHarness(t, []types.Integration{existing})
+	srv.setProbeStatus("acme-anthropic", types.IntegrationProbeStatus{State: "passed", CheckedAt: srv.cfg.Now().UTC()})
+
+	w := do(t, srv, http.MethodDelete, "/api/v1/integrations/acme-anthropic", adminToken, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("code = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	if st := srv.probeStatus("acme-anthropic"); st != nil {
+		t.Errorf("probeStatus after DELETE = %+v, want nil — a deleted row's probe result must not outlive it", st)
 	}
 }
 

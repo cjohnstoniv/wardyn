@@ -124,8 +124,12 @@ k8s:
   runsNamespace: ""
   # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
   # egress canary launches (with -egress-canary instead of its normal
-  # entrypoint args). Required in practice: an empty value boots wardynd but
-  # every run then fails closed (internal/runner/k8s's errProxyImageUnset).
+  # entrypoint args). REQUIRED when k8s.enabled: the chart refuses to render
+  # without it (templates/deployment.yaml), matching the k8s runner substrate
+  # itself — an empty value does not boot wardynd at all and does not merely
+  # fail runs closed (internal/runner/k8s's errProxyImageUnset surfaces from
+  # Driver construction, so cmd/wardynd/main.go's boot sequence returns the
+  # error and the pod crash-loops instead of coming up).
   proxyImage: ""
   # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
   # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).

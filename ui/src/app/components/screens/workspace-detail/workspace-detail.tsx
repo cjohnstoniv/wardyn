@@ -130,6 +130,11 @@ export function WorkspaceDetailScreen() {
   // ---------------- sessions (record / confined replay) ----------------
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
   const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
+  // W20-S1-2: the launch's own warnings (open-egress exfiltration window on
+  // weak confinement, the masking caveat) + its REAL confinement class — the
+  // server's own facts about THIS launch, never dropped and never guessed
+  // from the operator's persisted default tier.
+  const [recordLaunch, setRecordLaunch] = React.useState<{ warnings?: string[]; confinementClass?: string } | null>(null);
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
   const [pendingConfirm, setPendingConfirm] = React.useState<{ hosts: string[]; run: () => void } | null>(null);
@@ -138,9 +143,14 @@ export function WorkspaceDetailScreen() {
     if (!ws) return;
     setRecordBusyTask((confined ? "verify:" : "") + sessionKeyOf(name));
     setRecordNotice(null);
+    setRecordLaunch(null);
     try {
       const r = await workspacesApi.recordTask(ws.id, name, confined);
-      if (!r.ok) setRecordNotice({ status: r.status, detail: r.detail });
+      if (!r.ok) {
+        setRecordNotice({ status: r.status, detail: r.detail });
+      } else {
+        setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
+      }
       load(false);
     } catch (e) {
       toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", {
@@ -193,10 +203,15 @@ export function WorkspaceDetailScreen() {
   // "Approve N observed host(s)" count (record-pane.tsx) — reusing it here
   // means the untrusted-content confirm can never list more hosts than the
   // button that opened it offered (it used to subtract only approved_egress,
-  // missing the profile's own auto-allowed set).
+  // missing the profile's own auto-allowed set). W20-S1-1: pass the SAME
+  // selfHost record-pane.tsx does (window.location.hostname), or this dialog
+  // could offer a platform-plumbing host the button itself no longer shows.
   const requestPromoteEgress = (taskKey: string) => {
     if (!ws) return;
-    setPendingConfirm({ hosts: newEgressHosts(ws, taskKey), run: () => void promoteEgress(taskKey) });
+    setPendingConfirm({
+      hosts: newEgressHosts(ws, taskKey, window.location.hostname),
+      run: () => void promoteEgress(taskKey),
+    });
   };
 
   // ---------------- render ----------------
@@ -374,6 +389,7 @@ export function WorkspaceDetailScreen() {
           <RecordPane
             ws={ws}
             notice={recordNotice}
+            launch={recordLaunch}
             busyTask={recordBusyTask}
             modelReady={llmReady}
             onRecord={(name) => void doRecord(name, false)}

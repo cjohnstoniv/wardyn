@@ -103,10 +103,27 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
 
+	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
 		}
+		// W8-S1-3 (mirrors validatePolicyWorkspaces' own unique-target
+		// invariant, policy.go): an EXPLICIT target shared by two sources
+		// resolves to the same in-sandbox mount/clone path, which
+		// validatePolicyWorkspaces then 422s on every subsequent run — an
+		// onboarding-time 400 naming both sources catches it before it's
+		// even possible to run. An EMPTY target (no explicit choice — the
+		// caller relies on the per-attach default) is deliberately not
+		// checked here, same as validatePolicyWorkspaces: the default dest
+		// isn't derived until attach/clone time (buildRepoRecords).
+		if src.Target == "" {
+			continue
+		}
+		if j, dup := seenTargets[src.Target]; dup {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+		}
+		seenTargets[src.Target] = i
 	}
 	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
 		return workspaceRequest{}, msg
@@ -501,6 +518,27 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	type body struct {
 		Domains []string `json:"domains"`
 	}
+	// W19-W19b-3: a host the git broker (or the control plane itself) already
+	// owns is DEAD BY CONSTRUCTION as a direct ApprovedEgress entry — dispatch
+	// routes github.com/api.github.com/codeload.github.com/*.githubusercontent.com
+	// and every SSH-over-443 forge host through the broker/proxy specially
+	// (runs_dispatch_gitbroker.go), never as a plain allowlist host, so
+	// "approving" one here writes a row a real run's proxy will never consult.
+	// This is the SAME static skip-set promoteSkipHosts applies to the bulk
+	// promote-egress writer (record.go) plus the control-plane's own host
+	// (handlePromoteRecordEgress's selfHost) — this is the LAST writer of
+	// ApprovedEgress that did not share it; reject with the same honest 4xx
+	// the shape validator already uses instead of a silent-toast no-op.
+	deadHosts := map[string]struct{}{}
+	for _, h := range gitBrokerManagedHosts {
+		deadHosts[strings.ToLower(h)] = struct{}{}
+	}
+	for _, h := range gitBrokerSSHHosts() {
+		deadHosts[strings.ToLower(h)] = struct{}{}
+	}
+	if selfHost := controlPlaneHost(s.cfg.ControlPlaneURL); selfHost != "" {
+		deadHosts[selfHost] = struct{}{}
+	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
 		func(req body) ([]string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -511,6 +549,9 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !workspacescan.ValidApprovedHost(d) {
 					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+				}
+				if _, dead := deadHosts[d]; dead {
+					return nil, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
 				set[d] = struct{}{}
 			}

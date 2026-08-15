@@ -481,6 +481,29 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     expect(createRunMock.mock.calls[0][0].inline_policy).toBeUndefined();
   });
 
+  // W15-W15e-wizard-roundtrip-1: workspace_mounts/workspace_repos live ONLY on
+  // inline_policy (RunPolicySpec) — attaching a saved policy drops
+  // inline_policy entirely (XOR with policy_id), so the workspace picked on
+  // Access silently never reaches the server and the run launches on an
+  // empty scratch dir. workspace_id is a SEPARATE top-level field
+  // (seedRequestWorkspace applies it AFTER resolving the stored policy) and
+  // must ride along even when policy_id is set.
+  it("still conveys the picked workspace via workspace_id when launching under a saved policy (W15-W15e-wizard-roundtrip-1)", async () => {
+    listPoliciesMock.mockResolvedValue([savedPolicy]);
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("radio", { name: /payments-strict/ }));
+    await user.click(await screen.findByRole("button", { name: /review now/i }));
+    await user.click(await screen.findByRole("button", { name: /launch run/i }));
+
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(createRunMock.mock.calls[0][0]).toMatchObject({ policy_id: "pol-1", workspace_id: workspace.id });
+  });
+
   // D11/claim6: a recorded PROFILE sets selectedProfile but (unlike a saved
   // policy) never selectedPolicyId, so the old detach branch — keyed only off
   // selectedPolicyId — never fired for it. After a hand edit, Basics kept

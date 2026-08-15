@@ -329,6 +329,34 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
+// TestRunCmd_PolicyFileRejectsUnknownField is the W14-S1-2 regression: a
+// misspelled/unknown spec field in --policy-file used to be silently dropped
+// (json.Unmarshal ignores what it doesn't recognize), so the run launched
+// under a policy the operator believed enforced a setting it never carried.
+// It must now fail locally, before any request, exactly like `policy render`.
+func TestRunCmd_PolicyFileRejectsUnknownField(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	dir := t.TempDir()
+	file := dir + "/typo.json"
+	writeFile(t, file, `{"allowed_domains":["example.com"],"min_confinement_klass":"CC1"}`)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--policy-file", file)
+	if err == nil {
+		t.Fatal("expected an error for an unknown spec field, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse --policy-file") {
+		t.Errorf("error = %q, want a parse error", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (an unknown field must short-circuit before launch)", n)
+	}
+}
+
 func TestRunCmd_ImageAndTaskModeInBody(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
 
@@ -772,6 +800,46 @@ func TestKillCmd_RejectsNonUUID(t *testing.T) {
 	srv.mu.Unlock()
 	if n != 0 {
 		t.Errorf("server saw %d requests, want 0 (parse must short-circuit)", n)
+	}
+}
+
+// --------------------------------------------------------------------------
+// run recording command
+// --------------------------------------------------------------------------
+
+func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
+	runID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, "cast-bytes")
+	outPath := t.TempDir() + "/out.cast"
+
+	err := execCmd(t, "run", "recording", runID.String(), "-o", outPath, "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("run recording returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String()
+	if got.method != http.MethodGet || got.path != want {
+		t.Errorf("got %s %s, want GET %s", got.method, got.path, want)
+	}
+}
+
+// W21-S1-6: --session fetches an interactive run's OTHER recordings — an
+// attach session's cast is stored server-side under the composite key
+// "<run-id>~<session>" (recording.CastKey), which the server has always
+// served, but nothing on the CLI/SDK side could ever request one before this.
+func TestRunRecordingCmd_SessionFlagUsesCompositeKey(t *testing.T) {
+	runID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, "cast-bytes")
+	outPath := t.TempDir() + "/out.cast"
+
+	err := execCmd(t, "run", "recording", runID.String(), "--session", "attach-1", "-o", outPath, "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("run recording --session returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String() + "~attach-1"
+	if got.method != http.MethodGet || got.path != want {
+		t.Errorf("got %s %s, want GET %s", got.method, got.path, want)
 	}
 }
 

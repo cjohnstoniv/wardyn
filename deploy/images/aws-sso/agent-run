@@ -44,7 +44,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
     echo "  AWS_PAGER=${AWS_PAGER-<unset>}"
     selftest_report_mitm_ca
-    selftest_report_repo_and_git
+    selftest_report_repo_and_git || ok=0
     if [[ $ok -eq 1 ]]; then
         echo "=== selftest PASS ==="
         exit 0

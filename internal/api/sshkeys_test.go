@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -175,5 +176,50 @@ func TestSSHKeysREST_ScopedToOwnPrincipal(t *testing.T) {
 	// The row must survive: a wrong-principal delete never removed it.
 	if _, err := st.GetSSHKeyByFingerprint(context.Background(), "SHA256:someone-elses-key"); err != nil {
 		t.Errorf("mallory's key was removed by a non-owner delete attempt: %v", err)
+	}
+}
+
+// TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured pins W25-W25.4-2: a key
+// registered under the non-human admin-token principal (docs/SSH.md's plain
+// curl + $WARDYN_ADMIN_TOKEN recipe) can NEVER authorize an SSO human's run —
+// sshAuth's owner-only gate compares run.CreatedBy (the OIDC sub) against the
+// key's stored Principal, and "admin-token" matches no run a human creates.
+// Once OIDC is configured, a bare admin-token POST must 422, naming the
+// reason, instead of silently writing a key that will sit dead forever. A
+// real signed-in human's own POST (via their OIDC session) must still work.
+func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
+	h := newHarness(t)
+	st := newSSHMemStore()
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	body := `{"name":"laptop","public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBl3jvXfmZbBd3q5aLKZTv3rIcvKlfz2eYQpuYSGfCPT alice@laptop"}`
+
+	// Bare admin-token bearer, OIDC configured: rejected, nothing stored.
+	w := do(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", adminToken, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("admin-token POST with OIDC configured: code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	listed, err := st.ListSSHKeysByPrincipal(context.Background(), adminTokenPrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Errorf("a rejected admin-token registration must not be stored, got %+v", listed)
+	}
+
+	// A real SSO human's own POST still works and lands under THEIR principal.
+	cookie := ssoSession(t, "alice-sub", "alice@example.com", oidc.RoleMember)
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", cookie, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SSO human POST: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var added types.SSHPublicKey
+	if err := json.Unmarshal(w.Body.Bytes(), &added); err != nil {
+		t.Fatal(err)
+	}
+	if added.Principal != "alice-sub" {
+		t.Errorf("Principal = %q, want the human's OIDC sub (alice-sub)", added.Principal)
 	}
 }

@@ -255,8 +255,11 @@ configure_git_broker_insteadof() {
     [[ -n "$records" ]] || return 0
     local have_ssh=0
     [[ -n "${WARDYN_SSH_GRANTS:-}" && "${WARDYN_SSH_GRANTS}" != "{}" ]] && have_ssh=1
-    local _u _d slug broker
-    while IFS=$'\t' read -r _u _d slug; do
+    local _u _d slug _ref broker
+    # 4th field (ref, W9-S1-3) is read but unused here — must still be named or
+    # a record with one collapses onto `slug` (read's overflow-into-last-var
+    # behavior), corrupting the slug this function actually cares about.
+    while IFS=$'\t' read -r _u _d slug _ref; do
         slug="${slug%.git}"
         # A full https github URL names the SAME repo as its bare slug, and the
         # control plane derives the broker key from either (gitBrokerKeyFromSlug),
@@ -309,23 +312,46 @@ name_run_branch() {
 
 # Clone the run's repo(s) into the workspace, if requested and not already present.
 # WARDYN_REPOS (multi) supersedes the legacy single WARDYN_REPO_URL: a
-# newline-delimited list of TAB-separated <url>\t<dest>\t<slug> records built by the
-# control plane. Every field is control-plane-sanitised (no whitespace/control
-# chars, repoFieldSafe) and every dest is a validated in-container path — ALWAYS
-# quote, never interpolate into a shell word. A clone is attempted only when the
-# dest has no existing .git, so a pre-populated / bind-mounted repo is never
-# clobbered. Failure is a governance signal, not fatal: log and continue.
-clone_one() {  # $1=url  $2=dest  $3=slug
-    local url="$1" dest="$2" slug="$3"
+# newline-delimited list of TAB-separated <url>\t<dest>\t<slug>\t<ref> records
+# built by the control plane. Every field is control-plane-sanitised (no
+# whitespace/control chars, repoFieldSafe) and every dest is a validated
+# in-container path — ALWAYS quote, never interpolate into a shell word. A
+# clone is attempted only when the dest has no existing .git, so a
+# pre-populated / bind-mounted repo is never clobbered. Failure is a
+# governance signal, not fatal: log and continue.
+clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" = the remote's default branch)
+    local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
     [[ -e "${dest}/.git" ]] && return 0   # never clobber a populated/bind-mounted repo
     mkdir -p "$dest"
-    echo "agent-run: cloning ${slug:-$url} into ${dest} (shallow, via wardyn-proxy)" >&2
-    if git clone --depth 1 -- "$url" "$dest"; then
-        echo "agent-run: clone OK (${dest})" >&2
+    echo "agent-run: cloning ${slug:-$url}${ref:+ @ ${ref}} into ${dest} (shallow, via wardyn-proxy)" >&2
+    if [[ -z "$ref" ]]; then
+        if git clone --depth 1 -- "$url" "$dest"; then
+            echo "agent-run: clone OK (${dest})" >&2
+            name_run_branch "$dest"
+        else
+            echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+        fi
+        return 0
+    fi
+    # A branch/tag clones shallow directly. `--branch` cannot take an arbitrary
+    # commit sha, so that case (and any other failure of the direct attempt)
+    # falls back to a shallow fetch of the exact ref + checkout FETCH_HEAD —
+    # GitHub and the git-broker both support fetching by full sha.
+    if git clone --depth 1 --branch "$ref" -- "$url" "$dest" 2>/dev/null; then
+        echo "agent-run: clone OK (${dest} @ ${ref})" >&2
+        name_run_branch "$dest"
+        return 0
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    if git clone --no-checkout --depth 1 -- "$url" "$dest" 2>/dev/null \
+        && git -C "$dest" fetch --depth 1 origin "$ref" \
+        && git -C "$dest" checkout FETCH_HEAD; then
+        echo "agent-run: clone OK (${dest} @ ${ref}, via fetch)" >&2
         name_run_branch "$dest"
     else
-        echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+        echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
     fi
 }
 
@@ -337,9 +363,9 @@ clone_one() {  # $1=url  $2=dest  $3=slug
 # `workdir` itself, only uses it to compute clone destinations.
 dispatch_repo_clones() {
     if [[ -n "${WARDYN_REPOS:-}" ]]; then
-        while IFS=$'\t' read -r r_url r_dest r_slug; do
+        while IFS=$'\t' read -r r_url r_dest r_slug r_ref; do
             [[ -n "$r_url" ]] || continue
-            clone_one "$r_url" "$r_dest" "$r_slug"
+            clone_one "$r_url" "$r_dest" "$r_slug" "$r_ref"
         done <<< "$WARDYN_REPOS"
     elif [[ -n "${WARDYN_REPO_URL:-}" ]]; then
         # Legacy single-repo fallback (one release; superseded by WARDYN_REPOS).
@@ -379,6 +405,22 @@ resolve_workdir() {
     fi
 }
 
+# repo_scan_ok — for the scan-only lane ONLY: false when a repo clone was
+# requested (WARDYN_REPOS / WARDYN_REPO_URL) but no .git shows up under
+# `workdir` after dispatch_repo_clones + resolve_workdir — i.e. the clone
+# FAILED (egress policy or credential broker blocked it; clone_one already
+# logged and continued rather than aborting the run). Without this check a
+# scan-only run silently scans the empty ~/work dir and uploads a
+# high-confidence EMPTY profile: false green on a stock no-GitHub-App
+# install. A dir-kind scan (no repo requested) has no repo to fail cloning,
+# so it always passes here. Call ONLY from the WARDYN_SCAN_ONLY branch — an
+# agent/exec run tolerates a missing repo by design.
+repo_scan_ok() {
+    [[ -z "${WARDYN_REPOS:-}" && -z "${WARDYN_REPO_URL:-}" ]] && return 0
+    [[ -d "$workdir" ]] || return 1
+    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep -q .
+}
+
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
 # control plane set WARDYN_TASK_MODE=exec, run the task as a plain shell
 # command INSTEAD of the agent harness and never return. No-op otherwise.
@@ -389,7 +431,11 @@ resolve_workdir() {
 maybe_exec_task_mode() {
     if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
         echo "agent-run: exec task mode — running task as a shell command (no agent harness)" >&2
-        exec /bin/sh -lc "$1"
+        # Plain `-c`, NOT `-l`: this process already has the env it needs (it
+        # survives `sh -c` fine), and a login shell sources /etc/profile,
+        # which reassembles PATH from scratch — destroying every BYOI/
+        # devcontainer image's own Dockerfile ENV PATH toolchain.
+        exec /bin/sh -c "$1"
     fi
 }
 
@@ -478,10 +524,11 @@ selftest_check_bins() {
     return $rc
 }
 
-# Shared, report-only selftest output: these echo/inspect, never mutate $ok and
-# never exit — the PASS/FAIL decision stays with the caller. Split in two
-# because claude-code prints its anthropic-auth section between them, so the
-# output order stays CA -> (anthropic auth) -> repo/git.
+# Shared selftest output, split in two because claude-code prints its
+# anthropic-auth section between them, so the output order stays
+# CA -> (anthropic auth) -> repo/git. selftest_report_mitm_ca is pure
+# report-only (echo/inspect, never mutates $ok). selftest_report_repo_and_git
+# is NOT — see its own doc comment.
 selftest_report_mitm_ca() {
     echo "--- TLS-MITM CA trust (selftest: report only) ---"
     if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
@@ -506,7 +553,19 @@ selftest_report_mitm_ca() {
     fi
 }
 
+# selftest_report_repo_and_git — mostly report-only (repo wiring is always
+# informational), EXCEPT the gitconfig check: RETURNS nonzero when a git grant
+# is present (WARDYN_GITHUB_GRANT_ID or WARDYN_GIT_PAT_GRANTS) but the system
+# gitconfig has no credential.helper wired. A BYOI-wrapped image copies the
+# wardyn-git-helper binary onto PATH (finalizeImage's tools/ COPY) but never
+# wires `git config --system credential.helper` — only the prebuilt
+# claude-code/codex-cli images bake that RUN line in. Without it git never
+# invokes the helper, so a granted run's credential brokering silently
+# no-ops. Report-only would let that ship quietly; callers write
+# `selftest_report_repo_and_git || ok=0` so the documented fail-closed
+# contract (deploy/images/README.md §6) is actually enforced, not just echoed.
 selftest_report_repo_and_git() {
+    local rc=0
     echo "--- repo wiring (selftest never clones) ---"
     echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
     echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"
@@ -517,12 +576,20 @@ selftest_report_repo_and_git() {
     fi
     echo "--- git credential helper ---"
     echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
-    git config --system --get credential.helper 2>/dev/null \
-        && echo "  OK (system config, global)" || echo "  MISSING (system gitconfig not wired)"
+    if git config --system --get credential.helper >/dev/null 2>&1; then
+        echo "  OK (system config, global)"
+    else
+        echo "  MISSING (system gitconfig not wired)"
+        if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
+            echo "  FAIL: a git grant is present but the credential helper is not wired — brokered git would silently no-op"
+            rc=1
+        fi
+    fi
     # Caller-auth gate (selftest never provisions — that happens at task time):
     if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
         echo "  caller-auth gate: ACTIVE at task time (a git grant is present; agent-run will provision WARDYN_GIT_HELPER_SECRET + a 0400 secret file)"
     else
         echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
     fi
+    return $rc
 }

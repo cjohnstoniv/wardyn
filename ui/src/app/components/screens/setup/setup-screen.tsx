@@ -177,19 +177,20 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // step reads Skipped with its checkmark. Backing off it decides nothing.
   const integrationsCountRef = React.useRef(0);
   // corpNetworkGate's latest `.on` (steps.ts) — read by selectStep below so a
-  // rail jump obeys the SAME rule as the footer's Next button: "There is no
-  // click-past" (steps.ts's own stated invariant) means every forward exit
-  // from Corporate network, not just the one button. Updated wherever
-  // corpGateResult itself is computed (below); defaults open so a rail click
-  // is never blocked before that first computation lands.
+  // rail jump (or the ?step= deep-link init effect further down) obeys the
+  // SAME rule as the footer's Next button: "There is no click-past" (steps.ts's
+  // own stated invariant) means every forward jump past Corporate network from
+  // ANYWHERE, not just a Next click while that step is the one on screen —
+  // W2-S1-2: the guard used to be scoped to `stepId === "corp_network"` and
+  // this ref reset to `true` on every render taken off that step, so a rail
+  // jump (or deep link) FROM an earlier step straight past it never saw the
+  // real gate at all. Updated unconditionally wherever corpNetwork itself is
+  // computed (below); defaults open so a rail click is never blocked before
+  // that first computation lands.
   const corpGateOnRef = React.useRef(true);
   const selectStep = React.useCallback(
     (next: SetupStepId) => {
-      if (
-        stepId === "corp_network" &&
-        STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("corp_network") &&
-        !corpGateOnRef.current
-      ) {
+      if (STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("corp_network") && !corpGateOnRef.current) {
         return; // same block the footer's Next enforces — no click-past via the rail either
       }
       if (next !== stepId) {
@@ -263,6 +264,23 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // run once on mount — the loaders are stable (useCallback([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // W2-S1-2: a `?step=` deep link is read once at mount (the initializer
+  // above), BEFORE status — and so the corp_network gate — is known. An
+  // operator pasting/bookmarking a link past it must not skip the same
+  // mandatory proof a rail jump can't skip either (selectStep's guard,
+  // above) — correct it the first time the gate becomes knowable. Runs once
+  // (the ref latch): after that, staying on/returning to a later step is
+  // legitimate forward progress, not a link to re-validate.
+  const initialDeepLinkCheckedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (initialDeepLinkCheckedRef.current || !status) return;
+    initialDeepLinkCheckedRef.current = true;
+    if (STEP_ORDER.indexOf(stepId) > STEP_ORDER.indexOf("corp_network") && !corpGateOnRef.current) {
+      setStepId("corp_network");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   const finish = React.useCallback(() => {
     dismissSetup();
@@ -350,6 +368,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     redirectCount: corpRedirects.length,
     ...corpGate,
   };
+  // Unconditional (not gated on `stepId === "corp_network"`): selectStep and the
+  // deep-link init effect below both need the REAL gate state no matter which
+  // step is on screen right now (see corpGateOnRef's declaration for why the
+  // old stepId-scoped version was the bug).
+  corpGateOnRef.current = corpNetworkGate(corpNetwork, corpRedirects).on;
   const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects, tierCounts.sources, tierCounts.images);
   const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects, tierCounts.sources, tierCounts.images);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
@@ -397,9 +420,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // ON a head/reason can still be present (no_runner / a custom-endpoint
   // pass) and renders as a neutral standing note beside the ENABLED button.
   const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects, corpTab) : null;
-  // Read by selectStep (a stable useCallback that can't see this render's
-  // local const) so a rail click obeys the same gate — see corpGateOnRef.
-  corpGateOnRef.current = corpGateResult ? corpGateResult.on : true;
   const dispatchCorpAction = (kind: CorpGateActionKind) => {
     const a = corpActionsRef.current;
     if (!a) return;
@@ -461,6 +481,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onGateChange={onCorpGateChange}
             onRecheck={recheck}
             gateResult={corpGateResult ?? undefined}
+            secretNames={secretNames}
             registerActions={(a) => {
               corpActionsRef.current = a;
             }}
@@ -500,7 +521,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           <LaunchStep
             status={status}
             onLaunch={() => setNewRunOpen(true)}
-            onOpenRuns={onDone}
+            onOpenRuns={finish}
             canLaunch={readiness.ready}
             llmReady={readiness.llmReady}
           />

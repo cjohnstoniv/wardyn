@@ -111,6 +111,38 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 	}
 }
 
+// TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret is
+// W15-W15b-composer-pipeline-6: an integration-bound run's api_key grant can
+// carry a NON-convention secret name (applyIntegrationCreds grants the
+// integration's own secret, e.g. via its DisplayName), not the provider
+// convention default. The "add_secret" fix used to always name the
+// convention secret (anthropic-api-key) regardless — an operator who added
+// THAT secret would see the checklist go green while the run still
+// authenticates through the integration's own (still-missing) secret,
+// unaffected by what they just added.
+func TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret(t *testing.T) {
+	srv := newSetupTestServer()
+	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
+	spec := types.RunPolicySpec{
+		EligibleGrants: []types.GrantSpec{{
+			Kind: types.GrantAPIKey,
+			Scope: mustJSON(map[string]string{
+				"host": "api.anthropic.com", "header": "x-api-key", "format": "%s",
+				"secret_name": "acme-integration-anthropic-key",
+			}),
+		}},
+	}
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), &composeLLMAccess{Provisioned: false, Note: "no model access"}, nil, composeSubscriptionState{})
+	it, ok := findItem(items, "llm_access:claude-code")
+	if !ok {
+		t.Fatal("expected an llm_access item")
+	}
+	if it.Fix == nil || it.Fix.SecretName != "acme-integration-anthropic-key" {
+		t.Errorf("fix = %+v, want add_secret naming the run's ACTUAL grant secret (acme-integration-anthropic-key), "+
+			"not the provider convention default", it.Fix)
+	}
+}
+
 // ── secret ──────────────────────────────────────────────────────────────────
 
 func TestDeriveSetupItems_SecretPresentAbsent(t *testing.T) {

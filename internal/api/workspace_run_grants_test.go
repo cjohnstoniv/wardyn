@@ -46,6 +46,14 @@ func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, r
 	ws.ActiveRunID = &runID
 	return ws, true, nil
 }
+
+// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
+// access unconditionally (W20-W20-llm-transport-matrix-1), reaching
+// defaultAgentRunsIntegration's GetSiteConfig read on every call — the
+// embedded nil store.Store would otherwise panic here.
+func (s *fkGrantStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
 func (s *fkGrantStore) ClearWorkspaceActiveRun(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return true, nil
 }
@@ -140,6 +148,51 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	kinds := fake.grantKinds()
 	if len(kinds) != 1 || kinds[0] != types.GrantGitHubToken {
 		t.Fatalf("record run must persist exactly one github_token clone grant AFTER its run row exists; got %v", kinds)
+	}
+}
+
+// TestLaunchRecordRun_RequiredSecretRowRidesAlong is the W8-S1-2 regression: a
+// workspace's REQUIRED secret: contract row must ride a record/verify session
+// the same way it rides a real run — the Verify carry card (step-requirements.tsx)
+// promises "N required secrets ride proxy-side", but launchRecordRun used to
+// hand-roll only the integration: case (requiredIntegrationIDs), silently
+// dropping every secret: row. Local-dir workspace (no repo source) isolates
+// the assertion to exactly the one grant the required secret produces — a repo
+// source would also add its own github_token clone grant.
+func TestLaunchRecordRun_RequiredSecretRowRidesAlong(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	ws := types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/work/acme"}},
+		Status:  types.WorkspaceScanned,
+		Requirements: map[string]types.WorkspaceRequirement{
+			"secret:acme-deploy-key": {Level: "required", Provenance: "operator_set"},
+		},
+	}
+	fake := &fkGrantStore{runs: map[uuid.UUID]types.AgentRun{}, importStateFake: importStateFake{ws: ws}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-deploy-key": []byte("v")}}
+	srv := New(cfg)
+
+	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false)
+	if err != nil {
+		t.Fatalf("launchRecordRun on a workspace with a required secret row failed: %v", err)
+	}
+	kinds := fake.grantKinds()
+	if len(kinds) != 1 || kinds[0] != types.GrantAPIKey {
+		t.Fatalf("record run must persist exactly one api_key grant for the required secret row; got %v", kinds)
+	}
+	var scope struct {
+		SecretName string `json:"secret_name"`
+	}
+	if err := json.Unmarshal(fake.grants[0].Spec.Scope, &scope); err != nil {
+		t.Fatalf("decode grant scope: %v", err)
+	}
+	if scope.SecretName != "acme-deploy-key" {
+		t.Errorf("grant scope.secret_name = %q, want the required row's own secret (acme-deploy-key)", scope.SecretName)
 	}
 }
 

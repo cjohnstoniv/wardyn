@@ -184,8 +184,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   builds and pushes the four images a release ships (`wardynd`,
   `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
   `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag, cosign-signs each keylessly
-  (Fulcio/Rekor via the Actions OIDC token), and attaches a CycloneDX SBOM
-  release asset via the existing `make sbom` target. linux/amd64 only today.
+  (Fulcio/Rekor via the Actions OIDC token), and publishes a CycloneDX SBOM via
+  the existing `make sbom` target as a downloadable workflow artifact
+  (deliberately not auto-attached to the GitHub Release — RELEASING.md's
+  release step is manual by design; attach it by hand if wanted). linux/amd64
+  only today.
 - **CLI confinement-tier aliases + `/healthz` friendly names.** The run
   commands accept `--confinement fence|wall|vault` as aliases for CC1/CC2/CC3
   (with trust-model flag help), and `/healthz` now exposes a

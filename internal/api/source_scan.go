@@ -56,7 +56,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 
 	switch src.Kind {
 	case types.SourceLocalDir:
-		profile, detail, ok := s.scanLocalDirSource(r.Context(), src)
+		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src)
 		if !ok {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
@@ -67,6 +67,9 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			"source.scan", id.String(), "success", mustJSON(map[string]any{
 				"confidence": profile.Confidence, "secret_reqs": len(profile.RequiredSecrets),
 				"suggested_egress": len(profile.SuggestedEgress), "leak_findings": len(profile.LeakFindings),
+				// AI-advisor discriminator, same shape uploadSourceScanResult records
+				// for a repo source (scanresult.go) — W9-S1-6.
+				"ai_advisor": aiRan, "ai_changed": aiChanged,
 			})))
 		writeJSON(w, http.StatusOK, profile)
 
@@ -140,19 +143,28 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 // and persists the outcome on the source row. ok=false returns the 422 detail
 // (already persisted as status=error) — the same never-a-false-green rule the
 // workspace scan enforces, with the same sealed-daemon diagnosis.
-func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (workspacescan.WorkspaceProfile, string, bool) {
+//
+// Consults the SAME opt-in ADVISORY AI gap-fill the sandboxed repo-scan upload
+// lane does (applyScanAIAdvisor, scanresult.go) — WARDYN_SCAN_AI_ADVISOR
+// previously only ever ran for a repo source, silently never firing for a
+// local_dir one even though the flag's own help text makes no such
+// distinction (W9-S1-6). aiRan/aiChanged mirror uploadSourceScanResult's own
+// audit discriminator for the caller to record.
+func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
 	fi, serr := os.Stat(src.Locator)
 	if serr != nil || !fi.IsDir() {
 		detail := localDirScanFailureDetail(src.Locator, serr == nil && !fi.IsDir(),
 			os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
 		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError, nil)
-		return workspacescan.WorkspaceProfile{}, detail, false
+		return workspacescan.WorkspaceProfile{}, false, false, detail, false
 	}
-	profile := workspacescan.Scan(src.Locator)
+	facts := workspacescan.CollectFacts(src.Locator)
+	profile = workspacescan.DeriveProfile(facts)
+	profile, aiRan, aiChanged = s.applyScanAIAdvisor(ctx, facts, profile)
 	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seedSourceRequirements(src.Kind, src.Locator, profile)); err != nil {
-		return workspacescan.WorkspaceProfile{}, "persist scan profile: " + err.Error(), false
+		return workspacescan.WorkspaceProfile{}, false, false, "persist scan profile: " + err.Error(), false
 	}
-	return profile, "", true
+	return profile, aiRan, aiChanged, "", true
 }
 
 // launchSourceScanRun is launchScanRun retargeted one tier down: the fence is
@@ -247,7 +259,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		}
 		switch src.Kind {
 		case types.SourceLocalDir:
-			if _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
+			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
 				s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 					"workspace.scan", ws.ID.String(), "failure", mustJSON(map[string]any{"detail": detail})))
 				writeError(w, http.StatusUnprocessableEntity, detail)

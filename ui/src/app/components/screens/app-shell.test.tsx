@@ -109,6 +109,70 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
   });
 });
 
+// W31-S1-1: local-mode installs bypass auth entirely server-side
+// (internal/api/http.go humanOrAdminAuth), so "Sign out" is a no-op that only
+// drops the user onto a SignIn screen whose admin-token field is unchecked
+// (probeAuth trivially re-succeeds against the auth-bypassed API on whatever's
+// typed). The account menu must hide Sign out — and say why — whenever /me
+// reports method:"local", while a real session (sso/token) keeps it.
+describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function renderShellAs(method: "local" | "sso" | "token") {
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.endsWith("/healthz")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+        });
+      }
+      if (u.endsWith("/api/v1/me")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            principal: "local:operator",
+            method,
+            operator: true,
+            role: "admin",
+            email: "",
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  async function openAccountMenu() {
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    const user = userEvent.setup();
+    await user.click(headerButtons[headerButtons.length - 1]);
+    return screen.findByRole("menu");
+  }
+
+  it("hides Sign out and explains local mode when meta.method is local", async () => {
+    renderShellAs("local");
+    const menu = await openAccountMenu();
+    await waitFor(() => expect(within(menu).getByText(/local mode/i)).toBeInTheDocument());
+    expect(within(menu).queryByText("Sign out")).toBeNull();
+  });
+
+  it("still offers Sign out for a real SSO session", async () => {
+    renderShellAs("sso");
+    const menu = await openAccountMenu();
+    await waitFor(() => expect(within(menu).getByText("Sign out")).toBeInTheDocument());
+  });
+});
+
 describe("MobileNav (below-md nav fallback)", () => {
   it("starts collapsed: trigger present, aria-expanded=false, no nav links rendered", () => {
     renderMobileNav();
@@ -124,7 +188,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -164,7 +228,7 @@ describe("SidebarNav (member role — B3)", () => {
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });

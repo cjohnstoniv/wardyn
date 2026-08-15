@@ -62,6 +62,56 @@ func TestExamplePoliciesValidate(t *testing.T) {
 	}
 }
 
+// TestCIClaudeLLMExample_MeetsCINonNegotiables pins W16-S1-6: docs/CI.md's
+// "Model access for harness mode" section points readers at a model-access
+// example for CI. The old pointer (examples/policies/claude-llm.json) is a DEV
+// policy that violates every one of the SAME doc's own CI non-negotiables one
+// section up ("Writing a CI policy") — deny_with_review instead of
+// always_deny, a requires_approval:true grant, and an unbounded (0)
+// auto_stop_after_sec. examples/policies/ci-claude-llm.json is ci.json's CI
+// baseline plus exactly the api.anthropic.com egress entry and api_key grant
+// model access needs — a copy-paste-safe CI example, not a dev ceiling.
+func TestCIClaudeLLMExample_MeetsCINonNegotiables(t *testing.T) {
+	spec, err := LoadPolicySpec("../../examples/policies/ci-claude-llm.json")
+	if err != nil {
+		t.Fatalf("load ci-claude-llm.json: %v", err)
+	}
+	if spec.FirstUseApproval != types.FirstUseAlwaysDeny {
+		t.Errorf("first_use_approval = %q, want %q (CI non-negotiable: nothing waits on a human)", spec.FirstUseApproval, types.FirstUseAlwaysDeny)
+	}
+	if spec.AutoStopAfterSec <= 0 {
+		t.Errorf("auto_stop_after_sec = %d, want a positive bound (CI non-negotiable: bound the run)", spec.AutoStopAfterSec)
+	}
+	foundAPIKey := false
+	for _, g := range spec.EligibleGrants {
+		if g.RequiresApproval {
+			t.Errorf("grant %+v requires approval — CI non-negotiable: no requires_approval:true grants (a human is never there to decide)", g)
+		}
+		if g.Kind != types.GrantAPIKey {
+			continue
+		}
+		var scope struct {
+			Host       string `json:"host"`
+			SecretName string `json:"secret_name"`
+		}
+		if err := json.Unmarshal(g.Scope, &scope); err == nil && scope.Host == "api.anthropic.com" && scope.SecretName == "anthropic-api-key" {
+			foundAPIKey = true
+		}
+	}
+	if !foundAPIKey {
+		t.Errorf("eligible_grants = %+v, want a no-approval api_key grant for api.anthropic.com/anthropic-api-key", spec.EligibleGrants)
+	}
+	found := false
+	for _, d := range spec.AllowedDomains {
+		if d == "api.anthropic.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("allowed_domains = %v, want api.anthropic.com", spec.AllowedDomains)
+	}
+}
+
 // TestValidatePolicySpecRejectsDeadDomain is the trust-boundary check itself:
 // a mid-label wildcard is rejected at policy write time, the supported forms
 // are not.

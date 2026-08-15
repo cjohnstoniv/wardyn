@@ -145,7 +145,20 @@ func composerSpecFromIntegrations(secrets secretstore.Store, sc types.SiteConfig
 	managedBlobPresent := func(provider string) bool {
 		return secretPresent("wardyn-harness-" + provider + "-oauth")
 	}
-	in, ok := api.WardynFeaturesBackend(sc, secretPresent, bedrockRegion != "", bedrockModel != "", managedBlobPresent)
+	// bedrockCredentialPresent mirrors two of resolveBedrockAuth's four
+	// credential lanes (bearer, resident SigV4 keys) — the two that are plain
+	// named secrets in the SAME store secretPresent already reads. The other
+	// two (a captured AWS SSO session, a host ~/.aws mount) need a live Server
+	// (blob decrypt / filesystem stat) this boot-time derivation doesn't have;
+	// missing them here just means a mount- or SSO-only Bedrock setup derives
+	// no composer backend until WARDYN_COMPOSER_CONFIG is set explicitly — a
+	// narrower miss than the bug this closes (region+model alone reading
+	// "available" with literally zero credentials configured).
+	// ponytail: secret-store lanes only; add SSO/mount if a boot-time Server
+	// handle for them ever exists.
+	bedrockCredentialPresent := secretPresent("bedrock-api-key") ||
+		(secretPresent("aws-access-key-id") && secretPresent("aws-secret-access-key"))
+	in, ok := api.WardynFeaturesBackend(sc, secretPresent, bedrockRegion != "", bedrockModel != "", bedrockCredentialPresent, managedBlobPresent)
 	if !ok {
 		return backends.BackendSpec{}, false
 	}

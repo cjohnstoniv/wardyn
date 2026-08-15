@@ -138,7 +138,12 @@ export function buildIntegrationWrite(v: IntegrationFormValues): IntegrationWrit
   } else if (isGithubApp) {
     secrets.push({ role: "app_id", secret_name: v.appIdSecret.trim() }, { role: "app_key", secret_name: v.appKeySecret.trim() });
   } else if (isGitHost) {
-    secrets.push({ role: "pat", secret_name: v.genericSecret.trim() });
+    // W11-S1-4: the "Git over SSH" catalog entry (id "gitssh") shares
+    // apiType "git_host" with the PAT-over-HTTPS lanes, but the server's
+    // capability matrix (internal/api/integrations.go) keys clone:pat vs
+    // clone:ssh off the secret's ROLE — mislabeling an SSH key as "pat"
+    // reports the wrong clone lane.
+    secrets.push({ role: type.id === "gitssh" ? "ssh_key" : "pat", secret_name: v.genericSecret.trim() });
   } else if (takesHeader && v.genericSecret.trim()) {
     secrets.push({
       role: "api_key",
@@ -156,7 +161,14 @@ export function buildIntegrationWrite(v: IntegrationFormValues): IntegrationWrit
   if (isSubscription) config.lane = v.hostCli ? "resident_host" : "managed";
 
   const egress = isSubscription || isBedrock ? type.hosts.slice() : v.hostList;
-  const probeHost = egress[0];
+  // W11-S1-3: the auto-probe URL is `https://${probeHost}/` below — a wildcard
+  // (or port-qualified) FIRST host there builds a malformed URL validSiteURL
+  // (internal/api/site_config.go) rejects outright, 400ing Save even though
+  // HOSTS_HINT ("wildcards are fine") makes no such exception. Skip to the
+  // first BARE host instead — same shape the server's own bareExactHost
+  // (integrations_write.go) accepts a credential header on — and drop the
+  // probe entirely (never a 400) when every host is a wildcard/port entry.
+  const probeHost = egress.find((h) => !h.startsWith("*.") && !h.includes(":"));
 
   return {
     name: v.name.trim(),

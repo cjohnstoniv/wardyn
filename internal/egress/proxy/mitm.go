@@ -16,7 +16,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -271,18 +270,32 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// configured — the transport's egressDial chains the CONNECT and TLS then
 	// runs end-to-end proxy<->host — else the vetted IP (direct). Upstream mode
 	// relaxes the vetted-IP pin for this hop (see dialThroughUpstream).
-	target := net.JoinHostPort(host, strconv.Itoa(port))
-	if p.upstream == nil {
-		var verr error
-		target, verr = p.vetURL("https://" + target)
-		if verr != nil {
-			p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
-			p.httpError(w, "llm upstream vet failed", verr, http.StatusBadGateway)
-			return
-		}
+	target, terr := p.egressTarget(host, port)
+	if terr != nil {
+		p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
+		p.httpError(w, "llm upstream vet failed", terr, http.StatusBadGateway)
+		return
 	}
 
-	bodyReader, scanSummary, blocked := p.inspectLLM(w, r, host, rest, channel)
+	// LLM hosts go through inspectLLM's per-endpoint classifier as always. A
+	// corp artifact host, though, is ALWAYS ChannelGeneric — which classifyLLM
+	// unconditionally treats as scanNone (not prompt-bearing) — so inspectLLM
+	// would silently stream it through unscanned even when the operator has
+	// opted every generic forward body into inspection via
+	// inspect_forward_egress. That flag already extends scanning to the plain
+	// (non-MITM) forward path (handlePlain/inspectForwardBody); route the
+	// artifact-MITM body through the SAME scanBufferedBody core here so the
+	// flag's promise holds on this path too (W19-W19d-1: a MITM'd non-LLM
+	// tunnel used to be unconditionally unscanned, no matter the policy).
+	var bodyReader io.Reader
+	var scanSummary *egress.ScanSummary
+	var blocked bool
+	if mitmSource == ruleSourceArtifactMITM && p.scanner != nil &&
+		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
+		bodyReader, scanSummary, blocked = p.inspectForwardBody(w, r, host, port)
+	} else {
+		bodyReader, scanSummary, blocked = p.inspectLLM(w, r, host, rest, channel)
+	}
 	if blocked {
 		return
 	}

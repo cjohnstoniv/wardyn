@@ -17,6 +17,11 @@
 #                         watcher maps exit 0 -> COMPLETED).
 #   agent-run --selftest  verify sh/curl/python3 exist; print PASS; exit 0. No
 #                         network, no side effects. Used by e2e image validation.
+#   agent-run --idle      both runners (docker and k8s) launch EVERY interactive
+#                         run's main container/pod process as `agent-run --idle`
+#                         (never Exec's a task into it) — it must hold the
+#                         process open for attach, not exit. See README.md §2
+#                         mode 3.
 #
 # The workspace is bind-mounted by the driver. Its mount target depends on the
 # policy's WorkspaceMounts (the composer uses /home/agent/work), so we cd into the
@@ -46,6 +51,14 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "=== selftest FAIL ==="
         exit 1
     fi
+fi
+
+# ── idle mode (interactive runs) ────────────────────────────────────────────
+# The driver never Exec's a task into an interactive run's main process — it
+# attaches a shell to it — so this must hold the container open, not exit.
+if [ "${1:-}" = "--idle" ]; then
+    echo "agent-run: oracle idling (interactive attach)" >&2
+    exec sleep infinity
 fi
 
 # ── normal task mode ─────────────────────────────────────────────────────────

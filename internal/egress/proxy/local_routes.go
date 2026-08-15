@@ -334,7 +334,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, re
 		return
 	}
 
-	target, err := p.vetURL("https://" + host)
+	// egressTarget hides the corp-upstream branch (W23-S1-4 / W19-W19d-3): a
+	// brokered LLM route needs the same corp-proxy-by-name dial the MITM path
+	// (serveMITMRequest) already gets, not the local-DNS-required vetURL below.
+	target, err := p.egressTarget(host, 443)
 	if err != nil {
 		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
 		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
@@ -738,21 +741,6 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 			Action:   "blind",
 		},
 	})
-}
-
-// vetURL resolves the host of rawURL through the SSRF guard and returns the
-// pinned "ip:port" dial target. The port defaults to the URL scheme's default.
-// Fails closed on any unparseable URL or blocked address.
-func (p *Proxy) vetURL(rawURL string) (string, error) {
-	host, port, err := hostPortFromURL(rawURL)
-	if err != nil {
-		return "", err
-	}
-	guard := VetHost(host, p.res)
-	if guard.Denied {
-		return "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
-	}
-	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), nil
 }
 
 // resolveTrustedURL resolves the host of a TRUSTED rawURL (the operator-

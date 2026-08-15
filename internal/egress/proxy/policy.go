@@ -312,6 +312,30 @@ func (p *Policy) AllowedExactHost(host string) bool {
 	return ok
 }
 
+// AllowsLiteralIP reports whether host (a literal IP address, already
+// lowercased with any trailing dot trimmed) is explicitly present in this
+// policy's EXACT allowlist for port — either a bare entry (matches any port)
+// or a port-qualified one. Only an exact, operator-authored entry counts
+// (never a wildcard): a literal IP the operator typed into AllowedDomains
+// directly (e.g. an egress-redirect "To" target or corp registry that lives
+// on RFC1918 space, per SiteConfig.EgressRedirects) carries none of the
+// DNS-rebinding risk the unconditional private-IP guard exists to catch —
+// there is no hostname to rebind — so evaluate() treats it as trusted
+// instead of hard-denying it (W13-S1-3). Deny still beats allow.
+func (p *Policy) AllowsLiteralIP(host string, port int) bool {
+	if _, ok := p.deniedExact[host]; ok {
+		return false
+	}
+	if _, ok := p.deniedExactPort[hostPortKey(host, port)]; ok {
+		return false
+	}
+	if _, ok := p.allowedExact[host]; ok {
+		return true
+	}
+	_, ok := p.allowedExactPort[hostPortKey(host, port)]
+	return ok
+}
+
 // IPGuardResult records the outcome of resolving + vetting a target host.
 type IPGuardResult struct {
 	// IP is the single vetted address to dial (no further DNS resolution).

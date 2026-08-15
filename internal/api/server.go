@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -667,14 +668,18 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	// dropped_total and observed_total are published by the sensor on the
 	// heartbeat data when available; tolerate their absence.
 	var hb struct {
-		DroppedTotal  uint64 `json:"dropped_total"`
-		ObservedTotal uint64 `json:"observed_total"`
+		DroppedTotal   uint64            `json:"dropped_total"`
+		ObservedTotal  uint64            `json:"observed_total"`
+		ObservedByKind map[string]uint64 `json:"observed_by_kind"`
 	}
 	if len(ev.Data) > 0 {
 		_ = json.Unmarshal(ev.Data, &hb)
 	}
 	out["dropped_total"] = hb.DroppedTotal
 	out["observed_total"] = hb.ObservedTotal
+	if len(hb.ObservedByKind) > 0 {
+		out["observed_by_kind"] = hb.ObservedByKind
+	}
 	switch {
 	case s.cfg.Now().Sub(ev.Time) > ebpfHeartbeatTTL:
 		// Heartbeat stale: the sensor process itself has stalled/died.
@@ -687,10 +692,79 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		out["state"] = "idle"
 		out["reason"] = "no kernel events observed"
 	default:
-		// Beating within the TTL AND real kernel events have been observed.
-		out["state"] = "healthy"
+		// W20-W20-groundtruth-mapper-4: "healthy" used to be one aggregate over
+		// every kernel event kind — a sensor seeing only process.exec (a
+		// mis-scoped TracingPolicy that never fires for network.connect or
+		// file.write, say) reported healthy identically to one seeing all
+		// three. When the sensor publishes the per-kind breakdown, require
+		// EVERY known kind to have arrived at least once; report "partial"
+		// (not the "healthy" overclaim) and name what's missing otherwise. An
+		// older sensor build that has not upgraded to publish
+		// observed_by_kind at all (empty map) cannot be assessed this way —
+		// fall back to the aggregate-only "healthy" rather than downgrading
+		// on missing DATA rather than a missing EVENT KIND.
+		if missing := missingGroundtruthKinds(hb.ObservedByKind); len(hb.ObservedByKind) > 0 && len(missing) > 0 {
+			out["state"] = "partial"
+			out["missing_kinds"] = missing
+		} else {
+			out["state"] = "healthy"
+		}
 	}
 	return out
+}
+
+// ebpfGroundtruthCaveat is the one-line, human-readable note a Record Mode
+// capture (RecordTaskResult.Caveats, reconcileRecordRun) and a synthesized
+// profile (profileResponse.Warnings, handleSynthesizeProfile) each stamp for
+// every non-healthy sensor state — the SAME state ebpfGroundtruthStatus
+// reports on /healthz, read through the one function so the two surfaces can
+// never disagree about what "healthy" means (W20-W20-groundtruth-mapper-4:
+// before this, the per-kind coverage state existed ONLY on the admin-only
+// /healthz endpoint — nowhere an operator reviewing a capture or a
+// synthesized profile would ever see it). "" (no caveat) when the sensor is
+// fully healthy — there is nothing to warn about.
+func (s *Server) ebpfGroundtruthCaveat(ctx context.Context) string {
+	status := s.ebpfGroundtruthStatus(ctx)
+	switch status["state"] {
+	case "unavailable":
+		return "kernel ground truth: unavailable — no eBPF sensor heartbeat was ever observed for this run; " +
+			"proxy egress decisions are the only signal behind this capture"
+	case "degraded":
+		return "kernel ground truth: degraded — the eBPF sensor's heartbeat is stale; kernel-level coverage " +
+			"for this capture may be incomplete"
+	case "idle":
+		return "kernel ground truth: idle — the eBPF sensor is alive but mapped zero kernel events; " +
+			"this capture has no kernel-level corroboration"
+	case "partial":
+		missing, _ := status["missing_kinds"].([]string)
+		return "kernel ground truth: partial — the eBPF sensor never observed " + strings.Join(missing, ", ") +
+			"; this capture's kernel-level corroboration is incomplete"
+	default: // "healthy", or absent (tests with no Store — same as unavailable, but there's no run to caveat)
+		return ""
+	}
+}
+
+// groundtruthKinds is the closed set of kernel event kinds the sensor maps
+// (cmd/wardyn-tetragon-ingest/main.go's processLine — exec/connect/sensitive-
+// write). ebpfGroundtruthStatus requires every one of these to have arrived
+// at least once before reporting "healthy" when the sensor publishes a
+// per-kind breakdown at all.
+var groundtruthKinds = []string{
+	groundtruth.ActionProcessExec,
+	groundtruth.ActionNetworkConnect,
+	groundtruth.ActionFileWrite,
+}
+
+// missingGroundtruthKinds returns the subset of groundtruthKinds absent or
+// zero in observedByKind, in a stable order.
+func missingGroundtruthKinds(observedByKind map[string]uint64) []string {
+	var missing []string
+	for _, k := range groundtruthKinds {
+		if observedByKind[k] == 0 {
+			missing = append(missing, k)
+		}
+	}
+	return missing
 }
 
 // handleLogout terminates the human session. FIX #6: it is mounted as

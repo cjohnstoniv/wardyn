@@ -119,6 +119,12 @@ export const health = {
     // false-enabled guess. advertise_addr / host_key_fingerprint are both
     // non-secret (see docs/SSH.md) — the fingerprint is public by design.
     ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
+    // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
+    // name ("recording", "identity", ...). W21-S1-7: recording.selected ===
+    // "none" is the honest signal that THIS deployment's recording store
+    // never came up (stock Helm install: persistence off) — distinct from
+    // "no run has produced one yet". Absent on an older daemon.
+    components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
   }> {
     try {
       const res = await fetch("/healthz", { credentials: "include" });

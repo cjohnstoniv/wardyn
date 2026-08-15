@@ -67,15 +67,26 @@
 //	    deployment that has not wired the gate), the helper preserves the legacy
 //	    behaviour and mints, so legitimate git is never blocked.
 //
-//	RESIDUAL (documented honestly): this raises the bar from "any in-sandbox
-//	process" to "code executing AS the agent uid". A process running as the agent
-//	user can still read the 0400 secret file (or read WARDYN_GIT_HELPER_SECRET
-//	from a descendant's /proc/<pid>/environ, or simply be a descendant of
-//	agent-run) and thereby obtain the token. Closing that gap requires
-//	per-process credentials (e.g. SPIFFE-attested mint, or a per-invocation
-//	nonce), which is future work. Interactive runs are likewise not gated by this
-//	mechanism (no agent-run to provision the secret) and rely on the human
-//	attach principal being authorised.
+//	RESIDUAL (documented honestly): this secret binds a caller going through
+//	THIS BINARY — it stops a caller that speaks git's credential protocol
+//	(a sub-process, a snooping attach shell) by routing through
+//	wardyn-git-helper itself. It does NOT bind the credential at its source:
+//	the proxy's local mint route (POST /wardyn/v1/credentials/mint) is itself
+//	unauthenticated — like every other /wardyn/... local route, it trusts
+//	anything that can reach it as "the sandbox" — so a caller willing to skip
+//	this binary, read the grant id straight out of the container-wide
+//	WARDYN_GIT_PAT_GRANTS env (unlike WARDYN_GIT_HELPER_SECRET, that one is
+//	NOT process-scoped), and POST the route directly is not bound at all.
+//	Within the "goes through this binary" set, the secret further raises the
+//	bar from "any in-sandbox process" to "code executing AS the agent uid": a
+//	process running as the agent user can still read the 0400 secret file (or
+//	read WARDYN_GIT_HELPER_SECRET from a descendant's /proc/<pid>/environ, or
+//	simply be a descendant of agent-run) and thereby obtain the token via the
+//	binary too. Closing either gap requires authenticating the CALLER at the
+//	proxy's mint route itself (e.g. SPIFFE-attested mint, or a per-invocation
+//	nonce), which is future work. Interactive runs are likewise not gated by
+//	this mechanism (no agent-run to provision the secret) and rely on the
+//	human attach principal being authorised.
 //
 //	The secret is never logged.
 //
@@ -449,11 +460,25 @@ type mintResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// pendingResponse is the broker's 409 shape when an approval is pending.
+// mint 409-conflict "code" values — mirrors internal/api/internal.go's
+// mintConflict* constants (the ONE place both sides of this wire contract
+// must agree, W19-W19a-2).
+const (
+	mintConflictPending       = "pending"
+	mintConflictDenied        = "denied"
+	mintConflictScopeMismatch = "scope_mismatch"
+	mintConflictAlreadyMinted = "already_minted"
+)
+
+// pendingResponse is the broker's 409 shape — covers all four conflict
+// conditions (Code discriminates which; ApprovalID/Denied/Reason are
+// populated only for the two approval-flow codes).
 type pendingResponse struct {
+	Code       string `json:"code"`
 	ApprovalID string `json:"approval_id"`
 	Denied     bool   `json:"denied"`
 	Reason     string `json:"reason"`
+	Error      string `json:"error"`
 }
 
 // approvalResponse is the poll shape for GET /wardyn/v1/approvals/{id}.
@@ -570,14 +595,36 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 		if err := json.Unmarshal(respBody, &pr); err != nil {
 			return "", "", "", fmt.Errorf("decode 409 response: %w", err)
 		}
-		if pr.Denied {
+		// W19-W19a-2: the four 409 conditions share the status but carry a
+		// "code" discriminator — name the real cause instead of falling
+		// through to the generic missing-approval_id guess (mintWithApproval)
+		// for a condition that was never approval-pending at all.
+		switch pr.Code {
+		case mintConflictDenied:
 			reason := pr.Reason
 			if reason == "" {
 				reason = "no reason given"
 			}
 			return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+		case mintConflictAlreadyMinted:
+			return "", "", "", fmt.Errorf("credential already minted (single-use) — a prior mint for this grant already succeeded; " +
+				"see docs/adoption/corp-network-onboarding-findings.md B2 for the standing-lease gap this hits on a second git op")
+		case mintConflictScopeMismatch:
+			return "", "", "", fmt.Errorf("requested scope does not match the grant (no-widening)")
+		case mintConflictPending:
+			return "", "", pr.ApprovalID, nil
+		default:
+			// Pre-code broker (or the legacy shape before W19-W19a-2): fall
+			// back to the field-presence heuristic exactly as before.
+			if pr.Denied {
+				reason := pr.Reason
+				if reason == "" {
+					reason = "no reason given"
+				}
+				return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+			}
+			return "", "", pr.ApprovalID, nil
 		}
-		return "", "", pr.ApprovalID, nil
 
 	case http.StatusUnprocessableEntity:
 		return "", "", "", fmt.Errorf("credential grant requires SPIRE identity provider (not available in this deployment)")

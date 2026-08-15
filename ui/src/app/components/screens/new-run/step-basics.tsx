@@ -135,6 +135,17 @@ export function StepBasics({
         </Field>
       )}
 
+      {/* Read-only: carried from a composed proposal's "Edit in wizard" hand-off
+          (wizardStateFromProposal) — not a field this step lets you set, only
+          one it must not silently drop (see buildSpec's devcontainer_repo). */}
+      {operator && state.devcontainerRepo && (
+        <Field label="Devcontainer build" hint="From the composed proposal — Launch here builds this same devcontainer, not the convention image.">
+          <p className="rounded-md border border-border bg-surface-2/60 px-2.5 py-2 font-mono text-[0.75rem] text-foreground">
+            {state.devcontainerRepo}
+          </p>
+        </Field>
+      )}
+
       <Field
         label="Workspaces"
         hint="Confirming the workspace you chose when starting this run — change it, add another, or remove it here. Only onboarded directories and repos can be attached; a raw host path is never accepted. The first selected is the primary; none attached runs an ephemeral scratch directory."

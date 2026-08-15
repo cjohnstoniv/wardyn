@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 import { Loader2, Play, ScrollText, ShieldAlert, Square, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { runs as api } from "../../../lib/api/runs";
+import { HttpError } from "../../../lib/api/core";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { audit, egressFromAudit } from "../../../lib/api/audit";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
@@ -141,10 +142,19 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
+        //
+        // W3-S1-1: the four keyless demos' cards promise "no allowed
+        // destinations / no key" — without task_mode="exec" the server still
+        // folds the operator's site-wide model integration onto ANY run
+        // (foldRunIntegration only skips it for task_mode=exec; see
+        // internal/api/llmcred.go), silently widening egress to
+        // api.anthropic.com and injecting a live key proxy-side. Only the
+        // harness demo (needsModel) actually wants a model call.
         const run = await api.createRun({
           agent: "claude-code",
           interactive: true,
           inline_policy: demo.policy,
+          task_mode: demo.needsModel ? undefined : "exec",
         });
         setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
         const store = loadStore();
@@ -164,8 +174,20 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const end = React.useCallback(async (demo: Demo, runId: string) => {
     try {
       await api.killRun(runId);
-    } catch {
-      /* best-effort — a terminal run 409s, which is fine here */
+    } catch (e) {
+      // A 409 because the run is already terminal is a benign race (it ended
+      // on its own between the operator's click and this request) — safe to
+      // forget. Any OTHER failure — including the OTHER 409 shape, "run state
+      // changed concurrently; not overwriting with KILLED", which means this
+      // kill LOST a race and did NOT land — leaves the sandbox live
+      // server-side. Forgetting it here would orphan a run the operator
+      // believes was cancelled, so keep it tracked (and in localStorage) and
+      // surface the failure instead.
+      const alreadyTerminal = e instanceof HttpError && e.status === 409 && /already terminal/i.test(e.message);
+      if (!alreadyTerminal) {
+        toast.error("Couldn't end the demo", { description: getErrorMessage(e) });
+        return;
+      }
     }
     setRuns((m) => {
       const n = { ...m };

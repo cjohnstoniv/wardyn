@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	neturl "net/url"
 	"slices"
@@ -19,7 +18,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // referencedWorkspaces resolves the onboarded workspaces a RESOLVED spec uses —
@@ -73,170 +71,6 @@ func workspaceSourcesOfType(ws types.Workspace, typ types.WorkspaceSourceType) [
 		}
 	}
 	return out
-}
-
-// workspaceProfile decodes a workspace's opaque profile blob into the scanner's
-// WorkspaceProfile. Returns ok=false when there is no profile yet (unscanned) or
-// it is malformed.
-func workspaceProfile(ws types.Workspace) (workspacescan.WorkspaceProfile, bool) {
-	if len(ws.Profile) == 0 {
-		return workspacescan.WorkspaceProfile{}, false
-	}
-	var p workspacescan.WorkspaceProfile
-	if err := json.Unmarshal(ws.Profile, &p); err != nil {
-		return workspacescan.WorkspaceProfile{}, false
-	}
-	return p, true
-}
-
-// resolveWorkspaceImage returns the sandbox image for a run driven by its PRIMARY
-// onboarded workspace, or ok=false to fall through to the convention image.
-// Order (all fail-OPEN — any failure returns ok=false + convention image, never
-// blocks the run):
-//   - an explicit BaseImage CHOICE on the workspace ("registry"/"byo"/"custom") →
-//     use it (see below);
-//   - a REPO PRIMARY source (Sources[0]) whose profile HasDevcontainer → build
-//     the repo's own devcontainer;
-//   - a cached generated image still valid for the current profile hash → reuse;
-//   - else generate a devcontainer for the detected toolchain, build it, and cache
-//     image_ref + built_profile_hash on the workspace for reuse.
-//
-// logSink, when non-nil, receives the build's output as it happens (the
-// wizard Build step's in-memory ring); every OTHER caller passes nil, which
-// falls back to the ImageBuilder's own default (wardynd's slog) unchanged.
-//
-// It audits its own build success/failure against runID.
-func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer) (string, bool) {
-	buildAudit := func(outcome string, extra map[string]any) {
-		extra["workspace_id"] = primary.ID.String()
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), outcome, mustJSON(extra)))
-	}
-
-	// An explicit base-image CHOICE takes precedence over everything below.
-	// "recommended" (Wardyn's own convention image for the detected stack) —
-	// like a nil BaseImage — falls through to the devcontainer/generated path
-	// instead of a fixed ref.
-	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
-		if s.cfg.ImageBuilder == nil {
-			// PARITY-4: the workspace_id door hard-400s a base_image with no builder
-			// wired (validateImageBuildRequest, re-run after the seed); the UI door has
-			// no such gate, so at minimum AUDIT that the operator's chosen base image
-			// was DROPPED for the convention image rather than swapping it silently.
-			// (Fully closing the door = the UI sending workspace_id — later UI batch.)
-			buildAudit("skipped", map[string]any{
-				"source": "base_image:" + b.Kind, "base": b.Image,
-				"reason": "no image builder wired; base image dropped for the convention image",
-			})
-			return "", false
-		}
-		// Wrap the operator's base image the SAME way the workspace_id door does
-		// (PARITY-4): FinalizeBase copies the runner tools + agent-run in and tags it
-		// wardyn-byoi/<runid>, which ALSO arms dispatch's fail-closed harness selftest
-		// (runs_dispatch.go keys it off the wardyn-byoi/ prefix). Before this a UI-door
-		// run launched the raw image with no agent-run and failed with an opaque exec
-		// error, while the CLI wrapped + selftest-gated the identical workspace.
-		// "custom" Steps are not layered here (no builder method layers Dockerfile
-		// lines on a base yet) — same as the req.Image path's own verbatim wrap.
-		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink)
-		if berr != nil {
-			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
-			return "", false
-		}
-		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built})
-		return built, true
-	}
-
-	if s.cfg.ImageBuilder == nil {
-		return "", false
-	}
-
-	p, ok := workspaceProfile(primary)
-	if !ok {
-		return "", false // unscanned/malformed → convention image
-	}
-
-	// A repo PRIMARY source (Sources[0]) carrying its OWN devcontainer: respect
-	// it, build from the repo — UNLESS the source is an SSH URL. The image
-	// builder (envbuilder) clones with no minted key / known_hosts / :443
-	// ProxyCommand — only the agent-run sandbox has that wiring — so an SSH
-	// devcontainer build would fail auth. Fall through to a generated toolchain
-	// image; agent-run still clones the repo itself using the run's ssh_key
-	// grant (the repo's own devcontainer is just not built in v1).
-	//
-	// This lane never bakes the standard agent-tool install: it builds the
-	// repo's own devcontainer file(s) verbatim rather than rewriting them to
-	// point at the generated Dockerfile gen.go's baseOrBuild would otherwise
-	// layer a RUN onto (see its package comment — the two mechanisms that
-	// WOULD add one without rewriting the operator's own devcontainer, a
-	// lifecycle hook and the vendor's own devcontainer feature, were both
-	// tried against a real build and rejected). claude-code is therefore
-	// silently absent from this image unless the operator's own devcontainer
-	// happens to install it — deliberate, not an oversight.
-	if url := repoOwnDevcontainerURL(primary, p); url != "" {
-		repoSrc := primary.Sources[0]
-		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
-		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
-			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
-			return built, true
-		} else {
-			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "error": err.Error()})
-			return "", false
-		}
-	}
-	if len(primary.Sources) > 0 && primary.Sources[0].Type == types.WorkspaceSourceTypeRepo && p.HasDevcontainer {
-		if _, ssh := sshCloneHost(primary.Sources[0].Source); ssh {
-			buildAudit("skipped", map[string]any{"source": "repo-devcontainer", "reason": "ssh-source-not-buildable-by-image-builder"})
-		}
-	}
-
-	hash := p.CacheKey()
-	// Reuse a cached generated image when the profile is unchanged.
-	if primary.ImageRef != "" && primary.BuiltProfileHash == hash {
-		return primary.ImageRef, true
-	}
-
-	// Generate a devcontainer for the detected toolchain (the standard
-	// agent-tool install rides unconditionally — gen.go) and build it.
-	files, gerr := workspacescan.GenerateDevcontainer(p)
-	if gerr != nil {
-		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": gerr.Error()})
-		return "", false
-	}
-	tag := "wardyn-workspace/" + primary.ID.String() + ":" + hash[:12]
-	built, berr := s.cfg.ImageBuilder.BuildFromDevcontainerFiles(ctx, files, tag, logSink)
-	if berr != nil {
-		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
-		return "", false
-	}
-	// Cache the built image on the workspace for reuse by later runs — a SCOPED
-	// write: the previous full-row UpdateWorkspace here replayed a stale
-	// pre-launch snapshot over every concurrently-persisted async column
-	// (active_run_id, record_results, verify state).
-	if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, hash); uerr != nil {
-		// Non-fatal: the image built and is usable now; caching just missed.
-		buildAudit("success", map[string]any{"source": "generated-devcontainer", "image": built, "cache_warn": uerr.Error()})
-		return built, true
-	}
-	buildAudit("success", map[string]any{"source": "generated-devcontainer", "image": built})
-	return built, true
-}
-
-// repoOwnDevcontainerURL returns the clone URL resolveWorkspaceImage builds
-// FROM when ws's primary source is a repo carrying its own devcontainer
-// (HasDevcontainer) — or "" when that lane does not apply: no repo primary,
-// no devcontainer, an SSH source (the image builder cannot clone one — see
-// resolveWorkspaceImage's comment), or an unparseable source.
-func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile) string {
-	if len(ws.Sources) == 0 || ws.Sources[0].Type != types.WorkspaceSourceTypeRepo || !p.HasDevcontainer {
-		return ""
-	}
-	repoSrc := ws.Sources[0]
-	if _, ssh := sshCloneHost(repoSrc.Source); ssh {
-		return ""
-	}
-	return repoCloneURL(repoSrc.Source)
 }
 
 // claimImportStep atomically claims the workspace's serial import-step slot for
@@ -302,16 +136,6 @@ func (s *Server) defaultFloorClass() types.ConfinementClass {
 		return cc
 	}
 	return types.CC1
-}
-
-// workspaceRunImage is the image a verify/record run executes in: the
-// workspace's BUILT devcontainer image (built now if needed), falling back to
-// the convention agent image when no builder is configured.
-func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
-	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws, nil); ok {
-		return built
-	}
-	return agentImage("claude-code", s.cfg.AgentImages)
 }
 
 // dispatchAndSettle is the shared launch tail: dispatch, re-read the run so the
@@ -501,43 +325,43 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// global default.
 	var injections []runner.InjectionGrant
 
-	// The workspace's REQUIRED integration: rows ride a session the SAME way
-	// they ride a real run (SEAM-2): a confined replay whose install step
-	// needs Artifactory (say) must reach AND authenticate to it, not merely
-	// reach it — without this the held-then-approved request the operator
-	// approves below goes out credential-less and 401s, and the approve hook
-	// (learnVerifyEgress) durably writes a DUPLICATE egress: row for a host
-	// the integration: row already provides. Folded through the same
-	// chokepoint applyWorkspaceRequirements uses for a real run
-	// (applyIntegrationRequirement), independent of the LLM mode below — an
-	// integration credential is never skipped just because this session
+	// The workspace's REQUIRED contract rows ride a session the SAME way they
+	// ride a real run (SEAM-2): a confined replay whose install step needs
+	// Artifactory (say) or a declared secret must reach AND authenticate to
+	// it, not merely reach it — without this the held-then-approved request
+	// the operator approves below goes out credential-less and 401s, and the
+	// approve hook (learnVerifyEgress) durably writes a DUPLICATE egress: row
+	// for a host a integration: or secret: row already provides. Folded
+	// through the SAME chokepoint a real run uses (applyWorkspaceRequirements,
+	// runs_create.go) — not a hand-rolled integration:-only loop, which
+	// silently dropped required secret: rows even though the Verify carry
+	// card promises "N required secrets ride proxy-side" (W8-S1-2). nil
+	// selections: only Required rows apply — a confined replay has no per-run
+	// optional opt-in surface. Independent of the LLM mode below — a
+	// requirement credential is never skipped just because this session
 	// happens to be subscription-mounted.
-	if ids := requiredIntegrationIDs(ws); len(ids) > 0 {
-		present := s.presentSecretNames(ctx)
-		rows := s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
-		for _, id := range ids {
-			before := len(policy.EligibleGrants)
-			if _, applied := s.applyIntegrationRequirement(ctx, rows, &policy, id); !applied {
-				continue
-			}
-			minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
-			if ierr != nil {
-				return types.AgentRun{}, false, abort(fmt.Errorf("create integration grant: %w", ierr))
-			}
-			injections = append(injections, minted...)
-		}
+	before := len(policy.EligibleGrants)
+	_ = s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
+	if ierr != nil {
+		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
+	injections = append(injections, minted...)
+	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
+	// fold above already minted (and audited) the requirement grants — reusing
+	// the full policy.EligibleGrants slice there would remint and re-inject
+	// every one of them a second time.
+	llmGrantsBefore := len(policy.EligibleGrants)
 
-	var integKind string
-	var bedrockRef *types.WorkspaceBedrockRef
-	// Only when the workspace carries its OWN binding: the record session honors the
-	// workspace's pinned integration, but does NOT reach for the operator's
-	// site-wide default here (that tier stays a real run's concern) — which also
-	// keeps foldRunIntegration off defaultAgentRunsIntegration's site-config read on
-	// the record path.
-	if ws.LLMCred != nil && ws.LLMCred.IntegrationRef != "" {
-		_, integKind, bedrockRef = s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
-	}
+	// Unconditional, same as launch/preflight for a real run (W20-W20-llm-transport-matrix-1):
+	// foldRunIntegration already resolves the workspace's OWN binding first and only
+	// falls through to the operator's site-wide DefaultFor:agent_runs integration when
+	// the workspace names nothing — it returns kind=="" when neither resolves, so the
+	// ceiling/convention fallback below stays the last resort exactly as before. Gating
+	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
+	// site-wide default) for every unbound workspace's record/replay session, silently
+	// diverging from "Model access resolves" (docs/OPERATIONS.md).
+	_, integKind, bedrockRef := s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
 	subMounted := specHasMountTarget(&policy, claudeCredTarget)
 	if integKind == "" && !subMounted {
 		// No workspace/operator integration bound: fall back to the operator
@@ -557,10 +381,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		llmMode = "bedrock" // dispatch's resolveBedrockAuth wires it from bedrockRef below
 	}
 	if !subMounted {
-		// Build the injection from whatever api_key grant the fold or the fallback
-		// added — mirrors handleCreateRun's api_key branch (a subscription/bedrock
-		// fold adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
-		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants)
+		// Build the injection from whatever api_key grant the FALLBACK just added
+		// (llmGrantsBefore: the fold's own grants above are already minted) —
+		// mirrors handleCreateRun's api_key branch (a subscription/bedrock fold
+		// adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
+		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[llmGrantsBefore:])
 		if ierr != nil {
 			return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", ierr))
 		}
@@ -578,11 +403,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
 		LLMMode: llmMode, Model: s.cfg.AgentAnthropicModel,
+		Caveats: repoDevcontainerImageCaveats(ws),
 	}, recordStatusRecording)
 
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
-	return s.dispatchAndSettle(ctx, created, dispatchParams{
+	var resolvedManaged bool
+	result := s.dispatchAndSettle(ctx, created, dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,
@@ -600,7 +427,25 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// Any ephemeral source's scratch target — wireWorkspaceSource's doc
 		// comment — surfaced the same way the ordinary create-run path does.
 		EphemeralDirs: ephemeralDirs,
-	}), weakCC, nil
+		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
+		// cannot see the Wardyn-managed subscription lane at all — correct it
+		// below against what dispatch ACTUALLY resolved.
+		ResolvedManaged: &resolvedManaged,
+	})
+	// The mount/integration-based guess above already covers a host-staged
+	// subscription and a bound Bedrock/api-key integration; only the managed
+	// lane can flip "none"/"api-key" to "subscription" post-dispatch (the
+	// fallback grant it should have preempted was never minted in that case —
+	// see resolveLLMTransport's managed precedence comment).
+	if resolvedManaged && llmMode != "subscription" {
+		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
+			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
+			Status: recordStatusRecording, StartedAt: startedAt,
+			LLMMode: "subscription", Model: s.cfg.AgentAnthropicModel,
+			Caveats: repoDevcontainerImageCaveats(ws),
+		}, recordStatusRecording)
+	}
+	return result, weakCC, nil
 }
 
 // requiredIntegrationIDs returns the integration ids every REQUIRED
@@ -650,7 +495,7 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 			if run.Repo == "" {
 				run.Repo = src.Source
 			}
-			policy.WorkspaceRepos = append(policy.WorkspaceRepos, types.WorkspaceRepo{Repo: src.Source, Target: src.Target})
+			policy.WorkspaceRepos = append(policy.WorkspaceRepos, types.WorkspaceRepo{Repo: src.Source, Target: src.Target, Ref: src.Ref})
 			if url := repoCloneURL(src.Source); url != "" {
 				cloneURLs = append(cloneURLs, url)
 			}
@@ -888,6 +733,39 @@ const maxCaptureAuditEvents = 100000
 const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the derived observations/profile " +
 	"may be incomplete for an exceptionally long run"
 
+// dispatchFailureReason scans a run's already-fetched audit events for the
+// LAST failed run.create/run.dispatch entry and returns its error/note field
+// — the honest "why the sandbox never started" for a record run whose
+// SandboxRef is empty (W20-W20-capture-store-4). "" when no such event is
+// found (a truncated capture, or a failure mode that never audited a reason).
+func dispatchFailureReason(events []types.AuditEvent) string {
+	reason := ""
+	for _, ev := range events {
+		if ev.Outcome != "failure" || (ev.Action != "run.create" && ev.Action != "run.dispatch") {
+			continue
+		}
+		var data struct {
+			Error string `json:"error"`
+			Note  string `json:"note"`
+		}
+		if len(ev.Data) > 0 {
+			_ = json.Unmarshal(ev.Data, &data)
+		}
+		switch {
+		case data.Error != "":
+			reason = data.Error
+		case data.Note != "":
+			reason = data.Note
+		default:
+			continue
+		}
+	}
+	if reason == "" {
+		return "no dispatch-failure reason was audited"
+	}
+	return reason
+}
+
 // reconcileRecordRun captures a record run's evidence when it reaches a
 // terminal state — for ANY reason: auto completion, the operator's "Done
 // recording" kill, or a boot reconcile. Capture is server-side and pure
@@ -922,7 +800,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if err != nil {
 		return // transient store failure: leave `recording`; a later reconcile retries
 	}
-	obs := recordmode.Capture(events)
+	obs := recordmode.Capture(events, res.Confined)
 	now := s.cfg.Now().UTC()
 	res.FinishedAt = &now
 	res.Observations = &obs
@@ -931,9 +809,31 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if len(events) >= maxCaptureAuditEvents {
 		res.Caveats = append(res.Caveats, captureAuditTruncatedNote)
 	}
+	// W20-W20-groundtruth-mapper-4: surface the eBPF sensor's own coverage
+	// state on the capture itself — before this it lived only on the
+	// admin-only /healthz endpoint, nowhere an operator reviewing a recording
+	// would see it. Orthogonal to KernelSensorBlind above (that's THIS run's
+	// structural CC3 blindness; this is the host sensor's own health/coverage,
+	// which can be degraded or partial regardless of confinement class).
+	if gt := s.ebpfGroundtruthCaveat(ctx); gt != "" {
+		res.Caveats = append(res.Caveats, gt)
+	}
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
-		res.FailureHint = recordEmptyCaptureHint
+		// W20-W20-capture-store-4: recordEmptyCaptureHint blames the operator's
+		// proxy/WSL2 networking — a fair guess for a run that actually reached
+		// RUNNING and then observed nothing. A run whose sandbox never came up
+		// AT ALL (SandboxRef is set only once CreateSandbox succeeds —
+		// runs_dispatch.go) failed for a DIFFERENT, dispatch-side reason (image
+		// build, resource limits, a concurrent kill racing dispatch); naming
+		// that instead of the networking guess spares the operator a wasted
+		// WSL2-mirrored-networking detour on a session that never even tried
+		// to reach the control plane.
+		if run.SandboxRef == "" {
+			res.FailureHint = "the sandbox never started: " + dispatchFailureReason(events)
+		} else {
+			res.FailureHint = recordEmptyCaptureHint
+		}
 	} else {
 		res.Status = recordStatusRecorded
 		res.SecretNamesMinted = s.mintedSecretNames(ctx, runID, obs.MintedGrantIDs)

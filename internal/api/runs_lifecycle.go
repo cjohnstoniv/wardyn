@@ -200,6 +200,46 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// SweepTerminalSandboxes is the retry surface W22-S1-7 names as missing: a
+// failed StopSandbox/RevokeRun step inside a prior finalize (finalizeRunTail)
+// or kill (handleKillRun) leaves a terminal run row with a sandbox nothing
+// else revisits — ReconcileOnBoot skips terminal runs outright (reconcile.go),
+// and handleKillRun 409s a non-KILLED terminal run rather than risk
+// corrupting its recorded outcome. This PROBES the runner for every terminal
+// run with a SandboxRef (never trusts the row's own state — the row is
+// terminal by definition, so only a live probe can tell orphaned from
+// settled), tears down + re-runs the idempotent revoke cascade for anything
+// still reported running, and reports how many it swept. Read-only on the
+// store: it never writes run state (a terminal row's recorded outcome is
+// untouched either way), only the runner + broker/identity side effects
+// finalizeRunTail already performs for every OTHER terminal transition.
+//
+// Caller's choice when/how often to invoke this (boot, a periodic ticker, an
+// admin route) — none are wired up here; this is the primitive itself.
+func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
+	runs, err := s.cfg.Store.ListRuns(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if s.cfg.Runner == nil {
+		return 0, nil
+	}
+	swept := 0
+	for _, run := range runs {
+		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
+			continue
+		}
+		st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
+		if serr != nil || st.State != types.RunRunning {
+			continue // already gone (or unprobeable) — the normal, settled case
+		}
+		s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
+		s.revokeRunCascade(ctx, run.ID)
+		swept++
+	}
+	return swept, nil
+}
+
 // finalizeRunTail runs the terminal-transition side effects shared by the live
 // completion watcher (startCompletionWatcher) and the boot reconciler
 // (reconcileFinalize), AFTER the caller has won the CAS into terminal state:

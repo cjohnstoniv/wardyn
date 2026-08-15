@@ -39,6 +39,8 @@ import { integrationsApi } from "../../../lib/api/integrations";
 import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
+import { useOperator } from "../../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { BUILD_BLURB, StepBuild } from "./step-build";
 import { StepIntegrations, INTEGRATIONS_BLURB } from "./step-integrations";
@@ -59,6 +61,7 @@ import {
   initialStepFor,
   isSshRemote,
   newSourceRow,
+  applyWritableRequirement,
   parseRepoSource,
   removeSource,
   seedFloor,
@@ -130,17 +133,32 @@ interface WizardState {
 // wizard lands on whatever step this workspace hasn't cleared yet
 // (initialStepFor) instead of always starting at Sources.
 function initialState(initial?: Workspace): WizardState {
+  const sources = initial ? sourceRowsFromWorkspace(initial) : seedFloor();
+  // W8-S1-6: a workspace whose last scan failed server-side (status "error")
+  // re-enters this wizard with an EMPTY local scans map — that map only ever
+  // tracks a scan started THIS session (see startScan), so phaseA (the
+  // failed-card + Rescan affordance below) never lights up on edit
+  // re-entry. The operator instead lands on the empty "what the image
+  // needs" card with no error and no way to retry. Seed every scannable row
+  // as failed so edit re-entry takes the same failed-card path a live scan
+  // failure does.
+  const scans: Record<string, SourceScanState> = {};
+  if (initial?.status === "error") {
+    for (const r of sources) {
+      if (r.type !== "ephemeral") scans[r.id] = { status: "failed", error: "The last scan failed." };
+    }
+  }
   return {
     step: initial ? initialStepFor(initial) : "sources",
     name: initial?.name ?? "",
-    sources: initial ? sourceRowsFromWorkspace(initial) : seedFloor(),
+    sources,
     initialSources: initial?.sources ?? null,
     secretNames: [],
     githubApp: false,
     setupStatus: null,
     harnessAvailable: false,
     workspace: initial ?? null,
-    scans: {},
+    scans,
     scanning: false,
     partial: false,
     baseImage: initial ? baseImageStateFromWorkspace(initial) : defaultBaseImageState(),
@@ -202,6 +220,16 @@ export function WorkspaceWizard({
   onAttach?: (workspaceId: string) => void;
 }) {
   const isEdit = !!initial;
+  // W25-W25.2-2: every mutation this wizard can make (create, update, scan,
+  // build, set-egress, set-llm-cred, set-requirements, record, promote-egress
+  // — see internal/api/routes.go's operatorOnly group) is operator-only
+  // server-side, but the wizard itself had no client-side gate at all — a
+  // member reaches it from any of its mount points (new-run's "Add a
+  // workspace", the Workspaces/library screen, workspace-detail's Edit,
+  // setup), fills the form, and the FIRST mutating call 403s as a raw toast.
+  // One check here, at the wizard's own entry, covers every mount point —
+  // cheaper and safer than gating each trigger that opens it.
+  const operator = useOperator();
   const [state, setState] = React.useState<WizardState>(() => initialState(initial));
   const patch = (p: Partial<WizardState>) => setState((s) => ({ ...s, ...p }));
   const s = state;
@@ -251,8 +279,14 @@ export function WorkspaceWizard({
       ],
       initialSources: null,
     });
-  const updateSource = (id: string, p: Partial<SourceRow>) =>
-    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)), initialSources: null });
+  const updateSource = (id: string, p: Partial<SourceRow>) => {
+    // W8-S1-1: see applyWritableRequirement's doc — a writable toggle also
+    // stamps/clears the write:<path> requirement that actually governs
+    // runtime writability, not just WorkspaceSource.Writable.
+    const requirements =
+      p.writable !== undefined ? applyWritableRequirement(s.requirements, s.sources, id, p.writable) : s.requirements;
+    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)), requirements, initialSources: null });
+  };
   const removeSourceRow = (id: string) => patch({ sources: removeSource(s.sources, id), initialSources: null });
   const onSecretStored = (name: string) => patch({ secretNames: [...s.secretNames, name] });
 
@@ -596,6 +630,26 @@ export function WorkspaceWizard({
   // deliberate one-click close either way. ponytail: block, don't confirm —
   // add a confirm-on-X only if real usage shows accidental X-clicks too.
   const blockAccidentalDismiss = wsExists && s.step !== "done";
+
+  // A non-operator gets a read-only explanation instead of the full step
+  // machine — never a form whose eventual Continue/Save would 403.
+  if (!operator) {
+    return (
+      <Dialog open onOpenChange={(o) => !o && close()}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Edit workspace" : "Add workspace"}</DialogTitle>
+            <DialogDescription>{OPERATOR_ONLY_REASON}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" onClick={close}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>

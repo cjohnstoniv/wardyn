@@ -58,7 +58,15 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	obs := recordmode.Capture(events)
+	// confined=false: this endpoint synthesizes a profile from ANY run's audit
+	// trail (not only a "workspace record" confined-replay session — see
+	// reconcileRecordRun in workspace_run.go for that lane, which passes the
+	// session's actual Confined flag), and AgentRun carries no frozen
+	// AllowAllEgress to derive it from here. Preserves today's behavior: a
+	// deny is treated as an anomaly a synthesis must not silently bless,
+	// which is the conservative/correct default for a run whose confinement
+	// mode is not otherwise known at this call site.
+	obs := recordmode.Capture(events, false)
 	synth, synthWarns := recordmode.Synthesize(obs, grants, run)
 
 	// The control plane itself shows up in every capture (the sandbox's
@@ -116,6 +124,13 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	}
 	if len(events) >= maxCaptureAuditEvents {
 		warnings = append(warnings, captureAuditTruncatedNote)
+	}
+	// W20-W20-groundtruth-mapper-4: same one-line eBPF sensor coverage state
+	// reconcileRecordRun stamps onto RecordTaskResult.Caveats — a synthesized
+	// profile is reviewed on this SAME evidence, so it carries the same honesty
+	// note about how much of it is kernel-corroborated.
+	if gt := s.ebpfGroundtruthCaveat(ctx); gt != "" {
+		warnings = append(warnings, gt)
 	}
 
 	s.recordAudit(ctx, s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r), "run.record.synthesize",

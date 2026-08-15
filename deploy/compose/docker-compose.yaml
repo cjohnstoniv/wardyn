@@ -38,9 +38,12 @@ services:
   # CONTAINER never touches it, because it no longer shares the host network
   # namespace (see WARDYN_ENVBUILD_BUILD_NETWORK on wardynd below). Instead the
   # build container reaches this registry by compose service name over the
-  # wardyn-internal bridge (registry:5000, WARDYN_ENVBUILD_REGISTRY_INSECURE
-  # standing in for the TLS exemption a bridge address doesn't get for free).
-  # Still not reachable off-host either way.
+  # DEDICATED wardyn-envbuild bridge (registry:5000,
+  # WARDYN_ENVBUILD_REGISTRY_INSECURE standing in for the TLS exemption a
+  # bridge address doesn't get for free) — NOT the wardyn-internal bridge, so
+  # this untrusted build container is never a network peer of postgres or the
+  # admin API (see the `networks:` block at the bottom of this file). Still
+  # not reachable off-host either way.
   registry:
     image: registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
     container_name: ${WARDYN_NS:-wardyn}-registry
@@ -59,6 +62,11 @@ services:
       - registry_data:/var/lib/registry
     networks:
       - wardyn
+      # Also on the build-only network: the untrusted build container (see
+      # WARDYN_ENVBUILD_BUILD_NETWORK below) is NOT on `wardyn` — it must
+      # still reach `registry:5000` to push, so registry is multi-homed
+      # rather than the build container joining the control-plane bridge.
+      - wardyn-envbuild
 
   postgres:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
@@ -219,23 +227,29 @@ services:
       # the first verify session. The registry sidecar above supplies the
       # round-trip envbuilder needs (daemonless: push-then-finalize; the old
       # docker.sock commit knob stays retired). The build container runs on the
-      # wardyn-internal bridge by default HERE, NOT host (PLATREST-2): "host"
-      # would hand the untrusted build (Dockerfile RUN, feature installs,
-      # onCreate/updateContent — see internal/envbuild's package doc) the
-      # operator's whole loopback, including the control-plane Postgres and
-      # admin API published on it above/below with well-known demo credentials.
+      # DEDICATED wardyn-envbuild bridge by default HERE, NOT host (PLATREST-2)
+      # and NOT wardyn-internal either: "host" would hand the untrusted build
+      # (Dockerfile RUN, feature installs, onCreate/updateContent — see
+      # internal/envbuild's package doc) the operator's whole loopback, and
+      # wardyn-internal would still make it an in-network PEER of the
+      # control-plane Postgres and admin API (well-known demo credentials) even
+      # without loopback — a bridge-scoped peer can still dial their compose
+      # service names/ports directly. wardyn-envbuild carries neither.
       # docs/ENVBUILD.md "Build sandbox" spells out what that residual would be.
       # The recommended recipe is Wardyn-generated (not repo content); a repo's
       # OWN devcontainer build carries the usual build-step network caveat
       # (docs/ENVBUILD.md "Residual"). Opt out with WARDYN_ENVBUILD=false;
       # host-mode setups keep the explicit knobs.
       WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-true}"
-      # Reachable from the (now bridge-networked, not host-networked) build
-      # container by the registry's OWN compose service name + container port
-      # — see the registry service's comment above for why this is a DIFFERENT
+      # Reachable from the build container by the registry's OWN compose
+      # service name + container port over wardyn-envbuild (registry is
+      # multi-homed onto both networks — see its service block above) — see
+      # the registry service's comment above for why this is a DIFFERENT
       # address than the finalize pull below uses.
       WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-registry:5000/wardyn/devcontainers}"
-      WARDYN_ENVBUILD_BUILD_NETWORK: "${WARDYN_ENVBUILD_BUILD_NETWORK:-${WARDYN_NS:-wardyn}-internal}"
+      # Dedicated build-only bridge (no postgres/dex/wardynd on it) — see the
+      # registry service comment above and the `networks:` block below.
+      WARDYN_ENVBUILD_BUILD_NETWORK: "${WARDYN_ENVBUILD_BUILD_NETWORK:-${WARDYN_NS:-wardyn}-envbuild}"
       # The FINALIZE stage's pull runs on the HOST DAEMON (FROM + COPY, outside
       # the build container entirely), so it is unaffected by
       # WARDYN_ENVBUILD_BUILD_NETWORK above; it keeps resolving the image
@@ -625,5 +639,20 @@ networks:
     # control-plane network. Default wardyn-internal (single-tenant, unchanged).
     # MUST match wardynd's WARDYN_INTERNAL_NETWORK (both derive from WARDYN_NS) so
     # the docker runner connects the proxy sidecar to the right network.
+    # postgres, dex, and wardynd (the admin API) live here — see wardyn-envbuild
+    # below for why the untrusted envbuild build container is deliberately NOT
+    # a member.
     name: ${WARDYN_NS:-wardyn}-internal
+    driver: bridge
+  wardyn-envbuild:
+    # Dedicated bridge for the untrusted envbuilder BUILD container (Dockerfile
+    # RUN, devcontainer feature installs, onCreate/updateContent all execute
+    # here — internal/envbuild's package doc). It gets normal outbound internet
+    # (same as any compose bridge — devcontainer builds need it) and can reach
+    # `registry:5000` to push (registry is multi-homed onto both networks), but
+    # is NOT a member of `wardyn`, so it is never an in-network peer able to
+    # dial postgres or wardynd's admin API by service name — only WARDYN_ENVBUILD_
+    # BUILD_NETWORK (wardynd, above) and the registry service reference this
+    # network name, matching by WARDYN_NS the same way `wardyn` does.
+    name: ${WARDYN_NS:-wardyn}-envbuild
     driver: bridge

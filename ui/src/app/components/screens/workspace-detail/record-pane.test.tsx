@@ -68,12 +68,14 @@ function renderPane(
   handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
   modelReady = true,
   operator = true,
+  launch: { warnings?: string[]; confinementClass?: string } | null = null,
 ) {
   return render(
     <OperatorProvider operator={operator}>
       <RecordPane
         ws={ws(over)}
         notice={null}
+        launch={launch}
         busyTask={null}
         modelReady={modelReady}
         onRecord={handlers.onRecord ?? noop}
@@ -114,6 +116,26 @@ describe("RecordPane — header, CC1 banner, model note", () => {
   it("warns when no model path is ready", () => {
     renderPane({}, {}, false);
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
+  });
+
+  // W20-S1-2: the localStorage default is only a pre-launch GUESS — once a
+  // session has actually launched, the server's own confinement_class is the
+  // truth, even when it disagrees with the guess (CC1 default here, but the
+  // launch resolved to CC3 — no shared-kernel exposure, so no banner).
+  it("keys the CC1 banner off the launch's REAL confinement class, not the localStorage default, once a session has launched", () => {
+    // localStorage still says nothing (=> CC1 guess) — unchanged from the
+    // default-banner test above.
+    renderPane({}, {}, true, true, { confinementClass: "CC3" });
+    expect(screen.queryByTestId("record-cc1-banner")).not.toBeInTheDocument();
+  });
+
+  it("renders the launch's own warnings instead of silently dropping them", () => {
+    renderPane({}, {}, true, true, {
+      confinementClass: "CC1",
+      warnings: ["this recording runs with OPEN egress under the WEAKEST available isolation"],
+    });
+    const warn = screen.getByTestId("record-launch-warnings");
+    expect(warn).toHaveTextContent(/OPEN egress/);
   });
 });
 
@@ -214,6 +236,80 @@ describe("RecordPane — settled review card (open recording)", () => {
     const review = screen.getByTestId("record-review");
     expect(within(review).getByText(/promoted/i)).toBeInTheDocument();
     expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
+  });
+
+  // W20-S1-1: an observed-and-allowed host that is platform plumbing (the
+  // model-provider harness host every session needs, or the console's own
+  // origin) must never be offered for approval, and — since nothing needed
+  // approving at all — the pane must NOT claim "already allowed" (that
+  // implies an operator decision that never happened) or "Promoted" (nothing
+  // was ever promoted; egress_promoted stays unset).
+  describe("plumbing hosts are never offered for approval", () => {
+    const plumbingOnly = (over: Partial<RecordResult> = {}): RecordResult => ({
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: obs({
+        domains: [{ host: "api.anthropic.com", allow_count: 5, deny_count: 0, pending_count: 0 }],
+      }),
+      ...over,
+    });
+
+    it("model-provider host: no approve button, honest 'platform plumbing' message, no false 'already allowed'", () => {
+      renderPane({ record_results: { "build-test": plumbingOnly() }, profile });
+      const review = screen.getByTestId("record-review");
+      expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
+      expect(within(review).queryByText(/promoted/i)).not.toBeInTheDocument();
+      expect(within(review).getByText(/platform plumbing/i)).toBeInTheDocument();
+      expect(within(review).queryByText(/already allowed/i)).not.toBeInTheDocument();
+      expect(within(review).queryByLabelText("Already approved")).not.toBeInTheDocument();
+    });
+
+    it("the console's own origin (window.location.hostname) is excluded the same way", () => {
+      renderPane({
+        record_results: {
+          "build-test": plumbingOnly({
+            observations: obs({
+              domains: [{ host: window.location.hostname, allow_count: 2, deny_count: 0, pending_count: 0 }],
+            }),
+          }),
+        },
+        profile,
+      });
+      const review = screen.getByTestId("record-review");
+      expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
+      expect(within(review).getByText(/platform plumbing/i)).toBeInTheDocument();
+    });
+
+    it("a mix of a real host and a plumbing host still offers only the real one, correctly counted", async () => {
+      const onPromoteEgress = vi.fn();
+      renderPane(
+        {
+          record_results: {
+            "build-test": plumbingOnly({
+              observations: obs({
+                domains: [
+                  { host: "api.anthropic.com", allow_count: 5, deny_count: 0, pending_count: 0 },
+                  { host: "registry.npmjs.org", allow_count: 2, deny_count: 0, pending_count: 0 },
+                ],
+              }),
+            }),
+          },
+          profile,
+        },
+        { onPromoteEgress },
+      );
+      const review = screen.getByTestId("record-review");
+      const list = within(review).getByTestId("record-new-hosts");
+      expect(list).toHaveTextContent("registry.npmjs.org");
+      expect(list).not.toHaveTextContent("api.anthropic.com");
+      // The count in the button label must match — the exact "click Approve N
+      // but the server only promotes fewer" mismatch this finding closes.
+      expect(within(review).getByRole("button", { name: /approve 1 observed host/i })).toBeInTheDocument();
+      await userEvent.setup({ pointerEventsCheck: 0 }).click(within(review).getByRole("button", { name: /approve 1 observed host/i }));
+      expect(onPromoteEgress).toHaveBeenCalledWith("build-test");
+    });
   });
 
   it("chips only the declared secrets that were actually minted (proven used)", () => {
@@ -351,8 +447,15 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(within(panel).getByText("evil.example.com")).toBeInTheDocument();
     expect(within(panel).queryByText("other.com")).not.toBeInTheDocument();
 
+    // Deny is a two-step confirm (LiveApprovals, W20-W20-hold-fsm-6: it
+    // permanently poisons the host, so a click opens a confirm dialog rather
+    // than calling the API directly — see live-approvals.test.tsx's own
+    // "Deny opens a confirm dialog" pin) — click the row's Deny, then the
+    // dialog's own Deny action.
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(within(panel).getByRole("button", { name: /deny/i }));
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^deny$/i }));
     expect(denyMock).toHaveBeenCalledWith("apr1", expect.any(String));
   });
 

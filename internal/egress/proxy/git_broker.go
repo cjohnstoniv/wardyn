@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The Wardyn Git Broker: an authenticating git-smart-HTTP reverse-proxy local
@@ -64,7 +65,20 @@ const (
 	// (still-streamed) packfile. Hundreds of ref updates fit in 64 KiB; anything
 	// larger is pathological and is refused rather than buffered.
 	maxReceivePackCmds = 64 << 10
+	// envGitApprovalTimeout overrides gitApprovalTimeout's default (operator
+	// escape hatch for a slower approval workflow, same shape as
+	// envEnforceBranchNS above).
+	envGitApprovalTimeout = "WARDYN_GIT_APPROVAL_TIMEOUT"
+	// defaultGitApprovalTimeout mirrors wardyn-git-helper's own
+	// defaultApprovalTimeout (cmd/wardyn-git-helper/main.go): how long the
+	// FIRST clone/fetch/push on an approval-gated github_token grant blocks
+	// waiting for a human to approve in the Wardyn UI before failing.
+	defaultGitApprovalTimeout = 120 * time.Second
 )
+
+// gitApprovalPollInterval is how often mintGitToken re-polls a pending
+// mint-approval. A var so tests can shrink it.
+var gitApprovalPollInterval = 2 * time.Second
 
 // gitServices is the closed set of valid ?service= values / smart-HTTP verbs.
 var gitServices = map[string]bool{"git-upload-pack": true, "git-receive-pack": true}
@@ -158,7 +172,14 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := p.vetURL("https://" + githubHost)
+	// egressTarget hides the corp-upstream branch: under an operator upstream
+	// proxy this sends the CONNECT to github.com BY NAME (the corp proxy does
+	// the outbound DNS+dial) instead of requiring local DNS resolution the
+	// sandbox host frequently cannot do at all, and instead of handing the
+	// corp proxy a resolved IP LITERAL it would refuse (W23-S1-4 / W19-W19d-3)
+	// — the one governed git lane must work on exactly the network it exists
+	// for.
+	target, err := p.egressTarget(githubHost, 443)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		p.httpError(w, "git upstream vet failed", err, http.StatusBadGateway)
@@ -290,36 +311,136 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // mintGitToken calls the control-plane mint route server-side (run token injected
 // by forwardToControlPlane) — the exact route wardyn-git-helper uses, so no broker
 // change is needed. Returns the token and its expiry (unix ms; 0 if unparseable).
+//
+// On the FIRST clone/fetch/push against an approval-gated github_token grant
+// (the New Run wizard's default), the control plane 409s with an approval_id
+// instead of minting — there is nothing for a human to approve yet otherwise.
+// Unlike the sandbox-facing /wardyn/v1/credentials/mint route (which passes a
+// 409 straight through for the CALLER to poll, e.g. wardyn-git-helper's own
+// mintWithApproval loop for the git_pat lane), the broker mints server-side
+// with no caller able to retry — so it polls the SAME approval itself here
+// (the proxy already holds the run token) rather than 502ing the clone before
+// any human could possibly have approved it (W23-S1-1 / W19-W19a-1).
 func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (string, int64, error) {
-	body, err := json.Marshal(map[string]string{"grant_id": grantID.String()})
+	tok, expMs, status, body, err := p.callMintGit(ctx, grantID)
 	if err != nil {
 		return "", 0, err
 	}
-	resp, err := p.forwardToControlPlane(ctx, http.MethodPost,
-		"/api/v1/internal/credentials/mint", body, "application/json")
+	if status == http.StatusOK {
+		return tok, expMs, nil
+	}
+	if status != http.StatusConflict {
+		return "", 0, fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
+	}
+	approvalID := extractApprovalID(body)
+	if approvalID == nil {
+		return "", 0, fmt.Errorf("mint status 409 without approval_id")
+	}
+	return p.waitForGitApproval(ctx, grantID, *approvalID)
+}
+
+// callMintGit issues ONE POST to the control-plane mint route and reports its
+// raw outcome: (token, expiry, 200) on success, ("", 0, 409, body-with-
+// approval_id) when approval-gated and pending, or an error for anything the
+// caller cannot itself retry (network failure, malformed response).
+func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token string, expMs int64, status int, body []byte, err error) {
+	reqBody, err := json.Marshal(map[string]string{"grant_id": grantID.String()})
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, nil, err
+	}
+	resp, err := p.forwardToControlPlane(ctx, http.MethodPost,
+		"/api/v1/internal/credentials/mint", reqBody, "application/json")
+	if err != nil {
+		return "", 0, 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("mint status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", 0, resp.StatusCode, respBody, nil
 	}
 	var mr struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	if err := json.Unmarshal(respBody, &mr); err != nil {
-		return "", 0, fmt.Errorf("decode mint response: %w", err)
+		return "", 0, 0, nil, fmt.Errorf("decode mint response: %w", err)
 	}
 	if mr.Token == "" {
-		return "", 0, fmt.Errorf("mint response missing token")
+		return "", 0, 0, nil, fmt.Errorf("mint response missing token")
 	}
-	var expMs int64
 	if t, perr := time.Parse(time.RFC3339, mr.ExpiresAt); perr == nil {
 		expMs = t.UnixMilli()
 	}
-	return mr.Token, expMs, nil
+	return mr.Token, expMs, http.StatusOK, nil, nil
+}
+
+// waitForGitApproval polls approvalID (the SAME control-plane route
+// handleBrokerApproval forwards for the sandbox-facing lane, GET
+// /api/v1/internal/approvals/{id}) until it reaches a terminal state or
+// gitApprovalTimeout elapses, then re-mints exactly once on APPROVED. A
+// transient poll error is retried, not fatal — the same posture
+// approvalClient.poll takes for the egress_domain flow.
+func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (string, int64, error) {
+	timeout := defaultGitApprovalTimeout
+	if v := os.Getenv(envGitApprovalTimeout); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			timeout = d
+		}
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(gitApprovalPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-deadline.C:
+			return "", 0, fmt.Errorf("timed out after %s waiting for credential approval %s — "+
+				"approve it in the Wardyn UI and re-run", timeout, approvalID)
+		case <-ticker.C:
+		}
+		state, perr := p.pollGitApproval(ctx, approvalID)
+		if perr != nil {
+			continue // transient: keep waiting until the deadline
+		}
+		switch state {
+		case types.ApprovalApproved:
+			tok, expMs, status, body, err := p.callMintGit(ctx, grantID)
+			if err != nil {
+				return "", 0, err
+			}
+			if status != http.StatusOK {
+				return "", 0, fmt.Errorf("re-mint after approval status %d: %s", status, strings.TrimSpace(string(body)))
+			}
+			return tok, expMs, nil
+		case types.ApprovalDenied:
+			return "", 0, fmt.Errorf("credential approval %s was denied by the operator", approvalID)
+		case types.ApprovalExpired:
+			return "", 0, fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
+		default: // still PENDING: keep polling
+		}
+	}
+}
+
+// pollGitApproval fetches one approval's current state via the same
+// control-plane route the sandbox-facing /wardyn/v1/approvals/{id} local
+// route forwards (handleBrokerApproval), run-token-authenticated.
+func (p *Proxy) pollGitApproval(ctx context.Context, id uuid.UUID) (types.ApprovalState, error) {
+	resp, err := p.forwardToControlPlane(ctx, http.MethodGet, "/api/v1/internal/approvals/"+id.String(), nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("poll approval status %d", resp.StatusCode)
+	}
+	var ar types.ApprovalRequest
+	if err := json.Unmarshal(body, &ar); err != nil {
+		return "", err
+	}
+	return ar.State, nil
 }
 
 // parseGitBrokerPath splits /wardyn/gh/<org>/<repo>[.git]/<rest...> into the

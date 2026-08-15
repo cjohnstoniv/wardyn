@@ -499,7 +499,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	return runner.Sandbox{
-		Ref:           agentResp.ID,
+		// The deterministic name, not agentResp.ID: Docker's API accepts either
+		// for every call this driver makes on Ref (name and ID are
+		// interchangeable path params), but teardown's not-found fallback
+		// (runIDFromAgentName) can only recover a run id from THIS form — a raw
+		// daemon-assigned ID carries no run id at all, so that fallback silently
+		// no-op'd for every exec-capable (runc/gVisor) runtime — the common
+		// case — leaking the proxy sidecar + per-run network whenever the agent
+		// container was already gone at teardown (W15-W15c-terminal-lifecycle-2).
+		Ref:           agentContainerName(spec.RunID),
 		Driver:        driverName,
 		EnforcedClass: enforced,
 	}, nil
@@ -1009,17 +1017,33 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
 
-	if id == uuid.Nil {
-		// A not-found agent means the sandbox was already gone (nothing to tear
-		// down): idempotent success. But if we DID find/remove an agent yet could
-		// not resolve its run id (label absent AND name unparseable), its proxy +
-		// network may now be orphaned — surface that honestly rather than
-		// reporting a false success (fail closed). NOTE: a retry then sees the
-		// agent not-found and returns success, so callers must act on this FIRST
-		// error; a second teardown cannot re-detect the orphan.
-		if isNotFound(err) {
+	if id == uuid.Nil && isNotFound(err) {
+		// W15-W15c-terminal-lifecycle-2: the agent container is already gone
+		// (crashed, OOM-killed, or a concurrent teardown beat us to it), so
+		// ContainerInspect never ran the label/name recovery above at all —
+		// id stayed uuid.Nil and this used to report success without EVER
+		// trying to resolve the run id, leaking the sibling proxy sidecar
+		// (still holding the run's credentials) and the per-run network.
+		// agentRef itself IS the deterministic agent name on BOTH substrates
+		// now — the exec-less (krun) path always used it (see Exec), and
+		// CreateSandbox's exec-based (runc/gVisor) return now names it too
+		// instead of the daemon's opaque agentResp.ID — so try it before
+		// giving up; a ref this parse still can't recognize (e.g. an older
+		// persisted ref from before this fix) falls through to the prior
+		// idempotent-success behavior unchanged.
+		if nid, nerr := runIDFromAgentName(agentRef); nerr == nil {
+			id = nid
+		} else {
 			return nil
 		}
+	}
+	if id == uuid.Nil {
+		// A found-and-removed agent whose run id could not be resolved (label
+		// absent AND name unparseable): its proxy + network may now be
+		// orphaned — surface that honestly rather than reporting a false
+		// success (fail closed). NOTE: a retry then sees the agent not-found
+		// and returns success, so callers must act on this FIRST error; a
+		// second teardown cannot re-detect the orphan.
 		return fmt.Errorf("docker: teardown of agent %s: %w", agentRef, errTeardownUnresolved)
 	}
 
@@ -1051,6 +1075,13 @@ func (d *Driver) ensureImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("%w (image %q not present locally and pull failed — for the demo images run: make agent-images)", err, ref)
 	}
 	return nil
+}
+
+// ImagePresent implements runner.ImageChecker (W20-W20-record-image-5): the
+// exported form of imagePresent, so a caller holding only a runner.Runner can
+// verify a cached image ref is still real before trusting it.
+func (d *Driver) ImagePresent(ctx context.Context, ref string) (bool, error) {
+	return d.imagePresent(ctx, ref)
 }
 
 func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {

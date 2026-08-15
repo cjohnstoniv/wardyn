@@ -368,6 +368,70 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 	}
 }
 
+// TestMITMCorpHost_ForwardEgressScanCoversBody is the W19-W19d-1 regression.
+// channelForHost maps every corp artifact MITM host to ChannelGeneric, which
+// classifyLLM unconditionally treats as scanNone (not prompt-bearing) — so
+// inspectLLM alone streamed an artifact-MITM body through completely
+// unscanned, even with inspect_forward_egress on (the flag that already
+// extends inspection to the PLAIN, non-MITM forward path). A secret leaking
+// through a "corp registry" MITM tunnel must be caught exactly like one
+// leaking through a plain HTTP connector.
+func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
+	cu := captureUpstream(t, true, "mirror-ok")
+
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Scanner:         forwardScanEngine(t, "block"),
+		CA:              ca,
+		MITMHosts:       []string{"mirror.corp"},
+		Resolver:        publicResolver{},
+		TLSClientConfig: testInsecureTLSConfig,
+		Dial:            redirectDial(upstreamAddr(cu.srv)),
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	conn, status := connectThrough(t, proxySrv.URL, "mirror.corp:443")
+	defer conn.Close()
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT status = %q, want 200", status)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("failed to add Wardyn CA to agent trust pool")
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: "mirror.corp", RootCAs: pool})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("agent TLS handshake: %v", err)
+	}
+	defer tlsConn.Close()
+
+	body := `{"payload":"leak ` + scanTestSecret + `"}`
+	req, _ := http.NewRequest(http.MethodPost, "https://mirror.corp/api/npm/publish", strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatal(err)
+	}
+	getResp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatalf("read MITM response: %v", err)
+	}
+	if getResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — a secret in a corp-MITM'd body must be blocked "+
+			"under inspect_forward_egress like any other generic connector", getResp.StatusCode)
+	}
+	if cu.reached {
+		t.Fatal("a blocked corp-MITM request must never reach the upstream registry")
+	}
+}
+
 // A credential refresh that fails must fail CLOSED and must not relay the
 // control plane's response text verbatim: the error is written into the SANDBOX,
 // so any registered secret it carries is masked (httpError) before it leaves.

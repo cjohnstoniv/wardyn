@@ -26,6 +26,10 @@
 #             stack + ~/.wardyn install files. Leaves the machine clean (no
 #             re-up). Flags: --dry-run --purge-images --purge-env.
 #   pg        Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432).
+#
+# Regression coverage for the pure host-side decisions below (default-policy
+# auto-pick/re-pick, the CLI hand-off prefix) lives in scripts/test-up-policy.sh
+# (no docker, no network — extracts and exercises the functions directly).
 set -eu
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,6 +38,11 @@ ENV_FILE="${REPO_ROOT}/deploy/compose/.env"
 ENV_EXAMPLE="${REPO_ROOT}/deploy/compose/.env.example"
 
 . "${REPO_ROOT}/scripts/lib/common.sh"
+# reset / reset-all machinery — split into its own sourced sibling to keep
+# this file under the file-size gate (scripts/check-file-size.sh); see
+# scripts/up-reset.sh for why it's safe to source before REPO_ROOT's other
+# consumers (compose(), _confirm*(), cmd_up()) are defined below.
+. "${REPO_ROOT}/scripts/up-reset.sh"
 
 # Every entry point (setup/up/doctor/reset/reset-all/pg) must operate on the
 # SAME daemon — setup.sh exports its pick before delegating here, but direct
@@ -68,7 +77,8 @@ pick_policy() {
 
 # composer_wants_llm ENV_FILE -> "1" | ""
 # "1" when the operator has opted into a real model path: a non-fake composer
-# backend is configured, or a host LLM API key is exported.
+# backend is configured, or a host LLM API key is exported. THIS PROCESS'S env
+# only — see llm_ready_from_status below for the lane this can never see.
 composer_wants_llm() {
   _cwl_cfg=$(env_get "$1" WARDYN_COMPOSER_CONFIG)
   case "${_cwl_cfg}" in
@@ -78,6 +88,57 @@ composer_wants_llm() {
   [ -n "${ANTHROPIC_API_KEY:-}" ] && { echo 1; return; }
   [ -n "${OPENAI_API_KEY:-}" ]    && { echo 1; return; }
   echo ""
+}
+
+# llm_ready_from_status STATUS_JSON -> "1" | ""
+# W1-S1-3: composer_wants_llm is blind to a managed subscription connected in a
+# PRIOR `up` (no token re-supplied this run) and to a key added through the
+# UI — neither ever touches this process's env. cmd_up instead asks the
+# already-running daemon's own GET /api/v1/setup/status, whose llm_ready
+# aggregates every lane (subscription, composer backend, secret-name
+# heuristic, Bedrock, an AI-provider Integration) for the Getting-started
+# readiness banner. Split out as a pure string check (matching
+# composer_wants_llm's own case-pattern style) so test-up-policy.sh can pin
+# the match on a canned body with no docker/network.
+llm_ready_from_status() {
+  case "$1" in
+    *'"llm_ready":true'*) echo 1 ;;
+    *) echo "" ;;
+  esac
+}
+
+# resolve_default_policy ENV_FILE OVERRIDE RUNTIMES_JSON WANTS_LLM -> policy path
+# Decides + PERSISTS WARDYN_DEFAULT_POLICY into ENV_FILE (plus a
+# WARDYN_DEFAULT_POLICY_AUTO marker) and echoes the resulting path. OVERRIDE
+# is the process-env WARDYN_DEFAULT_POLICY for this invocation ("" if unset):
+# an explicit override always wins and clears the marker (operator has now
+# spoken) so a later plain `up` won't auto-pick over it. Otherwise ENV_FILE's
+# own value is kept UNLESS it is unset or still carries the marker (meaning WE
+# chose it last time, not the operator) — in which case pick_policy re-runs.
+# That re-pick is what lets a managed subscription or an exported API key
+# added AFTER the first `make setup` actually take effect on the next `up`:
+# the old "only decide when .env has nothing" rule froze the pure-Fence
+# demo.json/default.json ceiling forever once written, and a composed run kept
+# 404ing on its first model call even after a real model path showed up.
+# Pre-marker installs (a value with no marker at all) read as NOT-ours, same
+# as a hand-set override.
+resolve_default_policy() {
+  _rdp_file=$1; _rdp_override=$2; _rdp_runtimes=$3; _rdp_wants_llm=$4
+  if [ -n "${_rdp_override}" ]; then
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 0
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_override}"
+    echo "${_rdp_override}"
+    unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm
+    return
+  fi
+  _rdp_cur=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY)
+  if [ -z "${_rdp_cur}" ] || [ "$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "1" ]; then
+    _rdp_cur=$(pick_policy "${_rdp_runtimes}" "${_rdp_wants_llm}")
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 1
+  fi
+  env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_cur}"
+  echo "${_rdp_cur}"
+  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur
 }
 
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
@@ -118,8 +179,12 @@ host_goarch() {
 # your host" instead of "nothing is configured". Rewritten on every `up`, so it
 # can never go stale across a network change. base64 because compose interpolates
 # `$` inside .env values; the payload is credential-masked before it is emitted.
+#
+# Also leaves a working host-native CLI at bin/wardyn (same convention as
+# scripts/setup.sh's host-mode `go build -o bin/wardyn`) for cmd_up's hand-off
+# to point at — the containerized path installs no `wardyn` on PATH otherwise.
 seed_host_proxy() {
-  _shp_bin="${REPO_ROOT}/bin/wardyn-host"
+  _shp_bin="${REPO_ROOT}/bin/wardyn"
   mkdir -p "${REPO_ROOT}/bin" 2>/dev/null || return 0
   # distroless has no shell, so `docker run … cat` can't work — create, cp, rm.
   _shp_cid=$(docker create wardyn/wardynd:local 2>/dev/null) || return 0
@@ -135,6 +200,19 @@ seed_host_proxy() {
     fi
   fi
   unset _shp_bin _shp_cid _shp_json _shp_b64
+}
+
+# wardyn_cli_prefix REPO_ROOT_DIR -> invocation prefix for example commands.
+# seed_host_proxy extracts a working host-native `wardyn` to REPO_ROOT_DIR/bin
+# (same convention as scripts/setup.sh's host-mode `go build -o bin/wardyn`);
+# use it when present. Otherwise fall back to a bare `wardyn` (assumed on
+# PATH) — the caller is expected to also print the `go install` recovery line.
+wardyn_cli_prefix() {
+  if [ -x "$1/bin/wardyn" ]; then
+    echo "./bin/wardyn"
+  else
+    echo "wardyn"
+  fi
 }
 
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
@@ -178,6 +256,24 @@ _confirm() {
     case "${_c_a}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
   fi
   warn "Non-interactive: set WARDYN_FORCE_RESET=1 to proceed."
+  return 1
+}
+
+# _confirm_host_stop PROMPT — like _confirm, but gated on the SEPARATE
+# WARDYN_FORCE_STOP_HOST flag, never WARDYN_FORCE_RESET: `reset` only wipes the
+# compose volumes by contract (TRY-IT.md's "does not touch a host-mode
+# daemon"), so a headless `WARDYN_FORCE_RESET=1 make reset` confirming the
+# (unrelated) volume wipe must not ALSO silently kill a live host-mode wardynd
+# — that needs its own explicit opt-in. Interactive behavior is identical to
+# _confirm (prompt, default No).
+_confirm_host_stop() {
+  [ "${WARDYN_FORCE_STOP_HOST:-}" = 1 ] && return 0
+  if [ -t 0 ]; then
+    printf '  %s [y/N] ' "$1"
+    read -r _c_a || _c_a=""
+    case "${_c_a}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  fi
+  warn "Non-interactive: set WARDYN_FORCE_STOP_HOST=1 to also stop it headlessly."
   return 1
 }
 
@@ -249,6 +345,22 @@ cmd_doctor() {
     report warn "port 5432 already in use — postgres may fail to bind (an existing wardyn-postgres container already holding it is fine)."
   else
     report ok "port 5432 free."
+  fi
+  # registry: auto-started via postgres/dex/wardynd's depends_on, so it binds
+  # even on a plain `make setup` — not opt-in like the SSO/groundtruth profiles.
+  _registry_port="${WARDYN_REGISTRY_PORT:-5010}"
+  if port_in_use "${_registry_port}"; then
+    report warn "port ${_registry_port} already in use — the devcontainer-build registry may fail to bind. Override with WARDYN_REGISTRY_PORT=<port>, or free the port."
+  else
+    report ok "port ${_registry_port} free."
+  fi
+  # wardynd's SSH gateway mapping is always published in compose, whether or
+  # not WARDYN_SSH_LISTEN is set to actually enable the gateway.
+  _ssh_port="${WARDYN_SSH_PORT:-2222}"
+  if port_in_use "${_ssh_port}"; then
+    report warn "port ${_ssh_port} already in use — wardynd's SSH gateway mapping may fail to bind. Override with WARDYN_SSH_PORT=<port>, or free the port."
+  else
+    report ok "port ${_ssh_port} free."
   fi
 
   if [ -e /dev/kvm ]; then
@@ -431,18 +543,17 @@ cmd_up() {
   # publish this stack uses (see docker-compose.yaml). Inert under SSO (local-mode-only).
   env_set "${ENV_FILE}" WARDYN_LOCAL_TRUST_FORWARDER true
 
-  _policy="${WARDYN_DEFAULT_POLICY:-}"
-  [ -z "${_policy}" ] && _policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
-  if [ -z "${_policy}" ]; then
-    _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-    _policy=$(pick_policy "${_runtimes}" "$(composer_wants_llm "${ENV_FILE}")")
+  _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+  _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+  _policy=$(resolve_default_policy "${ENV_FILE}" "${WARDYN_DEFAULT_POLICY:-}" "${_runtimes}" "$(composer_wants_llm "${ENV_FILE}")")
+  if [ "${_policy}" != "${_prev_policy}" ]; then
     log "Auto-picked default policy: ${_policy}"
     case "${_policy}" in
       */composer-dev.json)
         log "  (composer-capable ceiling — a real model path is configured; a composed run can reach its LLM)" ;;
     esac
   fi
-  env_set "${ENV_FILE}" WARDYN_DEFAULT_POLICY "${_policy}"
+  unset _prev_policy
 
   if [ -z "$(env_get "${ENV_FILE}" WARDYN_COMPOSER_CONFIG)" ]; then
     env_set "${ENV_FILE}" WARDYN_COMPOSER_CONFIG '{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}'
@@ -544,6 +655,29 @@ cmd_up() {
     fi
   fi
 
+  # W1-S1-3: the pick above ran BEFORE wardynd existed — composer_wants_llm can
+  # only see THIS process's env (WARDYN_COMPOSER_CONFIG/*_API_KEY), never a
+  # managed subscription (just connected above, OR left over from a PRIOR `up`
+  # with no token re-supplied this time) or a key added through the UI in a
+  # browser session up.sh never sees. Ask the daemon itself instead, reachable
+  # the same way the local-mode gate smoke below already proves: an in-network
+  # peer under WARDYN_LOCAL_TRUST_FORWARDER, no token needed in local mode.
+  _status_json=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+    -s -m 5 "http://wardynd:8080/api/v1/setup/status" 2>/dev/null || true)
+  _llm_ready=$(llm_ready_from_status "${_status_json}")
+  unset _status_json
+  if [ -n "${_llm_ready}" ]; then
+    _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
+    _post_runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
+    _post_policy=$(resolve_default_policy "${ENV_FILE}" "" "${_post_runtimes}" 1)
+    if [ "${_post_policy}" != "${_prev_policy}" ]; then
+      log "Re-picked default policy now that a model path is live: ${_post_policy} — restarting wardynd"
+      compose up -d wardynd
+    fi
+    unset _prev_policy _post_runtimes _post_policy
+  fi
+  unset _llm_ready
+
   # Can THIS shell reach the published UI port? In WSL2 NAT mode it usually
   # cannot (only the Windows browser can) — an honest note, not a failure.
   if ! curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; then
@@ -580,21 +714,25 @@ cmd_up() {
     *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
   esac
 
+  _cli=$(wardyn_cli_prefix "${REPO_ROOT}")
+
   # Route hand-off. CI/headless (no browser or no TTY): no browser, NO demos —
   # just the launch command. Interactive (UI/CLI): open Getting-started + point at
   # the keyless demo and a one-command governed run.
   if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ] || [ ! -t 1 ]; then
     log "Wardyn is up (headless): ${_url}"
     log "  Ready — launch a governed run:"
-    log "    wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
+    log "    ${_cli} run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
   else
     open_url "${_url}"
     log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
     log "  Prove the sandbox boundary from the CLI (keyless):"
-    log "    wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
-    log "  Give it a real Claude:  wardyn subscription connect   (then run with sandbox-claude.yaml)"
+    log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
+    log "  Give it a real Claude:  ${_cli} subscription connect   (then run with sandbox-claude.yaml)"
     log "  Or click the /demos screen in the UI."
   fi
+  [ "${_cli}" = "wardyn" ] && log "  (bin/wardyn wasn't extracted — build one: go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest)"
+  unset _cli
 
   # The per-run sandbox proxy + agent images are NOT needed to reach the UI or the
   # Getting-started page — only to LAUNCH a run. Build them AFTER the browser is
@@ -641,233 +779,7 @@ cmd_down() {
   make -C "${REPO_ROOT}" compose-down
 }
 
-# reset — deliberate clean slate. `down` keeps the named volumes (postgres_data,
-# recordings, audit) so runs + the append-only audit log survive a restart, which
-# is what you want normally. reset REMOVES them, so the following `up` starts with
-# an EMPTY Runs list — the honest "fresh like a new clone" state on a machine that
-# has run Wardyn before. Irreversible, so it CONFIRMS (default No; headless needs
-# WARDYN_FORCE_RESET=1). A live HOST-mode (`make setup`) daemon is offered a stop
-# first: the containerized wardynd this brings up binds the same 127.0.0.1:8080,
-# so leaving the host one running guarantees a port collision, not a second UI.
-# For the FULL undo (host daemon + rundir + compose, no re-up) use reset-all.
-cmd_reset() {
-  warn "reset REMOVES the compose volumes: Postgres (ALL runs + the append-only audit log) and recordings."
-  warn "This is irreversible. Plain \`make compose-down\` keeps them; use that if you only want to stop the stack."
-  _host_pid="$(cat "${HOME}/.wardyn/host-wardynd.pid" 2>/dev/null || true)"
-  if [ -n "${_host_pid}" ] && kill -0 "${_host_pid}" 2>/dev/null; then
-    warn "Host-mode wardynd is running (PID ${_host_pid}) — the containerized wardynd this brings up needs its :8080."
-    if _confirm "Stop the host daemon first (make stop-host)?"; then
-      make -C "${REPO_ROOT}" stop-host
-    else
-      warn "Left the host daemon up — the fresh containerized wardynd will fail to bind :8080."
-    fi
-  fi
-  if ! _confirm "Wipe the compose volumes and re-up?"; then
-    [ -t 0 ] && { log "Aborted — nothing was removed."; exit 0; }
-    exit 2
-  fi
-  compose down -v --remove-orphans
-  log "Volumes removed — bringing up a fresh, empty Wardyn"
-  cmd_up
-}
-
-# reset-all — the TRUE fresh-install undo: everything `make setup` / `make
-# compose-up` created, across BOTH modes (host daemon + compose stack), so an
-# iteration loop can start each round from a genuinely clean box. Unlike
-# `reset` it does NOT re-up — it leaves the machine clean and stops.
-#
-# ~/.wardyn is shared real estate (other tools keep source trees and scratch
-# there), so removal is a NAMED ALLOWLIST of the files setup.sh /
-# stage-claude-creds.sh create — never `rm -rf ~/.wardyn`. Everything else
-# found there is reported as PRESERVED.
-#
-# Kept by default (flags to purge):
-#   deploy/compose/.env  (--purge-env)     the persisted age key. Safe to keep:
-#                                          `down -v` destroyed every secret
-#                                          sealed under it, and the same key
-#                                          just seals the next ones. Purge only
-#                                          for a pristine first-contact baseline.
-#   built :local images  (--purge-images)  the minutes-long rebuild set.
-# Built binaries (bin/, ui/dist) are `make clean`'s job — not duplicated here.
-_ra_mark() {  # _ra_mark 0|1 LABEL — one manifest line
-  if [ "$1" = 1 ]; then printf '  [present] %s\n' "$2"; else printf '  [absent]  %s\n' "$2"; fi
-}
-
-cmd_reset_all() {
-  _ra_dry=0; _ra_purge_images=0; _ra_purge_env=0
-  for _ra_a in "$@"; do
-    case "${_ra_a}" in
-      --dry-run)      _ra_dry=1 ;;
-      --purge-images) _ra_purge_images=1 ;;
-      --purge-env)    _ra_purge_env=1 ;;
-      *) die "reset-all: unknown flag '${_ra_a}' (known: --dry-run --purge-images --purge-env)" ;;
-    esac
-  done
-  _ra_rundir="${HOME}/.wardyn"
-  # :local is the current locally-built tag; the :demo variants are the
-  # pre-rename generation still present on boxes that set up before it.
-  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
-
-  # ── gather facts (read-only) ─────────────────────────────────────────
-  _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)
-  _ra_host_live=0
-  [ -n "${_ra_host_pid}" ] && kill -0 "${_ra_host_pid}" 2>/dev/null && _ra_host_live=1
-
-  _ra_proj=$(compose config 2>/dev/null | awk '/^name:/{print $2; exit}')
-  [ -n "${_ra_proj}" ] || _ra_proj=compose
-  _ra_containers=$(compose ps -aq 2>/dev/null | grep -c . || true)
-
-  # Enable every profile the file declares (sso, groundtruth, build-only, …) so
-  # profile-gated volumes like tetragon_export are seen AND torn down too.
-  _ra_profiles=""
-  for _ra_p in $(compose config --profiles 2>/dev/null); do
-    _ra_profiles="${_ra_profiles} --profile ${_ra_p}"
-  done
-
-  # Resolve the EXACT docker volume names this compose file owns (explicit
-  # `name:` when set, else <project>_<logical>) — the same set `down -v`
-  # removes. A project-label filter is NOT safe here: the label is just the
-  # directory name ("compose"), which this repo's pre-rename eras (warden-*/
-  # writ-*) share, and reset-all must never claim volumes that aren't its own.
-  # The set is STATIC — docker-compose.yaml's top-level `volumes:` declares
-  # exactly these six, unconditionally, regardless of which profiles are
-  # active — so it is hardcoded here instead of derived via
-  # `compose config --format json | jq`. That derivation used to make jq a
-  # HARD dependency for an accurate manifest: absent jq (or `config` failing),
-  # _ra_volnames silently resolved empty, every volume line below rendered
-  # [absent], and the site-config/secrets [destroy] warning was suppressed
-  # entirely — while `down -v` a few lines down still wiped them for real (a
-  # false-negative consent prompt, not just a cosmetic gap). Only `recordings`
-  # carries an explicit `name:` in docker-compose.yaml (namespaced by
-  # WARDYN_NS, not the project); the other five follow compose's default
-  # <project>_<logical> naming.
-  _ra_volnames="${_ra_proj}_postgres_data ${_ra_proj}_audit ${_ra_proj}_registry_data ${_ra_proj}_groundtruth_token ${_ra_proj}_tetragon_export ${WARDYN_NS:-wardyn}-recordings"
-  _ra_volumes=""
-  for _ra_v in ${_ra_volnames}; do
-    docker volume inspect "${_ra_v}" >/dev/null 2>&1 && _ra_volumes="${_ra_volumes}${_ra_v} "
-  done
-
-  _ra_net=0; _ra_net_attached=0
-  if docker network inspect wardyn-internal >/dev/null 2>&1; then
-    _ra_net=1
-    _ra_net_attached=$(docker network inspect -f '{{len .Containers}}' wardyn-internal 2>/dev/null || echo 0)
-  fi
-
-  _ra_testpg=0
-  docker inspect wardyn-test-pg >/dev/null 2>&1 && _ra_testpg=1
-
-  # ~/.wardyn: split into install files (ours to delete) vs preserved (not ours)
-  _ra_install=""; _ra_preserved=""
-  if [ -d "${_ra_rundir}" ]; then
-    for _ra_e in "${_ra_rundir}"/* "${_ra_rundir}"/.[!.]*; do
-      [ -e "${_ra_e}" ] || continue
-      case "$(basename "${_ra_e}")" in
-        host-wardynd.pid|host-wardynd.log|claude-creds|composer-dev-subscription.json)
-          _ra_install="${_ra_install}$(basename "${_ra_e}") " ;;
-        *)
-          _ra_preserved="${_ra_preserved}$(basename "${_ra_e}") " ;;
-      esac
-    done
-  fi
-
-  _ra_env_present=0
-  [ -f "${ENV_FILE}" ] && _ra_env_present=1
-
-  _ra_images_present=""
-  for _ra_img in ${_ra_images}; do
-    docker image inspect "${_ra_img}" >/dev/null 2>&1 && _ra_images_present="${_ra_images_present}${_ra_img} "
-  done
-
-  # ── manifest ─────────────────────────────────────────────────────────
-  log "reset-all — full undo of local Wardyn setup (daemon: ${DOCKER_HOST:-default socket}). Manifest:"
-  if [ "${_ra_host_live}" = 1 ]; then
-    _ra_mark 1 "host-mode wardynd (PID ${_ra_host_pid}, ~/.wardyn/host-wardynd.pid) — will be stopped"
-  else
-    _ra_mark 0 "host-mode wardynd (no live PID)"
-  fi
-  _ra_mark "$([ "${_ra_containers:-0}" -gt 0 ] && echo 1 || echo 0)" "compose containers: ${_ra_containers:-0} (project '${_ra_proj}')"
-  _ra_mark "$([ -n "${_ra_volumes}" ] && echo 1 || echo 0)" "compose volumes: ${_ra_volumes:-none }(runs + audit + recordings — IRREVERSIBLE)"
-  # The corporate baseline lives in Postgres, so the volume takes it too. Say so
-  # HERE, while the operator can still capture it: otherwise the stack comes back
-  # up looking healthy and sandbox egress is silently unconfigured.
-  if [ -n "${_ra_volumes}" ]; then
-    printf '  [destroy] site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) — they live in the Postgres volume.\n'
-    # Name a command that EXISTS and RESOLVES on the flagship path. Two traps:
-    # containerized setup ships no host-side wardyn binary (it lives in the
-    # wardynd image, and nothing in the Makefile builds bin/), and this box may
-    # run a second dockerd — wardyn_pick_docker_host already resolved which one,
-    # so echo it into the hint rather than let a bare `docker compose` hit the
-    # default socket and report the stack as not running.
-    printf '            Capture first if this host needs them back:\n'
-    printf '              %sdocker compose -f %s exec -T wardynd wardyn site-config get > corp-baseline.json\n' \
-      "${DOCKER_HOST:+DOCKER_HOST=${DOCKER_HOST} }" "${COMPOSE_FILE#"${REPO_ROOT}/"}"
-    printf '            (host mode / built CLI:  wardyn site-config get > corp-baseline.json)\n'
-  fi
-  if [ "${_ra_net}" = 1 ]; then
-    _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
-  else
-    _ra_mark 0 "docker network wardyn-internal"
-  fi
-  _ra_mark "${_ra_testpg}" "dev/e2e postgres container wardyn-test-pg (:55432)"
-  _ra_mark "$([ -n "${_ra_install}" ] && echo 1 || echo 0)" "~/.wardyn install files: ${_ra_install:-none }(includes STAGED CLAUDE CREDS — re-stage after next setup)"
-  [ -n "${_ra_preserved}" ] && printf '  [keep]    ~/.wardyn PRESERVED (not Wardyn setup'\''s): %s\n' "${_ra_preserved}"
-  if [ "${_ra_purge_env}" = 1 ]; then
-    _ra_mark "${_ra_env_present}" "deploy/compose/.env (age key) — --purge-env"
-  else
-    printf '  [keep]    deploy/compose/.env (age key; sealed secrets die with the volume, so keeping it is safe — --purge-env for a pristine baseline)\n'
-  fi
-  if [ "${_ra_purge_images}" = 1 ]; then
-    _ra_mark "$([ -n "${_ra_images_present}" ] && echo 1 || echo 0)" "built images: ${_ra_images_present:-none}— --purge-images (minutes to rebuild)"
-  else
-    printf '  [keep]    built images (%s) — --purge-images to remove; rebuilds take minutes\n' "${_ra_images_present:-none present}"
-  fi
-  printf '  [note]    built binaries (bin/, ui/dist): use `make clean`\n'
-
-  if [ "${_ra_dry}" = 1 ]; then
-    log "Dry run — nothing was touched. After a real reset-all every line above reads [absent]."
-    exit 0
-  fi
-
-  # ── consent, then act on the facts above ─────────────────────────────
-  warn "This removes everything marked [present]: all runs, the audit log, recordings, and staged Claude creds."
-  if ! _confirm "Proceed with reset-all?"; then
-    [ -t 0 ] && { log "Aborted — nothing was removed."; exit 0; }
-    exit 2
-  fi
-
-  [ "${_ra_host_live}" = 1 ] && make -C "${REPO_ROOT}" stop-host
-
-  # shellcheck disable=SC2086 — _ra_profiles is a flat flag list by construction
-  compose ${_ra_profiles} down -v --remove-orphans \
-    || warn "compose down failed (docker unreachable?) — continuing with filesystem cleanup"
-
-  # run-host.sh creates wardyn-internal OUTSIDE compose ownership (the source of
-  # setup.sh's "incorrect label" recovery dance) — remove it when nothing is
-  # attached so the next setup recreates it cleanly; a busy network is left alone.
-  if docker network inspect wardyn-internal >/dev/null 2>&1; then
-    docker network rm wardyn-internal >/dev/null 2>&1 \
-      || warn "wardyn-internal still has attached containers — left in place"
-  fi
-
-  # -v: also drop the anonymous pgdata volume docker auto-created for it
-  [ "${_ra_testpg}" = 1 ] && docker rm -f -v wardyn-test-pg >/dev/null 2>&1
-
-  # Allowlist only — never `rm -rf ~/.wardyn` (see comment above).
-  rm -f  "${_ra_rundir}/host-wardynd.pid" "${_ra_rundir}/host-wardynd.log"
-  rm -rf "${_ra_rundir}/claude-creds"
-  rm -f  "${_ra_rundir}/composer-dev-subscription.json"
-
-  [ "${_ra_purge_env}" = 1 ] && rm -f "${ENV_FILE}"
-
-  if [ "${_ra_purge_images}" = 1 ]; then
-    for _ra_img in ${_ra_images_present}; do
-      docker rmi "${_ra_img}" >/dev/null 2>&1 || warn "could not remove ${_ra_img} (in use?)"
-    done
-  fi
-
-  log "Clean. Verify: scripts/up.sh reset-all --dry-run   (every line should read [absent])"
-  log "Next: make setup (asks; Enter = containerized)  or  make compose-up (containerized, no prompt)"
-}
+# reset / reset-all: see scripts/up-reset.sh (sourced above).
 
 cmd_pg() {
   # THE dev/e2e Postgres bring-up: .github/workflows/ci.yml's "Start Postgres"

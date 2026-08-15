@@ -390,10 +390,11 @@ func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType strin
 // late-bound INTO it once built) — there is no live Server here to read them
 // from. ok=false (no eligible integration) is the signal to keep today's
 // behavior: no registry, compose 404s honestly.
-func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool, bedrockRegionSet, bedrockModelSet bool, managedBlobPresent func(string) bool) (types.Integration, bool) {
+func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool, bedrockRegionSet, bedrockModelSet, bedrockCredentialPresent bool, managedBlobPresent func(string) bool) (types.Integration, bool) {
 	env := capEnv{
 		SecretPresent: secretPresent, BedrockRegionSet: bedrockRegionSet,
 		BedrockModelSet: bedrockModelSet, ManagedBlobPresent: managedBlobPresent,
+		BedrockCredentialPresent: bedrockCredentialPresent,
 	}
 	for _, in := range sc.Integrations {
 		if !types.AIProviderKind(in.Kind) || !slices.Contains(in.DefaultFor, "wardyn_features") {

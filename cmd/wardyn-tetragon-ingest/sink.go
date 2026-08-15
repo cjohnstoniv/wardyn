@@ -51,12 +51,22 @@ type eventSink struct {
 	tokSrc tokenSource
 	client *http.Client
 
-	ch        chan types.AuditEvent
-	dropped   atomic.Uint64
-	posted    atomic.Uint64
-	observed  atomic.Uint64
-	batchSize int
-	flushIval time.Duration
+	ch       chan types.AuditEvent
+	dropped  atomic.Uint64
+	posted   atomic.Uint64
+	observed atomic.Uint64
+	// observedByKind splits observed by event subtype (W20-W20-groundtruth-
+	// mapper-4): ebpf_groundtruth's "healthy" used to be one aggregate over
+	// every kernel event kind, so a sensor that sees exec but never a single
+	// network.connect (a mis-scoped TracingPolicy, say) reported healthy
+	// exactly like one seeing all three — the operator gets no signal that
+	// one whole event class went dark. Keyed by types.ActionProcessExec /
+	// ActionNetworkConnect / ActionFileWrite; mu guards the map (rare writes,
+	// one per mapped kernel event — not the hot POST path).
+	kindMu         sync.Mutex
+	observedByKind map[string]uint64
+	batchSize      int
+	flushIval      time.Duration
 
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -119,12 +129,13 @@ func newEventSinkWithSource(controlPlaneURL string, src tokenSource, bufferSize,
 		src = func() (string, error) { return "", nil }
 	}
 	s := &eventSink{
-		endpoint:  controlPlaneURL + "/api/v1/internal/groundtruth",
-		tokSrc:    src,
-		client:    client,
-		ch:        make(chan types.AuditEvent, bufferSize),
-		batchSize: batchSize,
-		flushIval: flushIval,
+		endpoint:       controlPlaneURL + "/api/v1/internal/groundtruth",
+		tokSrc:         src,
+		client:         client,
+		ch:             make(chan types.AuditEvent, bufferSize),
+		batchSize:      batchSize,
+		flushIval:      flushIval,
+		observedByKind: map[string]uint64{},
 	}
 	// Seed the cached token. A failure here is non-fatal: the first POST will
 	// attempt a refresh anyway, and the 401 path will surface a persistent gap.
@@ -315,8 +326,27 @@ func (s *eventSink) postedCount() uint64  { return s.posted.Load() }
 // TracingPolicy) or the run is idle — either way NOT "healthy".
 func (s *eventSink) observedCount() uint64 { return s.observed.Load() }
 
-// markObserved records that one real kernel event was mapped off the tail.
-func (s *eventSink) markObserved() { s.observed.Add(1) }
+// markObserved records that one real kernel event of the given kind (Action —
+// types.ActionProcessExec / ActionNetworkConnect / ActionFileWrite) was
+// mapped off the tail, both in the aggregate total and per-kind.
+func (s *eventSink) markObserved(kind string) {
+	s.observed.Add(1)
+	s.kindMu.Lock()
+	s.observedByKind[kind]++
+	s.kindMu.Unlock()
+}
+
+// observedByKindSnapshot returns a copy of the per-kind observed counts, for
+// stamping onto the heartbeat.
+func (s *eventSink) observedByKindSnapshot() map[string]uint64 {
+	s.kindMu.Lock()
+	defer s.kindMu.Unlock()
+	out := make(map[string]uint64, len(s.observedByKind))
+	for k, v := range s.observedByKind {
+		out[k] = v
+	}
+	return out
+}
 
 // close drains and stops the sink, blocking until the worker exits or ctx done.
 func (s *eventSink) close(ctx context.Context) {

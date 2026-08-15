@@ -339,6 +339,20 @@ export interface WizardState {
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
   image: string;
+  // A composed proposal's devcontainer build (composer.RunInput.
+  // DevcontainerRepo — mutually exclusive with `image`, operator-only, same as
+  // it). Wizard-editable, never — it is CARRIED from "Edit in wizard" so the
+  // wizard's own Launch builds the SAME sandbox "Approve & launch" would have
+  // (see wizardStateFromProposal / buildSpec); "" = no devcontainer build.
+  devcontainerRepo: string;
+
+  // W15-W15e-wizard-roundtrip-3: grant kinds this wizard has no editable UI
+  // for at all — ssh_key (a resident private key for git's SSH transport) and
+  // cloud_sts — carried verbatim from a hydrated spec's eligible_grants so
+  // buildSpec can re-emit them unchanged instead of silently dropping them
+  // (the git_pat kind above got its own editable Access fields for the same
+  // reason). Never wizard-editable; the wizard just passes these through.
+  opaqueGrants: GrantSpec[];
 }
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
@@ -367,9 +381,16 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     gitPatHost: "",
     gitPatSecretName: "",
     gitPatUsername: "",
-    // Default to approval-gated: a PAT is a long-lived, non-expirable secret, so
-    // its first use should route through a human approval by default.
-    gitPatRequiresApproval: true,
+    // W12-W12-B-4: approval-gated by default used to sound safer, but the
+    // broker's mint is single-use per grant (internal/broker/broker.go's
+    // minted_jti guard) regardless of RequiresApproval — an approval-gated
+    // git_pat authenticates exactly ONE git operation, then every later one
+    // in the SAME run (a second push, a submodule fetch, …) 409s "mint
+    // returned without approval_id" with no way to re-approve mid-run. The
+    // cached github_token lane doesn't hit this (its brokered mint is
+    // refreshed per use, not a raw single-use secret grant), so default off
+    // to match its effective behavior; the operator can still opt back in.
+    gitPatRequiresApproval: false,
 
     allowedDomains: ["api.anthropic.com"],
     deniedDomains: [],
@@ -384,6 +405,8 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     profileName: "",
 
     image: "",
+    devcontainerRepo: "",
+    opaqueGrants: [],
   };
 }
 
@@ -411,34 +434,31 @@ export function isValidDomain(d: string): boolean {
 }
 
 // Split a free-text repo list ("org/a, org/b") into trimmed non-empty entries.
-function parseRepoList(raw: string): string[] {
+// EXPORTED: shared with wizard-spec.ts's buildSpec (github_token grant scope)
+// and validateStep below.
+export function parseRepoList(raw: string): string[] {
   return raw
     .split(/[\s,]+/)
     .map((r) => r.trim())
     .filter(Boolean);
 }
 
-// Compose the github_token grant scope. read => contents:read; read+write =>
-// contents:write + pull_requests:write. The broker clamps to its ceiling.
-function githubPermissionsMap(perm: GitHubPermission): Record<string, string> {
-  return perm === "read+write"
-    ? { contents: "write", pull_requests: "write" }
-    : { contents: "read" };
-}
-
 // The ONE predicate for "is there a real git_pat grant" — shared by buildSpec's
 // grant emission, its requiredHosts union, and validateStep's error, so a
 // half-configured PAT (host with no secret, or vice versa) can never widen
-// egress for a grant that was never minted (D5/claim4).
-function gitPatConfigured(state: WizardState): boolean {
+// egress for a grant that was never minted (D5/claim4). EXPORTED: buildSpec
+// and impliedEgressHosts live in wizard-spec.ts now.
+export function gitPatConfigured(state: WizardState): boolean {
   return state.gitPatEnabled && !!state.gitPatHost.trim() && !!state.gitPatSecretName.trim();
 }
 
 // Resolve one WorkspaceSelection against the fetched onboarded-workspace list
 // into its onboarded kind/source/name. Returns undefined for a stale selection
 // (the workspace was deleted after it was picked) — buildSpec defensively skips
-// those rather than emitting a dangling reference.
-function resolveWorkspace(sel: WorkspaceSelection, workspaces: Workspace[]): Workspace | undefined {
+// those rather than emitting a dangling reference. EXPORTED: buildSpec and
+// impliedEgressHosts (wizard-spec.ts) resolve selections the same way
+// primaryWorkspaceId below does.
+export function resolveWorkspace(sel: WorkspaceSelection, workspaces: Workspace[]): Workspace | undefined {
   return workspaces.find((w) => w.id === sel.workspaceId);
 }
 
@@ -601,6 +621,11 @@ export function toRunWorkspacesWire(selections: RunWorkspaceSelection[]): RunWor
 export type CreateRunInputWithComposition = CreateRunInput & {
   workspaces?: RunWorkspaceSelectionWire[];
   integration_id?: string;
+  // A composed proposal's devcontainer build (pkg/client.CreateRunRequest.
+  // DevcontainerRepo — mutually exclusive with `image`). Carried from
+  // WizardState.devcontainerRepo so "Launch" from the wizard builds the same
+  // sandbox "Approve & launch" would have for the same proposal.
+  devcontainer_repo?: string;
   // The PRIMARY workspace's id, sent ONLY when the selection resolves to no
   // mount/repo (a pure-ephemeral / migrated-0029 container workspace). Such a
   // workspace has no source the server's referencedWorkspaces can match, so its
@@ -611,249 +636,13 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   workspace_id?: string;
 };
 
-// Why buildSpec unions a host into allowed_domains without the operator ever
-// toggling it on the Egress step (D6/claim3).
-export type ImpliedEgressWhy = "GitHub access" | "model key" | "Git PAT" | "repo workspace";
-
-export interface ImpliedEgressHost {
-  host: string;
-  why: ImpliedEgressWhy;
-}
-
-// The ONE list of grant-implied egress hosts — buildSpec unions these into
-// allowed_domains (below) so a granted capability is never silently gated
-// behind first-use approval; step-egress.tsx renders the SAME list as
-// non-removable "Added by grants:" chips so the one screen that owns egress
-// can't disagree with what actually ships. Extracted here so the two call
-// sites share one predicate/host-list and can never drift (D6/claim3).
-export function impliedEgressHosts(
-  state: WizardState,
-  workspaces: Workspace[] = [],
-): ImpliedEgressHost[] {
-  const out: ImpliedEgressHost[] = [];
-  if (state.llmSecretName) {
-    out.push({ host: llmHostForSecret(state.agent, state.llmSecretName), why: "model key" });
-  }
-  // Any repo-kind selection implies the GitHub clone hosts even with the
-  // GitHub grant untouched — claim 3's sharpest sub-case. When the grant IS
-  // on, name that as the reason instead; same two hosts either way.
-  // resolvableSources (not the flattened w.kind) so a multi-source workspace
-  // whose repo isn't sources[0] is still recognized (PARITY-2).
-  const hasRepoSelection = state.workspaces.some((sel) => {
-    const w = resolveWorkspace(sel, workspaces);
-    return !!w && resolvableSources(w).some((s) => s.type === "repo");
-  });
-  if (state.githubEnabled) {
-    out.push(
-      { host: "github.com", why: "GitHub access" },
-      { host: "*.githubusercontent.com", why: "GitHub access" },
-    );
-  } else if (hasRepoSelection) {
-    out.push(
-      { host: "github.com", why: "repo workspace" },
-      { host: "*.githubusercontent.com", why: "repo workspace" },
-    );
-  }
-  // Gated on the SAME predicate as the grant emission (D5/claim4): a host
-  // typed with no secret selected must never claim to be "added by grants".
-  if (gitPatConfigured(state)) {
-    out.push({ host: state.gitPatHost.trim(), why: "Git PAT" });
-  }
-  return out;
-}
-
-// buildSpec is the contract chokepoint: state in, canonical wire shapes out.
-// `workspaces` is the onboarded-workspace list each selection resolves against
-// (the wizard fetches it via listWorkspaces(); tests that don't touch
-// state.workspaces can omit it). Resolution happens here rather than being
-// embedded in WizardState so a selection is just "which workspace id, plus this
-// run's target/read-only override" — never a stale copy of the workspace record.
-export function buildSpec(
-  state: WizardState,
-  workspaces: Workspace[] = [],
-): {
-  run: CreateRunInputWithComposition;
-  inline_policy: RunPolicySpec;
-} {
-  const interactive = state.mode === "interactive";
-
-  // --- run scalars ---
-  const run: CreateRunInputWithComposition = {
-    agent: state.agent as Agent,
-    repo: "",
-    // An interactive run comes up idle (the backend ignores task for it), but
-    // sending the trimmed task is harmless and preserves it for display.
-    task: state.task.trim(),
-    confinement_class: state.confinementClass,
-    interactive,
-  };
-  // BYOI: a user-supplied base image the backend wraps with the runner tools.
-  if (state.image.trim()) {
-    run.image = state.image.trim();
-  }
-  // Governed command: task_mode=exec runs `task` as a plain shell command, no
-  // agent/model involved. Omitted for "agent" so the wire default ("harness")
-  // stays backward-compatible.
-  if (state.runType === "command") {
-    run.task_mode = "exec";
-  }
-  // Run override: pins model/harness access to one specific integration,
-  // overriding the workspace pin and server default (see step-access.tsx).
-  if (state.integrationId) {
-    run.integration_id = state.integrationId;
-  }
-
-  // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
-  // ---
-  // The FIRST selection is the PRIMARY: its kind/source drives the run's `repo`
-  // label (and, per the synthesis doc, the sandbox's base image) — additional
-  // selections are just attached alongside it.
-  const workspaceMounts: WorkspaceMount[] = [];
-  const workspaceRepos: WorkspaceRepo[] = [];
-  state.workspaces.forEach((sel, i) => {
-    const w = resolveWorkspace(sel, workspaces);
-    if (!w) return; // stale selection — defensively skip rather than dangle
-    // One entry per SOURCE this workspace carries (PARITY-2) — a multi-source
-    // or migrated-ephemeral workspace has no single mount/repo to flatten to;
-    // the old w.kind/w.source read was EMPTY for exactly those cases, so it
-    // silently attached nothing at all.
-    const { mounts, repos } = resolveWorkspaceMounts(w, sel);
-    workspaceMounts.push(...mounts);
-    workspaceRepos.push(...repos);
-    if (i === 0) {
-      // Synthetic repo label so the run row reads meaningfully — the first
-      // resolved repo/mount from the PRIMARY selection, never a bare "" for a
-      // workspace w.source can't represent on its own.
-      if (repos[0]) run.repo = repos[0].repo;
-      else if (mounts[0]) run.repo = `local:${basename(mounts[0].source)}`;
-    }
-  });
-
-  // --- per-workspace requirements-contract options (CreateRunRequest.Workspaces)
-  // --- additive to the mounts/repos above: a selection here does nothing unless
-  // its workspace is already attached via one of those (see WorkspaceSelection's
-  // doc comment on the Go side).
-  const runWorkspaces = toRunWorkspacesWire(state.workspaces);
-  if (runWorkspaces.length) run.workspaces = runWorkspaces;
-
-  // Residual PARITY-2: a pure-ephemeral (migrated-0029 container) primary
-  // contributes no mount/repo, so the per-source resolution above emits nothing
-  // the server can match a workspace to — referencedWorkspaces reads only the
-  // spec's mounts/repos, so wsRefs is empty and the workspace's custom
-  // base_image (and scratch target) is silently dropped, launching on the
-  // DEFAULT image. Convey the workspace's IDENTITY via workspace_id so the
-  // server's seedRequestWorkspace resolves its base_image. Gated on "buildSpec
-  // produced no mount/repo" so it can never double-mount a local_dir/repo the
-  // resolution already emitted; the first resolvable selection is the primary.
-  if (!workspaceMounts.length && !workspaceRepos.length) {
-    const primary = state.workspaces.find((sel) => resolveWorkspace(sel, workspaces));
-    if (primary) run.workspace_id = primary.workspaceId;
-  }
-
-  // --- eligible grants ---
-  const grants: GrantSpec[] = [];
-
-  if (state.githubEnabled) {
-    grants.push({
-      kind: "github_token",
-      scope: {
-        repos: parseRepoList(state.githubRepos),
-        permissions: githubPermissionsMap(state.githubPermission),
-      },
-      ttl_seconds: Math.max(0, Math.round(state.githubTtlMinutes * 60)),
-      requires_approval: state.githubRequiresApproval,
-    });
-  }
-
-  // git_pat grant: broker a stored PAT to git for a non-GitHub host. The PAT
-  // VALUE reaches git via the credential helper (opposite of api_key). Emit only
-  // when enabled with both a host and a secret selected.
-  if (gitPatConfigured(state)) {
-    const scope: Record<string, string> = {
-      host: state.gitPatHost.trim(),
-      secret_name: state.gitPatSecretName.trim(),
-    };
-    const user = state.gitPatUsername.trim();
-    if (user) scope.username = user;
-    grants.push({
-      kind: "git_pat",
-      scope,
-      requires_approval: state.gitPatRequiresApproval,
-    });
-  }
-
-  // The LLM api_key grant — carried forward for a hydrated recording/policy
-  // that already names one (see wizardStateFromProposal); there is no longer a
-  // manual picker for it in step-access.tsx (model access resolves from
-  // integrations instead).
-  if (state.llmSecretName) {
-    const host = llmHostForSecret(state.agent, state.llmSecretName);
-    const { header, format } = apiKeyInjectionFor(host);
-    grants.push({
-      kind: "api_key",
-      scope: {
-        host,
-        header,
-        secret_name: state.llmSecretName,
-        format,
-      },
-      requires_approval: false,
-    });
-  }
-
-  // --- lifecycle: an interactive run comes up idle, so never-reap (-1) unless
-  // the operator explicitly chose an auto-stop window. ---
-  let autoStopAfterSec: number | undefined;
-  if (state.lifecycle === "never") {
-    autoStopAfterSec = -1;
-  } else {
-    autoStopAfterSec = Math.max(1, Math.round(state.autoStopMinutes * 60));
-  }
-
-  // Ensure the egress allowlist covers the hosts the run's OWN grants need, so a
-  // selected LLM key or a GitHub clone isn't silently gated behind a first-use
-  // approval. impliedEgressHosts is the ONE list (D6/claim3) — step-egress.tsx
-  // renders the SAME hosts as "Added by grants:" chips, so the two can never
-  // disagree about what buildSpec actually unions in here.
-  const requiredHosts = impliedEgressHosts(state, workspaces).map((h) => h.host);
-
-  // Allow-all egress: deny-list only. allowed_domains may be empty and first-use
-  // approval is inert, so we drop the run's own required hosts (everything
-  // non-denied is already reachable) and force first_use_approval off.
-  const allowAll = state.allowAllEgress;
-
-  // HIGH fix (wizard contract): proxy credential injection fails CLOSED unless
-  // the api_key grant's EXACT injection host is present in allowed_domains — the
-  // injector only rewrites requests whose host is on the allowlist. Under
-  // allow-all the rest of the allowlist is correctly dropped, but the api_key
-  // host MUST always be pinned, or a selected LLM key never gets injected and
-  // the agent can't authenticate at startup. (github_token clones don't need a
-  // pinned host under allow-all — they're reached via plain egress, not a proxy
-  // injection rule — so we only force the api_key host through here.)
-  const grantInjectionHosts: string[] = [];
-  if (state.llmSecretName) {
-    grantInjectionHosts.push(llmHostForSecret(state.agent, state.llmSecretName));
-  }
-
-  const allowedDomains = allowAll
-    ? dedupe(grantInjectionHosts) // deny-list only, but keep api_key injection host(s)
-    : dedupe([...state.allowedDomains, ...requiredHosts]);
-
-  const inline_policy: RunPolicySpec = {
-    allowed_domains: allowedDomains,
-    first_use_approval: allowAll ? "always_deny" : state.firstUseApproval,
-    min_confinement_class: state.confinementClass,
-  };
-  if (allowAll) inline_policy.allow_all_egress = true;
-  const denied = dedupe(state.deniedDomains);
-  if (denied.length) inline_policy.denied_domains = denied;
-  if (grants.length) inline_policy.eligible_grants = grants;
-  if (workspaceMounts.length) inline_policy.workspace_mounts = workspaceMounts;
-  if (workspaceRepos.length) inline_policy.workspace_repos = workspaceRepos;
-  if (autoStopAfterSec !== undefined) inline_policy.auto_stop_after_sec = autoStopAfterSec;
-
-  return { run, inline_policy };
-}
+// buildSpec (the state -> canonical wire-contract composer) and
+// impliedEgressHosts (the grant-implied-egress-host list it shares with
+// step-egress.tsx, D6/claim3) moved to ./wizard-spec.ts — re-exported here so
+// every existing importer (wizard.tsx, step-review.tsx, the test suite, …)
+// keeps working unchanged.
+export { buildSpec, impliedEgressHosts } from "./wizard-spec";
+export type { ImpliedEgressHost, ImpliedEgressWhy } from "./wizard-spec";
 
 // The agent's human display label — shared by every surface that names it in
 // prose (RD.NONE_LINE, step-access.tsx's OverridePeek) so "Codex CLI" can
@@ -862,21 +651,9 @@ export function agentLabel(agent: WizardAgent): string {
   return agent === "codex-cli" ? "Codex CLI" : "Claude Code";
 }
 
-// The LLM key target host. Anthropic for Claude Code, OpenAI for Codex.
-function llmHostForSecret(agent: WizardAgent, _secret: string): string {
-  return agent === "codex-cli" ? "api.openai.com" : "api.anthropic.com";
-}
-
-// The injection header + format are per-host: Anthropic wants the RAW key in
-// x-api-key (the prior always-"Authorization: Bearer" was the bug); OpenAI wants
-// "Authorization: Bearer <key>".
-function apiKeyInjectionFor(host: string): { header: string; format: string } {
-  if (host === "api.anthropic.com") return { header: "x-api-key", format: "%s" };
-  return { header: "Authorization", format: "Bearer %s" };
-}
-
-
-function dedupe(xs: string[]): string[] {
+// EXPORTED: wizard-spec.ts's buildSpec (and wizardStateFromProposal /
+// validateStep below) share this ONE dedupe.
+export function dedupe(xs: string[]): string[] {
   return Array.from(new Set(xs.map((x) => x.trim()).filter(Boolean)));
 }
 
@@ -944,6 +721,26 @@ export function wizardStateFromProposal(
   const githubGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "github_token");
   const apiKeyGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "api_key");
   const apiKeySecret = (apiKeyGrant?.scope?.secret_name as string) ?? "";
+  // W15-W15e-wizard-roundtrip-3: this used to hydrate ONLY github_token/
+  // api_key — a recorded/composed spec's git_pat grant silently vanished on
+  // "Edit in wizard" / fast-track while spec.allowed_domains (below) still
+  // carried its host into allowedDomains, so the destination stayed allowed
+  // with no credential left to authenticate to it. git_pat has a full,
+  // editable home in WizardState (Access's Git-PAT card), so hydrate it.
+  const gitPatGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "git_pat");
+  const gitPatScope = (gitPatGrant?.scope ?? {}) as { host?: string; secret_name?: string; username?: string };
+  // W15-W15e-wizard-roundtrip-3 (part 2, per the finding's own callout):
+  // ssh_key/cloud_sts grants have no editable home in this wizard at all (no
+  // fields anywhere represent them) — they used to silently drop here, same
+  // as any workspace_mounts entry this best-effort inverse doesn't recognize
+  // (see the recordedSubscription comment below), while spec.allowed_domains
+  // still carried their host, the identical shape of bug git_pat had. Keep
+  // every OTHER grant kind verbatim in a pass-through bucket buildSpec
+  // re-emits unchanged (WizardState.opaqueGrants) instead of refusing the
+  // fast-track — this wizard cannot EDIT these, but re-emitting the grant the
+  // recording/proposal already had is not an edit.
+  const KNOWN_GRANT_KINDS = new Set(["github_token", "api_key", "git_pat"]);
+  const opaqueGrants = (spec.eligible_grants ?? []).filter((g) => !KNOWN_GRANT_KINDS.has(g.kind));
 
   // A recorded profile's api_key grant can name the subscription OAuth sentinel
   // instead of a real stored secret (recordings never synthesize a resident
@@ -960,8 +757,20 @@ export function wizardStateFromProposal(
     repos?: unknown;
     permissions?: Record<string, unknown>;
   };
+  // W15-W15e-wizard-roundtrip-4: this wizard's github_token permission is a
+  // two-state read/read+write toggle (githubPermissionsMap re-emits
+  // "read+write" as BOTH contents:write AND pull_requests:write together).
+  // Collapsing to "read+write" off contents:write ALONE — the prior check —
+  // WIDENS an asymmetric source scope (contents:write with no
+  // pull_requests:write, e.g. a recording that never opened a PR) into one
+  // that re-emits pull_requests:write it never had, contradicting Record
+  // Mode's "reuse can only ever subset" claim. Require BOTH, matching
+  // exactly what "read+write" re-emits; an asymmetric scope this two-state
+  // toggle can't represent falls back to "read" (narrower, never wider).
   const ghPerm: GitHubPermission =
-    ghScope.permissions && ghScope.permissions.contents === "write" ? "read+write" : "read";
+    ghScope.permissions?.contents === "write" && ghScope.permissions?.pull_requests === "write"
+      ? "read+write"
+      : "read";
 
   return {
     ...base,
@@ -977,22 +786,60 @@ export function wizardStateFromProposal(
     githubTtlMinutes: githubGrant?.ttl_seconds
       ? Math.max(1, Math.round(githubGrant.ttl_seconds / 60))
       : base.githubTtlMinutes,
+
+    gitPatEnabled: !!gitPatGrant,
+    gitPatHost: gitPatScope.host ?? "",
+    gitPatSecretName: gitPatScope.secret_name ?? "",
+    gitPatUsername: gitPatScope.username ?? "",
+    gitPatRequiresApproval: gitPatGrant?.requires_approval ?? base.gitPatRequiresApproval,
     // The api_key grant references a stored secret by name; carry it forward so
     // the wizard re-emits the same grant — EXCEPT the subscription sentinel, which
     // is not a real stored secret (it means "subscription auth", handled above).
     llmSecretName: recordedSubscription ? "" : apiKeySecret,
 
-    allowedDomains: spec.allowed_domains?.length ? dedupe(spec.allowed_domains) : base.allowedDomains,
+    // W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field
+    // (RunPolicySpec.allowed_domains string[]) — `[]` is always a real,
+    // meaningful value, not "unset". Record Mode's own synthesized profile
+    // (internal/recordmode/recordmode.go's Synthesize) writes exactly `[]`
+    // — or, for a genuinely deny-all outcome ("no allowed egress observed"),
+    // a NIL slice (`var allowed []string`, never appended to) — for that
+    // deny-all case. types.go's AllowedDomains has no `omitempty`, so a nil
+    // slice still serializes to wire `null`, not `[]` (Go's ordinary
+    // encoding/json behavior); TS's `string[]` type says "always an array"
+    // but does not guard the runtime JSON boundary. dedupe() itself would
+    // THROW (Array.prototype.map on null) on that null, crashing the
+    // recorded-profile fast-track (applyProfileSpecToState skips straight to
+    // Review, so the operator never sees a screen to work around it) for
+    // exactly the deny-all case this file most wants to get right.
+    // compose-quick-review.tsx:114's `p.allowed_domains ?? []` already
+    // guards the identical field for the same reason. `?? []` treats that
+    // wire null the same as an explicit empty array — both mean deny-all.
+    allowedDomains: dedupe(spec.allowed_domains ?? []),
     deniedDomains: dedupe(spec.denied_domains ?? []),
     firstUseApproval: asFirstUseMode(spec.first_use_approval),
     allowAllEgress: spec.allow_all_egress === true,
 
     confinementClass: cc,
+    // auto_stop_after_sec is `int json:"...,omitempty"` server-side (internal/
+    // types/types.go) — absent and an explicit 0 are indistinguishable on the
+    // wire, and 0 is never a meaningful idle-timeout choice (the UI's own
+    // min=1 already disallows it) — unlike allowed_domains above, there is no
+    // real "unset vs deliberately empty" distinction to lose here, so
+    // defaulting to this wizard's normal fresh-entry default (base, same as
+    // initialWizardState) when absent is not a misrepresentation.
     lifecycle: spec.auto_stop_after_sec === -1 ? "never" : "auto",
     autoStopMinutes:
       spec.auto_stop_after_sec != null && spec.auto_stop_after_sec > 0
         ? Math.max(1, Math.round(spec.auto_stop_after_sec / 60))
         : base.autoStopMinutes,
+
+    // W15-W15e-wizard-roundtrip-6: without this, "Edit in wizard" silently
+    // dropped a composed devcontainer_repo — the wizard's own Launch then
+    // built the plain convention image, a DIFFERENT sandbox than "Approve &
+    // launch" (which sends result.proposed.run — devcontainer_repo intact —
+    // unchanged) would have built for the identical proposal.
+    devcontainerRepo: run.devcontainer_repo ?? "",
+    opaqueGrants,
   };
 }
 

@@ -13,14 +13,23 @@ The server must be started with an image builder wired (`-tags docker` +
 
 ```sh
 wardyn run --agent claude-code --task "…" \
-  --devcontainer-repo org/env-repo --devcontainer-ref main
+  --devcontainer-repo https://github.com/org/env-repo --devcontainer-ref main
 ```
 
 The equivalent API body (POST `/api/v1/runs`):
 
 ```json
-{"agent":"claude-code","devcontainer_repo":"org/env-repo","devcontainer_ref":"main"}
+{"agent":"claude-code","devcontainer_repo":"https://github.com/org/env-repo","devcontainer_ref":"main"}
 ```
+
+**Unlike `--repo`, `--devcontainer-repo` takes a full clone URL verbatim — it
+does NOT expand a bare `<org>/<repo>` slug.** `req.DevcontainerRepo` reaches
+`BuildDevcontainer` unmodified (`internal/api/runs_create.go`), and
+`validateBuildInput` (`internal/envbuild/builder.go`) then rejects anything
+that does not start with `https://` or `git://` (see "Build sandbox" below) —
+so a bare slug like `org/env-repo` fails at build time with "RepoURL scheme
+not allowed", not a silent fallback. This is a real gap from `--repo`'s own
+slug-expansion (`repoCloneURL`); pass the full URL until it closes.
 
 `--devcontainer-repo` is mutually exclusive with `--image` (BYOI), which the
 server enforces with a 400. **With NO builder wired the run does not fail — it
@@ -143,13 +152,17 @@ and its blast radius minimised. Builder applies, by default:
   Postgres and admin API, for instance): "host" puts the untrusted build in
   the SAME network namespace as the operator, with the SAME reach to
   whatever is bound to 127.0.0.1 — including default demo credentials
-  published in this repo. The compose stack instead defaults this to the
-  wardyn-internal bridge (opting in to *that* network only, not the host's),
-  and reaches its own registry sidecar by compose service name
-  (`registry:5000`) rather than the loopback publish a host-networked build
-  container could otherwise use; WARDYN_ENVBUILD_REGISTRY_INSECURE tells
-  envbuilder that registry has no TLS to verify, since a non-loopback address
-  gets no automatic exemption from that check. A repo's OWN devcontainer
+  published in this repo. The compose stack instead defaults this to a
+  DEDICATED wardyn-envbuild bridge — deliberately NOT the wardyn-internal
+  bridge that postgres/dex/wardynd's admin API sit on, since a bridge peer can
+  dial another compose service by name/port even without loopback reach; an
+  earlier revision of this stack made that mistake, sharing wardyn-internal
+  with the build container. The build container reaches its own registry
+  sidecar by compose service name (`registry:5000`), which is multi-homed
+  onto both networks so it stays reachable without widening the build
+  container's peers; WARDYN_ENVBUILD_REGISTRY_INSECURE tells envbuilder that
+  registry has no TLS to verify, since a non-loopback address gets no
+  automatic exemption from that check. A repo's OWN devcontainer
   build still runs on whatever network is configured — this bounds where the
   build container reaches, not what a devcontainer explicitly configured to
   reach it does with that reachability.

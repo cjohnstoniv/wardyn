@@ -22,6 +22,16 @@ import (
 // resolveLLMTransport, consumed by the CA / grant-authoring / SandboxSpec
 // phases of dispatchRun.
 type llmTransport struct {
+	// modelRun: this dispatch actually invokes the model (see the doc comment
+	// on resolveLLMTransport's local modelRun below) — false for task-mode=exec
+	// and for a non-interactive scan run. W5-S1-5: buildRunMounts reads this to
+	// drop the resident ~/.claude mount (claudeCredTarget/claudeCredJSONTarget)
+	// from a non-model run's spec even when the resolved POLICY still carries
+	// it (e.g. an operator's subscription-blessed default/named policy reused
+	// for a plain exec task with no per-run integration consent) — every OTHER
+	// injection mode below already gates on this same signal; the mount was
+	// the one path that did not.
+	modelRun bool
 	// subscription: the policy bind-mounts the resident ~/.claude (claudeCredTarget).
 	subscription bool
 	// injectSub: subscription AND a live token provider is wired AND the
@@ -41,6 +51,25 @@ type llmTransport struct {
 	injectBedrockBearer bool
 }
 
+// isModelRun reports whether a dispatch actually invokes the model. Two run
+// kinds make NO model call and so must receive NO LLM credential (least
+// privilege): a scan run (execs wardyn-scan — workspaceID/sourceID set,
+// non-interactive), and a task-mode=exec run — the BYOA/CI plain-command lane
+// whose `wardyn run --task-mode exec` contract is literally "no agent, no LLM
+// credentials". Without the exec term, a CI exec job with a connected
+// managed/resident subscription plus any egress (which docs/CI.md itself
+// tells operators to add) silently gets a live Anthropic OAuth token injected
+// proxy-side + api.anthropic.com appended to its allow-list, for a plain
+// shell command that never asked for a model. An INTERACTIVE workspace-linked
+// run (Record Mode) is human-driven, not a scan, so it stays a model run.
+// Mirrors the WARDYN_SCAN_ONLY discriminator. Extracted as its own function
+// (rather than inlined in resolveLLMTransport) so it's independently unit
+// testable — this gate gets it wrong once and every non-model run leaks a
+// live model credential.
+func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive bool) bool {
+	return taskMode != "exec" && !((workspaceID != nil || sourceID != nil) && !interactive)
+}
+
 // resolveLLMTransport decides which LLM transport credentials this run and sets
 // the corresponding sandbox env (ANTHROPIC_BASE_URL / CLAUDE_CONFIG_DIR /
 // placeholders / Bedrock env / the codex-cli OpenAI gateway route). It may
@@ -54,19 +83,9 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 
 	// modelRun gates EVERY proxy-side credential-injection mode below
 	// (subscription, managed, Bedrock) on a run that actually invokes the model.
-	// Two run kinds make NO model call and so must receive NO LLM credential
-	// (least privilege): a scan run (execs wardyn-scan — WorkspaceID/SourceID
-	// set, non-interactive), and a task-mode=exec run — the BYOA/CI plain-command
-	// lane whose `wardyn run --task-mode exec` contract is literally "no agent,
-	// no LLM credentials". Without the exec term, a CI exec job with a connected
-	// managed/resident subscription plus any egress (which docs/CI.md itself tells
-	// operators to add) silently gets a live Anthropic OAuth token injected
-	// proxy-side + api.anthropic.com appended to its allow-list, for a plain shell
-	// command that never asked for a model. An INTERACTIVE workspace-linked run
-	// (Record Mode) is human-driven, not a scan, so it stays a model run. Mirrors
-	// the WARDYN_SCAN_ONLY discriminator.
-	modelRun := taskMode != "exec" &&
-		!((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
+	// See isModelRun's doc comment for the full rationale.
+	modelRun := isModelRun(taskMode, run.WorkspaceID, run.SourceID, interactive)
+	t.modelRun = modelRun
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
 	// INTERACTIVE run never invokes agent-run (the human runs `claude` in the
@@ -89,6 +108,21 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
 	t.injectSub = modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
+	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
+	// operator to run `claude setup-token` in the attach shell and mint one. Point
+	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
+	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
+	// mis-signals api-key mode. No mount, no injection, no MITM — computed BEFORE
+	// the Bedrock block below so it can gate resolveBedrockAuth itself, not just
+	// the sandboxEnv branch (W12-W12-C-1): every consumer of llm.bedrock* —
+	// resident_env's ~/.aws mount (runs_dispatch.go), the bearer grant + MITM
+	// host (runs_dispatch.go, dispatch.go) — reads bedrockReady/injectBedrockBearer
+	// directly, so leaving t.bedrock resolved (even though sandboxEnv correctly
+	// skipped applyBedrockTransport for this run) still handed a login box the
+	// host's AWS credentials or a minted bearer token it never asked for and has
+	// no attach-shell affordance to use.
+	t.harnessLogin = run.Task == harnessLoginTask
+
 	// Bedrock: a third Anthropic transport, mutually exclusive with subscription
 	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
 	// the readiness rule and the resident-AWS-cred rationale.
@@ -97,19 +131,14 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// exec run signs no Bedrock request, so it gets no resident AWS SigV4 creds.
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
-	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
-	t.bedrockReady = t.bedrock.ready
-	// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
-	// (never-resident); consumed by the CA / injection / MITM-host wiring
-	// alongside the subscription path.
-	t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
-
-	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
-	// operator to run `claude setup-token` in the attach shell and mint one. Point
-	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
-	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
-	// mis-signals api-key mode. No mount, no injection, no MITM.
-	t.harnessLogin = run.Task == harnessLoginTask
+	if !t.harnessLogin {
+		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
+		t.bedrockReady = t.bedrock.ready
+		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
+		// (never-resident); consumed by the CA / injection / MITM-host wiring
+		// alongside the subscription path.
+		t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
+	}
 
 	// MANAGED subscription: when there is no resident ~/.claude mount and no
 	// Bedrock, and the operator connected a Wardyn-managed setup-token, inject it

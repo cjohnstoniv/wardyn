@@ -41,7 +41,7 @@ import {
   orphanedVerifySessions,
   isRecording,
   isEmptyCapture,
-  newEgressHosts,
+  egressPromotionDiff,
   policyNameFor,
   sessionStage,
   verifyKeyOf,
@@ -63,6 +63,7 @@ import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 export function RecordPane({
   ws,
   notice,
+  launch,
   busyTask,
   modelReady,
   onRecord,
@@ -76,6 +77,11 @@ export function RecordPane({
   // Inline notice from the last record/replay attempt (400 bad name; 503 no
   // runner; 409 another session already running).
   notice: { status: number; detail?: string } | null;
+  // The last successful launch's own warnings + REAL confinement class
+  // (handleRecordWorkspace's 202 body) — W20-S1-2: never dropped, and the
+  // authoritative source for the CC1 banner below once a session has
+  // actually launched (getDefaultCc() is only a pre-launch guess).
+  launch?: { warnings?: string[]; confinementClass?: string } | null;
   // The record_results key currently being kicked — a plain session key for an
   // open (re-)record, or verifyKeyOf(key) for a confined (re-)replay. Disables
   // just that session's matching button.
@@ -104,12 +110,15 @@ export function RecordPane({
   const operator = useOperator();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
-  // The record sandbox runs under the strongest class the host supports; the
-  // pane's best proxy is the operator's persisted default tier (same source
-  // SecurityChip uses). CC1 (Fence) is the loud case: open egress on a shared-
-  // kernel box, so its banner always applies — every session still starts as
-  // an open recording, confined replay is a later step in the SAME lifecycle.
-  const tier = getDefaultCc() ?? "CC1";
+  // The record sandbox runs under the strongest class the host supports. Once
+  // a session has actually launched, `launch.confinementClass` is the SERVER's
+  // own verdict for that run — use it; before any launch (or if the field is
+  // absent on an older server), fall back to the operator's persisted default
+  // tier, the same proxy SecurityChip uses. CC1 (Fence) is the loud case: open
+  // egress on a shared-kernel box, so its banner always applies — every
+  // session still starts as an open recording, confined replay is a later
+  // step in the SAME lifecycle.
+  const tier = launch?.confinementClass ?? getDefaultCc() ?? "CC1";
   // Scan-detected commands become copy-paste hints so a clueless operator
   // knows what to run in the session — guidance without a taxonomy.
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
@@ -180,6 +189,22 @@ export function RecordPane({
         <p className="text-xs text-muted-foreground">
           {notice.detail || "Another session is already running for this workspace."}
         </p>
+      )}
+      {/* The last launch's own warnings (open-egress exfiltration window on
+          weak confinement; the masking caveat) — the server's own caveats
+          about THIS session, never silently dropped. */}
+      {launch?.warnings && launch.warnings.length > 0 && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
+          data-testid="record-launch-warnings"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <ul className="list-disc space-y-1 pl-4">
+            {launch.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {sessions.length > 0 && (
@@ -561,11 +586,20 @@ function RecordReviewCard({
     );
   }
 
-  // Egress promotion diff: hosts observed (allow_count>0) that aren't already
-  // allowed → approvable; the rest are shown greyed for context.
-  const newHosts = newEgressHosts(ws, sessionKey);
-  const observed = (rr.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
-  const alreadyApproved = observed.filter((h) => !newHosts.includes(h));
+  // Egress promotion diff: hosts observed (allow_count>0) bucketed into
+  // approvable / already-approved / platform-plumbing (W20-S1-1) — one
+  // function so a host can't land in more than one bucket. selfHost mirrors
+  // the server's own control-plane-host exclusion; the console is always
+  // same-origin with wardynd (lib/api/core.ts's relative BASE), so the
+  // browser's own hostname IS that host.
+  const diff = egressPromotionDiff(ws, sessionKey, window.location.hostname);
+  const newHosts = diff.approvable;
+  const alreadyApproved = diff.alreadyApproved;
+  // Distinct from "nothing NEW because it's already allowed": these hosts
+  // were never approvable at all (harness/control-plane plumbing), so
+  // claiming "already allowed" would misattribute them to an operator
+  // decision that never happened.
+  const onlyPlumbingObserved = newHosts.length === 0 && alreadyApproved.length === 0 && diff.plumbing.length > 0;
 
   // Secrets proven-used = the workspace's DECLARED required-secret names that this
   // run actually minted a grant for. Render-derived intersection — never mutates
@@ -586,7 +620,9 @@ function RecordReviewCard({
           </Chip>
         ) : newHosts.length === 0 ? (
           <p className="text-[0.6875rem] text-muted-foreground">
-            No new hosts to approve — everything this task reached is already allowed.
+            {onlyPlumbingObserved
+              ? "Nothing needed approval — observed hosts were platform plumbing."
+              : "No new hosts to approve — everything this task reached is already allowed."}
           </p>
         ) : (
           <>

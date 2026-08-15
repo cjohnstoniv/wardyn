@@ -286,8 +286,21 @@ type awsSSOBlob struct {
 // the Anthropic prefix guard (there is no fixed AWS token prefix); like that
 // guard it is a SHAPE check, not authentication — real validation happens on
 // first use against portal.sso.
+//
+// AccountID/RoleName are required, not merely nice-to-have: resolveBedrockAuth
+// selects this credential (ssoInject) the instant a blob is stored, ahead of
+// the host-mode ~/.aws mount and static-key lanes, and awsSSOConfigFileContents
+// bakes account_id/role_name VERBATIM into the generated ~/.aws/config INI. A
+// blob missing either (wardyn-aws-sso's best-effort `aws sso list-accounts` /
+// list-account-roles resolution came up empty — no accounts, a timeout, a
+// malformed response) can never satisfy GetRoleCredentials, so accepting it as
+// "connected" would silently pre-empt a lane that might have actually worked.
+// Rejecting it here (before storage) means the operator sees the upload fail
+// and can re-run the login, rather than a stored-but-useless credential
+// quietly winning every later Bedrock run.
 func (b awsSSOBlob) valid() bool {
-	return b.AccessToken != "" && b.StartURL != "" && b.Region != "" && !b.ExpiresAt.IsZero()
+	return b.AccessToken != "" && b.StartURL != "" && b.Region != "" && !b.ExpiresAt.IsZero() &&
+		b.AccountID != "" && b.RoleName != ""
 }
 
 // expired reports whether the SSO access token has lapsed. A blob with a refresh

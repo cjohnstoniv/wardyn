@@ -11,7 +11,7 @@
 // runningLabel/fmtStepDuration checklist helpers (they served the old
 // automated build+verify pipeline, not the per-session record/replay model
 // this card uses). Pure TS — no React, no fetch, no DOM.
-import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { effectiveWorkspaceRequirements, type RecordResult, type Workspace, type WorkspaceProfile } from "../../../lib/types";
 
 // One recorded SESSION: its stable key (record_results map key) + the
 // operator's display name. Sessions are user-named, not derived — the list is
@@ -80,20 +80,85 @@ export function isRecording(ws: Workspace): boolean {
   return Object.values(ws.record_results ?? {}).some((r) => r.status === "recording");
 }
 
-// The "Approve N observed hosts" diff: hosts the open recording actually
-// reached (allow_count > 0 — Synthesize's own promotion rule) that are NOT
-// already auto-allowed by the scan profile or operator-approved. Dedup,
-// order-preserving.
-export function newEgressHosts(ws: Workspace, taskKey: string): string[] {
+// isModelProviderHost mirrors record.go's modelProviderEgress: the LLM
+// harness's own egress (api.anthropic.com / any *.anthropic.com host,
+// api.openai.com) — needed by every session regardless of the task, so never
+// a task-specific "approve this" candidate. Static/cheap subset of
+// promoteSkipHosts (record.go) — the two remaining categories there
+// (a bound Bedrock integration's regional host, a required-integration's own
+// egress) need server-side integration resolution this pure client-side
+// helper has no view of, and stay a documented gap (see egressPromotionDiff).
+function isModelProviderHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h.endsWith("anthropic.com") || h === "api.openai.com";
+}
+
+// EgressPromotionDiff buckets a session's observed+allowed hosts (Synthesize's
+// own promotion rule: allow_count > 0) into exactly the three things the
+// review card and its confirm dialog need to render honestly:
+//   - approvable: new, real candidates — the "Approve N observed hosts" list.
+//   - alreadyApproved: covered by ApprovedEgress, the scan profile's
+//     egress_domains, or an effective egress:required requirement row.
+//   - plumbing: excluded as platform plumbing (the control-plane host itself,
+//     the model-provider harness hosts) — never approvable, and NOT the same
+//     claim as alreadyApproved ("an operator already approved this").
+// One function computing all three (rather than three separately-derived
+// lists) so they can't drift apart — every observed+allowed host lands in
+// EXACTLY one bucket.
+export interface EgressPromotionDiff {
+  approvable: string[];
+  alreadyApproved: string[];
+  plumbing: string[];
+}
+
+// W20-S1-1: this must mirror the server's OWN dedup in
+// handlePromoteRecordEgress (internal/api/record.go) — which skips a host
+// already covered by ApprovedEgress OR an effective egress:required
+// requirement row — or the card offers a host that's already covered,
+// the operator clicks Approve, the server folds in zero NEW rows (the
+// dedup drops it), yet EgressPromoted still flips true unconditionally
+// and the card renders "Promoted" for a click that promoted nothing.
+// approved_egress + profile.egress_domains alone missed the requirements
+// overlay (e.g. a host approved earlier via the workspace wizard, not this
+// legacy lane) — effectiveWorkspaceRequirements closes that gap.
+//
+// selfHost (the browser's own origin — the console is always same-origin
+// with wardynd, see lib/api/core.ts's relative BASE) mirrors the server's
+// controlPlaneHost exclusion; this file stays DOM-free (see the header
+// comment), so callers (record-pane.tsx, workspace-detail.tsx) pass
+// window.location.hostname — both MUST pass the same value, since
+// workspace-detail.tsx's untrusted-content confirm dialog must never list
+// more hosts than the button that opened it offered (UI-WS-14).
+export function egressPromotionDiff(ws: Workspace, taskKey: string, selfHost?: string): EgressPromotionDiff {
   const rr = recordResult(ws, taskKey);
   const observed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
   const profile = (ws.profile ?? {}) as WorkspaceProfile;
   const already = new Set([...(ws.approved_egress ?? []), ...(profile.egress_domains ?? [])]);
-  const out: string[] = [];
-  for (const h of observed) {
-    if (!already.has(h) && !out.includes(h)) out.push(h);
+  for (const [key, req] of Object.entries(effectiveWorkspaceRequirements(ws))) {
+    if (req.level === "required" && key.startsWith("egress:")) already.add(key.slice("egress:".length));
   }
-  return out;
+  const self = selfHost?.toLowerCase().trim();
+  const diff: EgressPromotionDiff = { approvable: [], alreadyApproved: [], plumbing: [] };
+  const seen = new Set<string>();
+  for (const h of observed) {
+    if (seen.has(h)) continue;
+    seen.add(h);
+    if (already.has(h)) {
+      diff.alreadyApproved.push(h);
+    } else if ((self && h === self) || isModelProviderHost(h)) {
+      diff.plumbing.push(h);
+    } else {
+      diff.approvable.push(h);
+    }
+  }
+  return diff;
+}
+
+// The "Approve N observed hosts" list — the approvable bucket of
+// egressPromotionDiff. Kept as its own export: workspace-detail.tsx's
+// untrusted-content confirm dialog only ever needs this one list.
+export function newEgressHosts(ws: Workspace, taskKey: string, selfHost?: string): string[] {
+  return egressPromotionDiff(ws, taskKey, selfHost).approvable;
 }
 
 // True when a settled recording captured NO egress — the honest failure case

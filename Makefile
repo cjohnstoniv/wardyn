@@ -183,9 +183,10 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # the release gate. It PUSHES NOTHING and TAGS NOTHING.
 #
 # WARDYN_TEST_PG adds the Postgres lane (CI always runs it; local runs say so
-# loudly when it is skipped). Still not a full CI replica: the three jobs that
-# need a live daemon or service — conformance, envbuild-integration and the
-# Playwright ui-e2e — are CI-only. See RELEASING.md.
+# loudly when it is skipped). Still not a full CI replica: five jobs need a
+# live daemon or service — conformance, conformance-k8s, envbuild-integration,
+# helm-install-test, and the Playwright ui-e2e — and are CI-only. See
+# RELEASING.md.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
@@ -194,10 +195,11 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
 	fi
 	@echo ""
-	@echo "release-check PASSED. NOT covered here: conformance, envbuild-integration,"
-	@echo "the Playwright ui-e2e, and screenshot freshness (ci.yml's screenshots-fresh"
-	@echo "job owns that — a local commit-timestamp test cannot be cleared once the"
-	@echo "PNGs re-render byte-identical) — confirm CI is green on the commit before tagging."
+	@echo "release-check PASSED. NOT covered here: conformance, conformance-k8s,"
+	@echo "envbuild-integration, helm-install-test, the Playwright ui-e2e, and"
+	@echo "screenshot freshness (ci.yml's screenshots-fresh job owns that — a local"
+	@echo "commit-timestamp test cannot be cleared once the PNGs re-render"
+	@echo "byte-identical) — confirm CI is green on the commit before tagging."
 
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
@@ -428,6 +430,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
@@ -623,7 +626,9 @@ screenshots: ## Regenerate docs/img UI screenshots (run after visible UI changes
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
 # host (advanced escape hatch — wardynd runs as you, using your resident Claude
-# login). Enter / headless = containerized; team (multi-user) mode is not scheduled (see ROADMAP.md).
+# login). Enter / headless = containerized; a packaged one-command team setup does not
+# exist, but admin/member RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user
+# and deploy/compose/README.md for the recipe.
 # In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
 # run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
 # WARDYN_IMPORT_SCM=1 / WARDYN_FORCE_RESET=1 are set. Scripts that must not

@@ -38,6 +38,15 @@ func TestValidateSiteConfig(t *testing.T) {
 		{"upstream proxy plain URL with embedded userinfo is REJECTED (Task 1's mandatory guard)",
 			types.SiteConfig{UpstreamProxyURL: "http://user:pass@proxy.corp:3128"}, false},
 		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
+		{
+			// W13-S1-4 regression: https:// used to pass validSiteURL (it accepts
+			// both http/https for its OTHER callers) and save clean, then display
+			// as the live chain while resolveUpstreamProxyURL silently dropped it
+			// at dispatch (the sidecar's plaintext-CONNECT hop cannot carry
+			// https). Must be rejected at the SAME gate dispatch applies.
+			"upstream proxy plain URL https is REJECTED (dispatch cannot use it — W13-S1-4)",
+			types.SiteConfig{UpstreamProxyURL: "https://proxy.corp:8443"}, false,
+		},
 		{"good scm host", types.SiteConfig{ScmHosts: []string{"dev.azure.com"}}, true},
 		{"scm host with scheme", types.SiteConfig{ScmHosts: []string{"https://dev.azure.com"}}, false},
 		{"scm host with port", types.SiteConfig{ScmHosts: []string{"dev.azure.com:443"}}, false},
@@ -240,6 +249,42 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 	}
 	if len(got2.EgressRedirects) != 1 || got2.EgressRedirects[0].TokenSecretRef != "npm-token" {
 		t.Errorf("GET EgressRedirects = %+v, want one npm entry with TokenSecretRef npm-token", got2.EgressRedirects)
+	}
+}
+
+// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins W26-S1-2: PUT
+// /site-config must surface, never silently accept, a secret ref the store
+// doesn't currently hold (e.g. `wardyn site-config apply corp-baseline.json`
+// run before the referenced secrets were restored). The write itself still
+// succeeds — dangling is a valid mid-recovery state, never rejected.
+func TestHandlePutSiteConfig_ReportsDanglingSecretRefs(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, _ := newSiteConfigHarness(t, fake)
+	// Only npm-token is present; corp-proxy-url is dangling.
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"npm-token": []byte("tok")}}
+	srv.router = srv.routes() // re-mount with the secret surfaces enabled
+
+	body := `{
+		"upstream_proxy_secret_ref": "corp-proxy-url",
+		"egress_redirects": [
+			{"from": "https://registry.npmjs.org/", "to": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token", "ecosystem": "npm"}
+		]
+	}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (dangling refs are advisory, not rejected); body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		DanglingSecretRefs []string `json:"dangling_secret_refs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DanglingSecretRefs) != 1 || got.DanglingSecretRefs[0] != "corp-proxy-url" {
+		t.Errorf("dangling_secret_refs = %v, want [corp-proxy-url] (npm-token is present, must not be listed)", got.DanglingSecretRefs)
+	}
+	if fake.putSeen == nil || fake.putSeen.UpstreamProxySecretRef != "corp-proxy-url" {
+		t.Fatal("a dangling ref must still be persisted as given, never rejected")
 	}
 }
 

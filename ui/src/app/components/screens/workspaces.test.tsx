@@ -330,7 +330,13 @@ describe("WorkspaceLLMCredDialog", () => {
 
   it("saves the picked Integration via setWorkspaceLLMCred and reports the updated workspace", async () => {
     listIntegrationsMock.mockResolvedValue({
-      ai: [{ id: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
+      // serverId is required: LLMCredFields skips any row without one (a
+      // deliberate filter — see workspace-llm-cred.tsx's `.filter((r) =>
+      // r.serverId)` — mirroring step-access.tsx's identical picker, since a
+      // client display id with no server-side identity would silently fail
+      // to bind server-side). A real deriveAiRows "Managed subscription" row
+      // always carries one (aiServerId("anthropic_subscription", false)).
+      ai: [{ id: "ai-managed", serverId: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
       scm: [],
     });
     const workspace = ws({}, { id: "ws-9", name: "payments", llm_cred: {} });

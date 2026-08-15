@@ -143,7 +143,16 @@ type mintData struct {
 // sorted Observations. It is pure and input-order independent: it reads only the
 // egress.*, credential.mint, and kernel.* (eBPF ground-truth) streams and
 // silently ignores any other action, so it is robust to new audit verbs.
-func Capture(events []types.AuditEvent) Observations {
+//
+// confined distinguishes an OPEN (learning) recording, where a deny is a real
+// anomaly a least-privilege synthesis must not silently bless, from a
+// CONFINED replay, where a deny is the advertised containment proof working
+// as designed — the off-policy host it denied is exactly what confinement
+// exists to block (W19-W19b-4). A confined deny is still captured on the
+// per-host DomainObservation (nothing is hidden), it just does not also land
+// in Anomalies, and its message never claims "during open recording" for a
+// session that was never open.
+func Capture(events []types.AuditEvent, confined bool) Observations {
 	domains := map[string]*domainAgg{}
 	minted := map[uuid.UUID]bool{}
 	execs := map[string]bool{}
@@ -154,7 +163,7 @@ func Capture(events []types.AuditEvent) Observations {
 	for _, ev := range events {
 		switch ev.Action {
 		case actionEgressAllow, actionEgressDeny, actionEgressPending:
-			captureEgress(ev, domains, anomalies)
+			captureEgress(ev, domains, anomalies, confined)
 		case actionCredentialMint:
 			// Only a SUCCESSFUL mint actually yielded a credential the run used.
 			if ev.Outcome == outcomeSuccess {
@@ -179,9 +188,11 @@ func Capture(events []types.AuditEvent) Observations {
 	}
 }
 
-// captureEgress folds one egress.* decision into the per-host aggregate and
-// records an anomaly for a deny seen during the (open) recording.
-func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool) {
+// captureEgress folds one egress.* decision into the per-host aggregate and,
+// for an OPEN recording only, records an anomaly for a deny — a deny during a
+// CONFINED replay is the containment proof working as intended, not an
+// anomaly (W19-W19b-4).
+func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
 
@@ -209,11 +220,16 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 		agg.pending++
 	case actionEgressDeny:
 		agg.deny++
-		rs := strings.TrimSpace(d.RuleSource)
-		if rs == "" {
-			rs = "unknown"
+		if !confined {
+			rs := strings.TrimSpace(d.RuleSource)
+			if rs == "" {
+				rs = "unknown"
+			}
+			anomalies[fmt.Sprintf("egress.deny to %s during open recording (rule_source=%s)", host, rs)] = true
 		}
-		anomalies[fmt.Sprintf("egress.deny to %s during open recording (rule_source=%s)", host, rs)] = true
+		// confined: the deny is captured on the per-host DomainObservation
+		// above (agg.deny) — a plain containment observation, not an
+		// anomaly a synthesis must second-guess.
 	}
 }
 

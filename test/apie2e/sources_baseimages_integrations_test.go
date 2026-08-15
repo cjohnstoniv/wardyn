@@ -53,7 +53,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	if req, ok := created.Requirements["egress:example.com"]; !ok || req.Level != "required" {
 		t.Fatalf("created source requirements = %+v, want the seeded egress:example.com row", created.Requirements)
 	}
-	t.Cleanup(func() { _ = h.sdk.DeleteSource(context.Background(), created.ID, true) })
+	t.Cleanup(func() { _, _ = h.sdk.DeleteSource(context.Background(), created.ID, true) })
 
 	got, err := h.sdk.GetSource(ctx, created.ID)
 	if err != nil {
@@ -95,25 +95,45 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 
 	// Attach: a workspace whose local_dir source names the SAME canonical
 	// locator dedupes onto this exact source row (canonicalSourceIdentity) —
-	// how a source becomes "in use" through the public API.
+	// how a source becomes "in use" through the public API. An ephemeral
+	// scratch dir rides ALONGSIDE it (W6-S1-1): force-detaching the ONLY
+	// attachment a workspace has is exactly what STORE-1 refuses
+	// (workspacesOrphanedBySource, internal/store/store_sources.go) — this
+	// mirrors TestPG_DeleteSourceInUse's ws-c, so this fixture exercises the
+	// same contract force=1 actually enforces, not the case it refuses.
 	ws, err := h.sdk.CreateWorkspace(ctx, client.WorkspaceRequest{
-		Name:    "apie2e-src-attach-" + uuid.NewString(),
-		Sources: []client.WorkspaceSource{{Type: client.WorkspaceSourceTypeLocalDir, Path: dir}},
+		Name: "apie2e-src-attach-" + uuid.NewString(),
+		Sources: []client.WorkspaceSource{
+			{Type: client.WorkspaceSourceTypeLocalDir, Path: dir},
+			{Type: client.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorkspace (source attach): %v", err)
 	}
 	t.Cleanup(func() { _ = h.sdk.DeleteWorkspace(context.Background(), ws.ID) })
-	if len(ws.Attachments) != 1 || ws.Attachments[0].SourceID == nil || *ws.Attachments[0].SourceID != created.ID {
-		t.Fatalf("workspace attachments = %+v, want exactly one pointing at source %s", ws.Attachments, created.ID)
+	var sourceAttachment *client.WorkspaceAttachment
+	for i := range ws.Attachments {
+		if ws.Attachments[i].SourceID != nil && *ws.Attachments[i].SourceID == created.ID {
+			sourceAttachment = &ws.Attachments[i]
+		}
+	}
+	if len(ws.Attachments) != 2 || sourceAttachment == nil {
+		t.Fatalf("workspace attachments = %+v, want two (the source + the ephemeral scratch dir), one pointing at source %s", ws.Attachments, created.ID)
 	}
 
 	// In use: a non-forced delete 409s naming the attaching workspace.
-	assertAPIStatus(t, h.sdk.DeleteSource(ctx, created.ID, false), http.StatusConflict)
+	_, err = h.sdk.DeleteSource(ctx, created.ID, false)
+	assertAPIStatus(t, err, http.StatusConflict)
 
-	// force=1: detaches everywhere and deletes.
-	if err := h.sdk.DeleteSource(ctx, created.ID, true); err != nil {
+	// force=1: detaches everywhere and deletes, echoing which workspace(s) it
+	// detached (W6-S1-2: the operator's only signal — nothing 422s downstream).
+	detachedFrom, err := h.sdk.DeleteSource(ctx, created.ID, true)
+	if err != nil {
 		t.Fatalf("DeleteSource(force=true): %v", err)
+	}
+	if !slices.Contains(detachedFrom, ws.Name) {
+		t.Errorf("DeleteSource(force=true) detachedFrom = %v, want it to include %q", detachedFrom, ws.Name)
 	}
 	_, gerr := h.sdk.GetSource(ctx, created.ID)
 	assertAPIStatus(t, gerr, http.StatusNotFound)
@@ -156,15 +176,9 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 	}
 	t.Cleanup(func() { doAdmin(t, http.MethodDelete, base+"/"+created.ID+"?force=1", nil) })
 
-	status, raw = doAdmin(t, http.MethodGet, base+"/"+created.ID, nil)
-	if status != http.StatusOK {
-		t.Fatalf("GET /base-images/{id} status = %d (body=%s)", status, raw)
-	}
-	var got baseImageDoc
-	if err := json.Unmarshal(raw, &got); err != nil || got.ID != created.ID {
-		t.Fatalf("GET base image = %+v, err=%v", got, err)
-	}
-
+	// W7-S1-1: there is no GET /base-images/{id} (DEADCODE-1, sources.go) — a
+	// base image's own catalog row is read back via the list, never a
+	// by-id route (mountLibraryRoutes registers no Get for it).
 	status, raw = doAdmin(t, http.MethodGet, base, nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /base-images status = %d (body=%s)", status, raw)
@@ -212,9 +226,20 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 		t.Errorf("workspace base_image_id after force-detach = %v, want nil (falls back to the derived recommended build)", fresh.BaseImageID)
 	}
 
-	status, _ = doAdmin(t, http.MethodGet, base+"/"+created.ID, nil)
-	if status != http.StatusNotFound {
-		t.Fatalf("GET /base-images/{id} after delete status = %d, want 404", status)
+	// No GET /base-images/{id} to re-probe (W7-S1-1, see above) — assert
+	// absence from the list instead.
+	status, raw = doAdmin(t, http.MethodGet, base, nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET /base-images after delete status = %d (body=%s)", status, raw)
+	}
+	var listAfter struct {
+		BaseImages []baseImageDoc `json:"base_images"`
+	}
+	if err := json.Unmarshal(raw, &listAfter); err != nil {
+		t.Fatalf("decode base image list after delete: %v (body=%s)", err, raw)
+	}
+	if slices.ContainsFunc(listAfter.BaseImages, func(b baseImageDoc) bool { return b.ID == created.ID }) {
+		t.Errorf("base image list still contains %s after delete", created.ID)
 	}
 }
 

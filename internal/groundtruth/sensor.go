@@ -19,16 +19,22 @@ import (
 // cumulative count of real kernel events mapped off the tail; both are surfaced
 // on /healthz so it can tell "sensor alive but observing nothing" (idle) apart
 // from "events flowing" (healthy) and show the drop-gap size. A live heartbeat
-// ALONE never proves kernel ground truth is arriving.
-func HeartbeatEventWithDropped(droppedTotal, observedTotal uint64) types.AuditEvent {
+// ALONE never proves kernel ground truth is arriving. observedByKind (keyed by
+// Action — ActionProcessExec/ActionNetworkConnect/ActionFileWrite) is the
+// SAME cumulative count split per event kind (W20-W20-groundtruth-mapper-4):
+// the aggregate alone cannot distinguish "all three kinds arriving" from "one
+// kind carrying the whole count while the others are silently blind" (a
+// mis-scoped TracingPolicy, say). May be nil/empty on an older sensor build.
+func HeartbeatEventWithDropped(droppedTotal, observedTotal uint64, observedByKind map[string]uint64) types.AuditEvent {
 	data := heartbeatData{
 		EventData: EventData{
 			Stream:      Stream,
 			Subtype:     "heartbeat",
 			Correlation: CorrelationUnmapped, // host-scoped, not bound to a run
 		},
-		DroppedTotal:  droppedTotal,
-		ObservedTotal: observedTotal,
+		DroppedTotal:   droppedTotal,
+		ObservedTotal:  observedTotal,
+		ObservedByKind: observedByKind,
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -55,6 +61,10 @@ type heartbeatData struct {
 	// it to tell "sensor alive but observing nothing" (idle) apart from "events
 	// flowing" (healthy) — a live heartbeat alone never proves ground truth.
 	ObservedTotal uint64 `json:"observed_total"`
+	// ObservedByKind splits ObservedTotal by event Action
+	// (kernel.process.exec/kernel.network.connect/kernel.file.write).
+	// /healthz reports per-kind coverage off this — see HeartbeatEventWithDropped.
+	ObservedByKind map[string]uint64 `json:"observed_by_kind,omitempty"`
 }
 
 // BlindEvent builds the one-time event emitted for a run the host eBPF sensor

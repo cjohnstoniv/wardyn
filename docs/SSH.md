@@ -14,10 +14,18 @@ surface: the daemon does not even generate a host key.
 
 ## 1. Register a public key
 
-Account menu → **SSH keys** → **Add key** — paste your public key (the
-console never asks for a private key; the paste field's own helper line says
-so, and pasting one is refused server-side with a specific error). Or via the
-API:
+**SSO deployment (OIDC configured):** Account menu → **SSH keys** → **Add
+key** — paste your public key (the console never asks for a private key; the
+paste field's own helper line says so, and pasting one is refused
+server-side with a specific error). A key registered against your SSO
+session lands under your OIDC `sub` — the only principal the gateway's
+owner-only check (below) will ever match against a run you created.
+
+**Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
+registers the key against the shared, non-human `admin-token` principal, not
+any human's own identity. With OIDC configured, `POST` from a bare admin
+token now 422s for exactly this reason instead of silently writing a key
+that can never authorize anyone's run — use the console (above) instead:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
@@ -183,14 +191,15 @@ would neither work nor mean anything).
 username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-only, not operator-gated.** SSH authorization is
+**Owner-only, no admin override.** SSH authorization is
 `run.created_by == the key's registered principal` — a single equality
-check, deliberately narrower than the browser terminal's `requireOperator`
-gate (which lets an operator attach to *any* run). SSH has no session
-cookie to carry an operator role through, so today an admin who needs
-another human's run uses the web terminal, same as a member would. Extending
-SSH to admins/operators needs a role column this table doesn't have yet —
-tracked as a residual in
+check, deliberately narrower than the browser terminal (owner-or-admin via a
+minted attach ticket; admin-only via the ticket-less session-cookie
+fall-through). SSH has no session cookie and no role column to carry an
+admin override through, so today: an admin reaching another human's run
+uses the web terminal (owner-or-admin attach ticket); a member has no path
+to another human's run over either transport. Extending SSH to admins needs
+a role column this table doesn't have yet — tracked as a residual in
 [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), not
 silently assumed away.
 

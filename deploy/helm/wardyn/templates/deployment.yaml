@@ -27,6 +27,9 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
 {{- end -}}
+{{- if and .Values.k8s.enabled (not .Values.k8s.proxyImage) -}}
+{{- fail "wardyn: k8s.enabled requires k8s.proxyImage. The k8s runner substrate (internal/runner/k8s driver.go) refuses to construct without one (errProxyImageUnset) — this is a boot-time failure, not a per-run one: wardynd's runner build returns the error straight up through cmd/wardynd/main.go, so the pod crash-loops instead of coming up with runs merely failing closed. Set k8s.proxyImage to the wardyn-proxy image you built and pushed (see the chart README's Prerequisites)." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -219,13 +222,19 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           startupProbe:
-            # Generous startup budget so a slow first DB connect (migrations)
-            # does not trip the liveness probe and crash-loop the pod.
+            # Generous startup budget covering wardynd's OWN connect (fixed 30s)
+            # + migrate (WARDYN_MIGRATE_TIMEOUT, default 5m) budgets — /healthz
+            # doesn't bind until both finish, so this window must stay >= their
+            # sum or the probe kills the pod mid-migration instead of protecting
+            # it (W28-S1-4: before the migrate timeout existed, wardynd itself
+            # hard-exited at 30s regardless of this probe's allowance, so the
+            # "generous startup budget" this comment promised was never the
+            # thing actually bounding a slow migration).
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 5
-            failureThreshold: 30
+            failureThreshold: 90
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

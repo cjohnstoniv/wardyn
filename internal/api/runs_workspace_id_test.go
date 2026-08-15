@@ -450,6 +450,51 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 	})
 }
 
+// imageCheckerRunner wraps fakeRunner with runner.ImageChecker, so a test can
+// simulate a docker-like substrate that can confirm/deny a cached image_ref
+// is still actually present.
+type imageCheckerRunner struct {
+	*fakeRunner
+	present map[string]bool // ref -> present; absent key = "not present"
+}
+
+func (r *imageCheckerRunner) ImagePresent(_ context.Context, ref string) (bool, error) {
+	return r.present[ref], nil
+}
+
+// TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild is
+// W20-W20-record-image-5: a cached image_ref the daemon no longer has used to
+// be a permanent dead end — resolveWorkspaceImage trusted BuiltProfileHash
+// alone and never verified the ref was still real. With an ImageChecker
+// Runner wired, a cache "hit" whose ref the runner reports ABSENT must fall
+// through to a rebuild instead of returning the dead ref.
+func TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	builder := &capturingImageBuilder{}
+	cfg := baseTestConfig(h, &resolveImageStoreFake{})
+	cfg.ImageBuilder = builder
+	cfg.Runner = &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{}} // empty: nothing is present
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID: uuid.New(), Profile: mustJSON(profile),
+		ImageRef: "wardyn-workspace/gone:abc", BuiltProfileHash: profile.CacheKey(),
+	}
+
+	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed")
+	}
+	if image == "wardyn-workspace/gone:abc" {
+		t.Error("must not reuse a cached image_ref the runner reports absent — permanent dead end otherwise")
+	}
+	if len(builder.calls) != 1 {
+		t.Errorf("want exactly one rebuild when the cached image is confirmed absent, got %d", len(builder.calls))
+	}
+}
+
 // TestResolveBuildView_AgreesWithBuiltHash pins the reader/writer contract the
 // /build endpoints depend on: resolveBuildView must key the cache-hit "done"
 // branch on the SAME expression resolveWorkspaceImage stores in
@@ -483,5 +528,127 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 	view := fresh.resolveBuildView(ws)
 	if view.State != "done" || view.Image != built {
 		t.Errorf("resolveBuildView = %+v, want state=done image=%q — the reader disagrees with the writer's hash", view, built)
+	}
+}
+
+// TestResolveWorkspaceImage_ByoiCachesAcrossSessions is
+// W20-W20-record-image-3: the byoi lane used to tag EVERY wrap with the run
+// id (`wardyn-byoi/<runid>:latest`), so two record/replay sessions against
+// the identical base image always rebuilt — a multi-minute FinalizeBase call
+// on every single launch. A cache hit must reuse the workspace's stored
+// ImageRef without calling FinalizeBase again; a base ref CHANGE must still
+// rebuild (and re-cache under the new key).
+func TestResolveWorkspaceImage_ByoiCachesAcrossSessions(t *testing.T) {
+	h := newHarness(t)
+	builder := &capturingByoiImageBuilder{}
+	st := &resolveImageStoreFake{}
+	cfg := baseTestConfig(h, st)
+	cfg.ImageBuilder = builder
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		BaseImage: &types.WorkspaceBaseImage{
+			Kind: "custom", Image: "ghcr.io/acme/base:1",
+		},
+	}
+
+	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed (first launch)")
+	}
+	if len(builder.calls) != 1 {
+		t.Fatalf("want exactly one FinalizeBase call on the first launch, got %d", len(builder.calls))
+	}
+	if st.builtHash == "" {
+		t.Fatal("first launch stored no built_profile_hash — nothing to cache against")
+	}
+
+	// A SECOND session for the SAME workspace+base ref: simulate what the
+	// workspace row now holds (ImageRef/BuiltProfileHash persisted by the
+	// first launch's SetWorkspaceBuiltImage call).
+	ws.ImageRef, ws.BuiltProfileHash = first, st.builtHash
+	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed (second launch)")
+	}
+	if second != first {
+		t.Errorf("second launch = %q, want the cached image %q reused", second, first)
+	}
+	if len(builder.calls) != 1 {
+		t.Errorf("want NO additional FinalizeBase call on a cache hit, got %d total calls", len(builder.calls))
+	}
+
+	// Changing the base ref must still rebuild — the cache is per (kind, ref),
+	// not blanket-sticky on the workspace.
+	ws.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:2"}
+	third, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed (third launch, changed base ref)")
+	}
+	if third == first {
+		t.Errorf("a changed base ref must not reuse the old base's cached image")
+	}
+	if len(builder.calls) != 2 {
+		t.Errorf("want exactly one rebuild after the base ref changed, got %d total calls", len(builder.calls))
+	}
+}
+
+// capturingByoiImageBuilder records every FinalizeBase call and returns a
+// tag derived from the CALL COUNT (not the output tag) — a real Docker image
+// digest is deterministic per input, unlike the old runID-suffixed tag this
+// test's cache-hit assertion depends on distinguishing from a genuine rebuild.
+type capturingByoiImageBuilder struct {
+	fakeImageBuilder
+	calls []string // base refs FinalizeBase was called with, in order
+}
+
+func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer) (string, error) {
+	b.calls = append(b.calls, baseRef)
+	return "wardyn-byoi/cached:" + baseRef, nil
+}
+
+// TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions is
+// W20-W20-record-image-3's repo-own-devcontainer half: this lane built the
+// repo's OWN devcontainer unconditionally on every session (a fixed tag, but
+// no cache-hit check before calling BuildDevcontainer again).
+func TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+		HasDevcontainer: true,
+	}
+	builder := &capturingImageBuilder{}
+	st := &resolveImageStoreFake{}
+	cfg := baseTestConfig(h, st)
+	cfg.ImageBuilder = builder
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "https://github.com/acme/widgets", Ref: "main"}},
+		Profile: mustJSON(profile),
+	}
+
+	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed (first launch)")
+	}
+	if len(builder.repoBuilds) != 1 {
+		t.Fatalf("want exactly one BuildDevcontainer call on the first launch, got %d", len(builder.repoBuilds))
+	}
+	if st.builtHash == "" {
+		t.Fatal("first launch stored no built_profile_hash — nothing to cache against")
+	}
+
+	ws.ImageRef, ws.BuiltProfileHash = first, st.builtHash
+	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok {
+		t.Fatal("resolveWorkspaceImage failed (second launch)")
+	}
+	if second != first {
+		t.Errorf("second launch = %q, want the cached image %q reused", second, first)
+	}
+	if len(builder.repoBuilds) != 1 {
+		t.Errorf("want NO additional BuildDevcontainer call on a cache hit, got %d total calls", len(builder.repoBuilds))
 	}
 }

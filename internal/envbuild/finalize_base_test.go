@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // toolsDirWithRequired creates a temp dir containing every required runner tool
@@ -188,5 +189,29 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	t.Setenv(envToolsDir, "")
 	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-4:latest", nil); err == nil {
 		t.Fatal("expected FinalizeBase to fail closed with no tools dir")
+	}
+}
+
+// TestFinalizeBase_AppliesOwnDeadline is W20-W20-record-image-4:
+// runBuildAndFinalize (the devcontainer-build path) always bounds its work
+// with BuildTimeout/defaultBuildTimeout; FinalizeBase (the BYOI-wrap path)
+// used to run under whatever the caller's ctx carried — nothing at all for a
+// caller that detaches from request cancellation (context.WithoutCancel,
+// e.g. launchRecordRun). Called with context.Background() (no deadline) and
+// a small BuildTimeout, FinalizeBase must still apply ITS OWN bound: the
+// underlying docker call must observe a ctx with a deadline.
+func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent["ubuntu:24.04"] = true
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+	b.BuildTimeout = time.Hour // any positive value; the assertion is presence, not the exact deadline
+
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-6:latest", nil); err != nil {
+		t.Fatalf("FinalizeBase: %v", err)
+	}
+	if !f.lastImageListHadDeadline {
+		t.Fatal("FinalizeBase called the docker client with an undeadlined ctx — " +
+			"it must apply BuildTimeout/defaultBuildTimeout itself, not rely on the caller to wrap it")
 	}
 }

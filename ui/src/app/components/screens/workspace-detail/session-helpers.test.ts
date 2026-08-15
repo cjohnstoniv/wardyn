@@ -16,6 +16,7 @@ import {
   recordResult,
   isRecording,
   newEgressHosts,
+  egressPromotionDiff,
   isEmptyCapture,
   sessionStage,
   verifyKeyOf,
@@ -128,6 +129,145 @@ describe("record helpers — read the server-authored record fields", () => {
       profile: { egress_domains: ["cdn.jsdelivr.net"] } as unknown as Record<string, unknown>,
     });
     expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
+  });
+
+  // W20-S1-1: a host already covered by an effective egress:required
+  // requirement row (e.g. approved earlier via the workspace wizard, never
+  // written to the legacy approved_egress/profile lanes) must NOT be offered
+  // again — the server's own dedup (handlePromoteRecordEgress) drops it, so
+  // offering it here promotes zero new rows while the card still claims
+  // "Promoted".
+  it("newEgressHosts also excludes a host already required via effective_requirements (server dedup parity)", () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      mode: "auto",
+      status: "recorded",
+      observations: {
+        domains: [
+          { host: "registry.npmjs.org", allow_count: 3, deny_count: 0, pending_count: 0 },
+          { host: "api.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }, // effective-required
+        ],
+        minted_grant_ids: [],
+        exec_argv0s: [],
+        file_writes: [],
+        connects: [],
+        anomalies: [],
+      },
+    };
+    const w = ws({
+      record_results: { code: rr },
+      effective_requirements: {
+        "egress:api.example.com": { level: "required", provenance: "operator_set" },
+      },
+    });
+    expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
+  });
+
+  // W20-S1-1: a platform-plumbing host (the model-provider harness host every
+  // session needs, or the console's own origin) must land in its OWN bucket
+  // — never "approvable" (nothing to click Approve for) and never
+  // "alreadyApproved" (that claims an operator decision that never
+  // happened). One function computes all three so a host can't drift
+  // between buckets across two separately-derived lists.
+  describe("egressPromotionDiff — plumbing hosts get their own bucket, never approvable or falsely 'already approved'", () => {
+    it("a model-provider host (api.anthropic.com, or any *.anthropic.com) is plumbing, not approvable", () => {
+      const rr: RecordResult = {
+        run_id: "r1",
+        mode: "auto",
+        status: "recorded",
+        observations: {
+          domains: [
+            { host: "api.anthropic.com", allow_count: 5, deny_count: 0, pending_count: 0 },
+            { host: "eu.anthropic.com", allow_count: 1, deny_count: 0, pending_count: 0 },
+            { host: "api.openai.com", allow_count: 1, deny_count: 0, pending_count: 0 },
+            { host: "registry.npmjs.org", allow_count: 3, deny_count: 0, pending_count: 0 },
+          ],
+          minted_grant_ids: [],
+          exec_argv0s: [],
+          file_writes: [],
+          connects: [],
+          anomalies: [],
+        },
+      };
+      const w = ws({ record_results: { code: rr } });
+      const diff = egressPromotionDiff(w, "code");
+      expect(diff.approvable).toEqual(["registry.npmjs.org"]);
+      expect(diff.plumbing.sort()).toEqual(["api.anthropic.com", "api.openai.com", "eu.anthropic.com"]);
+      expect(diff.alreadyApproved).toEqual([]);
+      // newEgressHosts (the confirm-dialog's own list) is exactly the
+      // approvable bucket — never widens past it.
+      expect(newEgressHosts(w, "code")).toEqual(diff.approvable);
+    });
+
+    it("selfHost (the console's own origin) is plumbing when passed, ignored when omitted", () => {
+      const rr: RecordResult = {
+        run_id: "r1",
+        mode: "auto",
+        status: "recorded",
+        observations: {
+          domains: [{ host: "wardyn.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }],
+          minted_grant_ids: [],
+          exec_argv0s: [],
+          file_writes: [],
+          connects: [],
+          anomalies: [],
+        },
+      };
+      const w = ws({ record_results: { code: rr } });
+      expect(egressPromotionDiff(w, "code", "wardyn.example.com").plumbing).toEqual(["wardyn.example.com"]);
+      expect(egressPromotionDiff(w, "code", "wardyn.example.com").approvable).toEqual([]);
+      // Omitted selfHost (this file's DOM-free contract — see the header
+      // comment — means callers must supply it) degrades to NOT excluding
+      // it, never a crash.
+      expect(egressPromotionDiff(w, "code").approvable).toEqual(["wardyn.example.com"]);
+    });
+
+    it("a host already covered by approved_egress/profile/requirements is alreadyApproved, never plumbing", () => {
+      const rr: RecordResult = {
+        run_id: "r1",
+        mode: "auto",
+        status: "recorded",
+        observations: {
+          domains: [{ host: "github.com", allow_count: 1, deny_count: 0, pending_count: 0 }],
+          minted_grant_ids: [],
+          exec_argv0s: [],
+          file_writes: [],
+          connects: [],
+          anomalies: [],
+        },
+      };
+      const w = ws({ record_results: { code: rr }, approved_egress: ["github.com"] });
+      const diff = egressPromotionDiff(w, "code");
+      expect(diff.alreadyApproved).toEqual(["github.com"]);
+      expect(diff.plumbing).toEqual([]);
+      expect(diff.approvable).toEqual([]);
+    });
+
+    it("every observed+allowed host lands in exactly one bucket (no drift, no double-count)", () => {
+      const rr: RecordResult = {
+        run_id: "r1",
+        mode: "auto",
+        status: "recorded",
+        observations: {
+          domains: [
+            { host: "registry.npmjs.org", allow_count: 1, deny_count: 0, pending_count: 0 }, // approvable
+            { host: "github.com", allow_count: 1, deny_count: 0, pending_count: 0 }, // already approved
+            { host: "api.anthropic.com", allow_count: 1, deny_count: 0, pending_count: 0 }, // plumbing
+            { host: "blocked.example", allow_count: 0, deny_count: 5, pending_count: 0 }, // never observed-allowed at all
+          ],
+          minted_grant_ids: [],
+          exec_argv0s: [],
+          file_writes: [],
+          connects: [],
+          anomalies: [],
+        },
+      };
+      const w = ws({ record_results: { code: rr }, approved_egress: ["github.com"] });
+      const diff = egressPromotionDiff(w, "code");
+      const all = [...diff.approvable, ...diff.alreadyApproved, ...diff.plumbing];
+      expect(all.sort()).toEqual(["api.anthropic.com", "github.com", "registry.npmjs.org"]);
+      expect(new Set(all).size).toBe(all.length); // no host counted twice
+    });
   });
 
   it("isEmptyCapture is true when a settled recording observed no egress", () => {

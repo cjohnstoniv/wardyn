@@ -4,7 +4,7 @@ The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 `wardyn setup status` says what model access is still missing. Easiest first: a
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
-key), **record → replay confined** to onboard your own work, and the **AI
+key), **record, then replay confined** to onboard your own work, and the **AI
 Composer**.
 
 The Getting-started page detects this host's real capabilities — which confinement
@@ -72,7 +72,8 @@ block (a proof the table doesn't cover), a first-use approval (queue → approve
 retry), the brokered git-credential chain, and the kill cascade with its
 `actor_type=human` audit event. Its one weak step is the recording: it uploads a
 synthetic asciicast and fetches it back, which exercises the endpoint but does not
-prove the recorder captured a live session — use the Replay tab for that.
+prove the recorder captured a live session — check the **Recording** tab after a
+real run for that.
 `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to
 poke at.
 
@@ -135,7 +136,7 @@ What you can verify live, even without keys:
 | Egress policy | from the sandbox, curl an unlisted domain via the proxy → 403 + a pending approval in the UI |
 | Approval queue | the Approvals tab; approve/deny and watch the audit trail |
 | Attributed audit | Audit tab: every event carries `actor_type` human/agent/system |
-| Terminal replay | Runs tab → Replay (the recorder captures even failed agent starts) |
+| Terminal replay | Runs tab → a run → **Recording** (the recorder captures even failed agent starts) |
 | Kill switch | `wardyn run kill <id>` → container gone, run token revoked (401), audit `run.kill` |
 | Brokered credentials | `docker exec wardyn-agent-<id> sh -c 'printf "protocol=https\nhost=github.com\n\n" \| wardyn-git-helper get'` → raises a credential approval; approving it hits the fail-closed mint (no GitHub App configured) — the whole chain is visible in audit |
 
@@ -167,7 +168,9 @@ wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
 `wardyn-proxy-injected`, never your key); Claude Code talks to
 `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the
 proxy injects `x-api-key` and logs every model call as a `brokered:llm`
-decision in the audit trail. Watch the session live in the Replay tab.
+decision in the audit trail. Watch the session live via Attach (`wardyn attach
+<id>`, or the console's Live terminal) — the **Recording** tab plays back the
+captured cast only after the fact, it has no live view.
 
 To also enable real GitHub pushes: create a GitHub App (contents+PR write),
 then `wardyn secret set github-app-id` and `wardyn secret set github-app-key`
@@ -198,9 +201,16 @@ opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 
 ### Model auth: three ways to give Claude Code its LLM access
 
-Wardyn credentials a Claude run one of three ways (precedence: subscription →
-Bedrock → api-key). All keep the real credential out of the sandbox *except* the
-Bedrock access-key path (see below):
+Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
+subscription mount (host mode's resident `~/.claude`) > managed subscription >
+Bedrock > api-key — **except** that an `api_key` grant the run's policy
+already brokers for `api.anthropic.com` is treated as an explicit operator
+opt-in and suppresses the managed-subscription fallback: `wardyn subscription
+connect` fills in only for a run that has neither a resident mount nor that
+grant, it never silently overrides a run you gave its own key
+(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`). All three keep
+the real credential out of the sandbox *except* the Bedrock access-key path
+(see below):
 
 - **API key** (Level 2 above) — `wardyn secret set anthropic-api-key`. The proxy
   injects `x-api-key` at startup; **never resident**.
@@ -325,9 +335,14 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
 ```
 
 `make reset` operates on the **compose** stack: it wipes those volumes and
-brings up a *containerized* wardynd. It does not touch a host-mode daemon — to
-reset host mode, `make stop-host && make setup`. `make doctor` is read-only —
-re-run it any time to re-check this host's capabilities.
+brings up a *containerized* wardynd. A live host-mode daemon would collide with
+it on `:8080`, so a still-running one is offered a stop first — interactively,
+a separate y/N prompt (never lumped into the wipe's own confirmation);
+headlessly, only if you *also* set `WARDYN_FORCE_STOP_HOST=1`
+(`WARDYN_FORCE_RESET=1` alone confirms the volume wipe and nothing else, so it
+never silently kills a host-mode daemon it wasn't asked to touch). To reset
+host mode instead, `make stop-host && make setup`. `make doctor` is read-only
+— re-run it any time to re-check this host's capabilities.
 
 ### When it goes wrong
 

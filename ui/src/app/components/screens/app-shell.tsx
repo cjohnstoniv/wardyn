@@ -11,6 +11,7 @@ import {
   Cable,
   ChevronsUpDown,
   Fingerprint,
+  FlaskConical,
   FolderOpen,
   KeyRound,
   Lock,
@@ -123,6 +124,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
       { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+      { to: "/demos", label: "Demos", icon: FlaskConical },
     ],
   },
   {
@@ -504,7 +506,13 @@ function TopBar({
                 )}
               </div>
               <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-                {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}
+                {meta.method === "sso"
+                  ? "signed in via SSO"
+                  : meta.method === "token"
+                    ? "admin token"
+                    : meta.method === "local"
+                      ? "local mode — no login on this install"
+                      : ""}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
@@ -513,10 +521,19 @@ function TopBar({
                 <KeyRound className="size-4" /> SSH keys
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onSignOut} className="text-danger focus:text-danger">
-              <LogOut className="size-4" /> Sign out
-            </DropdownMenuItem>
+            {/* W31-S1-1: local mode has no session to sign out of — humanOrAdminAuth
+                (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
+                the client to a SignIn screen whose admin-token field is unchecked
+                (probeAuth trivially re-succeeds against the auth-bypassed API on
+                whatever's typed). Hide the no-op action instead of offering fake auth. */}
+            {meta.method !== "local" && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onSignOut} className="text-danger focus:text-danger">
+                  <LogOut className="size-4" /> Sign out
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

@@ -4,8 +4,15 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -73,4 +80,90 @@ func keysOf(m map[string]types.WorkspaceRequirement) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// localDirScanStore is the minimal store.Store scanLocalDirSource needs:
+// SetSourceScanResultUnfenced, captured so the test can inspect exactly what
+// was persisted.
+type localDirScanStore struct {
+	store.Store
+	saved  []byte
+	status types.WorkspaceStatus
+}
+
+func (s *localDirScanStore) SetSourceScanResultUnfenced(_ context.Context, _ uuid.UUID, profile []byte, status types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	s.saved, s.status = profile, status
+	return types.Source{Status: status}, nil
+}
+
+// TestScanLocalDirSource_ConsultsAIAdvisor is the W9-S1-6 regression:
+// WARDYN_SCAN_AI_ADVISOR used to run ONLY for the sandboxed repo-scan upload
+// lane (uploadSourceScanResult) — a local_dir source's host-side scan called
+// workspacescan.Scan directly and never consulted s.cfg.ScanAIAdvisor at all,
+// even though the flag's own help text makes no repo-only distinction. A real
+// on-disk unrecognized build file (setup.py — unmappedBuildFiles,
+// markers.go) makes ShouldAdvise true exactly the way a real scan would.
+func TestScanLocalDirSource_ConsultsAIAdvisor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "setup.py"), []byte("# unmapped build file"), 0o644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+	invoked := false
+	adv := func(_ context.Context, _ workspacescan.ScanFacts, base workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
+		invoked = true
+		out := base
+		out.Tools = []string{"advised-tool"}
+		out.Source = workspacescan.SourceAIAssisted
+		return out
+	}
+	st := &localDirScanStore{}
+	srv := New(Config{Store: st, ScanAIAdvisor: adv})
+
+	src := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: dir}
+	profile, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src)
+	if !ok {
+		t.Fatalf("scanLocalDirSource failed: %s", detail)
+	}
+	if !invoked {
+		t.Fatal("the AI advisor was never invoked for a local_dir source (W9-S1-6)")
+	}
+	if !aiRan || !aiChanged {
+		t.Fatalf("aiRan/aiChanged = %v/%v, want true/true", aiRan, aiChanged)
+	}
+	if len(profile.Tools) != 1 || profile.Tools[0] != "advised-tool" {
+		t.Fatalf("advisor addition not reflected in the returned profile: tools=%v", profile.Tools)
+	}
+	var saved workspacescan.WorkspaceProfile
+	if err := json.Unmarshal(st.saved, &saved); err != nil {
+		t.Fatalf("persisted profile: %v", err)
+	}
+	if len(saved.Tools) != 1 || saved.Tools[0] != "advised-tool" {
+		t.Fatalf("advisor addition not persisted: tools=%v", saved.Tools)
+	}
+}
+
+// TestScanLocalDirSource_AIDisabled_ByteIdentical: nil advisor (the flag off)
+// must leave scanLocalDirSource's persisted profile byte-identical to the
+// deterministic DeriveProfile — the same "OFF is a no-op" guarantee the
+// sandboxed repo-scan upload lane pins (TestUploadScanResult_AIDisabled_ByteIdentical).
+func TestScanLocalDirSource_AIDisabled_ByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "setup.py"), []byte("# unmapped build file"), 0o644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+	st := &localDirScanStore{}
+	srv := New(Config{Store: st}) // no ScanAIAdvisor: feature off
+
+	src := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: dir}
+	_, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src)
+	if !ok {
+		t.Fatalf("scanLocalDirSource failed: %s", detail)
+	}
+	if aiRan || aiChanged {
+		t.Fatalf("aiRan/aiChanged = %v/%v, want false/false with the advisor disabled", aiRan, aiChanged)
+	}
+	want := mustJSON(workspacescan.DeriveProfile(workspacescan.CollectFacts(dir)))
+	if string(st.saved) != string(want) {
+		t.Fatalf("disabled profile not byte-identical to deterministic derive\n got=%s\nwant=%s", st.saved, want)
+	}
 }

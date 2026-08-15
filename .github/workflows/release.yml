@@ -97,12 +97,35 @@ jobs:
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
+          # float-latest: "true" on the three agent-* rows below (W30-S1-2).
+          # internal/api/runs_policy.go's agentImage() fallback — what a
+          # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
+          # actually pulls — is hardcoded to the `:latest` tag
+          # (ghcr.io/cjohnstoniv/agent-<key>:latest), never the release
+          # semver. Without also pushing `:latest` here, a by-the-book Helm
+          # install pulled a tag this workflow never published — pull failure
+          # even after a green, signed release. wardynd/wardyn-proxy don't
+          # need this: the Helm chart pins their tag to .Chart.AppVersion
+          # (the release semver), never a bare `:latest` fallback.
           - name: agent-claude-code
             dockerfile: deploy/images/claude-code/Dockerfile
             build-args: ""
+            float-latest: "true"
           - name: agent-codex-cli
             dockerfile: deploy/images/codex-cli/Dockerfile
             build-args: ""
+            float-latest: "true"
+          # W5-S1-3: the guided AWS SSO container login (agentHarnessLogin's
+          # awsSSOAgent="aws-sso" row, harnesscred.go) resolves its sandbox
+          # image through the SAME agentImage() ghcr.io/cjohnstoniv/agent-<id>
+          # convention as claude-code/codex-cli above — without this row that
+          # image was never published, so a by-the-book Helm install or
+          # run-host.sh deployment 404'd on ImagePullBackOff / pull failure
+          # the moment an operator clicked "Log in with AWS SSO".
+          - name: agent-aws-sso
+            dockerfile: deploy/images/aws-sso/Dockerfile
+            build-args: ""
+            float-latest: "true"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -124,6 +147,26 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # W30-S1-2: docker/build-push-action's `tags:` accepts a newline-
+      # separated list — push the semver tag always, plus `:latest` on the
+      # float-latest rows (see the matrix comment above for why). cosign
+      # still signs by DIGEST (build.outputs.digest), so floating `:latest`
+      # doesn't change what gets signed.
+      - name: Compute the image tags
+        id: tags
+        env:
+          IMAGE_NAME: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          FLOAT_LATEST: ${{ matrix.float-latest }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:${RELEASE_TAG}"
+            if [ "$FLOAT_LATEST" = "true" ]; then
+              echo "${IMAGE_NAME}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -134,7 +177,7 @@ jobs:
           platforms: linux/amd64
           provenance: false
           build-args: ${{ matrix.build-args }}
-          tags: ghcr.io/cjohnstoniv/${{ matrix.name }}:${{ steps.tag.outputs.tag }}
+          tags: ${{ steps.tags.outputs.tags }}
       - name: Sign the pushed image (keyless, by digest)
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}

@@ -135,8 +135,9 @@ func featuresFor(langs []string) map[string]map[string]any {
 // curl + dpkg + coreutils from the base image, so it depends on no
 // devcontainer feature — which matters, because this RUN executes BEFORE any
 // feature and envbuilder offers no way to order the two. Reachable because
-// the generated devcontainer only ever builds with
-// WARDYN_ENVBUILD_BUILD_NETWORK=host (deploy/compose); air-gapped is a
+// the compose stack's WARDYN_ENVBUILD_BUILD_NETWORK default (the dedicated
+// wardyn-envbuild bridge — deploy/compose/docker-compose.yaml, never "host")
+// still gives the build container normal outbound internet; air-gapped is a
 // documented limitation, not special-cased here.
 //
 // codex-cli is deliberately absent: it has NO Wardyn-verified public

@@ -39,7 +39,7 @@ import { getToken } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "./ui/utils";
-import { useOperator } from "./wardyn/operator-context";
+import { useOperator, usePrincipal } from "./wardyn/operator-context";
 
 // ---------------------------------------------------------------------------
 // Auth-mode detection
@@ -100,6 +100,14 @@ export interface AttachTerminalProps {
    *  terminal inside an already-height-capped dialog is what blew the Add
    *  integration login out of its frame. */
   heightClass?: string;
+  /**
+   * The run's creator (AgentRun.created_by). Compared against the signed-in
+   * principal so a member can attach to a run THEY own — see the operator
+   * gate below. Omit for a mount site with no run object (e.g. a fresh
+   * interactive session the caller just created themselves): the gate then
+   * falls back to operator-only, same as before this prop existed.
+   */
+  createdBy?: string;
 }
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -120,15 +128,19 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]" },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", createdBy },
   ref,
 ) {
-  // Attach is operator-only on BOTH lanes it can take — the ticket mint
-  // (token-only mode, below) and the WS upgrade itself (cookie mode) — see
-  // http.go. Gating it here, before either is ever attempted, is the one
-  // chokepoint for every mount site (run detail, the demo screen, …): no
-  // failed ticket POST, no WS handshake that the server would refuse anyway.
+  // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
+  // admin-only (ticketOrHumanAuth's fall-through), but the ticket lane
+  // (mintAttachTicket / getRunAuthorized, see http.go + attach_ticket.go) lets
+  // a member hold a ticket for a run THEY created. Gating here, before either
+  // lane is ever attempted, is the one chokepoint for every mount site (run
+  // detail, the demo screen, …): no failed ticket POST, no WS handshake the
+  // server would refuse anyway.
   const operator = useOperator();
+  const principal = usePrincipal();
+  const owned = !!createdBy && createdBy === principal;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const fitAddonRef = React.useRef<FitAddon | null>(null);
@@ -203,11 +215,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
     // today's behavior — connects immediately — for every deployment that
-    // never sets WARDYN_OIDC_OPERATOR_EMAILS. Only a confirmed viewer skips
-    // straight to the reason below, before creating a terminal or a socket.
-    if (!operator) {
+    // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator who
+    // does not own this run (createdBy unset or mismatched) skips straight to
+    // the reason below, before creating a terminal or a socket.
+    if (!operator && !owned) {
       setConnState("error");
-      setErrorMsg("Attaching to a live sandbox requires the operator role.");
+      setErrorMsg("Attaching to a live sandbox requires the operator role or ownership of this run.");
       return;
     }
 
@@ -293,7 +306,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     const connect = () => {
       if (disposed) return;
       setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
-      if (tokenOnlyMode) {
+      // Ticket lane needed for token-only mode (the bearer can't ride a WS
+      // handshake) AND for a non-operator owner (the cookie lane is
+      // admin-only server-side — ticketOrHumanAuth's fall-through, http.go);
+      // an operator on a cookie session keeps using the cookie lane directly.
+      if (tokenOnlyMode || !operator) {
         // Mint a fresh single-use ticket per (re)connect — the previous one was
         // consumed by the last handshake — then open the WS with ?ticket=.
         runs
@@ -472,13 +489,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // operator is added deliberately: in the single-operator/default case it
-    // never changes value, so this never causes an extra run there — today's
-    // behavior is untouched. It only matters for the (rare) case where /me
-    // resolves to viewer shortly after an optimistic-operator mount; the
-    // early return above then tears the effect back down via its own cleanup
-    // before running again.
-  }, [runId, tokenOnlyMode, refit, operator]);
+    // operator/owned are added deliberately: in the single-operator/default
+    // case they never change value, so this never causes an extra run there —
+    // today's behavior is untouched. They matter for the (rare) case where
+    // /me resolves to a non-owning viewer shortly after an optimistic mount;
+    // the early return above then tears the effect back down via its own
+    // cleanup before running again.
+  }, [runId, tokenOnlyMode, refit, operator, owned]);
 
   // Refit shortly after entering/leaving fullscreen (the box just changed).
   React.useEffect(() => {

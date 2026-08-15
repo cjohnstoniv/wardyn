@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -416,6 +417,36 @@ func TestDeletePolicy_Success(t *testing.T) {
 	}
 }
 
+// TestDeleteSource_ReturnsDetachedFrom is the W6-S1-2 regression: a forced
+// delete's response used to be discarded entirely (out=nil), so the CLI had
+// no way to tell the operator which workspaces it just detached from — the
+// only signal available, since nothing 422s downstream at run time. The
+// server answers 200 with {"detached_from": [...]}; the SDK must surface it.
+func TestDeleteSource_ReturnsDetachedFrom(t *testing.T) {
+	id := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/sources/"+id.String() {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("force") != "1" {
+			t.Errorf("query = %q, want force=1", r.URL.RawQuery)
+		}
+		checkAuth(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"detached_from":["payments-ws","review-ws"]}`))
+	}))
+	defer srv.Close()
+
+	detachedFrom, err := newTestClient(srv).DeleteSource(context.Background(), id, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := []string{"payments-ws", "review-ws"}; !slices.Equal(detachedFrom, want) {
+		t.Errorf("detachedFrom = %v, want %v", detachedFrom, want)
+	}
+}
+
 // GetRecording streams raw asciicast bytes (not JSON) and must still carry the
 // bearer, since do()'s JSON path is bypassed.
 func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
@@ -448,6 +479,61 @@ func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
 	}
 }
 
+// W21-S1-6: an interactive run can carry MULTIPLE recordings, one per attach
+// session, each stored under the composite key "<run-id>~<session>"
+// (internal/recording.CastKey) — the server has always served that shape, but
+// GetRecording hardcoded the cast key to the bare run id, so nothing on the
+// CLI/SDK side could ever reach any recording but the run's own. The optional
+// session argument composes the SAME key the server expects.
+func TestGetRecording_SessionArgUsesCompositeKey(t *testing.T) {
+	id := uuid.New()
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/x-asciicast")
+		_, _ = io.WriteString(w, "{\"version\":2}\n")
+	}))
+	defer srv.Close()
+
+	rc, err := newTestClient(srv).GetRecording(context.Background(), id, "attach-1")
+	if err != nil {
+		t.Fatalf("GetRecording: %v", err)
+	}
+	defer rc.Close()
+	_, _ = io.ReadAll(rc)
+
+	if want := "/api/v1/runs/" + id.String() + "/recording/" + id.String() + "~attach-1"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+}
+
+// A zero-arg call (every existing caller) must keep composing the bare-id
+// key, byte-identical to before session was added — TestGetRecording_
+// StreamsCastWithAuth above already pins this, but that test predates session
+// existing at all; pin it explicitly here too so a regression in the
+// variadic's zero-length branch specifically is caught by name.
+func TestGetRecording_NoSessionArgDefaultsToBareRunID(t *testing.T) {
+	id := uuid.New()
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/x-asciicast")
+		_, _ = io.WriteString(w, "{\"version\":2}\n")
+	}))
+	defer srv.Close()
+
+	rc, err := newTestClient(srv).GetRecording(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetRecording: %v", err)
+	}
+	defer rc.Close()
+	_, _ = io.ReadAll(rc)
+
+	if want := "/api/v1/runs/" + id.String() + "/recording/" + id.String(); gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+}
+
 // TestPutSiteConfig_StripsIntegrations pins PLATFORM-API-5: the server
 // hard-rejects a PUT /site-config body carrying a non-empty integrations (they
 // are managed through their own endpoints), so the documented disaster-recovery
@@ -471,7 +557,7 @@ func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
 			{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey},
 		},
 	}
-	if _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
+	if _, _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, present := gotBody["integrations"]; present {

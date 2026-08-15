@@ -21,6 +21,16 @@ import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Button } from "../ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Mono } from "./code-block";
 import { OperatorOnlyHint, SectionLabel } from "./primitives";
 import { useOperator } from "./operator-context";
@@ -51,6 +61,12 @@ export function LiveApprovals({
   const operator = useOperator();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
+  // Deny is irreversible for the rest of the session (there is no re-raise
+  // once a host is denied) — a confirm stop, mirroring DeleteConfirmDialog's
+  // pattern, so one misclick can't silently poison a host the operator meant
+  // to keep. Approve stays a single click: it is the low-risk, correctable
+  // direction (a wrongly-approved request is still visible in the audit log).
+  const [denyTarget, setDenyTarget] = React.useState<ApprovalRequest | null>(null);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -88,6 +104,12 @@ export function LiveApprovals({
     } finally {
       setBusy(null);
     }
+  };
+
+  const confirmDeny = async () => {
+    if (!denyTarget) return;
+    await decide(denyTarget, false);
+    setDenyTarget(null);
   };
 
   if (pending.length === 0) {
@@ -138,13 +160,39 @@ export function LiveApprovals({
               variant="outline"
               className="h-7"
               disabled={!operator || busy === a.id}
-              onClick={() => decide(a, false)}
+              onClick={() => setDenyTarget(a)}
             >
               <X className="size-3.5" /> Deny
             </Button>
           </div>
         );
       })}
+      <AlertDialog open={!!denyTarget} onOpenChange={(o) => !o && setDenyTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Deny{" "}
+              <Mono>{denyTarget ? String((denyTarget.requested_scope?.host as string) ?? "unknown host") : ""}</Mono>?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Denying blocks this host for the rest of the session — there is no undo and no re-raise
+              once it's denied.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                confirmDeny();
+              }}
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+            >
+              <X className="size-3.5" /> Deny
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

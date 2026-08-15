@@ -149,7 +149,22 @@ func setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.Ru
 	}
 	if !llmAccess.Provisioned {
 		if p, ok := agentLLMProvider(agent); ok {
-			it.Fix = &SetupFix{Action: "add_secret", SecretName: p.secret}
+			// W15-W15b-composer-pipeline-6: name the run's ACTUAL resolved
+			// grant secret, not the provider convention name — an
+			// integration-bound run's api_key grant carries the
+			// INTEGRATION's own secret (applyIntegrationCreds), which may
+			// differ from the convention default. Fixing the wrong (unused)
+			// secret would end in a false green: the checklist reads
+			// "satisfied" once the convention secret exists, even though
+			// the run still authenticates through the integration's secret,
+			// unaffected by what the operator just added.
+			secretName := p.secret
+			if g, ok := apiKeyGrantForHost(&spec, p.host); ok {
+				if s := apiKeyGrantScopeSecret(g.Scope); s != "" {
+					secretName = s
+				}
+			}
+			it.Fix = &SetupFix{Action: "add_secret", SecretName: secretName}
 		}
 	}
 	return it, true

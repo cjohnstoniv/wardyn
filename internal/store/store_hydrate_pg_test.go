@@ -547,6 +547,92 @@ func TestPG_DeleteBaseImageInUse(t *testing.T) {
 	}
 }
 
+// TestPG_UpsertBaseImage_IdentityHitNeverTouchesName pins the OTHER half of
+// W7-S1-3 — the safety property a first attempt at this finding got wrong by
+// folding `name = EXCLUDED.name` straight into UpsertBaseImage's own ON
+// CONFLICT clause: this upsert is not only the Add dialog's create path, it
+// is also the PASSTHROUGH a workspace/run resolves its declared base-image
+// spec through (internal/api/sources.go's attachSourcesAndBaseImage-shaped
+// caller), which always derives an auto-placeholder name
+// (lastPathSegment(image)) with NO rename intent whatsoever. Applying
+// EXCLUDED.name unconditionally meant every such passthrough call silently
+// renamed an operator's custom-named catalog row back to that placeholder —
+// the exact "can never be renamed" promise this finding exists to fix, just
+// inverted. An identity hit must leave name alone; see
+// TestPG_UpdateBaseImageName_Renames for the actual (scoped) rename path.
+func TestPG_UpsertBaseImage_IdentityHitNeverTouchesName(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+
+	first, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "my-custom-devbox", Image: "ubuntu:24.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image (create): %v", err)
+	}
+
+	// Same identity (kind, image, steps), a different id and an
+	// auto-derived placeholder name — exactly the shape a passthrough
+	// caller with no rename intent sends (never an operator's typed value).
+	hit, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "ubuntu:24.04", Image: "ubuntu:24.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image (identity hit): %v", err)
+	}
+	if hit.ID != first.ID {
+		t.Fatalf("identity hit returned a different row: got %s, want the original %s", hit.ID, first.ID)
+	}
+	if hit.Name != "my-custom-devbox" {
+		t.Errorf("identity-hit Name = %q, want the ORIGINAL %q — a passthrough upsert must never clobber a custom name", hit.Name, "my-custom-devbox")
+	}
+
+	// Confirm the write actually landed (not just the RETURNING row).
+	reread, err := s.GetBaseImage(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get base image: %v", err)
+	}
+	if reread.Name != "my-custom-devbox" {
+		t.Errorf("reread Name = %q, want %q", reread.Name, "my-custom-devbox")
+	}
+}
+
+// TestPG_UpdateBaseImageName_Renames pins the ACTUAL W7-S1-3 fix: the
+// scoped rename path handleCreateBaseImage calls on an identity hit where
+// the request carried an explicit name (the Add dialog's re-POST-to-rename
+// shape) — the only route (UI, API, CLI, SDK) to rename a catalog row at
+// all, since none of them ever gained a dedicated edit endpoint.
+func TestPG_UpdateBaseImageName_Renames(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+
+	first, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "original-name", Image: "ubuntu:22.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image (create): %v", err)
+	}
+
+	renamed, err := s.UpdateBaseImageName(ctx, first.ID, "renamed")
+	if err != nil {
+		t.Fatalf("update base image name: %v", err)
+	}
+	if renamed.ID != first.ID || renamed.Name != "renamed" {
+		t.Fatalf("UpdateBaseImageName = %+v, want id %s name %q", renamed, first.ID, "renamed")
+	}
+
+	reread, err := s.GetBaseImage(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get base image: %v", err)
+	}
+	if reread.Name != "renamed" {
+		t.Errorf("reread Name = %q, want %q — the Add dialog's rename must not be silently discarded", reread.Name, "renamed")
+	}
+}
+
 // A genuinely-absent id must read as NotFound, not Conflict — the base-image
 // twin of TestPG_DeleteSourceUnknownIDIs404.
 func TestPG_DeleteBaseImageUnknownIDIs404(t *testing.T) {

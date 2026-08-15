@@ -43,7 +43,7 @@ func TestBuildRunnerFromFlags_DockerEnabled(t *testing.T) {
 	if r == nil || target != "docker" {
 		t.Fatalf("want orchestrated docker runner with target \"docker\", got %T / %q", r, target)
 	}
-	if !strings.Contains(strings.Join(componentsInfo(rrFlags("docker"), target)["sandbox"].Available, ","), "docker") {
+	if !strings.Contains(strings.Join(componentsInfo(rrFlags("docker"), target, nil)["sandbox"].Available, ","), "docker") {
 		t.Fatalf("healthz sandbox.available must list the registered docker substrate")
 	}
 }

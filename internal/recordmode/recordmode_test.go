@@ -100,9 +100,10 @@ func fileWriteEvent(path string) types.AuditEvent {
 
 func TestCapture(t *testing.T) {
 	tests := []struct {
-		name   string
-		events []types.AuditEvent
-		check  func(t *testing.T, obs Observations)
+		name     string
+		events   []types.AuditEvent
+		confined bool
+		check    func(t *testing.T, obs Observations)
 	}{
 		{
 			name:   "empty input yields zero-value observations",
@@ -151,6 +152,27 @@ func TestCapture(t *testing.T) {
 				}
 				if !containsSubstr(obs.Anomalies, "rule_source=builtin:private-ip") {
 					t.Errorf("anomaly missing rule_source: %v", obs.Anomalies)
+				}
+			},
+		},
+		{
+			// W19-W19b-4: a deny during a CONFINED replay is the advertised
+			// containment proof working as designed, not an anomaly a
+			// synthesis must second-guess — it must still show up on the
+			// per-host DomainObservation (nothing hidden), just not in
+			// Anomalies, and never claim "during open recording" for a
+			// session that was never open.
+			name:     "confined deny captures deny count but NOT an anomaly",
+			confined: true,
+			events: []types.AuditEvent{
+				egressEvent(egress.Deny, "off-policy.example", "GET", "builtin:private-ip"),
+			},
+			check: func(t *testing.T, obs Observations) {
+				if len(obs.Domains) != 1 || obs.Domains[0].DenyCount != 1 {
+					t.Fatalf("domain agg wrong: %+v", obs.Domains)
+				}
+				if len(obs.Anomalies) != 0 {
+					t.Errorf("a confined deny must not be recorded as an anomaly, got %v", obs.Anomalies)
 				}
 			},
 		},
@@ -251,7 +273,7 @@ func TestCapture(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.check(t, Capture(tt.events))
+			tt.check(t, Capture(tt.events, tt.confined))
 		})
 	}
 }
@@ -269,13 +291,13 @@ func TestCaptureOrderIndependent(t *testing.T) {
 		connectEvent("1.2.3.4:443", groundtruth.CorrelationUnmapped, outcomeSuccess),
 		fileWriteEvent("/etc/hosts"),
 	}
-	forward := Capture(events)
+	forward := Capture(events, false)
 
 	reversed := make([]types.AuditEvent, len(events))
 	for i := range events {
 		reversed[i] = events[len(events)-1-i]
 	}
-	backward := Capture(reversed)
+	backward := Capture(reversed, false)
 
 	if !reflect.DeepEqual(forward, backward) {
 		t.Fatalf("Capture is order-dependent:\n forward=%+v\nbackward=%+v", forward, backward)
@@ -292,7 +314,7 @@ func TestSynthesize(t *testing.T) {
 		// and first_use_approval must be true.
 		obs := Capture([]types.AuditEvent{
 			egressEvent(egress.Allow, "api.anthropic.com", "POST", "policy"),
-		})
+		}, false)
 		spec, _ := Synthesize(obs, nil, run)
 		if spec.AllowAllEgress {
 			t.Error("allow_all_egress must be forced false")
@@ -314,7 +336,7 @@ func TestSynthesize(t *testing.T) {
 			egressEvent(egress.Allow, "api.github.com", "GET", "policy"),
 			egressEvent(egress.Deny, "denied.example", "GET", "policy"),
 			egressEvent(egress.Pending, "pending.example", "GET", "policy"),
-		})
+		}, false)
 		spec, warns := Synthesize(obs, nil, run)
 		want := []string{"api.github.com", "pypi.org"}
 		if !reflect.DeepEqual(spec.AllowedDomains, want) {
@@ -331,7 +353,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("empty input denies all egress with warning", func(t *testing.T) {
-		spec, warns := Synthesize(Capture(nil), nil, run)
+		spec, warns := Synthesize(Capture(nil, false), nil, run)
 		if spec.AllowAllEgress || len(spec.AllowedDomains) != 0 {
 			t.Errorf("empty recording must produce empty default-deny egress: %+v", spec)
 		}
@@ -360,7 +382,7 @@ func TestSynthesize(t *testing.T) {
 		obs := Capture([]types.AuditEvent{
 			mintEvent(fixedGrantA, outcomeSuccess),
 			mintEvent(fixedGrantB, outcomeSuccess),
-		})
+		}, false)
 		spec, warns := Synthesize(obs, runGrants, run)
 		if len(spec.EligibleGrants) != 2 {
 			t.Fatalf("want 2 eligible grants (only the minted ones), got %d: %+v", len(spec.EligibleGrants), spec.EligibleGrants)
@@ -379,7 +401,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("minted grant absent from catalog warns and is omitted", func(t *testing.T) {
-		obs := Capture([]types.AuditEvent{mintEvent(fixedGrantA, outcomeSuccess)})
+		obs := Capture([]types.AuditEvent{mintEvent(fixedGrantA, outcomeSuccess)}, false)
 		spec, warns := Synthesize(obs, nil, run) // empty catalog
 		if len(spec.EligibleGrants) != 0 {
 			t.Errorf("unknown grant must be omitted, got %+v", spec.EligibleGrants)
@@ -390,7 +412,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("confinement class left empty and warns when run has none", func(t *testing.T) {
-		spec, warns := Synthesize(Capture(nil), nil, types.AgentRun{})
+		spec, warns := Synthesize(Capture(nil, false), nil, types.AgentRun{})
 		if spec.MinConfinementClass != "" {
 			t.Errorf("min_confinement_class = %q, want empty", spec.MinConfinementClass)
 		}
@@ -403,7 +425,7 @@ func TestSynthesize(t *testing.T) {
 		obs := Capture([]types.AuditEvent{
 			fileWriteEvent("/workspace/app/secret.txt"),
 			fileWriteEvent("/etc/passwd"),
-		})
+		}, false)
 		spec, warns := Synthesize(obs, nil, run)
 		if len(spec.WorkspaceMounts) != 0 {
 			t.Errorf("workspace_mounts must never be synthesized, got %+v", spec.WorkspaceMounts)
@@ -418,7 +440,7 @@ func TestSynthesize(t *testing.T) {
 			egressEvent(egress.Deny, "evil.example", "GET", "policy"),
 			execEvent([]string{"/usr/bin/curl"}, false),
 			connectEvent("8.8.8.8:53", groundtruth.CorrelationUnmapped, outcomeSuccess),
-		})
+		}, false)
 		_, warns := Synthesize(obs, nil, run)
 		if !containsSubstr(warns, "anomaly: egress.deny to evil.example") {
 			t.Errorf("expected deny anomaly surfaced as warning: %v", warns)
@@ -448,7 +470,7 @@ func TestSynthesizeDeterministic(t *testing.T) {
 		mintEvent(fixedGrantB, outcomeSuccess),
 		execEvent([]string{"/usr/bin/git"}, false),
 		fileWriteEvent("/work/out"),
-	})
+	}, false)
 
 	spec1, warns1 := Synthesize(obs, runGrants, run)
 	for i := 0; i < 25; i++ {
@@ -490,7 +512,7 @@ func TestMintedGrantIDsSorted(t *testing.T) {
 		mintEvent(fixedGrantC, outcomeSuccess),
 		mintEvent(fixedGrantA, outcomeSuccess),
 		mintEvent(fixedGrantB, outcomeSuccess),
-	})
+	}, false)
 	got := make([]string, len(obs.MintedGrantIDs))
 	for i, id := range obs.MintedGrantIDs {
 		got[i] = id.String()

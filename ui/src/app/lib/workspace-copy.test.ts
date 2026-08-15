@@ -47,6 +47,20 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
   });
 });
 
+// W9-S1-5: BLIND_SPOT must match the scanner's REAL bounds
+// (internal/workspacescan/scan.go's maxDepth=6, maxManifestHits, maxFileBytes;
+// detect.go's maxDetectLines) rather than a stale "4 levels" that never
+// tracked a depth the scanner raised to 6, and must name the per-scan file
+// budget / per-file size-or-line caps it was silently omitting entirely.
+describe("workspace-copy — BLIND_SPOT matches the scanner's real bounds", () => {
+  it("states the real walk depth (6, not the stale 4) and the file/size caps it used to omit", () => {
+    expect(C.BLIND_SPOT).toContain("6 levels");
+    expect(C.BLIND_SPOT).not.toContain("4 levels");
+    expect(C.BLIND_SPOT.toLowerCase()).toMatch(/file budget|manifest/);
+    expect(C.BLIND_SPOT).toMatch(/1 ?MB|1 ?MiB/i);
+  });
+});
+
 // Every string here is user-facing copy — "harness" is internal jargon (see
 // AI_TYPES/CAPS in integrations.ts, and V2C's own HARNESS_ON/HARNESS_OFF KEYS)
 // that the approved copy deliberately never says out loud (it says "agent

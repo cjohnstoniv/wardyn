@@ -95,7 +95,42 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	go s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval)
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx))
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx))
+}
+
+// reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass, closing
+// W15-W15c-terminal-lifecycle-4: a terminal run's SandboxRef only survives
+// finalizeRunTail non-empty when THAT run's own StopSandbox call failed
+// (finalizeRunTail's doc comment) — and this file's other three passes
+// deliberately skip terminal runs (they exist to finish an INCOMPLETE run,
+// not to retry a completed one's cleanup; isTerminalRunState guards below).
+// Nothing else ever revisits the abandoned container (and its proxy sidecar,
+// which resolved injected credential VALUES into memory at startup) after
+// the one failure audit at finalize time. Retry the teardown, every boot,
+// for every terminal run still carrying a ref — StopSandbox is idempotent on
+// an already-gone sandbox (Runner's own contract, handleKillRun's doc
+// comment), so retrying against a sandbox that in fact came down fine is a
+// safe no-op. Clears the ref on success so the run drops out of future
+// sweeps; a still-failing teardown leaves it set (stopSandboxOrAudit already
+// audits it with teardown_error) for the NEXT boot to retry.
+func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
+	runs, err := s.cfg.Store.ListRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile orphaned sandboxes: list runs: %w", err)
+	}
+	for _, run := range runs {
+		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
+			continue
+		}
+		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan_sweep") {
+			continue // still stuck; audited above, ref stays set for the next boot
+		}
+		if serr := s.cfg.Store.SetSandboxRef(ctx, run.ID, ""); serr != nil {
+			slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
+				slog.String("run_id", run.ID.String()), slog.Any("err", serr))
+		}
+	}
+	return nil
 }
 
 // sweepOrphanedBuilds reaps envbuild build containers orphaned by a crashed or

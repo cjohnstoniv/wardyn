@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,18 +42,32 @@ import (
 // role cannot DROP/DISABLE the audit_events append-only triggers. When unset,
 // behavior is EXACTLY single-DSN mode, with an honest notice that audit_events is
 // not DDL-protected without the role split. Extracted verbatim from run().
-func connectAndMigrate(bootCtx context.Context, dsn, migrateDSN string) (*pgxpool.Pool, error) {
-	pool, err := db.Connect(bootCtx, dsn)
+//
+// W28-S1-4: connect and migrate get SEPARATE budgets, not one shared deadline.
+// connectTimeout bounds the (fast) pool-open + ping calls; migrateTimeout bounds
+// db.Migrate alone, on its own context derived from rootCtx — a slow migration
+// (a new index on the unbounded audit_events table, say) gets minutes to finish
+// rather than crash-looping the upgrade against the same budget a TCP connect
+// needs seconds for. rootCtx is the signal-bound context (main's SIGINT/SIGTERM),
+// not the 30s-bounded one — WithTimeout takes the EARLIEST of parent and its own
+// deadline, so deriving migrateCtx from an already-30s-bounded parent would have
+// silently kept the old cap.
+func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration) (*pgxpool.Pool, error) {
+	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
+	defer cancelConnect()
+	pool, err := db.Connect(connectCtx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}
+	migrateCtx, cancelMigrate := context.WithTimeout(rootCtx, migrateTimeout)
+	defer cancelMigrate()
 	if mDSN := strings.TrimSpace(migrateDSN); mDSN != "" {
-		mpool, merr := db.Connect(bootCtx, mDSN)
+		mpool, merr := db.Connect(connectCtx, mDSN)
 		if merr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("connect migrate db: %w", merr)
 		}
-		merr = db.Migrate(bootCtx, mpool)
+		merr = db.Migrate(migrateCtx, mpool)
 		mpool.Close()
 		if merr != nil {
 			pool.Close()
@@ -63,23 +78,23 @@ func connectAndMigrate(bootCtx context.Context, dsn, migrateDSN string) (*pgxpoo
 		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
 		// owner/superuser) role gets no protection — logging "protected"
 		// unconditionally would be an overclaim (invariant 5).
-		protected, perr := db.AuditDDLProtected(bootCtx, pool)
+		protected, perr := db.AuditDDLProtected(connectCtx, pool)
 		if perr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify audit ddl protection: %w", perr)
 		}
 		if protected {
-			slog.InfoContext(bootCtx, "wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
+			slog.InfoContext(rootCtx, "wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
 		} else {
-			slog.WarnContext(bootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
+			slog.WarnContext(rootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
 		}
 		return pool, nil
 	}
-	if err := db.Migrate(bootCtx, pool); err != nil {
+	if err := db.Migrate(migrateCtx, pool); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	slog.InfoContext(bootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
+	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
 	return pool, nil
 }
 
@@ -159,10 +174,19 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runn
 		ConfinementRuntimes: confRuntimes,
 	})
 	if err != nil {
-		// FAIL CLOSED on both a typo'd -runner and a substrate that is not
-		// compiled into this build (e.g. "docker" without -tags docker) — the
-		// registry error lists what IS registered.
-		return nil, "", fmt.Errorf("unknown -runner %q (want \"none\" or a registered substrate; the docker substrate requires a wardynd built with -tags docker): %w", *f.runnerSel, err)
+		// W27-S1-3: discriminate WHY substrate.New failed before printing the
+		// same headline for both. A typo'd -runner or a substrate not compiled
+		// into this build (e.g. "docker" without -tags docker) never reaches the
+		// registry at all — Resolve's error is the right one for that. But a
+		// REGISTERED substrate (e.g. "k8s") can still fail to CONSTRUCT — the
+		// canary's flagship refuse-to-construct chief among them — and that
+		// failure has nothing to do with -tags docker; printing the build-tag
+		// headline over it sent every k8s boot refusal down the wrong
+		// troubleshooting path.
+		if !slices.Contains(substrate.Names(), *f.runnerSel) {
+			return nil, "", fmt.Errorf("unknown -runner %q (want \"none\" or a registered substrate; the docker substrate requires a wardynd built with -tags docker): %w", *f.runnerSel, err)
+		}
+		return nil, "", fmt.Errorf("-runner %q failed to start: %w", *f.runnerSel, err)
 	}
 	slog.Info("wardynd: runner enabled", slog.String("substrate", sub.Name()), slog.String("proxy_image", *f.proxyImage))
 	return orchestrator.New(sub).WithRefStore(refs), sub.Name(), nil
@@ -217,6 +241,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 
 	// Human SSO (OIDC), optional. The session-cookie HMAC key is loaded from the
 	// secret store ("wardyn-session-key"), generated and persisted on first boot.
+	// hasRoleMap survives past the OIDC-configured block below (roleMap itself
+	// is scoped to it) — validateOperatorPosture needs it after the block closes.
+	var hasRoleMap bool
 	if *f.oidcIssuer != "" {
 		sessKey, kerr := loadOrCreateSessionKey(bootCtx, secrets)
 		if kerr != nil {
@@ -230,6 +257,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if rerr != nil {
 			return of, fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", rerr)
 		}
+		hasRoleMap = len(roleMap) > 0
 		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
 		if defaultRole != "" && !oidc.ValidRole(defaultRole) {
 			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q", defaultRole, oidc.RoleAdmin, oidc.RoleMember)
@@ -313,7 +341,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// admin-equivalent. Checked HERE rather than in validateConfig because the
 	// authenticator only exists this far into boot; of.authn is the resolved
 	// "OIDC is configured" fact, so this cannot drift from what actually mounted.
-	if err := validateOperatorPosture(of.authn != nil, splitCSV(*f.oidcOperatorEmails), *f.allowOIDCNoOperatorList); err != nil {
+	if err := validateOperatorPosture(of.authn != nil, splitCSV(*f.oidcOperatorEmails), *f.allowOIDCNoOperatorList, hasRoleMap); err != nil {
 		return of, err
 	}
 
@@ -432,17 +460,29 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 // split lives in docs/PLUGGABILITY.md and ROADMAP.md, where a recommendation
 // this build cannot yet run belongs. policy_engine has no registry yet, so it
 // carries no "available".
-func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentInfo {
+//
+// recStore is the ACTUAL constructed store (nil when disabled — e.g. the fs
+// backend with no directory, the stock Helm install's default: persistence
+// off, WARDYN_RECORDING_DIR empty). Without it, "recording" reported the
+// *flag* (*f.recordingSel, e.g. "fs") regardless of whether that backend ever
+// came up, so a stock deployment's /healthz claimed a live recording store
+// while every run silently recorded nothing and the UI blamed "no session
+// captured yet" — a broken promise, not a missing feature.
+func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store) map[string]api.ComponentInfo {
 	sourceOf := func(selected, def string) string {
 		if selected == def {
 			return "default"
 		}
 		return "configured"
 	}
+	recInfo := api.ComponentInfo{Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "pg")}
+	if recStore == nil {
+		recInfo = api.ComponentInfo{Selected: "none", Available: recording.Names(), Source: "disabled"}
+	}
 	return map[string]api.ComponentInfo{
 		"identity":      {Selected: *f.identitySel, Available: identity.Names(), Source: sourceOf(*f.identitySel, "embedded")},
 		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), Source: sourceOf(*f.secretStoreSel, "pg")},
-		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "pg")},
+		"recording":     recInfo,
 		"policy_engine": {Selected: "builtin"},
 		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}

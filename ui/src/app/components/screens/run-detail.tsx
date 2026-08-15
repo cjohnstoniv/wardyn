@@ -21,9 +21,7 @@ import {
   Loader2,
   ScrollText,
   ShieldCheck,
-  Skull,
   SquareTerminal,
-  TerminalSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -40,6 +38,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
+import { health } from "../../lib/api/health";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
@@ -55,17 +54,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import {
   ActorTypeChip,
-  AgentBadge,
   ApprovalKindChip,
   ApprovalStateBadge,
   Chip,
-  ConfinementChip,
   EgressDecisionChip,
-  RunStateBadge,
   SectionCard,
 } from "../wardyn/primitives";
-import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
-import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { JsonBlock, Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
@@ -77,6 +71,7 @@ import { useOperator } from "../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
 import { cn } from "../ui/utils";
 import { ConnectSSHCard } from "./run-detail-ssh";
+import { SummaryHeader } from "./run-detail-summary-header";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -92,6 +87,13 @@ export function RunDetailScreen() {
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
+  // W21-S1-5: the run's session.recording events, indexed SEPARATELY from the
+  // general audit trail — that trail is fetched oldest-first with a hard
+  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording
+  // events can crowd out later ones (or vice versa: an early one falls off)
+  // before the recording picker ever sees them. A tiny second, filtered
+  // fetch spends its own 1000-row budget on just this action.
+  const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [tab, setTab] = React.useState<Tab>("overview");
 
@@ -101,6 +103,16 @@ export function RunDetailScreen() {
   // Which cast to replay: the run's own (stored under the bare run id) or one
   // interactive attach session (the composite `<run-id>~<session-uuid>` key).
   const [recKey, setRecKey] = React.useState(id);
+  // W21-S1-7: /healthz's components.recording — "none" means this
+  // deployment's recording store never came up (stock Helm install:
+  // persistence off), so a missing cast is a deployment fact, not "this run
+  // happened not to get one". A boot-time fact; read once.
+  const [recordingDisabled, setRecordingDisabled] = React.useState(false);
+  React.useEffect(() => {
+    health.health().then((h) => {
+      if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
+    });
+  }, []);
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
@@ -121,13 +133,15 @@ export function RunDetailScreen() {
         runsApi.getGrants(id),
         approvalsApi.listApprovals(""),
         auditApi.listAudit(id),
+        auditApi.listAudit(id, "session.recording"),
       ])
-        .then(([r, g, allApprovals, a]) => {
+        .then(([r, g, allApprovals, a, recA]) => {
           setRun(r ?? null);
           setGrants(g);
           setEgress(egressFromAudit(a));
           setApprovals(allApprovals.filter((x) => x.run_id === id));
           setAudit(a);
+          setRecordingAudit(recA);
           setStatus("ready");
         })
         .catch(() => {
@@ -317,8 +331,9 @@ export function RunDetailScreen() {
               <RecordingTab
                 state={recState}
                 recording={recording}
+                recordingDisabled={recordingDisabled}
                 runId={id}
-                sessions={attachSessions(audit)}
+                sessions={attachSessions(recordingAudit)}
                 selected={recKey || id}
                 onSelect={(key) => {
                   setRecKey(key);
@@ -346,77 +361,12 @@ function pendingCount(approvals: ApprovalRequest[]): number {
 
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
 // key the console never asked for — so they were write-only. There is no
-// list-casts endpoint (and no Store.List to add one on): the index is the audit
-// trail we already hold, where session.recording's TARGET is that very key.
+// list-casts endpoint (and no Store.List to add one on): the index is a
+// session.recording-FILTERED audit fetch (W21-S1-5) — not the general trail,
+// whose own 1000-row cap a chatty run can blow through — where the event's
+// TARGET is that very key.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
   return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
-}
-
-// ---------------------------------------------------------------------------
-// Summary header
-// ---------------------------------------------------------------------------
-function SummaryHeader({
-  run,
-  terminal,
-  exitCode,
-  onKill,
-}: {
-  run: AgentRun;
-  terminal: boolean;
-  // The agent's own exit code (audit-derived); undefined when none was recorded.
-  exitCode?: number;
-  onKill: () => void;
-}) {
-  const [confirmId, setConfirmId] = React.useState<string | null>(null);
-  return (
-    <div className="rounded-xl border border-border bg-card p-5">
-      <div className="flex flex-wrap items-start gap-4">
-        <AgentBadge agent={run.agent} withLabel={false} />
-        <div className="min-w-[260px] flex-1">
-          <h1 className="text-xl font-semibold leading-tight text-foreground">{run.task || "—"}</h1>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-            <AgentBadge agent={run.agent} />
-            <span>·</span>
-            <span className="font-mono">{run.repo}</span>
-            <span>·</span>
-            <span title={run.created_at}>started {relativeTime(run.created_at)} by {run.created_by}</span>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <RunStateBadge state={run.state} />
-            {/* A FAILED run said nothing about WHY anywhere in the console —
-                the agent's exit code was CLI-only (wardyn run --wait). */}
-            {exitCode !== undefined && (
-              <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono>
-                agent exit {exitCode}
-              </Chip>
-            )}
-            <ConfinementChip value={run.confinement_class} />
-            <BarrierStrengthStrip tier={run.confinement_class} />
-            {run.interactive && (
-              <Chip tone="info" className="gap-1">
-                <TerminalSquare className="size-3" />
-                {run.state === "RUNNING" ? "Interactive — attachable" : "Interactive"}
-              </Chip>
-            )}
-          </div>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-danger hover:text-danger"
-          disabled={terminal}
-          onClick={() => setConfirmId(run.id)}
-        >
-          <Skull className="size-4" /> Kill
-        </Button>
-        <KillRunDialog
-          runId={confirmId}
-          onOpenChange={(o) => !o && setConfirmId(null)}
-          onConfirm={onKill}
-        />
-      </div>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +463,7 @@ function OverviewTab({
           }
         >
           {attachable ? (
-            <AttachTerminal runId={run.id} />
+            <AttachTerminal runId={run.id} createdBy={run.created_by} />
           ) : (
             <EmptyMini
               text={
@@ -858,6 +808,7 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
 function RecordingTab({
   state,
   recording,
+  recordingDisabled,
   runId,
   sessions,
   selected,
@@ -866,6 +817,9 @@ function RecordingTab({
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
+  /** W21-S1-7: this deployment's recording store never came up — a missing
+   *  cast means "it can't", not "it hasn't yet". */
+  recordingDisabled: boolean;
   runId: string;
   // The run's interactive attach sessions (session.recording audit events).
   sessions: AuditEvent[];
@@ -908,8 +862,12 @@ function RecordingTab({
         <div className="rounded-xl border border-border bg-card">
           <EmptyState
             icon={SquareTerminal}
-            title="No recording available"
-            description="This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+            title={recordingDisabled ? "Session recording is disabled on this deployment" : "No recording available"}
+            description={
+              recordingDisabled
+                ? "No run on this server captures one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on."
+                : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+            }
           />
         </div>
       ) : (

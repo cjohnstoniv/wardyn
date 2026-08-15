@@ -36,17 +36,19 @@ All contributors and subagents MUST preserve the six security invariants documen
 
 ## Conformance Gate
 
-Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5+ — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
+Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target and, for anything the Kubernetes runner supports, the `conformance-k8s` CI job (needs a local `kind` cluster to run outside CI — see RELEASING.md; a driver-agnostic honesty stub keeps the contract enforced everywhere else). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the
   UNION of both shipped builds — tagless + `-tags docker`),
   `make test-report-docker` (fakeDocker), `make test-report-pg` (real Postgres)
-- Conformance tests: Docker + the driver-agnostic stub (both blocking in CI)
+- Conformance tests: Docker + the driver-agnostic stub (blocking in CI), plus
+  `conformance-k8s` for the Kubernetes runner
 - UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
 - Docs: the mermaid diagram + label-truth gate (`make diagrams`)
 - Deploy: `helm lint` + `helm template` render assertions over the default AND
-  `ci/all-on-values.yaml` value sets, and `docker compose config` validation
+  `ci/all-on-values.yaml` value sets, `docker compose config` validation, and
+  `helm-install-test` (kind cluster: postgres + helm install + `/healthz`)
 - Supply chain: `govulncheck`, `staticcheck`, `gitleaks` (secret scan),
   `go-licenses` (dependency license check), and SPDX license headers
   (`make license-headers`)

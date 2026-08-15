@@ -23,8 +23,13 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a) },
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+// serverId is required: LLMCredFields (workspace-llm-cred.tsx) skips any row
+// without one — a deliberate filter mirrored from step-access.tsx's picker,
+// since a client display id with no server-side identity would silently fail
+// to bind server-side. A real deriveAiRows "Managed subscription" row always
+// carries one (aiServerId("anthropic_subscription", false)).
 const listIntegrationsMock = vi.fn().mockResolvedValue({
-  ai: [{ id: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
+  ai: [{ id: "ai-managed", serverId: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
   scm: [],
 });
 vi.mock("../../../lib/api/integrations", async () => {

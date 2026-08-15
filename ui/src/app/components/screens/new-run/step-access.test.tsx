@@ -71,6 +71,7 @@ const teamKey: IntegrationRow = {
 
 const openaiTeam: IntegrationRow = {
   id: "int-openai",
+  serverId: "openai_api_key",
   category: "ai_provider",
   name: "OpenAI (team)",
   typeLabel: "openai · api key",
@@ -387,7 +388,10 @@ describe("StepAccess — Override for this run peek", () => {
     expect(compatibleRow).not.toBeDisabled();
   });
 
-  it("committing an override patches integrationId", async () => {
+  // W15-W15e-wizard-roundtrip-2: the peek must commit row.serverId — the id
+  // create/preflight actually resolve (resolveIntegrationRef) — never
+  // row.id, the client display namespace ("ai:…"/"int-…") that both 400.
+  it("committing an override patches integrationId with the row's SERVER id, not the client display id", async () => {
     listWorkspacesMock.mockResolvedValue([]);
     listIntegrationsMock.mockResolvedValue(integrations([teamKey, openaiTeam]));
     let patched: Record<string, unknown> | null = null;
@@ -400,7 +404,62 @@ describe("StepAccess — Override for this run peek", () => {
     await user.click(within(peek).getByText("Team API key"));
     await user.click(within(peek).getByRole("button", { name: /use this integration/i }));
 
-    expect(patched).toEqual({ integrationId: "int-team-key" });
+    // teamKey.id is "int-team-key" (the display id) — teamKey.serverId is
+    // "anthropic_api_key" (what the server actually resolves).
+    expect(patched).toEqual({ integrationId: "anthropic_api_key" });
+  });
+
+  // Same defect, exercised against a REAL deriveAiRows-shaped row (the
+  // "ai:…" id namespace + aiServerId's actual mapping), not the synthetic
+  // "int-team-key"/"anthropic_api_key" fixture above — the id/serverId gap
+  // this finding is about is invisible unless the id namespaces actually
+  // differ the way deriveAiRows really produces them.
+  it("a real deriveAiRows row commits its aiServerId, and a row with no serverId can't be picked at all", async () => {
+    const realApiKeyRow: IntegrationRow = {
+      id: "ai:anthropic_api_key",
+      serverId: "anthropic_api_key",
+      category: "ai_provider",
+      name: "Anthropic (API key)",
+      typeLabel: "anthropic · api key",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: ["anthropic-api-key"],
+      aiType: "anthropic_api_key",
+      checkIds: [],
+    };
+    // ai:anthropic_cli_login: a passive CLI-login detection with NO serverId
+    // (see integrations.ts) — nothing server-side to adopt/commit.
+    const cliLoginDetected: IntegrationRow = {
+      id: "ai:anthropic_cli_login",
+      category: "ai_provider",
+      name: "Claude Code CLI (resident login)",
+      typeLabel: "anthropic · cli login detected",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      hostCli: true,
+      checkIds: [],
+    };
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([realApiKeyRow, cliLoginDetected]));
+    let patched: Record<string, unknown> | null = null;
+    const user = userEvent.setup();
+    renderStep({ patch: (p) => { patched = p; } });
+
+    await screen.findByText("Anthropic (API key)");
+    await user.click(screen.getByRole("button", { name: /override for this run/i }));
+    const peek = await screen.findByRole("dialog");
+
+    // No-serverId row is skipped entirely — never rendered as an option.
+    expect(within(peek).queryByText("Claude Code CLI (resident login)")).toBeNull();
+
+    await user.click(within(peek).getByText("Anthropic (API key)"));
+    await user.click(within(peek).getByRole("button", { name: /use this integration/i }));
+
+    expect(patched).toEqual({ integrationId: "anthropic_api_key" });
   });
 
   it("'Use the server default' clears an existing override", async () => {
@@ -523,5 +582,37 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId="ws-1" />);
     await screen.findByText(RD.NONE_LINE("Claude Code"));
     expect(screen.getByRole("link", { name: /change on the workspace/i })).toHaveAttribute("href", "/workspaces/ws-1");
+  });
+
+  // W15-W15e-wizard-roundtrip-5: a workspace pin (llm_cred.integration_ref)
+  // that doesn't resolve to any fetched integration row must refuse here —
+  // mirroring the server's resolveRunIntegration (internal/api/llmcred.go),
+  // which returns "no binding" the instant a SET workspace ref fails to
+  // resolve, rather than falling through to the server-default tier. Before
+  // the fix this cascaded past the dangling pin and resolved (and rendered)
+  // a DIFFERENT provider — one the actual launch would never use.
+  it("a workspace pinned to an integration that no longer resolves shows the honest none-line, not a different provider", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-1",
+        name: "payments",
+        kind: "repo",
+        source: "acme/payments",
+        status: "scanned",
+        created_at: "now",
+        updated_at: "now",
+        llm_cred: { integration_ref: "int-deleted" },
+      },
+    ]);
+    // teamKey IS the genuinely-marked server default — must NOT be shown,
+    // even though it would resolve fine on its own.
+    listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
+    // onPatch present (the manual wizard's usage) so an unresolved case
+    // renders the amber none-line rather than the compose-form's softer
+    // neutral "resolves at review" line (M7) — this is the wizard's own path.
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId="ws-1" onPatch={() => {}} />);
+    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByText("Team API key")).not.toBeInTheDocument();
+    expect(screen.queryByText(/this workspace pins it/i)).not.toBeInTheDocument();
   });
 });

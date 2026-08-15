@@ -75,6 +75,12 @@ const (
 // wants snappy release, not a herd re-checking the same host.
 var holdPollInterval = 1 * time.Second
 
+// concurrentRaiseRetries bounds how many times ResolveWait re-resolves a host
+// stuck with State==apPending && ApprovalID==Nil before giving up (see
+// ResolveWait's doc comment). Each retry costs one holdPollInterval sleep, so
+// production worst case is a handful of seconds — well inside holdTimeout.
+const concurrentRaiseRetries = 5
+
 // approvalTTL bounds how long a granted (apApproved) host is trusted from cache
 // before Resolve re-validates it against the control plane. Without it an
 // approval that later EXPIRES or is REVOKED is never observed and egress keeps
@@ -120,6 +126,27 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveResult {
 	// First resolve raises the approval (or returns a cached terminal state).
 	r := a.Resolve(ctx, host)
+	// A concurrent first-touch connection to the SAME new host can land here
+	// while ANOTHER goroutine's raise() for that host is still in flight: the
+	// raiser claims apPending under lock BEFORE its network round trip returns
+	// and records the real approval id (see the needRaise branch below), so a
+	// sibling that resolves in that window observes apPending with a Nil id —
+	// indistinguishable, from resolveResult alone, from a raise that already
+	// failed outright. Without this retry, ApprovalID==uuid.Nil below would
+	// bail out immediately: wait_for_review would silently degrade to a
+	// deny_with_review-style fail-fast for every connection except the one
+	// that won the raise race (W20-hold-fsm-4). The raise is a single HTTP
+	// round trip, so a few short re-resolves clear it in practice; a raise
+	// that genuinely failed stays apPending/Nil and this exits the same as
+	// before, just after a bounded extra wait.
+	for i := 0; r.State == apPending && r.ApprovalID == uuid.Nil && i < concurrentRaiseRetries; i++ {
+		select {
+		case <-ctx.Done():
+			return r
+		case <-time.After(holdPollInterval):
+		}
+		r = a.Resolve(ctx, host)
+	}
 	if r.State == apApproved || r.State == apDenied || r.ApprovalID == uuid.Nil {
 		return r
 	}

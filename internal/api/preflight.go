@@ -137,6 +137,21 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// run launch credentials fine. No audit event — preflight persists nothing
 	// (the run.workspace.creds audit is the create path's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
+	// W15-S1-3: widen the spec's egress from onboarded-workspace registries +
+	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
+	// side-effect-free (no audit — mirrors the fold's own "preflight persists
+	// nothing" note above) — otherwise this preview graded/checklisted a
+	// NARROWER envelope than the run will actually be launched with (launch
+	// widens AFTER preflight would have graded), so Review understated what
+	// the run gets. unionRunEgress's SSH/site-config/ADO SCM lanes are
+	// deliberately NOT repeated here: those need grantWiring, which does not
+	// exist yet at preflight time (no grants have been minted) — the
+	// workspace + clone-host union below is the lane that can silently
+	// diverge without any grant ever being involved.
+	unionWorkspaceEgress(&spec, wsRefs)
+	for _, ws := range wsRefs {
+		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
+	}
 	_, _, bedrockRef := s.foldRunIntegration(ctx, &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 

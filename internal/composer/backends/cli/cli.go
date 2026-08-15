@@ -193,9 +193,15 @@ func (c *cliComposer) Clarify(ctx context.Context, req composer.ComposeRequest) 
 // read-only, approvals disabled — same trust posture as Propose/Clarify. The answer
 // is never re-graded or clamped.
 func (c *cliComposer) Assist(ctx context.Context, req composer.ComposeRequest, question string) (string, error) {
-	if err := composer.ValidateRequest(req); err != nil {
-		return "", err
-	}
+	// W15-W15b-composer-pipeline-3: unlike Propose/Clarify, Assist is advisory +
+	// escalation-only — it can be asked from the clarify/review steps where the
+	// UI hasn't (re)sent prompt/workspace (compose_assist.go's handler
+	// deliberately skips ValidateRequest for exactly this reason). Re-imposing
+	// the strict create-a-run validation here made every such Ask call fail
+	// ValidateRequest's "a prompt or at least one attachment is required" and
+	// 502 at the handler. The request body is already size-bounded by the
+	// handler's MaxBytesReader; the real content is `question`, checked non-empty
+	// by the handler (compose_assist.go) before this is ever called.
 	system := composer.AssistSystemPrompt
 	user := composer.AssistUserMessage(req, question)
 

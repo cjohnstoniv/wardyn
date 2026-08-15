@@ -57,6 +57,7 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_CI_TOOLS_DIR": true, "WARDYN_DOCKER_SOCK": true, "WARDYN_WORKSPACES_ROOT": true,
 	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
+	"WARDYN_DEFAULT_POLICY_AUTO": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
