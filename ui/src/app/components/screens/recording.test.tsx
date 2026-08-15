@@ -24,6 +24,7 @@ import type { AgentRun, Recording } from "../../lib/types";
 
 const listRunsMock = vi.fn();
 const getRecordingMock = vi.fn();
+const healthMock = vi.fn();
 vi.mock("../../lib/api/recordings", () => ({
   recordings: {
     getRecording: (...a: unknown[]) => getRecordingMock(...a),
@@ -33,6 +34,13 @@ vi.mock("../../lib/api/runs", () => ({
   runs: {
     listRuns: () => listRunsMock(),
   },
+}));
+// W21-S1-7: components.recording is read once (health()) to tell "this
+// deployment never records" apart from "no run has one yet". Default to an
+// older/unconfigured daemon's shape ({}) so every other test below is
+// unaffected.
+vi.mock("../../lib/api/health", () => ({
+  health: { health: (...a: unknown[]) => healthMock(...a) },
 }));
 
 // asciinema-player is heavy / DOM-driven; stub the player so we can assert
@@ -78,6 +86,7 @@ describe("RecordingScreen", () => {
   beforeEach(() => {
     listRunsMock.mockReset();
     getRecordingMock.mockReset();
+    healthMock.mockReset().mockResolvedValue({});
   });
 
   it("renders a distinct, retryable error when listRuns() fails, and never fires per-run checks", async () => {
@@ -131,6 +140,32 @@ describe("RecordingScreen", () => {
 
     await screen.findByText(/none of your runs have a recording yet/i);
     expect(screen.getByRole("link", { name: /go to runs/i })).toBeInTheDocument();
+  });
+
+  // W21-S1-7 regression: a stock Helm install (persistence off) never
+  // constructs a recording store, so /healthz's components.recording reports
+  // "none". Both empty states must say so honestly instead of implying more
+  // runs would eventually produce one — on base 763beb5 componentsInfo didn't
+  // carry the constructed store at all (it echoed the *flag*, "fs", even when
+  // the fs backend's empty Dir left it disabled), so this failed there too.
+  it("both empty states name the disabled deployment, not 'not yet', when components.recording is 'none'", async () => {
+    healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
+    listRunsMock.mockResolvedValue([]);
+    renderScreen();
+
+    await screen.findByText(/session recording is disabled on this deployment/i);
+    expect(screen.queryByText(/recordings appear once/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /go to runs/i })).not.toBeInTheDocument();
+  });
+
+  it("the 'none recorded' state also names the disabled deployment when components.recording is 'none'", async () => {
+    healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
+    listRunsMock.mockResolvedValue([run("run_1"), run("run_2")]);
+    getRecordingMock.mockResolvedValue(undefined);
+    renderScreen();
+
+    await screen.findByText(/session recording is disabled on this deployment/i);
+    expect(screen.queryByText(/none of your runs have a recording yet/i)).not.toBeInTheDocument();
   });
 
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {

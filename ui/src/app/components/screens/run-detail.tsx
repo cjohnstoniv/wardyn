@@ -40,6 +40,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
+import { health } from "../../lib/api/health";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
@@ -101,6 +102,16 @@ export function RunDetailScreen() {
   // Which cast to replay: the run's own (stored under the bare run id) or one
   // interactive attach session (the composite `<run-id>~<session-uuid>` key).
   const [recKey, setRecKey] = React.useState(id);
+  // W21-S1-7: /healthz's components.recording — "none" means this
+  // deployment's recording store never came up (stock Helm install:
+  // persistence off), so a missing cast is a deployment fact, not "this run
+  // happened not to get one". A boot-time fact; read once.
+  const [recordingDisabled, setRecordingDisabled] = React.useState(false);
+  React.useEffect(() => {
+    health.health().then((h) => {
+      if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
+    });
+  }, []);
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
@@ -317,6 +328,7 @@ export function RunDetailScreen() {
               <RecordingTab
                 state={recState}
                 recording={recording}
+                recordingDisabled={recordingDisabled}
                 runId={id}
                 sessions={attachSessions(audit)}
                 selected={recKey || id}
@@ -355,7 +367,7 @@ function attachSessions(audit: AuditEvent[]): AuditEvent[] {
 // ---------------------------------------------------------------------------
 // Summary header
 // ---------------------------------------------------------------------------
-function SummaryHeader({
+export function SummaryHeader({
   run,
   terminal,
   exitCode,
@@ -858,6 +870,7 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
 function RecordingTab({
   state,
   recording,
+  recordingDisabled,
   runId,
   sessions,
   selected,
@@ -866,6 +879,9 @@ function RecordingTab({
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
+  /** W21-S1-7: this deployment's recording store never came up — a missing
+   *  cast means "it can't", not "it hasn't yet". */
+  recordingDisabled: boolean;
   runId: string;
   // The run's interactive attach sessions (session.recording audit events).
   sessions: AuditEvent[];
@@ -908,8 +924,12 @@ function RecordingTab({
         <div className="rounded-xl border border-border bg-card">
           <EmptyState
             icon={SquareTerminal}
-            title="No recording available"
-            description="This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+            title={recordingDisabled ? "Session recording is disabled on this deployment" : "No recording available"}
+            description={
+              recordingDisabled
+                ? "No run on this server captures one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on."
+                : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+            }
           />
         </div>
       ) : (

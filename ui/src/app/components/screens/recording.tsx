@@ -17,6 +17,7 @@ import {
 import type { AgentRun, Recording } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
+import { health } from "../../lib/api/health";
 import { fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -58,6 +59,13 @@ interface RecordedRun {
   bytes: number;
 }
 
+// W21-S1-7: shared copy for both empty states below — a stock Helm install
+// (persistence.enabled=false, the default) never constructs a recording
+// store, so "launch more runs" is not just unhelpful here, it's false.
+const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployment";
+const RECORDING_DISABLED_DESC =
+  "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on.";
+
 function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds));
   const m = Math.floor(s / 60);
@@ -80,6 +88,17 @@ export function RecordingScreen() {
   const [agentFacet, setAgentFacet] = React.useState("all");
   const [stateFacet, setStateFacet] = React.useState("all");
   const [playing, setPlaying] = React.useState<RecordedRun | null>(null);
+  // W21-S1-7: /healthz's components.recording is the honest "will this
+  // deployment EVER produce one" signal (server.go's ComponentInfo) — "none"
+  // means the recording store never came up (stock Helm install: persistence
+  // off), not "no run has happened yet". Read once; it's a boot-time fact,
+  // not something that changes while this screen is open.
+  const [recordingDisabled, setRecordingDisabled] = React.useState(false);
+  React.useEffect(() => {
+    health.health().then((h) => {
+      if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
+    });
+  }, []);
   // Holds the in-flight load's cancel fn so a manual Refresh (which calls load()
   // directly, not via the effect) cancels the PREVIOUS load first. Without this
   // the prior load's per-run getRecording resolutions keep appending into the
@@ -194,14 +213,20 @@ export function RecordingScreen() {
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
-            title="Recordings appear once a run's terminal session is captured"
-            description="When a run's runner supports session capture, its terminal is recorded and its replay appears here. Launch a run to get started."
+            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "Recordings appear once a run's terminal session is captured"}
+            description={
+              recordingDisabled
+                ? RECORDING_DISABLED_DESC
+                : "When a run's runner supports session capture, its terminal is recorded and its replay appears here. Launch a run to get started."
+            }
             action={
-              <Button asChild size="sm">
-                <Link to="/runs">
-                  <Plus className="size-4" /> Go to Runs
-                </Link>
-              </Button>
+              recordingDisabled ? undefined : (
+                <Button asChild size="sm">
+                  <Link to="/runs">
+                    <Plus className="size-4" /> Go to Runs
+                  </Link>
+                </Button>
+              )
             }
           />
         </div>
@@ -276,14 +301,20 @@ export function RecordingScreen() {
             <div className="rounded-xl border border-dashed border-border">
               <EmptyState
                 icon={SquareTerminal}
-                title="None of your runs have a recording yet"
-                description="A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
+                title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
+                description={
+                  recordingDisabled
+                    ? RECORDING_DISABLED_DESC
+                    : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
+                }
                 action={
-                  <Button asChild size="sm">
-                    <Link to="/runs">
-                      <Plus className="size-4" /> Go to Runs
-                    </Link>
-                  </Button>
+                  recordingDisabled ? undefined : (
+                    <Button asChild size="sm">
+                      <Link to="/runs">
+                        <Plus className="size-4" /> Go to Runs
+                      </Link>
+                    </Button>
+                  )
                 }
               />
             </div>
