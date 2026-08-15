@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ type githubMinter struct {
 
 	mu           sync.Mutex
 	appClient    *gh.Client       // nil until the first successful lazy init
+	credHash     [32]byte         // sha256(appID||0||pem) appClient was built from
 	installByOrg map[string]int64 // cache: owner -> installation id
 	// baseURL, when set, overrides the go-github API base URL. Test seam only
 	// (an httptest server); empty in production (the default api.github.com).
@@ -61,28 +63,38 @@ func NewGitHubMinter(store secretstore.Store, cfg GitHubMinterConfig) (GitHubMin
 	}, nil
 }
 
-// client lazily builds (once) and returns the app-authenticated go-github
-// client, reading the App credentials from the secret store on first use. It
-// caches on success; a failure (secrets absent/invalid) is returned to the
-// caller (fail closed) and retried on the next mint — so no restart is needed
-// once the secrets appear.
+// client returns the app-authenticated go-github client, reading the App
+// credentials from the secret store on EVERY mint (two cheap local Gets) and
+// rebuilding only when their content hash has changed since the cached
+// client was built. This is what picks up an operator rotating (or first
+// setting) github-app-id / github-app-key without a wardynd restart: a
+// one-time construction cached forever would keep serving the pre-rotation
+// client (or never leave "secrets absent" once they were briefly missing at
+// boot) for the life of the process. A read failure (secrets absent/invalid)
+// is returned to the caller (fail closed) and retried on the next mint.
 func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.appClient != nil {
-		return m.appClient, nil
-	}
 	idRaw, err := m.store.Get(ctx, m.cfg.AppIDSecret)
 	if err != nil {
 		return nil, fmt.Errorf("broker: read github app id secret: %w", err)
 	}
-	appID, err := strconv.ParseInt(strings.TrimSpace(string(idRaw)), 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("broker: parse github app id: %w", err)
-	}
 	pem, err := m.store.Get(ctx, m.cfg.PrivateKeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("broker: read github app private key: %w", err)
+	}
+	h := sha256.New()
+	h.Write(idRaw)
+	h.Write([]byte{0})
+	h.Write(pem)
+	hash := [32]byte(h.Sum(nil))
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.appClient != nil && hash == m.credHash {
+		return m.appClient, nil
+	}
+	appID, err := strconv.ParseInt(strings.TrimSpace(string(idRaw)), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("broker: parse github app id: %w", err)
 	}
 	atr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, appID, pem)
 	if err != nil {
@@ -101,6 +113,7 @@ func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 		return nil, fmt.Errorf("broker: build github client: %w", err)
 	}
 	m.appClient = c
+	m.credHash = hash
 	return c, nil
 }
 
@@ -139,6 +152,15 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	}
 	tok, _, err := client.Apps.CreateInstallationToken(ctx, instID, opts)
 	if err != nil {
+		if isStaleInstallation(err) {
+			// The cached installation id is dead (the App was uninstalled and
+			// reinstalled on the org, or credentials rotated to a different
+			// App): drop it so the NEXT mint re-resolves instead of repeating
+			// this same failure forever without a restart.
+			m.mu.Lock()
+			delete(m.installByOrg, owner)
+			m.mu.Unlock()
+		}
 		return "", time.Time{}, fmt.Errorf("broker: create installation token: %w", err)
 	}
 	exp := time.Now().Add(defaultMaxTTL)
@@ -172,6 +194,24 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	m.installByOrg[owner] = id
 	m.mu.Unlock()
 	return id, nil
+}
+
+// isStaleInstallation reports whether err is a GitHub 401/404 response — what
+// GitHub returns for an installation id that no longer resolves (uninstalled
+// and reinstalled on the org, or the id belonged to a different App). Both
+// codes count: 401 is what CreateInstallationToken returns for a dead id,
+// 404 is what a lookup on a never-existed one would return.
+func isStaleInstallation(err error) bool {
+	var ghErr *gh.ErrorResponse
+	if !errors.As(err, &ghErr) || ghErr.Response == nil {
+		return false
+	}
+	switch ghErr.Response.StatusCode {
+	case http.StatusUnauthorized, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
 }
 
 // splitRepos validates "owner/name" form, requires a single owner across all
