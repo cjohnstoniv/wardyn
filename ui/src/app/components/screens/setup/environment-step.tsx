@@ -584,6 +584,21 @@ function ColumnState({
                 className="shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50"
               />
             </div>
+            {guide.docNote && (
+              <p className="text-xs leading-snug text-muted-foreground">{guide.docNote}</p>
+            )}
+            {guide.manualSteps && guide.manualSteps.length > 0 && (
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer select-none text-foreground">
+                  Manual steps
+                </summary>
+                <ul className="mt-1 list-disc space-y-1 pl-4">
+                  {guide.manualSteps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
             {stillNotDetected && <p className="text-xs text-danger">{stillNotDetected}</p>}
           </>
         ))}

@@ -52,6 +52,16 @@ describe("OnboardingScreen (welcome hero)", () => {
     await screen.findByText(/Barrier:/);
   });
 
+  // ui-setup-4: the hero's "about 2 minutes" estimate predates the funnel's
+  // growth to 12 steps + a mandatory corp-network probe gate (steps.ts) — no
+  // longer honest. The CTA drops the specific number entirely.
+  it("the Get started CTA does not claim a stale specific time estimate", async () => {
+    render(<OnboardingScreen onGetStarted={() => {}} />);
+    expect(screen.queryByText(/2 minutes/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Get started/ })).toBeInTheDocument();
+    await screen.findByText(/Barrier:/);
+  });
+
   it("surfaces live readiness from getSetupStatus (barrier tier + connected model)", async () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
     expect(await screen.findByText(/Barrier: Fence ready/)).toBeInTheDocument();

@@ -247,6 +247,29 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getAllByText("network only")).toHaveLength(1);
   });
 
+  // ui-setup-2: the row's only edit affordance (click-to-expand) was a bare
+  // div with no role/tabIndex/onKeyDown — unreachable and unactivatable from
+  // the keyboard.
+  it("a redirect row is keyboard-focusable and Enter expands its editor (ui-setup-2)", async () => {
+    const user = userEvent.setup();
+    renderEgress();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+
+    // The row's computed accessible name also swallows its nested Test/Remove
+    // buttons' text (one of which is literally "Remove ... ghcr.io redirect"),
+    // so a name-based role query is ambiguous — key off the row's own title
+    // instead, same identity the other row tests already use.
+    const row = screen.getByTitle("https://ghcr.io → https://registry.corp.internal/ghcr-remote");
+    expect(row).toHaveAttribute("role", "button");
+    expect(row).toHaveAttribute("tabIndex", "0");
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+    // Expanding swaps the row for its editor, whose stable Cancel control only
+    // exists once expanded.
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
+  });
+
   // WIRE-3: an integration-backed redirect used to render identically to an
   // untokened one — the operator concluded the token was lost.
   it("an integration-sourced token renders its own distinct chip, not the bare-secret one", async () => {

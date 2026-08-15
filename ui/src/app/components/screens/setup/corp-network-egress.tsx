@@ -125,7 +125,15 @@ function RedirectRow({
     <div
       className="flex cursor-pointer items-center gap-2.5 p-2.5 hover:bg-muted/40"
       title={`${r.from} → ${r.to}${r.token_secret_ref ? ` · token: ${r.token_secret_ref}` : r.token_integration_ref ? ` · token via integration: ${r.token_integration_ref}` : ""}`}
+      role="button"
+      tabIndex={0}
       onClick={onExpand}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onExpand();
+        }
+      }}
     >
       <Mono className="shrink-0 text-xs text-foreground">{compactEndpoint(r.from)}</Mono>
       <span className="shrink-0 text-[0.6875rem] text-muted-foreground">&rarr;</span>
