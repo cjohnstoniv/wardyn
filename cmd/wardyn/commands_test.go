@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -663,6 +664,77 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 	srv.mu.Unlock()
 	if n != 0 {
 		t.Errorf("server saw %d requests, want 0", n)
+	}
+}
+
+// TestAuditCmd_LimitOffsetFlagsPage pins W16-S1-2's core fix: before this,
+// `wardyn audit` had no way to page past the per-run 1000-event cap, so a run
+// with more events than that silently dropped its newest ones (including
+// run.complete) with no flag to ask for the rest.
+func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+	runID := uuid.New()
+	if err := execCmd(t, "audit", runID.String(), "--limit", "5", "--offset", "10", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("audit returned error: %v", err)
+	}
+	got := srv.last().query
+	if !strings.Contains(got, "limit=5") || !strings.Contains(got, "offset=10") {
+		t.Errorf("query = %q, want limit=5 and offset=10", got)
+	}
+}
+
+// TestAuditCmd_FilterFlagsReachServer pins the "documented filter flags" half
+// of W16-S1-2's fix: docs/sdk.md already claimed the CLI mirrors the server's
+// since/until/action_prefix/actor_type/outcome predicates, but auditCmd had no
+// such flags at all — the doc overclaimed. This locks the flags to the wire.
+func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
+	runID := uuid.New()
+	err := execCmd(t, "audit", runID.String(),
+		"--since", "2026-01-01T00:00:00Z", "--until", "2026-02-01T00:00:00Z",
+		"--action-prefix", "egress.", "--actor-type", "agent", "--outcome", "denied",
+		"--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("audit returned error: %v", err)
+	}
+	q, perr := url.ParseQuery(srv.last().query)
+	if perr != nil {
+		t.Fatalf("parse query %q: %v", srv.last().query, perr)
+	}
+	for k, want := range map[string]string{
+		"since": "2026-01-01T00:00:00Z", "until": "2026-02-01T00:00:00Z",
+		"action_prefix": "egress.", "actor_type": "agent", "outcome": "denied",
+	} {
+		if got := q.Get(k); got != want {
+			t.Errorf("query %s = %q, want %q (full query: %s)", k, got, want, srv.last().query)
+		}
+	}
+}
+
+// TestAuditCmd_TruncatedPageWarnsOnStderr pins that a truncated page (server
+// sets X-Wardyn-Truncated) is surfaced, not silently indistinguishable from a
+// complete trail — the exact harm W16-S1-2 named. The warning goes to
+// cmd.ErrOrStderr(), never mixed into the events themselves: emitJSON encodes
+// straight from the server-decoded slice, so there is no string path by which
+// this text could land inside the --json array.
+func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+	}))
+	t.Cleanup(srv.Close)
+
+	root := rootCmd()
+	errBuf := &strings.Builder{}
+	root.SetArgs([]string{"audit", uuid.New().String(), "--limit", "1", "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(&strings.Builder{})
+	root.SetErr(errBuf)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("audit returned error: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "truncated") || !strings.Contains(errBuf.String(), "--offset=1") {
+		t.Errorf("stderr = %q, want a truncation warning naming --offset=1", errBuf.String())
 	}
 }
 

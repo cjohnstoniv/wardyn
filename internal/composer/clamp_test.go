@@ -6,6 +6,7 @@ package composer
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -378,6 +379,125 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 	if hasWarn(warns, "llm_inspection") {
 		t.Errorf("unexpected llm_inspection warning with no ceiling opinion: %v", warns)
 	}
+}
+
+// TestClamp_LLMInspectionDroppedUnderNilCeiling is W12-A-1 (CRIT) / W14-S1-1:
+// a member's hand-authored inline_policy.llm_inspection used to pass through
+// COMPLETELY unclamped whenever the ceiling set none — exactly the shipped
+// default.json posture (it sets no llm_inspection at all). That let a member
+// turn the content-inspection sidecar on and point it (detector_sidecar_url)
+// at ANY URL the wardyn-proxy process can reach, or flip intercept_tls, with
+// zero operator opinion in the way. Symmetric with the workspace_mounts drop:
+// an unset ceiling is the FLOOR for this field, not "no opinion".
+func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
+	ceiling := operatorCeiling(t) // sets no llm_inspection opinion, like default.json
+	hostile := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{
+		Mode: "alert", DetectSecrets: true,
+		DetectorSidecarURL: "http://attacker.example.com/exfil",
+		InterceptTLS:       true,
+	}}
+	got, warns := Clamp(hostile, ceiling)
+	if got.LLMInspection != nil {
+		t.Errorf("llm_inspection = %+v, want nil — a nil-ceiling must be the FLOOR for this field, not a pass-through", got.LLMInspection)
+	}
+	if !hasWarn(warns, "llm_inspection dropped") {
+		t.Errorf("expected an llm_inspection-dropped warning, got %v", warns)
+	}
+}
+
+// TestClamp_LLMInspectionCopyRedactsSecretValues is W12-A-3: the ceiling's
+// llm_inspection is unconditionally inherited (see above), but a compose/
+// profile PROPOSAL is advisory output returned straight to the caller in an
+// HTTP response (and, before the fix, embedded in the run.compose audit event
+// too) — it must never carry the resolved secret VALUES, only the NAMES a
+// caller needs to know which secrets are covered. Dispatch alone resolves
+// names->values, in memory, for the proxy sidecar (see runs_dispatch.go).
+func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.LLMInspection = &types.LLMInspectionSpec{
+		Mode: "alert", DetectSecrets: true,
+		WorkspaceSecretNames:  []string{"prod-db-password"},
+		WorkspaceSecretValues: []string{"hunter2-this-must-never-leak"},
+	}
+	got, _ := Clamp(types.RunPolicySpec{}, ceiling)
+	if got.LLMInspection == nil {
+		t.Fatal("expected llm_inspection inherited from the ceiling")
+	}
+	if len(got.LLMInspection.WorkspaceSecretValues) != 0 {
+		t.Errorf("W12-A-3: clamp copy must zero workspace_secret_values, got %v", got.LLMInspection.WorkspaceSecretValues)
+	}
+	if len(got.LLMInspection.WorkspaceSecretNames) != 1 || got.LLMInspection.WorkspaceSecretNames[0] != "prod-db-password" {
+		t.Errorf("workspace_secret_names should survive the copy (the proposal needs to show WHICH secrets are covered), got %v", got.LLMInspection.WorkspaceSecretNames)
+	}
+	// The ceiling itself must be untouched (no aliasing): a second Clamp call
+	// must see the SAME ceiling values again, not an already-redacted copy.
+	if len(ceiling.LLMInspection.WorkspaceSecretValues) != 1 {
+		t.Errorf("Clamp must not mutate the ceiling's own LLMInspection in place, got %v", ceiling.LLMInspection.WorkspaceSecretValues)
+	}
+}
+
+// TestClamp_GitHubEmptyCeilingRepoListDeniesAll is W23-S1-3: a member's
+// hand-authored inline_policy github_token grant must not survive Clamp when
+// the ceiling's OWN grant sets no repo allowlist. The SHIPPED default.json
+// ceiling — resolveRunPolicy's real DefaultPolicy on exactly this path
+// (internal/api/inline_policy.go) — ships EXACTLY this shape ("repos": [],
+// a template for the composer/profile pipelines to ground, not an "any repo"
+// grant for a raw member): operatorCeiling(t) above never exercises it, since
+// its own github_token grant carries a non-empty repos list — that is the
+// "unshipped ceiling shape" that let this bug ship. Loaded verbatim from the
+// real file so this test breaks if the shipped ceiling shape ever changes.
+func TestClamp_GitHubEmptyCeilingRepoListDeniesAll(t *testing.T) {
+	ceiling := loadDefaultPolicyCeiling(t)
+	if len(ceiling.EligibleGrants) == 0 || ceiling.EligibleGrants[0].Kind != types.GrantGitHubToken {
+		t.Fatalf("examples/policies/default.json eligible_grants[0] is expected to be a github_token grant; got %+v", ceiling.EligibleGrants)
+	}
+	var ceilRepos struct {
+		Repos []string `json:"repos"`
+	}
+	_ = json.Unmarshal(ceiling.EligibleGrants[0].Scope, &ceilRepos)
+	if len(ceilRepos.Repos) != 0 {
+		t.Fatalf("examples/policies/default.json github_token repos = %v, want empty (this test's whole premise)", ceilRepos.Repos)
+	}
+
+	// A member's hand-authored inline_policy asking for an ARBITRARY repo the
+	// operator never selected or grounded.
+	hostile := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		{Kind: types.GrantGitHubToken, Scope: mustJSON(t, map[string]any{
+			"repos": []string{"attacker-org/private-repo"}, "permissions": map[string]string{"contents": "read"},
+		})},
+	}}
+	clamped, warns := Clamp(hostile, ceiling)
+	if len(clamped.EligibleGrants) != 1 {
+		t.Fatalf("expected the github_token grant kept (clamped by scope, not dropped by kind), got %d", len(clamped.EligibleGrants))
+	}
+	var got struct {
+		Repos []string `json:"repos"`
+	}
+	_ = json.Unmarshal(clamped.EligibleGrants[0].Scope, &got)
+	if len(got.Repos) != 0 {
+		t.Errorf("W23-S1-3: an empty ceiling repo list must deny ALL repos for a hand-authored spec, got %v", got.Repos)
+	}
+	if !hasWarn(warns, "outside operator scope") {
+		t.Errorf("expected a dropped-repo warning, got %v", warns)
+	}
+}
+
+// loadDefaultPolicyCeiling loads examples/policies/default.json VERBATIM
+// (plain json.Unmarshal, not composer-package-reachable LoadPolicySpec/
+// validatePolicySpec — internal/api imports internal/composer, so the reverse
+// import would cycle) — the real shipped ceiling shape, not a test fixture's
+// approximation of it.
+func loadDefaultPolicyCeiling(t *testing.T) types.RunPolicySpec {
+	t.Helper()
+	b, err := os.ReadFile("../../examples/policies/default.json")
+	if err != nil {
+		t.Fatalf("read default.json: %v", err)
+	}
+	var spec types.RunPolicySpec
+	if err := json.Unmarshal(b, &spec); err != nil {
+		t.Fatalf("parse default.json: %v", err)
+	}
+	return spec
 }
 
 // TestClamp_AllowedMethods is HIGH-2: empty means "all" for this field (unlike

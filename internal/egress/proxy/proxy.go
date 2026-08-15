@@ -57,6 +57,17 @@ type Proxy struct {
 	// a corporate registry token injects on the wire. Compiled at dispatch from
 	// site-config; see isMITMHost's trust-boundary comment. Empty == LLM only.
 	mitmHosts map[string]bool
+	// mitmPorts pairs each mitmHosts entry (same lowercased host key) with the
+	// CONNECT port that entry is scoped to, parsed from an Options.MITMHosts
+	// entry's optional ":port" suffix. 0 means the entry carried no port (the
+	// historical bare-host format every existing caller sends — Bedrock's
+	// runtimeHost, an un-migrated redirect) and stays eligible on ANY port,
+	// unchanged from before this field existed. A positive value (an
+	// artifact-redirect entry now authors "host:port") is EXACT: a CONNECT to
+	// the same host on a DIFFERENT port is never MITM'd or token-injected
+	// (W13-S1-5) — handleConnect enforces this alongside isCorpMITMHost so the
+	// allowlist stays as tight as isMITMHost's doc comment claims.
+	mitmPorts map[string]int
 	// mitmLLM gates TLS-MITM of the built-in LLM hosts on actual intent (subscription
 	// injection or intercept_tls) — a CA minted only for artifact token injection
 	// must NOT make Anthropic/OpenAI MITM-eligible. See isMITMHost / handleConnect.
@@ -160,6 +171,26 @@ type Options struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
+// parseMITMHostPort normalizes one Options.MITMHosts entry (trim, lowercase,
+// drop a trailing dot) and splits its optional ":port" suffix. port==0 means
+// the entry carried none — the historical bare-host format (Bedrock's
+// runtimeHost, a pre-fix redirect) — and matches any port; a malformed or
+// out-of-range port suffix is treated the same as absent rather than guessed.
+// A clean "host:port" (what planArtifactRedirect now authors, W13-S1-5) scopes
+// the entry to exactly that port.
+func parseMITMHostPort(entry string) (host string, port int) {
+	entry = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
+	if entry == "" {
+		return "", 0
+	}
+	if h, ps, err := net.SplitHostPort(entry); err == nil {
+		if p, perr := strconv.Atoi(ps); perr == nil && p > 0 && p < 65536 {
+			return h, p
+		}
+	}
+	return entry, 0
+}
+
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
 	if dial == nil {
@@ -179,10 +210,14 @@ func newProxy(opts Options) *Proxy {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
 	mitmHosts := make(map[string]bool, len(opts.MITMHosts))
-	for _, h := range opts.MITMHosts {
-		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
-			mitmHosts[h] = true
+	mitmPorts := make(map[string]int, len(opts.MITMHosts))
+	for _, entry := range opts.MITMHosts {
+		h, port := parseMITMHostPort(entry)
+		if h == "" {
+			continue
 		}
+		mitmHosts[h] = true
+		mitmPorts[h] = port
 	}
 	// Canonicalise git-broker allowlist keys to lowercase "<org>/<repo>" so lookups
 	// match regardless of the slug casing git sends (github owner/repo is
@@ -204,6 +239,7 @@ func newProxy(opts Options) *Proxy {
 		scanner:         opts.Scanner,
 		ca:              opts.CA,
 		mitmHosts:       mitmHosts,
+		mitmPorts:       mitmPorts,
 		mitmLLM:         opts.MITMLLM,
 		gitGrants:       gitGrants,
 		gitTokens:       make(map[uuid.UUID]*gitTokEntry),
@@ -347,6 +383,15 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
 		return egress.Deny, "", &log
 	}
+	// approvalID records whether (and via which approval) this request's verdict
+	// was RELEASED by the first-use approval flow, so the eventual Allow decision
+	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
+	// released request otherwise logs indistinguishably from a standing policy
+	// allow, with no approval_id, breaking the audit join from decision back to
+	// who approved the egress (W20-hold-fsm-1). Zero == this request never went
+	// through approval (a direct policy allow).
+	var approvalID uuid.UUID
+
 	switch verdict {
 	case egress.VerdictDeny:
 		log := decisionLog(req, egress.Deny, "policy:denied")
@@ -366,7 +411,9 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			}
 			switch r.State {
 			case apApproved:
-				// fall through to method + IP vetting below.
+				// Released by approval: remember it for the Allow log below, then
+				// fall through to method + IP vetting.
+				approvalID = r.ApprovalID
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
@@ -404,7 +451,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// so egressDial issues CONNECT <real-host> to the corp proxy.
 	if p.upstream != nil {
 		target := net.JoinHostPort(host, strconv.Itoa(port))
-		log := decisionLog(req, egress.Allow, "policy:allowed")
+		log := p.allowLog(req, approvalID)
 		return egress.Allow, target, &log
 	}
 	guard := VetHost(host, p.res)
@@ -414,8 +461,23 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	}
 
 	target := net.JoinHostPort(guard.IP.String(), strconv.Itoa(port))
-	log := decisionLog(req, egress.Allow, "policy:allowed")
+	log := p.allowLog(req, approvalID)
 	return egress.Allow, target, &log
+}
+
+// allowLog builds evaluate()'s Allow decision log. When the request's verdict
+// was RELEASED by the first-use approval flow (approvalID != Nil), it
+// attributes rule_source to "approval:<id>" and sets ApprovalID — mirroring
+// the already-attributed pending/deny branches above — so the audit trail
+// self-joins back to the approval that let the traffic through. Otherwise
+// (approvalID == Nil, the common case) it is a standing policy allow.
+func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.DecisionLog {
+	if approvalID == uuid.Nil {
+		return decisionLog(req, egress.Allow, "policy:allowed")
+	}
+	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
+	log.ApprovalID = &approvalID
+	return log
 }
 
 // handlePlain forwards an absolute-URI plain HTTP request.
@@ -537,12 +599,22 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// host to mitmHosts ONLY when it also authored a paired injection). Checked
 	// BEFORE the LLM branch so it stays clear of the LLM-specific blind-coverage
 	// bookkeeping; these hosts are not model APIs and are never content-scanned.
+	//
+	// PORT-SCOPED (W13-S1-5): mitmHosts is host-only, so also require the CONNECT
+	// port to match what was actually configured (mitmPorts; 0 == the entry
+	// carried no port and stays any-port, for backward compat with a bare
+	// legacy entry). Without this a CONNECT to the same hostname on a port the
+	// operator never configured would ALSO be MITM'd and token-injected — wider
+	// than the redirect actually authored. A non-matching port falls through to
+	// an ordinary opaque tunnel, still gated by the policy decision above.
 	if p.ca != nil && p.isCorpMITMHost(host) {
-		if log != nil {
-			p.sink.emit(*log)
+		if cport := p.mitmPorts[host]; cport == 0 || cport == port {
+			if log != nil {
+				p.sink.emit(*log)
+			}
+			p.mitmConnect(w, r, host, port)
+			return
 		}
-		p.mitmConnect(w, r, host)
-		return
 	}
 
 	if isLLMHost(host) {
@@ -560,7 +632,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			if log != nil {
 				p.sink.emit(*log)
 			}
-			p.mitmConnect(w, r, host)
+			p.mitmConnect(w, r, host, port)
 			return
 		}
 		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.blind

@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"maps"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -28,7 +30,11 @@ type artifactRedirectPlan struct {
 	env        map[string]string       // go GOPROXY/GOSUMDB (env-honoring)
 	configB64  string                  // per-tool config files, agent-run materializes
 	injections []runner.InjectionGrant // proxy-side token injections (api_key grants)
-	mitmHosts  []string                // corp hosts to TLS-MITM for token injection
+	// mitmHosts is "host:port" (net.JoinHostPort) — NOT a bare host — for each
+	// corp mirror to TLS-MITM for token injection, so the proxy's MITM-eligibility
+	// and its post-decrypt dial are both scoped to the port this redirect
+	// actually names (W13-S1-5) rather than always assuming 443.
+	mitmHosts []string
 }
 
 // redirectPublicHosts is the set of public hosts one redirect fronts: an
@@ -43,6 +49,30 @@ func redirectPublicHosts(r types.EgressRedirect) []string {
 		return []string{from}
 	}
 	return nil
+}
+
+// redirectPort extracts the port from a redirect's To URL/host, defaulting to
+// 443 (every corp mirror/relay this feature targets is HTTPS — the sandbox
+// never dials it directly, the proxy always TLS-terminates it, see mitm.go)
+// when none is given. Mirrors workspacescan.HostOf's own scheme/path
+// stripping so the two agree on where the authority ends; unlike HostOf it
+// keeps the port instead of discarding it — planArtifactRedirect needs both,
+// so mitmHosts can carry "host:port" and the proxy's TLS termination dials
+// the mirror's REAL port instead of always assuming 443 (W13-S1-5).
+func redirectPort(rawURL string) int {
+	s := strings.TrimSpace(rawURL)
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	if _, ps, err := net.SplitHostPort(s); err == nil {
+		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
+			return p
+		}
+	}
+	return 443
 }
 
 // artifactRunHostSet is the lowercased bare-host set of a run's egress entries,
@@ -191,6 +221,11 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if host == "" || seenHost[host] {
 			continue
 		}
+		// W13-S1-5: the redirect's REAL port travels with the host into
+		// plan.mitmHosts (below) so the proxy's TLS-MITM allowlist — and the dial
+		// it performs once it has decrypted the tunnel — are scoped to the mirror
+		// this redirect actually names, not always port 443.
+		port := redirectPort(r.To)
 		tok, why := s.resolveRedirectToken(ctx, r, present)
 		if why != "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
@@ -223,10 +258,15 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			continue
 		}
 		plan.injections = append(plan.injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
-		plan.mitmHosts = append(plan.mitmHosts, host)
+		// host:port, NOT bare host: the proxy's mitmHosts/mitmPorts matching (and
+		// therefore its dial once it has TLS-terminated the tunnel) is scoped to
+		// exactly this port. The injection scope/rule above stays a BARE host —
+		// buildInjector requires that — only the MITM-eligibility set carries the
+		// port.
+		plan.mitmHosts = append(plan.mitmHosts, net.JoinHostPort(host, strconv.Itoa(port)))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 			run.ID.String(), "success", mustJSON(map[string]any{
-				"ecosystem": r.Ecosystem, "host": host, "tls_mitm": true, "secret_name": tok.secretName,
+				"ecosystem": r.Ecosystem, "host": host, "port": port, "tls_mitm": true, "secret_name": tok.secretName,
 				"integration_id": r.TokenIntegrationRef,
 				"detail":         "corporate mirror/relay token injected proxy-side; sandbox never holds it",
 			})))

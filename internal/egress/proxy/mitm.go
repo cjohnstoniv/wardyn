@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -136,12 +137,16 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // The expanded surface (#2) is bounded on every axis: the set is authored by an
 // admin via the site-config API (NOT the sandbox, NOT the agent, NOT the run
 // request — a prompt-injected agent cannot add a host); it is an EXACT-hostname
-// allowlist, never a wildcard or suffix match; a host only lands here when it also
-// carries a paired injection rule for the operator's own token (config-only
-// redirects never MITM); and the CA private key stays in proxy memory exactly as
-// for the LLM path. What it costs: for those named hosts the proxy sees the
-// plaintext of the sandbox's requests (as it already does for the LLM hosts) — the
-// operator is trusting their own proxy with traffic to their own registry.
+// allowlist, never a wildcard or suffix match — and, since W13-S1-5, exact on
+// PORT too when the authored entry names one (mitmPorts; see handleConnect's
+// corp-MITM branch) so a mirror configured at a non-443 port cannot have its
+// tunnel matched by hostname alone and then dialed at the wrong port; a host
+// only lands here when it also carries a paired injection rule for the
+// operator's own token (config-only redirects never MITM); and the CA private
+// key stays in proxy memory exactly as for the LLM path. What it costs: for
+// those named hosts the proxy sees the plaintext of the sandbox's requests (as
+// it already does for the LLM hosts) — the operator is trusting their own
+// proxy with traffic to their own registry.
 func (p *Proxy) isMITMHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if h == anthropicHost || h == openaiHost {
@@ -191,8 +196,10 @@ func channelForHost(host string) contentscan.Channel {
 // INSPECT-ONLY passthrough handler (serveMITMRequest). This makes the otherwise-
 // opaque subscription-OAuth path inspectable. The caller has already evaluated +
 // allowed the CONNECT (its egress.allow decision is recorded); per-request scan
-// decisions are emitted inside.
-func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string) {
+// decisions are emitted inside. port is the REAL CONNECT port (handleConnect's
+// parsed target) carried through to serveMITMRequest's dial (W13-S1-5) — never
+// assume 443, a corp artifact mirror may listen elsewhere.
+func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -226,7 +233,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string)
 	// keeps serving requests until the client closes or IdleTimeout fires.
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
-			p.serveMITMRequest(rw, rr, host)
+			p.serveMITMRequest(rw, rr, host, port)
 		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout bounds the whole request incl. body so a slow-loris body
@@ -246,8 +253,11 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string)
 // live, host-refreshed OAuth token here. When NO rule exists, the agent's own
 // resident credential is preserved (inspect-only). A confident block refuses the
 // request (written by inspectLLM); a rotating credential that cannot be refreshed
-// fails closed rather than forwarding a stale token.
-func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string) {
+// fails closed rather than forwarding a stale token. port is the REAL CONNECT
+// port (from mitmConnect) — the dial below MUST use it rather than assume 443:
+// a tokened tunnel dialed to the wrong port presents the operator's credential
+// to whatever answers there instead of the intended mirror (W13-S1-5).
+func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	rest := strings.TrimPrefix(r.URL.Path, "/")
 	channel := channelForHost(host)
 	// Decision-log source: honest about WHY this tunnel was terminated — LLM
@@ -261,10 +271,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// configured — the transport's egressDial chains the CONNECT and TLS then
 	// runs end-to-end proxy<->host — else the vetted IP (direct). Upstream mode
 	// relaxes the vetted-IP pin for this hop (see dialThroughUpstream).
-	target := net.JoinHostPort(host, "443")
+	target := net.JoinHostPort(host, strconv.Itoa(port))
 	if p.upstream == nil {
 		var verr error
-		target, verr = p.vetURL("https://" + host)
+		target, verr = p.vetURL("https://" + target)
 		if verr != nil {
 			p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
 			p.httpError(w, "llm upstream vet failed", verr, http.StatusBadGateway)

@@ -46,6 +46,27 @@ func TestSeedSourceRequirements_EveryRowValidates(t *testing.T) {
 	}
 }
 
+// TestSeedSourceRequirements_SuggestedEgressNeverSeeded is the end-to-end half
+// of the W6-S1-3 fix, at the exact boundary the finding's acceptance
+// criterion names: "an AI-suggested host is NOT auto-unioned into a run's
+// allowlist without operator approval". workspacescan.AdviseProfile (ai.go)
+// now lands an AI-suggested host in SuggestedEgress, never EgressDomains (see
+// ai_test.go); this test locks in the OTHER half of that guarantee — that
+// seedSourceRequirements (the only producer of the "required"/auto-unioned
+// egress:<host> contract rows applyWorkspaceRequirements folds into a run's
+// AllowedDomains) reads ONLY EgressDomains, so a host that exists ONLY in
+// SuggestedEgress never becomes a contract row — even for a future profile
+// carrying nothing BUT an AI suggestion, egress can never auto-widen.
+func TestSeedSourceRequirements_SuggestedEgressNeverSeeded(t *testing.T) {
+	p := workspacescan.WorkspaceProfile{
+		SuggestedEgress: []string{"evil.example.com"},
+	}
+	seed := seedSourceRequirements(types.SourceRepo, "", p)
+	if len(seed) != 0 {
+		t.Fatalf("a profile with only SuggestedEgress must seed nothing (it is display-only, never a contract row): %v", keysOf(seed))
+	}
+}
+
 func keysOf(m map[string]types.WorkspaceRequirement) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

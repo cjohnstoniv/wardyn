@@ -43,6 +43,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -94,8 +95,14 @@ const (
 	// the finalize stage layers onto the built image (see Builder.ToolsDir).
 	envToolsDir = "WARDYN_ENVBUILD_TOOLS_DIR"
 
-	// envPushedRef overrides the FROM ref of the finalize stage when envbuilder's
-	// pushed image is not resolvable at the plain CacheRepo ref (see pushedBaseRef).
+	// envPushedRef overrides the REPOSITORY ADDRESS the finalize stage pulls
+	// the pushed base from, for when the host daemon reaches the SAME registry
+	// envbuilder pushed to at a different address (e.g. compose: the build
+	// container reaches it by service name, the host daemon by a published
+	// loopback port — see docs/ENVBUILD.md). It names an address, not a fixed
+	// ref: the per-build tag (see Builder.newPushRef, Builder.pushedBaseRef)
+	// is always appended on top, so the override composes with per-build
+	// isolation instead of collapsing every build back onto one shared ref.
 	envPushedRef = "WARDYN_ENVBUILD_PUSHED_REF"
 
 	// envRegistryInsecure opts envbuilder's registry traffic (CacheRepo push,
@@ -258,7 +265,9 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		return "", err
 	}
 
-	return b.runBuildAndFinalize(ctx, buildEnv(spec, b.CacheRepo), nil, nil, "", spec.LogSink, spec.OutputImageTag)
+	// A fresh per-build push ref (W20-record-image-2): see newPushRef.
+	pushRepo, buildTag := b.newPushRef()
+	return b.runBuildAndFinalize(ctx, buildEnv(spec, pushRepo), nil, nil, "", spec.LogSink, spec.OutputImageTag, buildTag)
 }
 
 // runBuildAndFinalize drives the container lifecycle shared by Build and
@@ -269,7 +278,12 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 // contextTar, when non-nil, is streamed into the created container at
 // contextTarDest before start — the generated-files build's delivery (see
 // BuildFromDevcontainerFiles for why a bind mount cannot carry it).
-func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag string) (string, error) {
+//
+// buildTag is THIS build's per-build push tag (from newPushRef, already baked
+// into env's ENVBUILDER_CACHE_REPO by the caller). Finalize pulls that SAME
+// tag back via pushedBaseRef, so two builds sharing this method — and this
+// Builder's one CacheRepo — never resolve each other's push (W20-record-image-2).
+func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag, buildTag string) (string, error) {
 	// Registry PUSH is the only delivery path (the docker.sock fallback is
 	// retired). Fail closed with an actionable error when no registry is set.
 	if err := b.requireCacheRepo(); err != nil {
@@ -392,10 +406,11 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		<-streamDone
 	}
 
-	// envbuilder has pushed the base image to the registry. Layer Wardyn's runner
-	// tools onto it and return the resolvable local tag (H5). pullParent=true: the
-	// base was just pushed to the registry, so the finalize build must pull it.
-	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, logSink, true)
+	// envbuilder has pushed the base image to the registry, at THIS build's own
+	// per-build ref (buildTag). Layer Wardyn's runner tools onto it and return
+	// the resolvable local tag (H5). pullParent=true: the base was just pushed
+	// to the registry, so the finalize build must pull it.
+	return b.finalizeImage(ctx, b.pushedBaseRef(buildTag), outputTag, toolsDir, logSink, true)
 }
 
 // FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary USER-supplied
@@ -823,23 +838,55 @@ func (b *Builder) validateToolsDir() (string, error) {
 	return dir, nil
 }
 
-// pushedBaseRef is the registry reference the finalize stage uses as its FROM
-// base: the image envbuilder pushed via ENVBUILDER_PUSH_IMAGE.
+// newPushRef returns a fresh per-build registry ref for THIS build's
+// envbuilder push (ENVBUILDER_CACHE_REPO), plus the bare tag alone.
 //
-// ASSUMPTION — envbuilder's push is resolvable at the plain CacheRepo
-// ref (resolving to :latest when CacheRepo carries no tag). envbuilder actually
-// tags the push with a content-addressed cache key (<CacheRepo>@sha256:<digest>)
-// that is not knowable host-side before the build, so this is the residual: if
-// your registry does not also expose the push at the CacheRepo ref, set
-// WARDYN_ENVBUILD_PUSHED_REF to the exact ref (or point CacheRepo at a tagged
-// repo). TestBuild_SmokeDockerd against a real registry validates the exact ref.
-// Upgrade path: parse the pushed ref from envbuilder's build log / a
-// GET_CACHED_IMAGE probe instead of assuming it.
-func (b *Builder) pushedBaseRef() string {
-	if v := strings.TrimSpace(os.Getenv(envPushedRef)); v != "" {
-		return v
+// W20-record-image-2 (confinement bypass): CacheRepo is one Builder-level
+// field shared by every build, so a bare CacheRepo — resolving to :latest, as
+// the old pushedBaseRef assumed — is the SAME push destination for every
+// concurrent build. Workspace A's finalize could then pull workspace B's push
+// if the two landed close together, and finalizeImage's pullBase=true pull is
+// an unconditional "pull fresh" (dockerutil.PullImage), so the swap is silent
+// — and the wrong content then gets tagged and cached permanently under A's
+// OutputImageTag with no re-validation. A random tag per Build /
+// BuildFromDevcontainerFiles call gives every build its own unambiguous
+// destination, so concurrent builds never collide — no serialization needed,
+// and legitimate rebuilds are unaffected (each is still a fresh push+pull;
+// only the shared/collidable name is gone).
+//
+// Empty CacheRepo returns ("", ""): requireCacheRepo fails the build closed
+// before either return value would be used.
+func (b *Builder) newPushRef() (pushRepo, tag string) {
+	repo := strings.TrimSpace(b.CacheRepo)
+	if repo == "" {
+		return "", ""
 	}
-	return strings.TrimSpace(b.CacheRepo)
+	tag = uuid.New().String()
+	return repo + ":" + tag, tag
+}
+
+// pushedBaseRef is the registry reference the finalize stage pulls FROM as its
+// FROM base: THIS build's own per-build tag (buildTag, from newPushRef — the
+// exact tag envbuilder was just told to push to via ENVBUILDER_CACHE_REPO),
+// resolved against whichever repository the host daemon reaches that registry
+// at.
+//
+// WARDYN_ENVBUILD_PUSHED_REF (envPushedRef) overrides only that repository
+// ADDRESS — e.g. compose's build container reaches the registry by service
+// name, but the HOST daemon running this pull needs a published loopback port
+// instead (see docs/ENVBUILD.md). The override names an address, never a
+// pre-tagged ref: buildTag is always appended on top, so it composes with
+// per-build isolation rather than reintroducing one shared ref across builds.
+// A real-registry TestBuild_SmokeDockerd validates the exact ref end to end.
+func (b *Builder) pushedBaseRef(buildTag string) string {
+	repo := strings.TrimSpace(os.Getenv(envPushedRef))
+	if repo == "" {
+		repo = strings.TrimSpace(b.CacheRepo)
+	}
+	if repo == "" || buildTag == "" {
+		return repo
+	}
+	return repo + ":" + buildTag
 }
 
 // finalizeImage runs the second-stage build (H5): FROM the image envbuilder

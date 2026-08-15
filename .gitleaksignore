@@ -27,3 +27,6 @@ a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
 # asciicast masks it. Same category as internal/broker/sshkey_test.go above — a
 # detector's test must hold the shape it detects. Not a real key.
 156f25a90c2e9eb89c8cbb9d48474c1ffeaa3cd2:internal/api/recording_upload_test.go:private-key:174
+# Synthetic RSA private keys in W12-B-1 reserved-secret regression fixtures (obviously fake material)
+22250717e7b04e25954a17a3c312ce8c88da501b:internal/broker/gitpat_test.go:private-key:105
+22250717e7b04e25954a17a3c312ce8c88da501b:internal/broker/sshkey_test.go:private-key:102

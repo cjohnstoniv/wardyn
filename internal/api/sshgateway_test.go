@@ -412,6 +412,25 @@ func mustSSHKeypair(t *testing.T) (ed25519.PrivateKey, ssh.PublicKey) {
 	return priv, sshPub
 }
 
+// offerOnlySigner implements ssh.Signer with a genuine public key but a Sign
+// that always fails — modeling an attacker who KNOWS a victim's public key
+// (public keys are not secret) but does not hold the matching private key.
+// Dialing with this signer still sends the real SSH_MSG_USERAUTH_REQUEST
+// "query" (RFC 4252 §7, HasSig=false) for the offered key — the same message
+// that reaches PublicKeyCallback/sshAuth for ANY pubkey attempt, signed or
+// not — but can never produce the signed follow-up VerifiedPublicKeyCallback
+// gates success on (golang.org/x/crypto/ssh's client wraps a plain Signer's
+// Sign via algorithmSignerWrapper regardless of signature-algorithm
+// negotiation, so this Sign is what ultimately gets called).
+type offerOnlySigner struct {
+	pub ssh.PublicKey
+}
+
+func (s offerOnlySigner) PublicKey() ssh.PublicKey { return s.pub }
+func (s offerOnlySigner) Sign(io.Reader, []byte) (*ssh.Signature, error) {
+	return nil, errors.New("offer-only: no private key (simulated attacker)")
+}
+
 // sshDial authenticates as username with clientPriv against h, pinning the
 // gateway's own host key (verify-on-first-connect, exactly what a real
 // client does against the fingerprint the run-detail pane shows).
@@ -516,6 +535,43 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 	}
 	if successes == 0 || failures == 0 {
 		t.Errorf("ssh.auth audit trail = %d success, %d failure; want at least one of each", successes, failures)
+	}
+}
+
+// TestSSHGateway_OfferWithoutSignatureNeverAudited pins W25.4-1: PublicKeyCallback
+// (sshAuth) fires on the UNSIGNED "query" every pubkey auth attempt opens
+// with (RFC 4252 §7) — before the client ever proves it holds the matching
+// private key. Auditing "ssh.auth success" there (the pre-fix behavior) let
+// an attacker who merely KNOWS a victim's public key — never the private key
+// — mint a forged success row attributed to that victim. The offered key
+// here is genuinely registered and owned (sshAuth's own checks all pass, so
+// the query itself is accepted server-side) — but offerOnlySigner can never
+// sign, so the connection ultimately fails and VerifiedPublicKeyCallback
+// (where success is audited post-fix, and only after a real Verify) never
+// runs.
+func TestSSHGateway_OfferWithoutSignatureNeverAudited(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	_, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	_, err := ssh.Dial("tcp", h.addr, &ssh.ClientConfig{
+		User:            run.ID.String(),
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(offerOnlySigner{pub: pub})},
+		HostKeyCallback: ssh.FixedHostKey(h.hostPub),
+		Timeout:         3 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("dial with an unsigned (offer-only) key succeeded, want a signing failure")
+	}
+
+	// We want the ABSENCE of an event, so a bounded sleep-out is the right
+	// shape here (giving the server-side query handling — and, pre-fix, its
+	// forged success write — a moment to run), not waitForAudit's
+	// poll-until-found, which would just time out either way.
+	time.Sleep(200 * time.Millisecond)
+	if ev := findAudit(h.audit.snapshot(), run.ID, "ssh.auth", "success"); ev != nil {
+		t.Fatalf("ssh.auth success recorded for an offer that was never signed: %+v; events=%s", ev, auditDump(h.audit.snapshot(), run.ID))
 	}
 }
 

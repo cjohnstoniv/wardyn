@@ -240,6 +240,19 @@ Honest limits (by design, not hidden):
 - **Detection, not prevention.** It never blocks. Exec of a dynamic linker
   (`ld-linux*`/`ld-musl*`) is FLAGGED (`data.loader=true`) — the documented
   `ld-linux`/`mmap` bypass is made visible, not stopped.
+- **The kernel sensor itself is host-wide.** `tetragon` is a privileged HOST
+  sensor: its `TracingPolicy` (`tetragon-policies/wardyn-groundtruth.yaml`) has
+  no namespace/cgroup/binary selector, so it observes every process on the
+  box, not only Wardyn's — a plain compose deployment has no stable per-
+  container identity a static policy file can select on ahead of a container
+  even existing. By DEFAULT the ingest sidecar drops any exec/connect/write
+  event it cannot correlate to a `wardyn.managed=true` agent container
+  (`gatedMapper`, `cmd/wardyn-tetragon-ingest/correlator.go`) before it reaches
+  this audit log / SIEM fanout, so other containers' and the bare host's
+  activity is NOT forwarded by default. Set
+  `WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS=true` on the sidecar to
+  opt back into forwarding those unmapped events (`run_id` NULL,
+  `correlation=unmapped`) for full-host detection coverage.
 - **Host eBPF is blind inside CC3/Kata guests.** For such runs the sidecar emits
   a one-time `kernel.sensor.blind` event so the gap is visible. Set
   `WARDYN_GROUNDTRUTH_BLIND_RUNS=<run-id>,...` to record it at sidecar boot.

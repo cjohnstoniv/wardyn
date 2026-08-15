@@ -43,6 +43,14 @@ spec:
   # "One replica, by construction" carries the full remaining list. The value
   # stays templated for a future build that ships multi-replica for real.
   replicas: {{ .Values.replicas }}
+  # Recreate, not Kubernetes' default RollingUpdate: a rolling update starts the
+  # NEW pod before terminating the old one — a second replica for the window
+  # between them, on every `helm upgrade`, even though `replicas` never leaves
+  # 1 — exactly the secret-masking exposure the refusal above exists to
+  # prevent. Recreate tears the old pod down first so there is never a second
+  # one live.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "wardyn.selectorLabels" . | nindent 6 }}
@@ -123,6 +131,20 @@ spec:
             # internal/recording/registry.go). An .Values.env entry overrides.
             - name: WARDYN_RECORDING_DIR
               value: {{ if .Values.persistence.enabled }}{{ printf "%s/recordings" .Values.persistence.mountPath | quote }}{{ else }}""{{ end }}
+            {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_AUDIT_SPOOL") }}
+            # wardynd's own default (./data/audit-spool.jsonl) is the audit
+            # fallback spool (C1: a Postgres write that fails is fsync'd here
+            # instead of silently lost) — and it lands on the read-only root FS
+            # exactly like WARDYN_RECORDING_DIR above, silently disabling the
+            # documented per-pod spool on the chart's own defaults. Point it at
+            # the always-present /tmp emptyDir when persistence is off (durable
+            # across a container restart, not a reschedule, but strictly better
+            # than the mkdir failure the unpatched default hits), or the
+            # persistent volume when persistence is on. An .Values.env entry
+            # overrides.
+            - name: WARDYN_AUDIT_SPOOL
+              value: {{ if .Values.persistence.enabled }}{{ printf "%s/audit-spool.jsonl" .Values.persistence.mountPath | quote }}{{ else }}"/tmp/audit-spool.jsonl"{{ end }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
@@ -213,8 +235,9 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- if .Values.persistence.enabled }}
-            # Recording/audit spool. The env block above already points
-            # WARDYN_RECORDING_DIR at <mountPath>/recordings.
+            # Recordings + audit spool. The env block above already points
+            # WARDYN_RECORDING_DIR / WARDYN_AUDIT_SPOOL at <mountPath>/recordings
+            # and <mountPath>/audit-spool.jsonl respectively.
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
             {{- end }}

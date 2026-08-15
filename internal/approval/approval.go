@@ -128,11 +128,22 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 
 	outcome := "success"
 	action := "approval.decide"
-	auditData, _ := json.Marshal(map[string]any{
+	data := map[string]any{
 		"approval_id": id,
 		"decision":    string(newState),
 		"reason":      reason,
-	})
+	}
+	// Self-joining SIEM stream (W20-hold-fsm-1's companion): surface the
+	// approval's own requested-scope host at the top level, when it has one, so
+	// a consumer of this event never has to parse the nested requested_scope
+	// JSON to learn which host a human just approved/denied. Best-effort — a
+	// kind whose scope carries no "host" (credential approvals commonly do,
+	// tool_call approvals may not) simply omits the key rather than adding an
+	// empty one.
+	if host := requestedScopeHost(result.RequestedScope); host != "" {
+		data["host"] = host
+	}
+	auditData, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
@@ -153,6 +164,21 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 	}
 
 	return result, nil
+}
+
+// requestedScopeHost best-effort-extracts the "host" field from an approval's
+// RequestedScope JSON — present on an egress_domain scope (egressScope,
+// internal/egress/proxy/approvals.go) and on the api_key credential scopes
+// planArtifactRedirect/authorBedrockBearerInjection author, absent on a
+// tool_call scope or malformed/empty JSON, in which case it returns "".
+func requestedScopeHost(scope json.RawMessage) string {
+	var s struct {
+		Host string `json:"host"`
+	}
+	if err := json.Unmarshal(scope, &s); err != nil {
+		return ""
+	}
+	return s.Host
 }
 
 // ExpireStale transitions all PENDING approvals that were requested before

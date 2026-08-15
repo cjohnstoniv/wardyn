@@ -21,7 +21,7 @@
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
 //     DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources:     ListSources, CreateSource, GetSource, ScanSource, DeleteSource
-//   - audit:       AuditEvents, RecentAuditEvents
+//   - audit:       AuditEvents, AuditEventsPage, RecentAuditEvents
 //   - secrets:     ListSecrets, SetSecret, DeleteSecret
 //   - site-config: GetSiteConfig, PutSiteConfig
 //   - setup:       SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -38,7 +38,10 @@
 // The list endpoints and the audit trail accept an optional ListOpts (variadic,
 // so existing zero-arg calls are unchanged) that sends ?limit=&offset=. A page
 // may be truncated (the server sets X-Wardyn-Truncated); re-request with Offset
-// advanced by len(page) to page forward.
+// advanced by len(page) to page forward. AuditEventsPage returns that signal
+// directly as a bool instead of leaving a caller to infer completeness from
+// len(page) == the limit it happened to pass — a guess that silently breaks the
+// moment a caller omits Limit and gets the server's own default page size.
 //
 // Usage:
 //
@@ -444,16 +447,68 @@ func (c *Client) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/policies/"+id.String(), nil, nil)
 }
 
+// AuditFilter narrows an audit query by the server's optional predicates —
+// ?since=&until=&action_prefix=&actor_type=&outcome= (see docs/sdk.md's Raw
+// HTTP section). The zero value applies no filter. Since/Until are RFC3339
+// strings; a malformed one is rejected by the server as a 400, same as the
+// raw HTTP API — the client does not duplicate that validation.
+type AuditFilter struct {
+	Since        string // RFC3339, e.g. time.Now().UTC().Format(time.RFC3339)
+	Until        string // RFC3339
+	ActionPrefix string
+	ActorType    string // "human" | "agent" | "system"
+	Outcome      string // "success" | "denied" | "failure"
+}
+
+// queryValues renders f as the query params the server's parseAuditFilter
+// expects; a zero field is simply omitted (never sent empty).
+func (f AuditFilter) queryValues() url.Values {
+	q := url.Values{}
+	if f.Since != "" {
+		q.Set("since", f.Since)
+	}
+	if f.Until != "" {
+		q.Set("until", f.Until)
+	}
+	if f.ActionPrefix != "" {
+		q.Set("action_prefix", f.ActionPrefix)
+	}
+	if f.ActorType != "" {
+		q.Set("actor_type", f.ActorType)
+	}
+	if f.Outcome != "" {
+		q.Set("outcome", f.Outcome)
+	}
+	return q
+}
+
+// AuditEventsPage is AuditEvents plus the server's X-Wardyn-Truncated signal
+// and the optional filter predicates (AuditFilter): truncated=true means this
+// page did NOT reach the run's newest event (including run.complete, since
+// the per-run trail is chronological/ASC) and the caller must page forward —
+// Offset += len(events) — to see the rest. This is the fix for the audit-gap
+// where a >1000-event run's newest events could silently drop with no way for
+// a caller to even detect it: AuditEvents alone (below) cannot tell "this is
+// everything" from "this is page 1 of more".
+func (c *Client) AuditEventsPage(ctx context.Context, runID uuid.UUID, filter AuditFilter, opts ...ListOpts) (events []types.AuditEvent, truncated bool, err error) {
+	q := filter.queryValues()
+	q.Set("run_id", runID.String())
+	path := "/api/v1/audit?" + q.Encode()
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &events, &hdr)
+	return events, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // AuditEvents returns the append-only audit trail for the specified run in
-// chronological (seq ASC) order. run_id is required by the server; a zero UUID
-// is rejected with 400. Pass a ListOpts to page a long trail: a truncated page
-// (server sets X-Wardyn-Truncated) is walked forward with Offset += len(page),
-// which reaches the terminal run.complete event under ASC order.
+// chronological (seq ASC) order, unfiltered. run_id is required by the
+// server; a zero UUID is rejected with 400. Pass a ListOpts to page a long
+// trail: a truncated page (server sets X-Wardyn-Truncated) is walked forward
+// with Offset += len(page), which reaches the terminal run.complete event
+// under ASC order — prefer AuditEventsPage, which returns that signal
+// directly instead of requiring the caller to infer it.
 func (c *Client) AuditEvents(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.AuditEvent, error) {
-	path := "/api/v1/audit?run_id=" + url.QueryEscape(runID.String())
-	var out []types.AuditEvent
-	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
-	return out, err
+	events, _, err := c.AuditEventsPage(ctx, runID, AuditFilter{}, opts...)
+	return events, err
 }
 
 // RecentAuditEvents returns the newest-first global audit feed (all runs) — the
@@ -617,7 +672,11 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID) (io.ReadClos
 // body (if non-nil) is JSON-encoded as the request body.
 // out (if non-nil) is JSON-decoded from a 2xx response body.
 // Any non-2xx response is returned as *APIError.
-func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+// headerOut, if a non-nil *http.Header is passed (at most one — variadic only
+// to keep this optional for every existing zero-arg call site), receives the
+// raw response header on return, success or error alike — the sole mechanism
+// AuditEventsPage uses to surface X-Wardyn-Truncated to a caller.
+func (c *Client) do(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) error {
 	// Encode the request body.
 	var reqBody io.Reader
 	if body != nil {
@@ -639,6 +698,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
+	if len(headerOut) > 0 && headerOut[0] != nil {
+		*headerOut[0] = resp.Header
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))

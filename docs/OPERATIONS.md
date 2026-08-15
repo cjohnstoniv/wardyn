@@ -50,9 +50,53 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
 ```
 
-Restore is the same three in reverse: `psql -U wardyn wardyn < dump.sql` into a
-fresh volume, untar into the recordings volume (`fs` store only), put
-`WARDYN_AGE_KEY` back in `.env`, then `make setup`.
+### Restore them
+
+Order matters, and it is not just the backup order reversed. The age key has
+to be in place before wardynd ever boots against the restored data — putting
+it in `.env` after `make setup` means the first boot already minted (and
+started using) an ephemeral one. And Postgres has to be the ONLY thing
+running while the dump loads: bringing up the full stack first races
+wardynd's own migrations and health traffic against the restore, and a bare
+`psql` with no `-v ON_ERROR_STOP=1` (the earlier form of this recipe) keeps
+going past a failed statement and still exits `0` — a lock conflict or schema
+mismatch mid-load then leaves a silently half-restored database that looks
+like a clean success.
+
+```sh
+# 1. Age key FIRST, before anything boots against the restored data — copy
+#    it back into deploy/compose/.env (wherever you stashed it in backup
+#    step 3 above).
+
+# 2. Start Postgres ALONE, not the full stack, so nothing else touches the
+#    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
+#    `docker compose -f deploy/compose/docker-compose.yaml down -v` first —
+#    pg_dump's plain-SQL output re-creates the schema from scratch and will
+#    collide with an existing one.)
+docker compose -f deploy/compose/docker-compose.yaml up -d postgres
+
+# 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
+#    abort the whole load with a nonzero exit, instead of silently skipping
+#    it and leaving a partial database with no error.
+docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
+
+# 4. Recordings — `fs` store only; the default `pg` store already came back
+#    in step 3.
+docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
+  tar xzf /from/recordings-<date>.tar.gz -C /to
+
+# 5. Now bring up the rest of the stack.
+make setup
+
+# 6. Verify — row count first:
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
+#    then prove the age key actually decrypts what came back, which a row
+#    count alone can't: launch a run against any workspace/policy that
+#    depends on a previously-stored secret and confirm it starts instead of
+#    failing closed with a decrypt error (see "The age key has no rotation
+#    path" — the wrong key fails exactly here, not at boot):
+wardyn run --agent claude-code --workspace <workspace-id>
+```
 
 > `make reset` runs `compose down -v` after a confirmation prompt
 > (`scripts/up.sh` `cmd_reset`): Postgres, recordings and the audit sink all go,

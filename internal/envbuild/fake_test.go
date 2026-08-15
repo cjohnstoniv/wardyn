@@ -154,12 +154,22 @@ func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client
 
 // ImageInspect reports the image config, carrying any ONBUILD triggers the test
 // baked in via onBuild (mirrors a real daemon: triggers surface in Config.OnBuild).
+// A bare (no-tag) onBuild key matches ANY tag under that repo (imageID == key,
+// or imageID prefixed by "key:") — the devcontainer-build path now resolves its
+// FROM through a per-build push ref (Builder.newPushRef) carrying a random tag
+// a test cannot predict ahead of a Build() call, so tests seed ONBUILD by bare
+// repo instead of the exact ref.
 func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _ ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inspected = append(f.inspected, imageID)
 	cfg := &dockerspec.DockerOCIImageConfig{}
-	cfg.OnBuild = f.onBuild[imageID]
+	for key, triggers := range f.onBuild {
+		if imageID == key || strings.HasPrefix(imageID, key+":") {
+			cfg.OnBuild = triggers
+			break
+		}
+	}
 	return client.ImageInspectResult{
 		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg},
 	}, nil

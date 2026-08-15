@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -322,6 +323,96 @@ func TestAuditEvents_Success(t *testing.T) {
 	}
 	if got[0].Action != "run.create" {
 		t.Errorf("got action %q, want run.create", got[0].Action)
+	}
+}
+
+// --------------------------------------------------------------------------
+// AuditEventsPage (W16-S1-2: truncation was previously undetectable — the
+// per-run trail caps at 1000 events server-side and neither the CLI nor the
+// SDK could tell "this is everything" from "this is page 1 of more", so a
+// long run's newest events, including run.complete, could silently vanish
+// from a caller's view.)
+// --------------------------------------------------------------------------
+
+func TestAuditEventsPage_SurfacesTruncationHeader(t *testing.T) {
+	runID := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+		writeJSON(w, http.StatusOK, []types.AuditEvent{{ID: uuid.New(), Action: "run.create", Outcome: "success"}})
+	}))
+	defer srv.Close()
+
+	events, truncated, err := newTestClient(srv).AuditEventsPage(context.Background(), runID, client.AuditFilter{}, client.ListOpts{Limit: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !truncated {
+		t.Error("AuditEventsPage: truncated = false, want true (server set X-Wardyn-Truncated: true)")
+	}
+	if len(events) != 1 {
+		t.Errorf("got %d events, want 1", len(events))
+	}
+}
+
+func TestAuditEventsPage_NotTruncatedWhenHeaderAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []types.AuditEvent{})
+	}))
+	defer srv.Close()
+
+	_, truncated, err := newTestClient(srv).AuditEventsPage(context.Background(), uuid.New(), client.AuditFilter{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if truncated {
+		t.Error("AuditEventsPage: truncated = true, want false (no X-Wardyn-Truncated header)")
+	}
+}
+
+func TestAuditEventsPage_FilterAndPagingComposeInQuery(t *testing.T) {
+	runID := uuid.New()
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		writeJSON(w, http.StatusOK, []types.AuditEvent{})
+	}))
+	defer srv.Close()
+
+	filter := client.AuditFilter{ActionPrefix: "egress.", Outcome: "denied", ActorType: "agent"}
+	if _, _, err := newTestClient(srv).AuditEventsPage(context.Background(), runID, filter, client.ListOpts{Limit: 50, Offset: 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for k, want := range map[string]string{
+		"run_id": runID.String(), "action_prefix": "egress.", "outcome": "denied",
+		"actor_type": "agent", "limit": "50", "offset": "10",
+	} {
+		if got := gotQuery.Get(k); got != want {
+			t.Errorf("query %s = %q, want %q (full query: %s)", k, got, want, gotQuery.Encode())
+		}
+	}
+}
+
+// TestAuditEvents_StillWorksUnfiltered pins that AuditEvents — the pre-existing
+// method test/e2e/live/harness.go, test/e2e/live/subscription_test.go, and
+// test/apie2e/audit_recording_test.go all call as (ctx, runID) with no other
+// args — keeps its exact signature and wire shape now that it delegates to
+// AuditEventsPage under the hood.
+func TestAuditEvents_StillWorksUnfiltered(t *testing.T) {
+	runID := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.RawQuery; got != "run_id="+runID.String() {
+			t.Errorf("query = %q, want exactly run_id=%s (no stray filter/paging params)", got, runID)
+		}
+		writeJSON(w, http.StatusOK, []types.AuditEvent{{Action: "run.create"}})
+	}))
+	defer srv.Close()
+
+	events, err := newTestClient(srv).AuditEvents(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("got %d events, want 1", len(events))
 	}
 }
 

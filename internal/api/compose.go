@@ -324,11 +324,22 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// github_token to the detected repos, or drop it when the dir has no GitHub
 	// remote ("no remote -> no token"). The LLM's repo guess never survives.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "ground"})
-	var groundWarns []string
-	if req.Workspace.Kind == composer.WorkspaceLocal {
-		groundWarns = groundGitHubGrants(&prop.InlinePolicy, detectedGitHub, detectedOther)
-		groundWarns = append(groundWarns, groundGitPATGrants(&prop.InlinePolicy, detectedOther)...)
-	}
+	// W15-b: fold the operator's EXPLICIT git-workspace selections into the SAME
+	// grounding set local-dir detection uses (composeWorkspaceGitRepos) — a
+	// composed run whose workspace is a DIRECT git pick (composer.WorkspaceGit),
+	// not a local directory Wardyn can `git remote -v` inspect, never ran
+	// grounding at all before this: the analyzer's OWN repo guess for a
+	// github_token grant reached composer.Clamp ungrounded, while Clamp's
+	// any-repo-when-ceiling-is-empty behavior assumed every proposal reaching it
+	// was already grounded to reality. groundGitHubGrants/groundGitPATGrants now
+	// always run (not gated to WorkspaceLocal): a pure-ephemeral workspace
+	// correctly grounds to nothing, dropping any github_token grant ("no remote
+	// -> no token"), exactly as it already does for a local dir with none.
+	selGitHub, selOther := composeWorkspaceGitRepos(req.Workspaces)
+	detectedGitHub = append(detectedGitHub, selGitHub...)
+	detectedOther = append(detectedOther, selOther...)
+	groundWarns := groundGitHubGrants(&prop.InlinePolicy, detectedGitHub, detectedOther)
+	groundWarns = append(groundWarns, groundGitPATGrants(&prop.InlinePolicy, detectedOther)...)
 	// ALL workspace kinds: api_key secret names must be storable, or the setup
 	// checklist's add-secret fix and the launch gate both dead-end (see
 	// groundAPIKeySecretNames).
@@ -412,6 +423,17 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	}
 	ceiling.MinConfinementClass = composer.EffectiveConfinementFloor(
 		s.cfg.DefaultPolicy.MinConfinementClass, req.ConfinementFloor, runnerBest)
+	// W23-S1-3: composer.Clamp now treats an EMPTY ceiling github_token repo
+	// list as deny-all (the RBAC floor a hand-authored/member inline_policy
+	// needs). This proposal's own github_token grant was already grounded to
+	// REALITY above (detectedGitHub: an actually-detected local remote, or an
+	// operator-selected git workspace) — not the analyzer's guess — so widen
+	// THIS pipeline's own ceiling copy to that grounded set when the operator's
+	// ceiling itself sets no repo allowlist (the shipped default.json shape),
+	// or the new deny-all floor would strip the very access grounding just
+	// proved legitimate. widenCeilingRepoAllowlist never mutates the shared
+	// s.cfg.DefaultPolicy — it returns a Clone()'d copy.
+	ceiling = widenCeilingRepoAllowlist(ceiling, detectedGitHub)
 	clamped, clampWarns := composer.Clamp(prop.InlinePolicy, ceiling)
 	// Pre/post-clamp egress diff for the setup checklist's dropped-domain rows
 	// (no Clamp signature change — Clamp already returns this as a joined prose
@@ -845,150 +867,6 @@ func applyWorkspaces(run *composer.RunInput, spec *types.RunPolicySpec, wss []co
 //   - non-GitHub remotes -> a warning (Wardyn brokers GitHub tokens only).
 //
 // It never fabricates a grant the model didn't request (least privilege).
-func groundGitHubGrants(spec *types.RunPolicySpec, detectedGitHub, detectedOther []string) []string {
-	var warns []string
-	kept := spec.EligibleGrants[:0]
-	dropped := 0
-	for _, g := range spec.EligibleGrants {
-		if g.Kind != types.GrantGitHubToken {
-			kept = append(kept, g)
-			continue
-		}
-		if len(detectedGitHub) == 0 {
-			dropped++
-			continue // no remote -> drop the github token entirely
-		}
-		var sc struct {
-			Repos       []string          `json:"repos"`
-			Permissions map[string]string `json:"permissions"`
-		}
-		_ = json.Unmarshal(g.Scope, &sc)
-		sc.Repos = detectedGitHub // override the guess with detected reality
-		if b, err := json.Marshal(sc); err == nil {
-			g.Scope = b
-		}
-		kept = append(kept, g)
-	}
-	spec.EligibleGrants = kept
-	if dropped > 0 {
-		warns = append(warns, "no GitHub git remote detected in the workspace; dropped the proposed github_token grant (nothing to scope it to)")
-	} else if len(detectedGitHub) > 0 {
-		warns = append(warns, "scoped github_token to the workspace's detected remote(s): "+strings.Join(detectedGitHub, ", "))
-	}
-	if len(detectedOther) > 0 {
-		warns = append(warns, "non-GitHub remote host(s) detected ("+strings.Join(detectedOther, ", ")+"); add a git_pat grant with a stored PAT to broker credentials for these hosts")
-	}
-	return warns
-}
-
-// groundGitPATGrants makes the proposal's non-GitHub PAT access reflect the
-// LOCAL workspace's ACTUAL non-github remotes (detectedOther): a git_pat grant
-// is KEPT only when its host matches a detected remote host, and DROPPED with a
-// warning otherwise (a stored PAT brokered for a host the workspace never uses
-// is needless standing access). It never fabricates a grant the model didn't
-// request (least privilege), mirroring groundGitHubGrants.
-func groundGitPATGrants(spec *types.RunPolicySpec, detectedOther []string) []string {
-	if len(spec.EligibleGrants) == 0 {
-		return nil
-	}
-	detected := make(map[string]bool, len(detectedOther))
-	for _, h := range detectedOther {
-		detected[strings.ToLower(h)] = true
-	}
-	var warns []string
-	kept := spec.EligibleGrants[:0]
-	for _, g := range spec.EligibleGrants {
-		if g.Kind != types.GrantGitPAT {
-			kept = append(kept, g)
-			continue
-		}
-		host, _, _, derr := gitPATScopeFields(g.Scope)
-		if derr != nil || !detected[strings.ToLower(host)] {
-			warns = append(warns, "dropped a git_pat grant (host "+host+"): no matching non-GitHub remote detected in the workspace")
-			continue
-		}
-		warns = append(warns, "kept git_pat grant for detected non-GitHub remote host "+host)
-		kept = append(kept, g)
-	}
-	spec.EligibleGrants = kept
-	return warns
-}
-
-// groundAPIKeySecretNames rewrites LLM-proposed api_key secret names that can
-// never exist: the model may invent env-var-style names (e.g.
-// "ANTHROPIC_API_KEY") that secretNameRE rejects, so the setup checklist's
-// add-secret fix would dead-end in the dialog's name validation and the launch
-// would 422 on a secret nobody can create. A name that fails secretNameRE gets
-// the provider's canonical name when the host is a known LLM provider (same
-// source of truth as agentLLMProvider), else a mechanical sanitize. Names the
-// store accepts are left alone — the model's valid choice stands. Mirrors the
-// deterministic-grounding rule: the model never invents unusable refs.
-func groundAPIKeySecretNames(spec *types.RunPolicySpec) []string {
-	var warns []string
-	for i, g := range spec.EligibleGrants {
-		if g.Kind != types.GrantAPIKey {
-			continue
-		}
-		var scope map[string]any
-		if err := json.Unmarshal(g.Scope, &scope); err != nil {
-			continue // validation rejects undecodable scopes later
-		}
-		name, _ := scope["secret_name"].(string)
-		host, _ := scope["host"].(string)
-		if name == "" || secretNameRE.MatchString(name) {
-			continue
-		}
-		fixed, ok := canonicalSecretForHost(host)
-		if !ok {
-			fixed = sanitizeSecretName(name)
-		}
-		if fixed == "" || fixed == name {
-			continue
-		}
-		scope["secret_name"] = fixed
-		raw, err := json.Marshal(scope)
-		if err != nil {
-			continue
-		}
-		spec.EligibleGrants[i].Scope = raw
-		warns = append(warns, fmt.Sprintf("normalized api_key secret name %q to storable %q (host %s)", name, fixed, host))
-	}
-	return warns
-}
-
-// canonicalSecretForHost maps a known LLM provider host to its canonical secret
-// name via the agentLLMProvider table (single source of truth).
-func canonicalSecretForHost(host string) (string, bool) {
-	for _, agent := range []string{"claude-code", "codex-cli"} {
-		if p, ok := agentLLMProvider(agent); ok && p.host == host {
-			return p.secret, true
-		}
-	}
-	return "", false
-}
-
-// sanitizeSecretName lowercases and maps a proposed name onto secretNameRE's
-// alphabet ('_' and spaces become '-', other invalid runes drop, edge
-// punctuation trims); returns "" when nothing storable remains.
-func sanitizeSecretName(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
-			b.WriteRune(r)
-		case r == '_', r == ' ':
-			b.WriteRune('-')
-		}
-	}
-	out := strings.Trim(b.String(), ".-_")
-	if !secretNameRE.MatchString(out) {
-		return ""
-	}
-	return out
-}
-
-// handleListComposerBackends returns the configured composer backends (no
-// secrets) for the UI provider dropdown. 404 when the composer is disabled.
 func (s *Server) handleListComposerBackends(w http.ResponseWriter, r *http.Request) {
 	if s.composerEnabledOrNotFound(w) {
 		return

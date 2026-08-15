@@ -76,7 +76,9 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 	if err != nil {
 		return "", err
 	}
-	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), nil, tarCtx, "/", logSink, outputTag)
+	// A fresh per-build push ref (W20-record-image-2): see Builder.newPushRef.
+	pushRepo, buildTag := b.newPushRef()
+	return b.runBuildAndFinalize(ctx, localBuildEnv(pushRepo), nil, tarCtx, "/", logSink, outputTag, buildTag)
 }
 
 // generatedFilesTar packs the generated files under destDir into an in-memory

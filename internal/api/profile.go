@@ -81,7 +81,17 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	// Clamp to the operator ceiling, validate, and deterministically grade —
 	// identical to the composer path (see compose.go) so a recording can never
 	// mint a profile beyond operator policy and the grade is spec-derived.
-	clamped, clampWarns := composer.Clamp(synth, s.cfg.DefaultPolicy)
+	//
+	// W23-S1-3: composer.Clamp now treats an EMPTY ceiling github_token repo
+	// list as deny-all (the RBAC floor a hand-authored/member inline_policy
+	// needs). synth's own github_token grant repos, if any, are already
+	// provably real (recordmode.Synthesize derives them from grants the
+	// SOURCE run actually held, themselves already clamped once at creation —
+	// see synthGitHubRepos), so widen this call's own ceiling copy to that set
+	// when the operator's ceiling itself sets none, or the new deny-all floor
+	// would strip access this synthesis already proved legitimate.
+	ceiling := widenCeilingRepoAllowlist(s.cfg.DefaultPolicy, synthGitHubRepos(synth))
+	clamped, clampWarns := composer.Clamp(synth, ceiling)
 	if verr := validatePolicySpec(clamped); verr != nil {
 		writeError(w, http.StatusUnprocessableEntity, "synthesized profile invalid: "+verr.Error())
 		return

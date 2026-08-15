@@ -161,5 +161,11 @@ and the CLI mirrors them on `wardyn audit`.
 
 The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
 trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
-reach the terminal `run.complete`. Everything else here is one method on the Go
-client above, or one `wardyn` CLI command.
+reach the terminal `run.complete`. `wardyn audit <run-id> --limit=N --offset=N`
+mirrors this on the CLI, and prints a `warning: audit trail truncated ...`
+line on stderr (never stdout, so `--json` stays a plain array) naming the next
+`--offset` — silence means the page you got is the whole trail. The Go client's
+`AuditEventsPage` returns the same signal as a `truncated bool` instead of a
+header a caller has to remember to check; `scripts/ci-run.sh` loops it so a CI
+run's `audit.json` artifact is never a silently-truncated prefix. Everything
+else here is one method on the Go client above, or one `wardyn` CLI command.

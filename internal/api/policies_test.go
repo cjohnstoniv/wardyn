@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // These tests exercise the admin-gated policy routes WITHOUT a Postgres pool.
@@ -95,6 +97,47 @@ func TestUpdatePolicyValidation(t *testing.T) {
 	if w := do(t, h.srv, http.MethodPut, "/api/v1/policies/not-a-uuid",
 		adminToken, `{"name":"p","spec":{"min_confinement_class":"CC2"}}`); w.Code != http.StatusBadRequest {
 		t.Errorf("update bad id: code = %d, want 400", w.Code)
+	}
+}
+
+// TestRedactPolicyForRead is W12-S1-1's read-path belt-and-braces: a policy
+// read must never echo a raw llm_inspection secret VALUE back to a caller,
+// even though validatePolicySpec already refuses to persist one (defense in
+// depth against a migration/direct-DB-edit violating that invariant). Names
+// are not sensitive the way values are and survive redaction untouched.
+func TestRedactPolicyForRead(t *testing.T) {
+	p := types.RunPolicy{
+		Spec: types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			LLMInspection: &types.LLMInspectionSpec{
+				Mode: "alert", DetectSecrets: true,
+				WorkspaceSecretNames:  []string{"prod-db-password"},
+				WorkspaceSecretValues: []string{"a-value-that-must-never-be-read-back"},
+			},
+		},
+	}
+	got := redactPolicyForRead(p)
+	if got.Spec.LLMInspection == nil {
+		t.Fatal("llm_inspection dropped entirely; want it kept (only values redacted)")
+	}
+	if len(got.Spec.LLMInspection.WorkspaceSecretValues) != 1 {
+		t.Fatalf("expected values replaced by a one-element count placeholder, got %v", got.Spec.LLMInspection.WorkspaceSecretValues)
+	}
+	if strings.Contains(got.Spec.LLMInspection.WorkspaceSecretValues[0], "must-never-be-read-back") {
+		t.Errorf("W12-S1-1: policy read DTO leaked the raw secret value: %v", got.Spec.LLMInspection.WorkspaceSecretValues)
+	}
+	if len(got.Spec.LLMInspection.WorkspaceSecretNames) != 1 || got.Spec.LLMInspection.WorkspaceSecretNames[0] != "prod-db-password" {
+		t.Errorf("names must survive redaction (only values are sensitive), got %v", got.Spec.LLMInspection.WorkspaceSecretNames)
+	}
+	// The ORIGINAL policy's own LLMInspection must not be mutated in place.
+	if p.Spec.LLMInspection.WorkspaceSecretValues[0] != "a-value-that-must-never-be-read-back" {
+		t.Errorf("redactPolicyForRead must not mutate the input policy's own LLMInspection, got %q", p.Spec.LLMInspection.WorkspaceSecretValues[0])
+	}
+
+	// A policy with no llm_inspection (or no values) passes through unchanged.
+	plain := types.RunPolicy{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
+	if got := redactPolicyForRead(plain); got.Spec.LLMInspection != nil {
+		t.Errorf("a policy with no llm_inspection must pass through unchanged, got %+v", got.Spec.LLMInspection)
 	}
 }
 

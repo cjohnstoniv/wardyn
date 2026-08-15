@@ -64,6 +64,26 @@ func newTestEvent(action string) types.AuditEvent {
 	}
 }
 
+// TestNewAuditSpool_CreatesMissingParentDir pins the W28-S1-2 fix: the flag
+// default (cmd/wardynd/boot_flags.go) is the RELATIVE "./data/audit-spool.jsonl",
+// and the chart's own defaults point it at a directory nothing has created yet
+// (an emptyDir or a fresh PVC). Before the MkdirAll in NewAuditSpool, opening a
+// path whose parent directory does not exist failed outright — this fails on
+// that base and passes once the parent is created for it.
+func TestNewAuditSpool_CreatesMissingParentDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "audit", "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool with missing parent dir: %v", err)
+	}
+	if err := sp.Append(newTestEvent("run.create")); err != nil {
+		t.Fatalf("Append after self-healed mkdir: %v", err)
+	}
+	if lc := spoolLineCount(t, path); lc != 1 {
+		t.Fatalf("spool after Append: %d lines, want 1", lc)
+	}
+}
+
 // TestAuditSpoolDrainReplaysAfterHeal is the counterfactual: without a drain
 // the spool is a write-only sink and never empties. Spool N events while the store
 // is down (drain lands nothing, file intact), heal the store, and assert all N

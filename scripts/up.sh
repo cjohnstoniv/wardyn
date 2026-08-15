@@ -729,17 +729,19 @@ cmd_reset_all() {
   # removes. A project-label filter is NOT safe here: the label is just the
   # directory name ("compose"), which this repo's pre-rename eras (warden-*/
   # writ-*) share, and reset-all must never claim volumes that aren't its own.
-  # `docker compose config --format json` already RESOLVES each volume's real
-  # docker name (explicit `name:` when set, else <project>_<logical>, and the
-  # bare external name for `external: true`), so read that structured output
-  # instead of hand-parsing the YAML render — the old awk scan assumed a fixed
-  # 2-space block style and silently mis-derived names for any flow-style or
-  # external-volume shape. jq is the shared JSON tool across scripts/ (ci-run.sh,
-  # run-e2e-byoi.sh); if jq or `config` is unavailable the preview lists no
-  # volumes, but the real `down -v` teardown below is unaffected.
-  _ra_volnames=$(compose ${_ra_profiles} config --format json 2>/dev/null \
-    | jq -r --arg proj "${_ra_proj}" '(.volumes // {}) | to_entries[] | .value.name // ($proj + "_" + .key)' 2>/dev/null \
-    | tr '\n' ' ')
+  # The set is STATIC — docker-compose.yaml's top-level `volumes:` declares
+  # exactly these six, unconditionally, regardless of which profiles are
+  # active — so it is hardcoded here instead of derived via
+  # `compose config --format json | jq`. That derivation used to make jq a
+  # HARD dependency for an accurate manifest: absent jq (or `config` failing),
+  # _ra_volnames silently resolved empty, every volume line below rendered
+  # [absent], and the site-config/secrets [destroy] warning was suppressed
+  # entirely — while `down -v` a few lines down still wiped them for real (a
+  # false-negative consent prompt, not just a cosmetic gap). Only `recordings`
+  # carries an explicit `name:` in docker-compose.yaml (namespaced by
+  # WARDYN_NS, not the project); the other five follow compose's default
+  # <project>_<logical> naming.
+  _ra_volnames="${_ra_proj}_postgres_data ${_ra_proj}_audit ${_ra_proj}_registry_data ${_ra_proj}_groundtruth_token ${_ra_proj}_tetragon_export ${WARDYN_NS:-wardyn}-recordings"
   _ra_volumes=""
   for _ra_v in ${_ra_volnames}; do
     docker volume inspect "${_ra_v}" >/dev/null 2>&1 && _ra_volumes="${_ra_volumes}${_ra_v} "

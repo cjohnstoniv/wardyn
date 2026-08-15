@@ -227,7 +227,33 @@ run_id="$(jq -r '.id' "${run_json}" 2>/dev/null || sed -n 's/.*"id"[^"]*"\([0-9a
 if [[ -n "${run_id}" ]]; then
   log "Collecting artifacts for run ${run_id} -> ${OUT_DIR}"
   wardyn run get "${run_id}" --json >"${run_json}" 2>/dev/null || warn "run get failed"
-  wardyn audit --run "${run_id}" --json >"${OUT_DIR}/audit.json" 2>/dev/null || warn "audit fetch failed"
+
+  # The per-run audit trail truncates at 1000 events (oldest-first) unless
+  # paged (W16-S1-2) — a run with more tool calls/egress decisions than that
+  # would otherwise silently lose its newest events, INCLUDING run.complete,
+  # from this artifact. Page with --limit/--offset until a short page proves
+  # we reached the end (the same "walk forward to the newest events" contract
+  # docs/sdk.md documents). jq is required to splice pages into one array;
+  # without it, fall back to a single (possibly-truncated) call rather than
+  # hand-rolling JSON concatenation in sed.
+  if command -v jq >/dev/null 2>&1; then
+    audit_jsonl="$(mktemp)"
+    audit_limit=1000
+    audit_offset=0
+    while :; do
+      page="$(wardyn audit "${run_id}" --limit "${audit_limit}" --offset "${audit_offset}" --json 2>/dev/null)" \
+        || { warn "audit fetch failed at offset ${audit_offset}"; break; }
+      page_count="$(printf '%s' "${page}" | jq 'length' 2>/dev/null)" || page_count=0
+      [[ "${page_count}" -gt 0 ]] && printf '%s' "${page}" | jq -c '.[]' >>"${audit_jsonl}"
+      audit_offset=$((audit_offset + page_count))
+      [[ "${page_count}" -ge "${audit_limit}" ]] || break
+    done
+    jq -s '.' "${audit_jsonl}" >"${OUT_DIR}/audit.json" 2>/dev/null || warn "audit artifact assembly failed"
+    rm -f "${audit_jsonl}"
+  else
+    warn "jq not found: collecting a single (possibly truncated) audit page"
+    wardyn audit "${run_id}" --json >"${OUT_DIR}/audit.json" 2>/dev/null || warn "audit fetch failed"
+  fi
 else
   warn "no run id parsed from output; skipping artifact collection"
 fi

@@ -214,6 +214,57 @@ func TestDecide_AdminTokenRecordsAsSystem(t *testing.T) {
 	}
 }
 
+// TestDecide_AuditDataIncludesRequestedScopeHost is W20-hold-fsm-1's companion
+// fix: approval.Decide's audit event now surfaces the approval's own
+// requested_scope host at the top level (when it has one), so a SIEM consumer
+// can join "who decided this" straight to "which host" without parsing the
+// nested requested_scope JSON itself. Fails on base 6d76911, whose audit data
+// carries only approval_id/decision/reason.
+func TestDecide_AuditDataIncludesRequestedScopeHost(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	scope := json.RawMessage(`{"host":"api.github.com","mode":"deny_with_review"}`)
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, scope))
+	if _, err := approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice@example.com", "ok"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if len(st.audit) == 0 {
+		t.Fatal("expected an audit event")
+	}
+	var data struct {
+		Host string `json:"host"`
+	}
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v (%s)", err, st.audit[0].Data)
+	}
+	if data.Host != "api.github.com" {
+		t.Errorf("audit data host = %q, want api.github.com", data.Host)
+	}
+}
+
+// TestDecide_AuditDataOmitsHostWhenScopeHasNone proves the host surfacing is
+// best-effort: a kind whose scope carries no "host" key (e.g. a bare
+// credential scope) must not inject a spurious empty field.
+func TestDecide_AuditDataOmitsHostWhenScopeHasNone(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
+	if _, err := approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice", "ok"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if _, ok := data["host"]; ok {
+		t.Errorf("audit data must not carry an empty host key when the scope has none: %s", st.audit[0].Data)
+	}
+}
+
 func TestDecide_Deny(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}

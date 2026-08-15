@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // dockerCorrelator maps container ids to Wardyn run ids by listing docker
@@ -211,4 +212,55 @@ func parseLabels(s string) map[string]string {
 		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
 	return out
+}
+
+// ── unmapped-event forwarding gate (W24-S1-1) ───────────────────────────────
+
+// mapLiner is the minimal surface tailExport/processLine (main.go) need from
+// the Tetragon->AuditEvent mapper. *groundtruth.Mapper satisfies it directly;
+// gatedMapper below wraps one to add the unmapped-host-event gate.
+type mapLiner interface {
+	MapLine(line []byte) (types.AuditEvent, bool)
+}
+
+// gatedMapper wraps a mapLiner and enforces the unmapped-host-event opt-in.
+//
+// FINDING (HIGH, secret-leak, W24-S1-1): Tetragon is a HOST sensor — it
+// observes every process on the box, not only Wardyn's. managedContainers
+// (cliDockerLister, above) filters the CORRELATION INDEX down to
+// wardyn.managed=true agent containers, but that index only decides whether a
+// container id RESOLVES; on its own it does nothing to stop a kernel event
+// from a container/process that is NOT in the index from being mapped and
+// forwarded with run_id NULL + correlation="unmapped". Left ungated, that
+// meant every other container's exec argv, sensitive file writes, and
+// connect tuples — plus the bare host's own processes — landed in the
+// control plane's undeletable audit log and fanned out to every SIEM sink: a
+// secret/PII leak of workloads Wardyn does not own, contradicting this
+// sidecar's former "drops the rest" doc claim (see main.go's package doc,
+// corrected alongside this fix).
+//
+// A container/process that DOES correlate to a Wardyn run (RunID != nil) is
+// NEVER gated — it is always forwarded. Heartbeat and kernel.sensor.blind
+// events are also unaffected: they are built directly
+// (internal/groundtruth/sensor.go) and emitted straight to the sink, never
+// through a mapLiner.
+//
+// allowUnmapped defaults false (its zero value): secure by default. Set via
+// -forward-unmapped-host-events / WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS
+// (see run() in main.go) to opt a deployment back into full-host detection
+// coverage, accepting the leak as a deliberate tradeoff.
+type gatedMapper struct {
+	inner         mapLiner
+	allowUnmapped bool
+}
+
+// MapLine delegates to inner, then drops an unmapped result unless opted in —
+// exactly like an unrecorded event kind (ok=false: not counted, not
+// forwarded). See the gatedMapper doc above for why this exists.
+func (g *gatedMapper) MapLine(line []byte) (types.AuditEvent, bool) {
+	ev, ok := g.inner.MapLine(line)
+	if !ok || g.allowUnmapped || ev.RunID != nil {
+		return ev, ok
+	}
+	return types.AuditEvent{}, false
 }

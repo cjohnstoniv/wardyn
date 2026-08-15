@@ -245,6 +245,17 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		// eternally (the exact C3 strand the sweep exists to close). Finalize it
 		// instead. An interactive run legitimately has no exec id, so it is exempt.
 		//
+		// W15-c: keyed on a GENUINELY empty AgentExecID only — dispatch
+		// (runs_dispatch.go, mainProcessExecID) now persists a non-empty sentinel
+		// for an exec-less (krun) launch, which legitimately has no separate exec
+		// id but IS a live, healthy run (the container's main process is the
+		// agent). Before that fix, dispatch persisted a bare "" for that case too,
+		// so this guard could not tell "never exec'd, stranded" apart from
+		// "exec-less, healthy" and finalized+killed the latter on every stale-lease
+		// sweep. Do NOT widen this back to "AgentExecID doesn't look like a real
+		// exec id" or similar — "" must stay reserved for "SetRunAgentExecID was
+		// never called".
+		//
 		// No age gate: dispatch HOLDS this run's watcher lease continuously from just
 		// before SetSandboxRef until the completion watcher takes over its own hold
 		// (runs_dispatch.go), so a run that reached ClaimStaleRunWatchers with a STALE

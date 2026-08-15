@@ -25,7 +25,7 @@
   "llm_inspection": {
     "mode": "alert",
     "detect_secrets": true,
-    "workspace_secret_values": [],
+    "workspace_secret_names": [],
     "on_scanner_error": "pass",
     "require_inspectable_llm": false
   }

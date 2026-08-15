@@ -321,6 +321,64 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	}
 }
 
+// TestFirstUseApprovedAttributesRuleSourceToApproval is the W20-hold-fsm-1
+// regression: an approval-RELEASED request's ALLOW decision must attribute to
+// the releasing approval — rule_source "approval:<id>", ApprovalID set — not
+// "policy:allowed" with no approval_id, which is indistinguishable from a
+// standing policy allow and breaks the audit join from "this egress happened"
+// back to "who approved it". Fails on base 6d76911 (rule_source ==
+// "policy:allowed", ApprovalID == nil for the post-approval request).
+func TestFirstUseApprovedAttributesRuleSourceToApproval(t *testing.T) {
+	state := apState(types.ApprovalPending)
+	cp := approvalCPStub(state, nil, nil)
+	defer cp.Close()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "reached")
+	}))
+	defer upstream.Close()
+
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	p, buf := newTestProxy(t, types.RunPolicySpec{
+		AllowedDomains:   []string{"known.test"},
+		FirstUseApproval: types.FirstUseDenyWithReview,
+	}, upstreamAddr(upstream), ap, nil)
+
+	// 1st request: pending, raises the approval.
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://newhost2.test/"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("first request want 403 got %d", rec.Code)
+	}
+	pending := lastDecision(t, buf)
+	if pending.ApprovalID == nil {
+		t.Fatalf("pending decision must carry an approval_id")
+	}
+	wantID := *pending.ApprovalID
+
+	// Approver approves; force the cache to allow poll now.
+	state.Store(types.ApprovalApproved)
+	forcePollNow(ap, "newhost2.test")
+
+	rec2 := httptest.NewRecorder()
+	p.ServeHTTP(rec2, mustProxyReq(t, http.MethodGet, "http://newhost2.test/v"))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("after approval want 200 got %d body=%q", rec2.Code, rec2.Body.String())
+	}
+
+	got := lastDecision(t, buf)
+	if got.Decision != egress.Allow {
+		t.Fatalf("decision = %q, want allow", got.Decision)
+	}
+	wantSource := "approval:" + wantID.String()
+	if got.RuleSource != wantSource {
+		t.Fatalf("rule_source = %q, want %q (base 6d76911 logs %q with no approval_id)", got.RuleSource, wantSource, "policy:allowed")
+	}
+	if got.ApprovalID == nil || *got.ApprovalID != wantID {
+		t.Fatalf("approval_id = %v, want %v (the releasing approval, so the audit trail self-joins)", got.ApprovalID, wantID)
+	}
+}
+
 func TestFirstUseDeniedCached(t *testing.T) {
 	var getCount atomic.Int32
 	cp := approvalCPStub(apState(types.ApprovalDenied), nil, &getCount)

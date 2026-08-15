@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"strings"
 
@@ -319,7 +320,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 		}
 		seenTargets[wr.Target] = true
 	}
-	if err := validateLLMInspection(spec.LLMInspection); err != nil {
+	if err := validateLLMInspection(spec); err != nil {
 		return err
 	}
 	return nil
@@ -327,7 +328,11 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 
 // validateLLMInspection enforces the structural invariants of the optional
 // outbound content-inspection block. A nil spec (the default) is valid (off).
-func validateLLMInspection(li *types.LLMInspectionSpec) error {
+// Takes the FULL RunPolicySpec (not just LLMInspection) because
+// detector_sidecar_url is now validated against this SAME spec's own egress
+// allowlist — see the W12-A-1 comment below.
+func validateLLMInspection(spec types.RunPolicySpec) error {
+	li := spec.LLMInspection
 	if li == nil {
 		return nil
 	}
@@ -337,14 +342,42 @@ func validateLLMInspection(li *types.LLMInspectionSpec) error {
 	default:
 		return fmt.Errorf("llm_inspection.mode: unknown mode %q", li.Mode)
 	}
+	// W12-A-1/W12-S1-1: a raw VALUE may never be authored on a policy write —
+	// stored, inline, or WARDYN_DEFAULT_POLICY. Only dispatch ever populates
+	// this field, internally, in memory, on the ephemeral copy handed to the
+	// proxy sidecar (resolveLLMInspectionSecrets, runs_dispatch.go). An
+	// operator authors workspace_secret_names instead (types.LLMInspectionSpec).
+	if len(li.WorkspaceSecretValues) > 0 {
+		return fmt.Errorf("llm_inspection.workspace_secret_values may not be set on a policy write " +
+			"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
+	}
 	if mode != "" && mode != "off" {
 		if !li.DetectSecrets && !li.DetectSecretPatterns && !li.DetectEntropy &&
 			!li.DetectPII && li.DetectorSidecarURL == "" && len(li.ClassifiedMarkers) == 0 {
 			return fmt.Errorf("llm_inspection: at least one detector must be enabled when mode is %q", mode)
 		}
-		if u := strings.TrimSpace(li.DetectorSidecarURL); u != "" &&
-			!strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-			return fmt.Errorf("llm_inspection.detector_sidecar_url must be an http(s) URL")
+		if u := strings.TrimSpace(li.DetectorSidecarURL); u != "" {
+			if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+				return fmt.Errorf("llm_inspection.detector_sidecar_url must be an http(s) URL")
+			}
+			// W12-A-1 belt-and-braces: the sidecar is dialed PROXY-SIDE with the
+			// outbound span TEXT (internal/contentscan/sidecar.go) — a surface the
+			// sandbox's own confinement class never bounds, so "trusted operator
+			// config" (that file's own framing) only actually holds once this
+			// URL's host is ALSO on this same policy's own egress allowlist — the
+			// same exact-entry bar a brokered credential injection already
+			// requires (domainAllowedExact) — rather than accepting any http(s)
+			// URL at face value. Doesn't widen egress by itself (the sidecar dial
+			// never goes through the sandbox's own allowlist); it requires the
+			// operator to have already named the host for something.
+			parsed, perr := neturl.Parse(u)
+			if perr != nil || parsed.Hostname() == "" {
+				return fmt.Errorf("llm_inspection.detector_sidecar_url is not a valid URL")
+			}
+			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, parsed.Hostname()) {
+				return fmt.Errorf("llm_inspection.detector_sidecar_url host %q must be in this policy's own allowed_domains "+
+					"(or allow_all_egress) — an operator allowlist, not a bare http(s) check", parsed.Hostname())
+			}
 		}
 		// require_inspectable_llm is a RUNTIME guarantee, and only TLS-MITM can
 		// inspect an opaque CONNECT (incl. an api-key run that overrides its base

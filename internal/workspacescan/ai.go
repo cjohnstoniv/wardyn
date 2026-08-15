@@ -20,10 +20,16 @@ package workspacescan
 // Authority rules (non-negotiable): the AI NEVER overrides or deletes a
 // deterministic fact. It can only ADD to fields that are EMPTY in the base
 // profile and can only RAISE NeedsReview. AI-suggested EGRESS is treated
-// cautiously — the deterministic filename-keyed table is the sole authority for
-// hosts, so AI egress is only ever used to gap-fill an EMPTY egress set and it
-// ALWAYS forces NeedsReview (a human promotes it deliberately; it can never
-// silently widen a run's allowlist). On ANY error (missing binary, timeout,
+// cautiously — the deterministic filename-keyed table (WorkspaceProfile.
+// EgressDomains) is the SOLE authority for auto-granted hosts and the AI never
+// writes to it at all (W6-S1-3: it used to, which let a model guess ride the
+// same auto-union privilege as a real marker-table hit). An AI-suggested host
+// instead lands in SuggestedEgress — the SAME advisory, content-derived,
+// never-auto-unioned lane the deterministic content scanner's own hits use
+// (profile.go, workspace_egress.go's unionWorkspaceEgress) — and ALWAYS forces
+// NeedsReview: an operator must deliberately promote it into the workspace's
+// own ApprovedEgress list before it can ever reach a run's allowlist; nothing
+// here can do that silently. On ANY error (missing binary, timeout,
 // non-zero exit, malformed output) this FAILS OPEN: the base profile is
 // returned unchanged.
 
@@ -153,17 +159,22 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 		}
 	}
 
-	// Egress is security-load-bearing: the deterministic filename-keyed table is
-	// the sole authority for hosts (a host derived from untrusted model output
-	// must never silently widen a run's allowlist). So AI egress ONLY gap-fills
-	// an EMPTY set, and doing so ALWAYS forces NeedsReview — a human promotes it
-	// deliberately before it can be trusted.
-	if len(out.EgressDomains) == 0 {
-		if v := cleanSet(adv.EgressDomains); len(v) > 0 {
-			out.EgressDomains = v
-			out.NeedsReview = true
-			added = true
-		}
+	// Egress is security-load-bearing: WorkspaceProfile.EgressDomains is the
+	// SOLE auto-granted-host authority and stays strictly filename-keyed — the
+	// AI never writes to it (W6-S1-3: seedSourceRequirements, source_scan.go,
+	// treats every EgressDomains entry as a required, auto-unioned contract row
+	// with no way to tell an AI guess from a deterministic marker-table hit).
+	// An AI-suggested host is instead UNIONED into SuggestedEgress — content-
+	// derived, advisory, and never auto-unioned into a run's allowlist
+	// (unionWorkspaceEgress, workspace_egress.go) — exactly like the
+	// deterministic content scanner's own SuggestedEgress hits (merge.go
+	// already unions this same field across sources), and always forces
+	// NeedsReview so an operator must deliberately promote it via the
+	// workspace's ApprovedEgress list before it can ever reach a run.
+	if v := cleanSet(adv.EgressDomains); len(v) > 0 {
+		out.SuggestedEgress = cleanSet(append(append([]string(nil), out.SuggestedEgress...), v...))
+		out.NeedsReview = true
+		added = true
 	}
 
 	// The AI can only RAISE NeedsReview, never clear it.

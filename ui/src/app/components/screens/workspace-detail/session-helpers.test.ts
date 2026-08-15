@@ -194,4 +194,43 @@ describe("sessionStage — record open → recorded → replaying confined → r
     });
     expect(sessionStage(w, "s")).toBe("replayed");
   });
+
+  // W20-capture-store-1: a re-recorded session must NOT inherit the PRIOR
+  // recording's confined verdict — verify:<key> is keyed only on the session
+  // key, so it silently survives a re-record untouched.
+  it("re-record after replay: the stale confined verdict must not outrank the fresh, unverified open capture", () => {
+    // record session K (t1) -> replay confined (t2, passes) -> RE-record K (t3,
+    // fresh open, never replayed). The verify:s entry is still the t2 replay of
+    // the ORIGINAL (t1) capture.
+    const w = ws({
+      record_results: {
+        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: "2026-01-02T00:00:00Z" },
+        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-01T01:00:00Z" },
+      },
+    });
+    // NOT the stale "replayed" green — the fresh capture reads as needing a replay.
+    expect(sessionStage(w, "s")).toBe("recorded");
+  });
+
+  it("re-record after replay, re-record FAILS: the failed fresh open still outranks the stale confined verdict", () => {
+    const w = ws({
+      record_results: {
+        s: { run_id: "r3", mode: "interactive", status: "record_failed", started_at: "2026-01-02T00:00:00Z" },
+        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-01T01:00:00Z" },
+      },
+    });
+    expect(sessionStage(w, "s")).toBe("record_failed");
+  });
+
+  it("legit flow preserved: replaying the NEW capture after a re-record still shows the green verdict", () => {
+    // record K (t1) -> replay (t2) -> re-record K (t3) -> replay AGAIN (t4):
+    // the confined entry now postdates the current open capture, so it's current.
+    const w = ws({
+      record_results: {
+        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: "2026-01-02T00:00:00Z" },
+        "verify:s": { run_id: "r4", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-02T01:00:00Z" },
+      },
+    });
+    expect(sessionStage(w, "s")).toBe("replayed");
+  });
 });

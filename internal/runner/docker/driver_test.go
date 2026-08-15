@@ -545,6 +545,58 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	}
 }
 
+// TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus pins driver.go's
+// half of W15-c: AgentStatus must treat the mainProcessExecID sentinel exactly
+// like "" — fall back to container Status — never probe it as a real docker
+// exec id, since "main-process" is never actually passed to ExecCreate.
+// f.execGone models that truthfully (the daemon has never heard of this id).
+//
+// Counterfactual (base 6d76911, which has no sentinel case): AgentStatus tries
+// ExecInspect("main-process"), the fake reports it not-found, and — because the
+// container is still RUNNING — the AMBIGUOUS-404 branch (GAP-RECONCILE-1)
+// returns an ERROR instead of a live status, so this test's `err != nil` check
+// fails red.
+func TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun") // CC3 via krun; krun has no docker exec
+	f.images["busybox:latest"] = true
+	f.execGone = mainProcessExecID
+	d := newTestDriver(f)
+
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
+		t.Fatalf("Exec (main process): %v", err)
+	}
+
+	st, err := d.AgentStatus(ctx, sb.Ref, mainProcessExecID)
+	if err != nil {
+		t.Fatalf("AgentStatus with the main-process sentinel must fall back to container Status, not probe a never-created exec id: %v", err)
+	}
+	if st.State != types.RunRunning {
+		t.Errorf("container is running (main process is the agent); AgentStatus = %q, want RUNNING", st.State)
+	}
+
+	// And once the container actually exits, the sentinel path must track THAT
+	// live, not just report healthy once at the RUNNING instant.
+	f.mu.Lock()
+	f.containers[sb.Ref].state = &container.State{Status: "exited", ExitCode: 3}
+	f.mu.Unlock()
+	st2, err := d.AgentStatus(ctx, sb.Ref, mainProcessExecID)
+	if err != nil {
+		t.Fatalf("AgentStatus after exit: %v", err)
+	}
+	if st2.State != types.RunFailed || st2.ExitCode == nil || *st2.ExitCode != 3 {
+		t.Errorf("AgentStatus after main-process exit = %+v, want RunFailed exit 3", st2)
+	}
+}
+
 func TestExec_RejectsEmptyArgv(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

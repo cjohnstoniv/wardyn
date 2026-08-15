@@ -22,6 +22,31 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// reservedRunTasks are run.Task discriminators the SERVER sets, on their own
+// separately-authorized launch paths, to switch on privileged downstream
+// behavior — never legitimate input on the general POST /runs door. Rejected
+// wholesale in decodeAndValidateCreateRun (W15-d) so "server-side only" is
+// enforced once, for every consumer, rather than trusted per-callsite.
+//
+//   - harnessLoginTask (harnesscred.go): the sharpest case — its consumers
+//     (handleUploadSSOToken, runIsUnrecordable/attach.go) trust run.Task ALONE,
+//     with no second trusted-linkage field to fall back on, so this is the
+//     only defense for them.
+//   - composeRunTask (composeresult.go): gates the compose-result upload.
+//   - "workspace record" (workspace_run.go/record.go): gates record + confined-
+//     verify upload/reconcile. Belt-and-suspenders here — those consumers are
+//     additionally gated on run.WorkspaceID, a column an ordinary create-run
+//     request can never set (seedRequestWorkspace's own doc).
+//   - "workspace verify": the retired verify-pipeline's discriminator
+//     (superseded by "workspace record" + confined=true, kept live only in
+//     test fixtures) — blocked defensively in case anything still recognizes it.
+var reservedRunTasks = map[string]bool{
+	harnessLoginTask:   true,
+	composeRunTask:     true,
+	"workspace record": true,
+	"workspace verify": true,
+}
+
 // decodeAndValidateCreateRun decodes the POST /api/v1/runs body and applies the
 // fail-closed request-shape checks: agent required, BYOI/devcontainer
 // exclusivity, a known confinement_class, the task_mode enum, the
@@ -43,6 +68,22 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// workspace (or an empty one).
 	if req.Agent == "" {
 		writeError(w, http.StatusBadRequest, "agent is required")
+		return req, "", false
+	}
+
+	// W15-d (CRIT, rbac-bypass): reject a client-supplied task that forges a
+	// server-set discriminator (reservedRunTasks below) — e.g. a plain member
+	// POSTing task="harness login" used to reach every consumer that trusts
+	// run.Task == harnessLoginTask alone (handleUploadSSOToken lets the run
+	// write the reserved AWS-SSO credential; runIsUnrecordable drops attach
+	// recording), completely bypassing the operatorOnly gate on the real
+	// /setup/harness-login door. One guard at this single chokepoint — every
+	// POST /runs caller passes through decodeAndValidateCreateRun — makes
+	// harnesscred.go's "set SERVER-SIDE, never from client input" doc true for
+	// every downstream consumer at once, rather than relying on each one to
+	// independently defend itself.
+	if reservedRunTasks[req.Task] {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return req, "", false
 	}
 

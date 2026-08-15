@@ -52,7 +52,7 @@ func routeFamilies() map[string][]string {
 		"policies":    {"CreatePolicy", "GetPolicy", "ListPolicies", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":       {"AuditEvents", "RecentAuditEvents"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
 		"secrets":     {"ListSecrets", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},

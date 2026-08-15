@@ -188,6 +188,29 @@ func TestAppendNetworkRedirectDenials(t *testing.T) {
 	}
 }
 
+// TestRedirectPort is the W13-S1-5 producer-side unit test: planArtifactRedirect
+// must carry a redirect's REAL port into plan.mitmHosts (net.JoinHostPort(host,
+// redirectPort(r.To))) rather than always assuming 443, so the proxy's MITM
+// dial (mitm.go) lands on the mirror the operator actually configured.
+func TestRedirectPort(t *testing.T) {
+	cases := []struct {
+		name string
+		to   string
+		want int
+	}{
+		{"explicit non-443 port", "https://artifactory.corp:5000/api/npm/npm-remote/", 5000},
+		{"no port defaults 443", "https://artifactory.corp/api/npm/npm-remote/", 443},
+		{"bare host:port, no scheme or path", "artifactory.corp:8081", 8081},
+		{"bare host, no scheme or path", "artifactory.corp", 443},
+		{"explicit default port stays 443", "https://artifactory.corp:443/api/", 443},
+	}
+	for _, c := range cases {
+		if got := redirectPort(c.to); got != c.want {
+			t.Errorf("%s: redirectPort(%q) = %d, want %d", c.name, c.to, got, c.want)
+		}
+	}
+}
+
 // TestArtifactBaseURLs extracts ecosystem->base (URL-only) from the
 // Ecosystem-tier subset of EgressRedirects, drops tokens, and SKIPS any
 // network-only row (Ecosystem "").

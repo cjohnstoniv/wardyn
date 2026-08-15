@@ -161,15 +161,23 @@ func TestBuild_PullsBaseItselfSoTheDaemonCannotRePullPastThePreflight(t *testing
 	}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	// The pushed base is still fetched fresh — the check must not cost freshness.
-	if !f.pulled("reg.example.com/cache") {
+	// The pushed base is still fetched fresh, from THIS build's own per-build
+	// push ref (W20-record-image-2: a bare/shared ref would let a concurrent
+	// build's push resolve here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef).
+	if len(f.pulledRefs) == 0 {
 		t.Fatal("finalize did not pull the freshly pushed base")
+	}
+	pulledRef := f.pulledRefs[len(f.pulledRefs)-1]
+	if !strings.HasPrefix(pulledRef, "reg.example.com/cache:") {
+		t.Fatalf("pulled ref = %q, want it under the reg.example.com/cache repo with a per-build tag", pulledRef)
 	}
 	if f.lastBuildPullParent {
 		t.Fatal("wrap build set PullParent: the daemon could resolve a base the ONBUILD preflight never saw")
 	}
-	if len(f.inspected) == 0 || f.inspected[0] != "reg.example.com/cache" {
-		t.Fatalf("wrap did not inspect the base it builds FROM, inspected=%v", f.inspected)
+	// The preflight must inspect the EXACT ref that was just pulled — a
+	// mismatch would reopen the TOCTOU this test's name calls out.
+	if len(f.inspected) == 0 || f.inspected[0] != pulledRef {
+		t.Fatalf("wrap inspected %v, want the SAME ref it just pulled (%q)", f.inspected, pulledRef)
 	}
 }
 
