@@ -128,6 +128,7 @@ export function StepEgress({
                   key={domain}
                   type="button"
                   onClick={() => togglePreset(domain)}
+                  aria-pressed={on}
                   className={cn(
                     "rounded-md border px-2 py-1 font-mono text-[0.6875rem] transition-colors",
                     on

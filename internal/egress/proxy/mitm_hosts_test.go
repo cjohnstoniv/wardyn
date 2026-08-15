@@ -3,7 +3,10 @@
 
 package proxy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestIsMITMHost_OperatorWidening pins the trust boundary of the isMITMHost
 // widening: the built-in LLM hosts are always MITM-eligible; an OPERATOR-configured
@@ -116,5 +119,32 @@ func TestMITMLLMHost_GatedOnIntent(t *testing.T) {
 	noCA := newProxy(Options{MITMLLM: true})
 	if noCA.mitmLLMHost(anthropicHost) {
 		t.Errorf("no CA configured must never MITM an LLM host")
+	}
+}
+
+// TestIsCorpMITMHost_ReservedLLMHostsExcludedEvenWhenListed is the bug-egress-2
+// regression: handleConnect dispatches the corp-artifact MITM branch (guarded by
+// isCorpMITMHost) BEFORE it ever reaches the isLLMHost/mitmLLMHost intent gate, so
+// isCorpMITMHost is the only thing standing between a misconfigured/admin-authored
+// mitmHosts entry naming a reserved LLM hostname and that entry silently routing
+// real Anthropic/OpenAI traffic through the corp-artifact-token MITM branch —
+// bypassing the mitmLLM intent gate entirely and swapping a corp registry token
+// onto LLM traffic. Unlike TestIsMITMHost_OperatorWidening's corp-guard check
+// (which never actually seeds mitmHosts with an LLM host, so it can't catch this),
+// this test puts anthropicHost/openaiHost directly IN mitmHosts and asserts
+// isCorpMITMHost still refuses them.
+func TestIsCorpMITMHost_ReservedLLMHostsExcludedEvenWhenListed(t *testing.T) {
+	p := newProxy(Options{
+		MITMHosts: []string{"artifactory.corp", anthropicHost, openaiHost, strings.ToUpper(anthropicHost)},
+	})
+
+	for _, h := range []string{anthropicHost, openaiHost, "API.ANTHROPIC.COM", "api.openai.com."} {
+		if p.isCorpMITMHost(h) {
+			t.Errorf("isCorpMITMHost(%q) = true, want false: a reserved LLM host must never be treated as a corp artifact host, even when present in mitmHosts", h)
+		}
+	}
+	// A genuine corp host in the same allowlist is unaffected.
+	if !p.isCorpMITMHost("artifactory.corp") {
+		t.Errorf("isCorpMITMHost(artifactory.corp) = false, want true (real corp host must still work)")
 	}
 }

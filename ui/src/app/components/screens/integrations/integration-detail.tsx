@@ -25,7 +25,7 @@ import {
   SECRET_DELIVERY_NOTE,
   type GenericIntegrationRow,
 } from "../../../lib/api/integrations";
-import { RESIDENCY_META } from "../../../lib/integrations";
+import { RESIDENCY_META, T } from "../../../lib/integrations";
 import { getErrorMessage, clockTime } from "../../../lib/format";
 import { HttpError } from "../../../lib/api/core";
 import { Button } from "../../ui/button";
@@ -34,9 +34,8 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip, OperatorOnlyHint, SectionLabel } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
-import { deleteWireRow, setDefaultFor } from "./actions";
+import { deleteWireRow, setDefaultFor, toggleDisabled } from "./actions";
 
 function Region({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -150,6 +149,14 @@ export function IntegrationDetailScreen() {
       toast.error("Couldn't update the default", { description: getErrorMessage(e) });
     }
   };
+  const toggleOff = async () => {
+    try {
+      await toggleDisabled(wire, !wire.disabled);
+      load();
+    } catch (e) {
+      toast.error("Couldn't update the integration", { description: getErrorMessage(e) });
+    }
+  };
   const runDelete = async () => {
     try {
       await deleteWireRow(wire);
@@ -174,17 +181,33 @@ export function IntegrationDetailScreen() {
         ← Integrations
       </button>
 
+      {!operator && (
+        <div className="flex items-center gap-2">
+          <Chip tone="neutral" dot>
+            Viewer role
+          </Chip>
+          <p className="text-xs text-muted-foreground">{T.VIEWER_LINE}</p>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-foreground">{row.name}</h1>
         <Mono className="text-sm">{wire.kind}</Mono>
         {wire.disabled && <Chip tone="neutral">Off</Chip>}
         <span className="flex-1" />
         {!stored ? (
-          <Button size="sm" variant="outline" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={adopt}>
+          <Button size="sm" variant="outline" disabled={!operator} onClick={adopt}>
             Adopt to edit
+            {!operator && <OperatorOnlyHint />}
           </Button>
         ) : (
-          <Chip tone="neutral">stored</Chip>
+          <>
+            <Chip tone="neutral">stored</Chip>
+            <Button size="sm" variant="outline" disabled={!operator} onClick={() => void toggleOff()}>
+              {wire.disabled ? "Enable" : "Disable"}
+              {!operator && <OperatorOnlyHint />}
+            </Button>
+          </>
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -291,9 +314,11 @@ export function IntegrationDetailScreen() {
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" disabled={!operator} onClick={() => toggleDefault("agent_runs", !defAgent)}>
               {defAgent ? "Unset" : "Set"} default for agent runs
+              {!operator && <OperatorOnlyHint />}
             </Button>
             <Button size="sm" variant="outline" disabled={!operator} onClick={() => toggleDefault("wardyn_features", !defFeat)}>
               {defFeat ? "Unset" : "Set"} default for Wardyn features
+              {!operator && <OperatorOnlyHint />}
             </Button>
           </div>
         )}
@@ -320,10 +345,10 @@ export function IntegrationDetailScreen() {
             variant="outline"
             className="border-danger/50 text-danger hover:bg-danger-subtle hover:text-danger"
             disabled={!operator}
-            title={operator ? undefined : OPERATOR_ONLY_REASON}
             onClick={() => setConfirmDelete(true)}
           >
             <Trash2 className="size-3.5" /> Delete integration…
+            {!operator && <OperatorOnlyHint />}
           </Button>
         </div>
       </Region>

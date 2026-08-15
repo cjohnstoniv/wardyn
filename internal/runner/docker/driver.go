@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -763,6 +762,28 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		d.mu.Unlock()
 		return fmt.Errorf("docker: create main-process agent: %w", err)
 	}
+	// Same fail-closed cap-enforcement gate the exec-based path applies in
+	// CreateSandbox (verifyCapsEnforced) — the exec-less container IS the agent
+	// (its main process is the untrusted workload), so it needs the identical
+	// guard before ContainerStart.
+	// Applied here rather than after Exec returns because the create-response
+	// Warnings this reads only exist right after ContainerCreate.
+	if capErr := verifyCapsEnforced(created.Warnings); capErr != nil {
+		if d.cfg.AllowUnenforceableCaps {
+			slog.Warn("wardynd: the daemon discarded a resource limit — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
+				slog.String("detail", capErr.Error()))
+		} else {
+			d.mu.Lock()
+			delete(d.creating, ref)
+			d.mu.Unlock()
+			rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+			defer cancel()
+			if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+				return fmt.Errorf("docker: main-process agent failed the cap check and could not be removed: %w (cap error: %v)", rerr, capErr)
+			}
+			return capErr
+		}
+	}
 	_, startErr := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{})
 	// The container now exists on the daemon, so re-check the claim: a teardown
 	// that ran during the create found NO container to remove and reported
@@ -1107,88 +1128,19 @@ func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
 	return len(res.Items) > 0, nil
 }
 
-// statusFromInspect maps Docker container state to a Wardyn RunState.
-func statusFromInspect(insp container.InspectResponse) runner.Status {
-	st := runner.Status{State: types.RunRunning}
-	if insp.State == nil {
-		st.State = types.RunStopped
-		return st
-	}
-	s := insp.State
-	switch {
-	case s.Running:
-		st.State = types.RunRunning
-	case s.OOMKilled:
-		st.State = types.RunFailed
-		st.Message = "OOM killed"
-	case s.Status == "created":
-		st.State = types.RunStarting
-	case s.Status == "exited", s.Status == "dead":
-		ec := s.ExitCode
-		st.ExitCode = &ec
-		if ec == 0 {
-			st.State = types.RunStopped
-		} else {
-			st.State = types.RunFailed
-			st.Message = fmt.Sprintf("exit code %d", ec)
+// ImageRemove implements runner.ImageRemover (bug-workspace-1): reclaims a
+// workspace-built image tag superseded by a rescan/edit/delete. A ref already
+// absent is not an error — idempotent, same contract as StopSandbox — and a
+// ref still referenced by another tag/container (still in USE, e.g. a
+// concurrently-running sandbox launched off it) fails soft rather than
+// yanking an image out from under a live run: the caller logs and moves on,
+// the same best-effort posture as every other cache-bust here.
+func (d *Driver) ImageRemove(ctx context.Context, ref string) error {
+	if _, err := d.cli.ImageRemove(ctx, ref, client.ImageRemoveOptions{}); err != nil {
+		if isNotFound(err) {
+			return nil
 		}
-	default:
-		st.State = types.RunStopped
+		return fmt.Errorf("docker: image remove %q: %w", ref, err)
 	}
-	if s.Error != "" {
-		st.Message = strings.TrimSpace(st.Message + " " + s.Error)
-	}
-	return st
-}
-
-// envSlice converts a non-secret env map to Docker's KEY=VALUE slice form.
-// Secrets never pass here (invariant 1) — the spec contract forbids it.
-func envSlice(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	return out
-}
-
-// proxyEnv builds the environment handed to the wardyn-proxy sidecar: the
-// full proxy config (incl. the run's egress policy — a proxy without a policy
-// fails closed and the sandbox has no egress) as one JSON env var, plus the
-// individual values for operator inspection. The run token is verifiable but
-// not a usable secret outside the platform; env visibility is part of the
-// documented daemon-trust tradeoff. A thin wrapper over runner.BuildProxyConfig
-// (the substrate-agnostic field-mapping + marshal core, hoisted so a k8s
-// substrate builds byte-identical sidecar config): this function adds only the
-// docker-Env-slice shape and the operator-knob forwarding below.
-func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
-	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
-	env := []string{
-		"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON),
-		"WARDYN_RUN_ID=" + runID.String(),
-		"WARDYN_CONTROL_PLANE_URL=" + pc.ControlPlaneURL,
-	}
-	// Operator knobs the sidecar reads from ITS environment: forward them from
-	// wardynd's environment when set, else they are dead on the docker runner
-	// (host-run and custom-image proxies read their own env directly).
-	for _, k := range []string{"WARDYN_LLM_SCAN", "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-	return env
-}
-
-// parseRunID parses a run-id label back to a UUID.
-func parseRunID(s string) (uuid.UUID, error) { return uuid.Parse(s) }
-
-// isNotRunning detects the daemon's "container not running" error so Kill can
-// proceed to force-remove an already-stopped container.
-func isNotRunning(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "is not running")
+	return nil
 }

@@ -167,13 +167,23 @@ function SourceRowCard({
           variant="ghost"
           className="size-7 shrink-0 p-0 text-muted-foreground"
           disabled={!removable}
-          title={removable ? undefined : "Every workspace has at least one source"}
+          // ui-wsWizard-2: disabled:pointer-events-none (ui/button.tsx) means
+          // a plain `title` here would never fire on hover — same defect
+          // class wizard.tsx's own footer button was patched for (see its
+          // aria-describedby note). aria-describedby + the visible line below
+          // is the reachable version, for pointer AND assistive tech.
+          aria-describedby={removable ? undefined : `${row.id}-remove-reason`}
           aria-label={`Remove ${meta.title.toLowerCase()}`}
           onClick={onRemove}
         >
           <X className="size-3.5" />
         </Button>
       </div>
+      {!removable && (
+        <p id={`${row.id}-remove-reason`} className="text-[0.6875rem] leading-snug text-muted-foreground">
+          Every workspace has at least one source.
+        </p>
+      )}
 
       <div className="space-y-3 border-t border-border pt-3">
         {row.type === "local_dir" && (

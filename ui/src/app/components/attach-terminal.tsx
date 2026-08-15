@@ -507,6 +507,22 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     };
   }, [fullscreen, refit]);
 
+  // Escape exits fullscreen (WCAG 2.1.2 no-keyboard-trap). Capture phase so
+  // this runs before xterm's textarea handler swallows the key and sends it
+  // to the PTY as literal input.
+  React.useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setFullscreen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [fullscreen]);
+
   return (
     <div
       className={cn(

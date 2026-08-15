@@ -42,14 +42,28 @@ const DONE: Record<SetupStepId, boolean> = {
 // The compact icon rail (lg-only) renders every step unconditionally (CSS-hidden,
 // not DOM-absent — jsdom doesn't apply Tailwind's responsive `hidden`), so its
 // buttons share accessible names with the full rail's. Scope queries to the full
-// rail's nav landmark, same as production CSS would at xl+.
+// rail's nav landmark, same as production CSS would at xl+. Both rails carry the
+// "Setup steps" nav landmark (ui-setup-5) and so share an accessible name — CSS
+// makes only one visible at a time in a real browser; jsdom renders both, so pick
+// the full rail explicitly: it's the SECOND "Setup steps" nav in DOM order (the
+// compact rail is declared first in PhaseRail's JSX).
 function renderRail(current: SetupStepId, onSelect = vi.fn()) {
   cleanup(); // some tests render twice (collapsed vs. expanded) to compare
   render(<PhaseRail current={current} badges={BADGES} done={DONE} onSelect={onSelect} />);
-  return within(screen.getByRole("navigation", { name: /setup steps/i }));
+  const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+  return within(navs[navs.length - 1]);
 }
 
 describe("PhaseRail", () => {
+  // ui-setup-5: only the full rail carried the nav/aria-label landmark; the
+  // compact (lg-only) icon rail was a bare div, invisible to landmark
+  // navigation for a screen-reader operator on that breakpoint.
+  it("ui-setup-5: the compact icon rail also carries its own Setup steps nav landmark", () => {
+    cleanup();
+    render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} />);
+    expect(screen.getAllByRole("navigation", { name: /setup steps/i })).toHaveLength(2);
+  });
+
   it("a full-rail step button carries both the frozen label and its badge text", () => {
     const rail = renderRail("environment");
     const btn = rail.getByRole("button", { name: /integrations/i });
@@ -115,7 +129,8 @@ describe("PhaseRail", () => {
   it("renders a muted visited dot (not a done checkmark) for a step whose badge reads Skipped", () => {
     const badges = { ...BADGES, workspaces: { text: "Skipped", tone: "neutral" } as StepBadge };
     render(<PhaseRail current="environment" badges={badges} done={DONE} onSelect={vi.fn()} />);
-    const nav = within(screen.getByRole("navigation", { name: /setup steps/i }));
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const nav = within(navs[navs.length - 1]);
     const btn = nav.getByRole("button", { name: /workspaces/i });
     expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     const dot = btn.querySelector("[data-visited]");
@@ -128,7 +143,8 @@ describe("PhaseRail", () => {
     const badges = { ...BADGES, workspaces: { text: "Skipped", tone: "neutral" } as StepBadge };
     const done = { ...DONE, workspaces: true };
     render(<PhaseRail current="environment" badges={badges} done={done} onSelect={vi.fn()} />);
-    const nav = within(screen.getByRole("navigation", { name: /setup steps/i }));
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const nav = within(navs[navs.length - 1]);
     const btn = nav.getByRole("button", { name: /workspaces/i });
     expect(btn.querySelector("[data-visited]")).toBeNull();
   });

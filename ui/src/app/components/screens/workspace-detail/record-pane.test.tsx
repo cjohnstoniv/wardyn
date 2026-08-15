@@ -365,6 +365,27 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(screen.queryByRole("button", { name: /^replay confined$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeInTheDocument();
   });
+
+  // ui-wsDetail-3: Re-record must not fire the launch on the first click —
+  // it would silently replace the settled review this card is showing.
+  it("Re-record asks for confirmation before overwriting the settled review", async () => {
+    const onRecord = vi.fn();
+    renderPane({ record_results: { "build-test": recorded() }, profile }, { onRecord });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^re-record$/i }));
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(screen.getByText(/replaced once the new recording settles/i)).toBeInTheDocument();
+  });
+
+  it("Re-record fires onRecord only after the confirm dialog is accepted", async () => {
+    const onRecord = vi.fn();
+    renderPane({ record_results: { "build-test": recorded() }, profile }, { onRecord });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^re-record$/i }));
+    const dialog = screen.getByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^re-record$/i }));
+    expect(onRecord).toHaveBeenCalledWith("build & test");
+  });
 });
 
 describe("RecordPane — empty capture is an honest failure, never success", () => {
@@ -424,6 +445,20 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(onApproveHost).toHaveBeenCalledWith("evil.example.com");
     // Settled replay offers a re-run, in the SAME card.
     expect(screen.getByRole("button", { name: /replay again/i })).toBeInTheDocument();
+  });
+
+  // ui-wsDetail-3: same overwrite-with-no-confirm gap, on the settled
+  // CONFINED review's own re-run button.
+  it("Replay again asks for confirmation before overwriting the settled containment review", async () => {
+    const onReplayConfined = vi.fn();
+    renderPane({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, approved_egress: ["github.com"] }, { onReplayConfined });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /replay again/i }));
+    expect(onReplayConfined).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText(/replaced once the new replay settles/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /replay again/i }));
+    expect(onReplayConfined).toHaveBeenCalledWith("build & test");
   });
 
   it("embeds the attach terminal and live approvals while a confined replay is recording", () => {

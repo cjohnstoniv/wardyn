@@ -329,7 +329,7 @@ export function WorkspaceDetailScreen() {
               <Mono className="text-xs text-foreground" title={sourceSubLine(ws)}>
                 {sourceSubLine(ws)}
               </Mono>
-              <CopyButton text={ws.source} iconClassName="size-3" className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground" />
+              <CopyButton text={ws.source} label="Copy source path" iconClassName="size-3" className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground" />
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               <strong className="text-foreground">Comes with:</strong> {comesWith}

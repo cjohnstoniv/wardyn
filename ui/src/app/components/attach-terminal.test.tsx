@@ -199,6 +199,24 @@ describe("AttachTerminal reconnect", () => {
     expect(resizeFrames.length).toBeGreaterThan(0);
     expect(resizeFrames[resizeFrames.length - 1]).toMatchObject({ cols: 512, rows: 30 });
   });
+
+  // A11y (WCAG 2.1.2 no keyboard trap): fullscreen must be escapable via a
+  // plain Escape keypress, not just the mouse-only toggle button. Before the
+  // fix, xterm's PTY forwarding swallowed Escape entirely.
+  it("Escape exits fullscreen instead of being swallowed by the PTY", async () => {
+    const { getByLabelText, queryByLabelText } = render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+
+    act(() => getByLabelText("Fullscreen").click());
+    expect(queryByLabelText("Exit fullscreen")).not.toBeNull();
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+
+    expect(queryByLabelText("Exit fullscreen")).toBeNull();
+    expect(queryByLabelText("Fullscreen")).not.toBeNull();
+  });
 });
 
 // Role-aware console: attach is operator-only on BOTH lanes (ticket mint and

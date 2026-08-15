@@ -47,6 +47,16 @@ func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
 		{"cloudsts empty object", grant(types.GrantCloudSTS, `{}`), false},
 		{"cloudsts null", grant(types.GrantCloudSTS, `null`), false},
 		{"cloudsts non-object", grant(types.GrantCloudSTS, `"role-arn"`), true},
+		// bug-policy-2: api_key must fail closed on an undecodable scope, the
+		// SAME as git_pat/ssh_key just below — a missing host/secret_name or
+		// non-JSON scope used to be silently ACCEPTED here (the check only
+		// ran `if derr == nil`), so a malformed default-policy api_key grant
+		// booted wardynd clean and only 422s at first run-creation.
+		{"api_key valid", grant(types.GrantAPIKey, `{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}`), false},
+		{"api_key missing host", grant(types.GrantAPIKey, `{"secret_name":"anthropic-api-key"}`), true},
+		{"api_key missing secret_name", grant(types.GrantAPIKey, `{"host":"api.anthropic.com"}`), true},
+		{"api_key non-object", grant(types.GrantAPIKey, `"not-an-object"`), true},
+		{"api_key null scope", grant(types.GrantAPIKey, `null`), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -33,17 +33,21 @@ const SETUP_POLL_MS = 5000;
 
 // Route guard for the mandatory first-run gate: while the gate is active, every
 // app route redirects to /setup — only Getting started (/setup), the demos
-// that are part of it (/demos), and /integrations stay reachable — so a fresh
-// local operator goes through setup before the app opens. /integrations is
-// exempted because the Getting Started Integrations step embeds it (see
-// setup/integrations-step.tsx) and a row's own "Open" action there links out
-// to /integrations/:id — without this, that link would bounce straight back
-// to /setup. Nav groups are hidden in parallel (AppShell). Finishing the flow
-// (dismissSetup), a first run, an onboarded console, SSO mode, or an
-// unreachable daemon all clear the gate.
-function RequireSetupComplete({ gated }: { gated: boolean }) {
+// that are part of it (/demos), /integrations, and /ssh-keys stay reachable —
+// so a fresh local operator goes through setup before the app opens.
+// /integrations is exempted because the Getting Started Integrations step
+// embeds it (see setup/integrations-step.tsx) and a row's own "Open" action
+// there links out to /integrations/:id — without this, that link would bounce
+// straight back to /setup. /ssh-keys is exempted for the same reason
+// ssh-keys.tsx itself isn't operator-gated: an SSH key is the signed-in
+// human's OWN credential, unrelated to setup — the account-menu link to it
+// (app-shell.tsx) is always rendered, gate or no gate. Nav groups are hidden
+// in parallel (AppShell). Finishing the flow (dismissSetup), a first run, an
+// onboarded console, SSO mode, or an unreachable daemon all clear the gate.
+const GATE_EXEMPT_PATHS = new Set(["/setup", "/demos", "/ssh-keys"]);
+export function RequireSetupComplete({ gated }: { gated: boolean }) {
   const loc = useLocation();
-  if (gated && loc.pathname !== "/setup" && loc.pathname !== "/demos" && !loc.pathname.startsWith("/integrations")) {
+  if (gated && !GATE_EXEMPT_PATHS.has(loc.pathname) && !loc.pathname.startsWith("/integrations")) {
     return <Navigate to="/setup" replace />;
   }
   return <Outlet />;

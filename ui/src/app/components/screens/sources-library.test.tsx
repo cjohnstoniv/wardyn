@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../lib/api/core";
 import type { Source, Workspace } from "../../lib/types";
 import { baseStatus } from "./setup/test-fixtures";
+import { OperatorProvider } from "../wardyn/operator-context";
 
 const listSourcesMock = vi.fn();
 const createSourceMock = vi.fn();
@@ -80,8 +81,18 @@ describe("sourceUsage / contractSummary — pure helpers", () => {
     expect(usage.get("b")).toBe(1);
   });
 
+  // ui-sourcesImages-2 regression: a repo that scans clean (no secrets, no
+  // egress) is a legitimate empty contract on a USABLE source, not an
+  // unscanned one — "No contract yet" next to "Status: Usable" read as the
+  // scan having silently not happened.
+  it("distinguishes a clean scan's empty contract from a not-yet-scanned one", () => {
+    expect(contractSummary(src({ status: "scanned" }))).toBe("No requirements");
+    expect(contractSummary(src({ status: "pending_scan" }))).toBe("No contract yet");
+    expect(contractSummary(src({ status: "scanning" }))).toBe("No contract yet");
+    expect(contractSummary(src({ status: "error" }))).toBe("No contract yet");
+  });
+
   it("summarizes the source's own contract by lane", () => {
-    expect(contractSummary(src())).toBe("No contract yet");
     expect(
       contractSummary(
         src({
@@ -164,6 +175,49 @@ describe("SourcesLibrary", () => {
     expect(await within(dialog).findByText(/pay, billing/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: /detach everywhere & delete/i }));
     await waitFor(() => expect(deleteSourceMock).toHaveBeenLastCalledWith("s-1", true));
+  });
+
+  // ui-sourcesImages-1 regression: force-detach on a source that's a
+  // workspace's SOLE attachment 409s deterministically too (STORE-1) — the
+  // dialog must surface that second failure, not fall silent while still
+  // offering the same doomed escape.
+  it("a force-detach that still 409s (sole attachment) surfaces the new failure instead of going silent", async () => {
+    listSourcesMock.mockResolvedValue([src()]);
+    deleteSourceMock
+      .mockRejectedValueOnce(new HttpError(409, "source is attached by 1 workspace(s): solo"))
+      .mockRejectedValueOnce(
+        new HttpError(409, "force-deleting would leave workspace(s) with no attachments: solo"),
+      );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<SourcesLibrary workspaces={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: /actions for payments/i }));
+    await user.click(screen.getByRole("menuitem", { name: /delete/i }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByText(/attached by 1 workspace/)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /detach everywhere & delete/i }));
+    expect(await within(dialog).findByText(/no attachments/)).toBeInTheDocument();
+    // Still open — not a silent generic toast masquerading as the dialog
+    // just sitting there with a stale, now-false message.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  // ui-sourcesImages-3 regression (a11y): operator-disabled Scan/Delete gave
+  // no visible reason, unlike the sibling Workspaces tier on the same page.
+  it("shows an inline operator-only reason on disabled Scan/Delete for a non-operator", async () => {
+    listSourcesMock.mockResolvedValue([src()]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <OperatorProvider operator={false}>
+        <SourcesLibrary workspaces={[]} />
+      </OperatorProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /actions for payments/i }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getAllByText(/requires the operator role/i)).toHaveLength(2);
   });
 
   it("scan action hits the per-source endpoint", async () => {

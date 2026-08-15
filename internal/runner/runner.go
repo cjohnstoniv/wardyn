@@ -377,3 +377,19 @@ type ImageChecker interface {
 	// image store right now.
 	ImagePresent(ctx context.Context, ref string) (bool, error)
 }
+
+// ImageRemover is an OPTIONAL Runner capability (bug-workspace-1): a substrate
+// with a local image store (the docker driver) implements this so a
+// superseded workspace-built image (a rescan, an image-choice edit, or a
+// workspace delete) can be reclaimed instead of leaking a full docker image
+// forever — every resolveWorkspaceImage build lane mints a fresh, uniquely-
+// named local tag on every cache miss and nothing removed the tag it
+// replaced. Best-effort by design (callers log-and-continue on error, the
+// same posture as ImageChecker): a substrate that pulls fresh per launch (k8s)
+// has nothing local to reclaim and simply doesn't implement this.
+type ImageRemover interface {
+	// ImageRemove deletes ref from the substrate's local image store. A ref
+	// already absent (raced by a manual prune, a prior partial cleanup) is
+	// NOT an error — same idempotent-teardown contract as StopSandbox.
+	ImageRemove(ctx context.Context, ref string) error
+}

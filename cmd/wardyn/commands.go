@@ -254,9 +254,9 @@ func printPreflight(ctx context.Context, c *sdk.Client, body sdk.CreateRunReques
 	}
 	fmt.Printf("dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
 	tw := newTab()
-	fmt.Fprintln(tw, "STATUS\tKIND\tREQUIRED_BY\tDETAIL")
+	fmt.Fprintln(tw, "STATUS\tLABEL\tKIND\tREQUIRED_BY\tDETAIL")
 	for _, it := range pf.SetupItems {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", it.Status, it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Status, orDash(it.Label), it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
 	}
 	return tw.Flush()
 }

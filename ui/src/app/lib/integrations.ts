@@ -31,6 +31,7 @@ export const T = {
   EMPTY_AI:
     "None. Runs work without a model — add one to have a coding agent drive a run, or to use Wardyn's own AI features.",
   EMPTY_SCM: "None. Public repos clone without any credential.",
+  EMPTY_OTHER: "None. Add one when a run needs a package feed, registry, cloud provider, data store, or other service.",
   // No "…or add it here" alternative any more — there is exactly one place a
   // proxy is configured, and the banner names it.
   PROXY_BANNER:

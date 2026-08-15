@@ -32,18 +32,26 @@ type bootFlags struct {
 	localMode            *bool
 	localOperator        *string
 	localTrustFwd        *bool
-	uiDir                *string
-	runnerSel            *string
-	identitySel          *string
-	secretStoreSel       *string
-	recordingSel         *string
-	confinementMap       *string
-	trustDomain          *string
-	controlURL           *string
-	policyPath           *string
-	composerCfg          *string
-	ageKey               *string
-	proxyImage           *string
+	// allowLocalModeWithOIDC is the escape hatch (see validateOperatorPosture's
+	// allowOIDCNoOperatorList for the sibling pattern) for the refusal in
+	// resolveLocalMode: an explicit -local-mode alongside a configured
+	// -oidc-issuer is refused by default, because humanOrAdminAuth branches on
+	// LocalMode FIRST and bypasses OIDC entirely without ever consulting it
+	// (bug-rbac-1) — a configured SSO deployment must not silently lose its
+	// RBAC to one stray env var.
+	allowLocalModeWithOIDC *bool
+	uiDir                  *string
+	runnerSel              *string
+	identitySel            *string
+	secretStoreSel         *string
+	recordingSel           *string
+	confinementMap         *string
+	trustDomain            *string
+	controlURL             *string
+	policyPath             *string
+	composerCfg            *string
+	ageKey                 *string
+	proxyImage             *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -119,23 +127,24 @@ func parseBootFlags() *bootFlags {
 		// the bind is a specific non-loopback interface — see listenBindsSpecificRoutable.
 		// Loopback and the unspecified bind (":8080", the compose topology) are
 		// already warn-only, unaffected by this flag.
-		allowPlaintextListen: flagBool("allow-plaintext-listen", "WARDYN_ALLOW_PLAINTEXT_LISTEN", false, "override: allow boot on a specific non-loopback bind serving plain HTTP with no TLS (normally refused — prefer -tls-cert/-tls-key or -tls-terminated)"),
-		adminToken:           flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
-		localMode:            flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "LOCAL HOST MODE: bypass public-API auth (no SSO/token) and attribute actions to the local operator. Single-developer localhost use only — refused on a publicly-routable bind. Sidecar/run-token auth is unaffected. Auto-enabled when no auth is configured AND the bind is loopback."),
-		localOperator:        flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)"),
-		localTrustFwd:        flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access."),
-		uiDir:                flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
-		runnerSel:            flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
-		identitySel:          flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),
-		secretStoreSel:       flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (pluggable seam): "pg" (default)`),
-		recordingSel:         flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `recording store (pluggable seam): "pg" (default; Postgres-backed, visible to every replica) or "fs" (legacy per-pod on-disk store)`),
-		confinementMap:       flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins making CC3 runtime-pluggable, e.g. "CC2=runsc;CC3=kata-qemu" (or "CC3=oci:kata-qemu"); empty = built-in defaults`),
-		trustDomain:          flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:           flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
-		policyPath:           flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
-		composerCfg:          flagEnv("composer-config", "WARDYN_COMPOSER_CONFIG", "", "AI Run Composer registry config: a JSON file path or inline JSON ({default,backends}); empty disables the composer"),
-		ageKey:               flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
-		proxyImage:           flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
+		allowPlaintextListen:   flagBool("allow-plaintext-listen", "WARDYN_ALLOW_PLAINTEXT_LISTEN", false, "override: allow boot on a specific non-loopback bind serving plain HTTP with no TLS (normally refused — prefer -tls-cert/-tls-key or -tls-terminated)"),
+		adminToken:             flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
+		localMode:              flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "LOCAL HOST MODE: bypass public-API auth (no SSO/token) and attribute actions to the local operator. Single-developer localhost use only — refused on a publicly-routable bind. Sidecar/run-token auth is unaffected. Auto-enabled when no auth is configured AND the bind is loopback."),
+		localOperator:          flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)"),
+		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access."),
+		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "override: allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, i.e. — silently disable the configured SSO/RBAC deployment and attribute every request to the fixed local operator (normally refused — unset -local-mode or -oidc-issuer instead)"),
+		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
+		runnerSel:              flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
+		identitySel:            flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),
+		secretStoreSel:         flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (pluggable seam): "pg" (default)`),
+		recordingSel:           flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `recording store (pluggable seam): "pg" (default; Postgres-backed, visible to every replica) or "fs" (legacy per-pod on-disk store)`),
+		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins making CC3 runtime-pluggable, e.g. "CC2=runsc;CC3=kata-qemu" (or "CC3=oci:kata-qemu"); empty = built-in defaults`),
+		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
+		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
+		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
+		composerCfg:            flagEnv("composer-config", "WARDYN_COMPOSER_CONFIG", "", "AI Run Composer registry config: a JSON file path or inline JSON ({default,backends}); empty disables the composer"),
+		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
+		proxyImage:             flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); "fs" store only — empty disables replay there, but is ignored by the default "pg" store (set -recording-store=fs too)`),
 		// OFF by default (0 = keep forever): a session recording is the governance
@@ -265,6 +274,19 @@ type localModeState struct {
 // comment. Extracted verbatim from run().
 func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
+	// bug-rbac-1: an EXPLICIT -local-mode alongside a configured -oidc-issuer
+	// is refused up front, before it can ever reach lm.enabled below. The
+	// auto-enable heuristic already excludes a configured issuer
+	// (*f.oidcIssuer == "" in the OR's right-hand side), so this refusal only
+	// ever fires for the explicit flag — humanOrAdminAuth branches on
+	// LocalMode FIRST and bypasses OIDC entirely without ever consulting it,
+	// so a boot that got this far would silently drop the whole SSO/RBAC
+	// deployment to a fixed local:operator with no warning anywhere.
+	if *f.localMode && strings.TrimSpace(*f.oidcIssuer) != "" && !*f.allowLocalModeWithOIDC {
+		return lm, fmt.Errorf("refusing to start: -local-mode is explicitly set alongside a configured -oidc-issuer %q — "+
+			"local mode bypasses ALL public-API auth and would silently disable the configured OIDC/SSO admin-member RBAC deployment; "+
+			"unset -local-mode (WARDYN_LOCAL_MODE) or -oidc-issuer, or explicitly set WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true to override", *f.oidcIssuer)
+	}
 	lm.enabled = *f.localMode || (*f.adminToken == "" && *f.oidcIssuer == "" && lm.loopback)
 	lm.operator = strings.TrimSpace(*f.localOperator)
 	// The demo admin token is published in this repo (compose + docs) and nothing

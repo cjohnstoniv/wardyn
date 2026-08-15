@@ -71,7 +71,11 @@ export function LiveApprovals({
   const refresh = React.useCallback(async () => {
     try {
       const all = await api.listApprovals("PENDING");
-      setPending(all.filter((a) => a.run_id === runId));
+      // Scoped to egress_domain only: the header/host/deny copy below is
+      // egress-specific. credential and tool_call approvals for this run
+      // still surface via the run detail's "Waiting for your confirmation"
+      // banner, which routes to the full Approvals screen's kind-aware UI.
+      setPending(all.filter((a) => a.run_id === runId && a.kind === "egress_domain"));
     } catch {
       /* transient poll error — keep the last snapshot */
     }

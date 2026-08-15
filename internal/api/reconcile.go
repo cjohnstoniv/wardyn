@@ -113,6 +113,15 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // safe no-op. Clears the ref on success so the run drops out of future
 // sweeps; a still-failing teardown leaves it set (stopSandboxOrAudit already
 // audits it with teardown_error) for the NEXT boot to retry.
+//
+// It also re-runs revokeRunCascade (bug-lifecycle-1 / W22-S1-7): a terminal
+// run's SandboxRef surviving means that run's ORIGINAL finalizeRunTail call
+// hit a failure, but revokeRunCascade runs there BEFORE the StopSandbox that
+// may have failed — so a run that reaches this pass may carry an un-revoked
+// identity/broker credential regardless of the teardown outcome. Retrying is
+// safe: revokeRunCascade's own doc marks it idempotent (a deny of an
+// already-denied token/credential is a no-op), so re-running it on an
+// already-revoked run costs one wasted call, never a double-effect.
 func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 	runs, err := s.cfg.Store.ListRuns(ctx)
 	if err != nil {
@@ -122,6 +131,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
 			continue
 		}
+		s.revokeRunCascade(ctx, run.ID)
 		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan_sweep") {
 			continue // still stuck; audited above, ref stays set for the next boot
 		}

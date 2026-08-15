@@ -121,6 +121,16 @@ describe("ConnectSSHCard — content", () => {
     }
   });
 
+  it("does not claim 'no key is registered' when listKeys merely fails (transient error, not a confirmed empty list)", async () => {
+    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    listKeysMock.mockRejectedValue(new Error("network blip"));
+    renderCard();
+
+    await screen.findByText("Connect via SSH");
+    expect(screen.queryByText("Add your SSH key first")).toBeNull();
+    expect(screen.queryByText(/no key is registered/i)).toBeNull();
+  });
+
   it("omits the -p flag when advertise_addr carries no port", async () => {
     healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);

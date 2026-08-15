@@ -206,6 +206,12 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	locator, ref := canonicalSourceIdentity(req.Kind, req.Locator, req.Ref)
+	// explicitName is captured BEFORE the lastPathSegment default below fills
+	// req.Name in — the identity-hit branch needs to tell "the operator typed
+	// a name" from "nothing was typed" (W7-S1-3, mirrored from
+	// handleCreateBaseImage): once req.Name has its default, an omitted name
+	// is indistinguishable from one that happens to equal the locator's tail.
+	explicitName := strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		req.Name = lastPathSegment(locator)
 	}
@@ -226,10 +232,25 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if created.ID != src.ID {
 		status = http.StatusOK // identity already in the library — that IS the feature
-		if req.Requirements != nil {
-			updated, uerr := s.cfg.Store.UpdateSourceConfig(r.Context(), created.ID, created.Name, req.Requirements)
+		// W7-S1-3 (bug-ops-1): an identity hit is the ONLY re-add/edit route
+		// (no separate PUT /sources/{id} — see this file's DEADCODE-1
+		// comment), so it must apply BOTH an explicitly-typed rename AND a
+		// requirements edit, never just the latter. UpdateSourceConfig
+		// replaces name+requirements together, so a field the caller did
+		// NOT set here falls back to the stored row's current value rather
+		// than being silently cleared.
+		if explicitName != "" || req.Requirements != nil {
+			name := created.Name
+			if explicitName != "" {
+				name = explicitName
+			}
+			reqs := req.Requirements
+			if reqs == nil {
+				reqs = created.Requirements
+			}
+			updated, uerr := s.cfg.Store.UpdateSourceConfig(r.Context(), created.ID, name, reqs)
 			if uerr != nil {
-				writeError(w, http.StatusInternalServerError, "apply requirements to existing source: "+uerr.Error())
+				writeError(w, http.StatusInternalServerError, "apply name/requirements to existing source: "+uerr.Error())
 				return
 			}
 			created = updated

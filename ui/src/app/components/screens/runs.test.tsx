@@ -163,3 +163,105 @@ describe("RunsScreen — member vs admin count line", () => {
     expect(screen.queryByText(/Your runs ·/)).not.toBeInTheDocument();
   });
 });
+
+// fix: the board card and the table row used to be role="button" tabIndex={0}
+// containers directly nesting the real Attach/Review/kebab <button>s inside
+// them — an invalid, double-nested interactive-widget structure (a11y
+// blocker). Dropped the role/tabIndex; mouse click-to-open stays via plain
+// onClick, keyboard/AT users reach the same action via the existing "Open
+// detail" menu item.
+describe("RunsScreen — row/card container is not itself a redundant role=button widget (a11y)", () => {
+  it("board density: the card is not exposed as its own button widget nesting the real action buttons", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /run actions/i });
+    // Before the fix, role="button" on the card computed its accessible name
+    // from its text content — including the task text — so this query would
+    // have matched the outer card div itself.
+    expect(screen.queryByRole("button", { name: /fix flaky auth tests/i })).not.toBeInTheDocument();
+  });
+
+  it("table density: same — the row is not a nested role=button widget either", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /^table$/i }));
+    await screen.findByRole("button", { name: /run actions/i });
+    expect(screen.queryByRole("button", { name: /fix flaky auth tests/i })).not.toBeInTheDocument();
+  });
+
+  it("clicking the card body (not a button) still opens the run — mouse convenience is preserved", async () => {
+    const user = userEvent.setup();
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <Routes>
+          <Route path="/runs" element={<RunsScreen />} />
+          <Route path="/runs/:id" element={<div>detail for {"{id}"}</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByText("Fix flaky auth tests"));
+    expect(await screen.findByText("detail for {id}")).toBeInTheDocument();
+  });
+});
+
+// fix: the loading skeleton used to always render the Board card-grid shape,
+// even in Table density — flashing the wrong skeleton on every manual
+// Refresh / re-navigation while Table density was active.
+describe("RunsScreen — loading skeleton matches the active density", () => {
+  it("shows the Board card-grid skeleton by default, and the Table skeleton once Table density is picked while still loading", async () => {
+    let resolveList!: (v: AgentRun[]) => void;
+    listRunsMock.mockImplementation(
+      () => new Promise<AgentRun[]>((res) => { resolveList = res; }),
+    );
+    const user = userEvent.setup();
+    renderScreen();
+
+    // Board density (default), still loading: 6 BoardSkeleton mini-cards.
+    const boardCard = ".rounded-xl.border.border-border.bg-card.p-4";
+    expect(document.querySelectorAll(boardCard).length).toBe(6);
+
+    await user.click(screen.getByRole("button", { name: /^table$/i }));
+
+    // Still loading (listRuns never resolved) but density is now Table — the
+    // Board shape must be gone, replaced by TableSkeleton's row structure.
+    expect(document.querySelectorAll(boardCard).length).toBe(0);
+    expect(document.querySelector(".divide-y.divide-border")).toBeInTheDocument();
+
+    resolveList([]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /run actions/i })).not.toBeInTheDocument());
+  });
+});
+
+// fix: Done section's global "Show fewer"/"Show all" toggle used to be gated
+// on `shownCount >= done.length` — a count coincidence true even when nothing
+// was ever expanded, whenever every group happened to fit within
+// GROUP_PREVIEW. That rendered a dead "Show fewer" button wired to a
+// toggleAll() no-op.
+describe("RunsScreen board — Done section's global toggle is never a dead no-op control", () => {
+  it("renders no global toggle when nothing is hidden and nothing is expanded (two small Done groups)", async () => {
+    const doneRuns: AgentRun[] = [
+      { ...run, id: "run-c1", state: "COMPLETED" },
+      { ...run, id: "run-c2", state: "COMPLETED" },
+      { ...run, id: "run-s1", state: "STOPPED" },
+      { ...run, id: "run-s2", state: "STOPPED" },
+    ];
+    listRunsMock.mockResolvedValue(doneRuns);
+    renderScreen();
+    await screen.findByText("Done");
+    expect(screen.queryByRole("button", { name: /^show fewer$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^show all$/i })).not.toBeInTheDocument();
+  });
+});
+
+// fix: Runs rendered its "Live" auto-refresh indicator as plain muted text +
+// a raw CircleDot icon, while Audit renders the same concept as the shared
+// Chip pill primitive — two visual treatments for one concept. Runs now uses
+// the same Chip.
+describe("RunsScreen — Live indicator uses the shared Chip primitive (matches Audit)", () => {
+  it("renders the Live copy inside the Chip pill (title carries the polling reason, like Audit's)", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /run actions/i });
+    const chip = screen.getByTitle("Polling for new runs");
+    expect(chip).toHaveTextContent("Live · refreshes every 3s");
+  });
+});

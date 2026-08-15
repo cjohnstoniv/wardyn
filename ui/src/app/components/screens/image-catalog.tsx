@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Mono } from "../wardyn/code-block";
-import { Chip } from "../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
@@ -233,7 +233,7 @@ export function ImageCatalog({
         </Button>
       </div>
 
-      {status === "loading" && <TableSkeleton rows={3} />}
+      {status === "loading" && <TableSkeleton rows={3} cols={5} />}
       {status === "error" && <ErrorState onRetry={load} />}
       {status === "ready" && images.length === 0 && (
         <EmptyState
@@ -295,6 +295,7 @@ export function ImageCatalog({
                             className="text-danger focus:text-danger"
                           >
                             <Trash2 className="size-3.5" /> Delete
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>

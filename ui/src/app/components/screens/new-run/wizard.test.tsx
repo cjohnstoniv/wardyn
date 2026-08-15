@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AgentRun, Workspace } from "../../../lib/types";
 
@@ -724,5 +724,97 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
     expect(await screen.findByRole("button", { name: /launch run/i })).toBeEnabled();
     expect(screen.queryByTestId("high-risk-section")).toBeNull();
+  });
+});
+
+// ui-newrun-1: every close path (Cancel, Escape, an overlay click, the header
+// X) must funnel through ONE requestClose() that only prompts when `state`
+// has diverged from the open-time snapshot. The sharpest regression case is
+// the PRIOR fix attempt's own bug: the snapshot must be taken from the
+// SEEDED initial state (initialWorkspaces/initialInteractive/initialState),
+// never a pre-seed baseline — otherwise an untouched Cancel on a workspace-
+// first pre-seeded wizard spuriously prompts.
+describe("PermissionWizard — unsaved-work close guard (ui-newrun-1)", () => {
+  beforeEach(() => {
+    healthMock.mockReset().mockResolvedValue({ confinement_classes: ["CC1", "CC2", "CC3"] });
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    listWorkspacesMock.mockReset().mockResolvedValue([workspace]);
+    listPoliciesMock.mockReset().mockResolvedValue([]);
+    preflightRunMock.mockReset();
+  });
+
+  it("Cancel on a freshly-opened, untouched wizard closes with no prompt", async () => {
+    const onOpenChange = vi.fn();
+    render(<PermissionWizard open onOpenChange={onOpenChange} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await screen.findByRole("button", { name: /^next$/i });
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(screen.queryByText(/discard this run/i)).not.toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // The prior fix attempt's bug, pinned: a workspace-first pre-seed (the
+  // New-run dialog's own flow, via initialWorkspaces — no full initialState)
+  // must read as the OPEN-time baseline, not a diff against it.
+  it("Cancel on a workspace-first PRE-SEEDED (but untouched) wizard closes with no prompt", async () => {
+    const onOpenChange = vi.fn();
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={onOpenChange}
+        onCreated={() => {}}
+        initialWorkspaces={[{ workspaceId: workspace.id }]}
+      />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Let the seed (and the async post-health-probe reseed) settle.
+    await screen.findByText("acme-repo", { exact: true });
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(screen.queryByText(/discard this run/i)).not.toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("Cancel after a real edit prompts to discard; Keep editing stays open, Discard closes", async () => {
+    const onOpenChange = vi.fn();
+    render(<PermissionWizard open onOpenChange={onOpenChange} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Basics -> Access -> Egress, then a real edit.
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await user.click(await screen.findByRole("switch", { name: /allow all egress/i }));
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(await screen.findByText(/discard this run/i)).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Keep editing dismisses the prompt without closing.
+    await user.click(screen.getByRole("button", { name: /keep editing/i }));
+    expect(screen.queryByText(/discard this run/i)).not.toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Cancel again and actually discard.
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await user.click(screen.getByRole("button", { name: /^discard$/i }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("Escape on a dirty wizard routes through the same guard, not just Cancel", async () => {
+    const onOpenChange = vi.fn();
+    render(<PermissionWizard open onOpenChange={onOpenChange} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await user.click(await screen.findByRole("switch", { name: /allow all egress/i }));
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(await screen.findByText(/discard this run/i)).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });

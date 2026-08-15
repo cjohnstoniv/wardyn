@@ -146,3 +146,26 @@ export async function setDefaultFor(wire: WireIntegration, mark: DefaultForMark,
     default_for,
   });
 }
+
+// setDefaultFor's twin for the `disabled` flag: the list and detail screens
+// both READ wire.disabled (the "Off" badge), but until this landed nothing in
+// ui/src ever WROTE it — an integration could never actually be turned off or
+// back on through the UI. Same PUT-is-full-replacement discipline: every
+// other field round-trips from the wire row untouched, only `disabled`
+// changes. Only meaningful on a STORED row (same reason setDefaultFor's
+// checkbox is gated on wire.source === "stored" — a PUT to a derived-only id
+// 409s server-side; adoption is explicit, never a side effect of this toggle).
+export async function toggleDisabled(wire: WireIntegration, disabled: boolean): Promise<void> {
+  await genericIntegrationsApi.put(wire.id, {
+    name: wire.name ?? "",
+    kind: wire.kind,
+    disabled,
+    secrets: wire.secrets,
+    egress: wire.egress,
+    config: wire.config,
+    probe: wire.probe,
+    docs: wire.docs,
+    disabled_capabilities: wire.disabled_capabilities,
+    default_for: wire.default_for,
+  });
+}

@@ -199,23 +199,29 @@ function Carries({ tools }: { tools: string[] }) {
   );
 }
 
-function ImageCard({
-  id,
-  selected,
-  onSelect,
-  children,
-}: {
-  // A fixed choice id, or "catalog-<uuid>" for a saved tier-2 entry.
-  id: BaseImageChoice | `catalog-${string}`;
-  selected: boolean;
-  onSelect: () => void;
-  children: React.ReactNode;
-}) {
+// ui-wsWizard-4: role=radio's interaction contract (APG radiogroup pattern)
+// is roving tabindex — only the checked option is a tab stop, arrows move
+// selection AND focus together. This card used to give every card its own
+// tabIndex={0} (every card its own tab stop, no arrow handling at all), so
+// the announced role's keyboard contract wasn't implemented. tabIndex now
+// comes from the group (selected card only); ImageCards below owns the
+// arrow-key handling and the ref each card registers itself under.
+const ImageCard = React.forwardRef<
+  HTMLDivElement,
+  {
+    // A fixed choice id, or "catalog-<uuid>" for a saved tier-2 entry.
+    id: BaseImageChoice | `catalog-${string}`;
+    selected: boolean;
+    onSelect: () => void;
+    children: React.ReactNode;
+  }
+>(function ImageCard({ id, selected, onSelect, children }, ref) {
   return (
     <div
+      ref={ref}
       role="radio"
       aria-checked={selected}
-      tabIndex={0}
+      tabIndex={selected ? 0 : -1}
       data-testid={`image-card-${id}`}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -232,7 +238,7 @@ function ImageCard({
       {children}
     </div>
   );
-}
+});
 
 // A card's disclosed body must not toggle the card's own selection when the
 // operator clicks — or types — inside an input/checkbox/button it contains.
@@ -269,9 +275,49 @@ export function ImageCards({
     };
   }, []);
 
+  // ui-wsWizard-4: roving tabindex + arrow-key navigation, per the APG
+  // radiogroup pattern. `order` mirrors each card's own id/selected/onSelect
+  // below (top-to-bottom render order); cardRefs lets an arrow press move
+  // DOM focus to the newly-selected card, not just its React state.
+  const cardRefs = React.useRef(new Map<string, HTMLDivElement>());
+  const cardRef = (id: string) => (el: HTMLDivElement | null) => {
+    if (el) cardRefs.current.set(id, el);
+    else cardRefs.current.delete(id);
+  };
+  const order: { id: string; selected: boolean; onSelect: () => void }[] = [
+    { id: "recommended", selected: state.choice === "recommended", onSelect: () => onChange({ choice: "recommended" }) },
+    ...catalog.map((entry) => ({
+      id: `catalog-${entry.id}`,
+      selected: state.choice === "catalog" && state.catalog?.id === entry.id,
+      onSelect: () =>
+        onChange({
+          choice: "catalog",
+          catalog: { id: entry.id, kind: entry.kind, name: entry.name, image: entry.image, steps: entry.steps },
+        }),
+    })),
+    { id: "registry", selected: state.choice === "registry", onSelect: () => onChange({ choice: "registry" }) },
+    { id: "custom", selected: state.choice === "custom", onSelect: () => onChange({ choice: "custom" }) },
+    { id: "byo", selected: state.choice === "byo", onSelect: () => onChange({ choice: "byo" }) },
+  ];
+  const onRadiogroupKeyDown = (e: React.KeyboardEvent) => {
+    if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = order.findIndex((o) => o.selected);
+    if (idx === -1) return;
+    const dir = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 1;
+    const next = order[(idx + dir + order.length) % order.length];
+    next.onSelect();
+    cardRefs.current.get(next.id)?.focus();
+  };
+
   return (
-    <div role="radiogroup" aria-label="Base image" className="space-y-2">
-      <ImageCard id="recommended" selected={state.choice === "recommended"} onSelect={() => onChange({ choice: "recommended" })}>
+    <div role="radiogroup" aria-label="Base image" className="space-y-2" onKeyDown={onRadiogroupKeyDown}>
+      <ImageCard
+        ref={cardRef("recommended")}
+        id="recommended"
+        selected={state.choice === "recommended"}
+        onSelect={() => onChange({ choice: "recommended" })}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[0.8125rem] font-medium text-foreground">Recommended — built for this workspace</span>
           <Chip tone="primary">recommended</Chip>
@@ -283,6 +329,7 @@ export function ImageCards({
 
       {catalog.map((entry) => (
         <ImageCard
+          ref={cardRef(`catalog-${entry.id}`)}
           key={entry.id}
           id={`catalog-${entry.id}`}
           selected={state.choice === "catalog" && state.catalog?.id === entry.id}
@@ -304,7 +351,12 @@ export function ImageCards({
         </ImageCard>
       ))}
 
-      <ImageCard id="registry" selected={state.choice === "registry"} onSelect={() => onChange({ choice: "registry" })}>
+      <ImageCard
+        ref={cardRef("registry")}
+        id="registry"
+        selected={state.choice === "registry"}
+        onSelect={() => onChange({ choice: "registry" })}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[0.8125rem] font-medium text-foreground">A registry image that fits</span>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
@@ -315,7 +367,12 @@ export function ImageCards({
         </p>
       </ImageCard>
 
-      <ImageCard id="custom" selected={state.choice === "custom"} onSelect={() => onChange({ choice: "custom" })}>
+      <ImageCard
+        ref={cardRef("custom")}
+        id="custom"
+        selected={state.choice === "custom"}
+        onSelect={() => onChange({ choice: "custom" })}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[0.8125rem] font-medium text-foreground">Customize the build</span>
           {credCount > 0 && (
@@ -341,7 +398,7 @@ export function ImageCards({
         )}
       </ImageCard>
 
-      <ImageCard id="byo" selected={state.choice === "byo"} onSelect={() => onChange({ choice: "byo" })}>
+      <ImageCard ref={cardRef("byo")} id="byo" selected={state.choice === "byo"} onSelect={() => onChange({ choice: "byo" })}>
         <span className="text-[0.8125rem] font-medium text-foreground">Bring your own image</span>
         {state.choice === "byo" ? (
           <div onClick={stopPropagation} onKeyDown={stopPropagation} className="space-y-2 border-t border-border pt-3">
@@ -400,13 +457,20 @@ export function StepBaseImage({
           </span>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {detectedChips.map((chip) => (
-            <Chip key={chip} tone="neutral" mono>
-              {chip}
-            </Chip>
-          ))}
-        </div>
+        {detectedChips.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {detectedChips.map((chip) => (
+              <Chip key={chip} tone="neutral" mono>
+                {chip}
+              </Chip>
+            ))}
+          </div>
+        ) : (
+          // ui-wsWizard-5: an empty chip row with no fallback line reads as a
+          // rendering glitch, not an intentional "nothing detected" state —
+          // mirrors the empty-state copy pattern step-requirements.tsx uses.
+          <p className="text-xs text-muted-foreground">Nothing detected in the scan.</p>
+        )}
       </div>
 
       <ImageCards detectedChips={detectedChips} partial={partial} state={state} onChange={onChange} />

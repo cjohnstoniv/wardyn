@@ -170,8 +170,22 @@ func (p *Proxy) mitmLLMHost(host string) bool {
 // host (i.e. MITM-eligible but NOT a built-in LLM host). The CONNECT path uses it
 // to route corp hosts into the MITM tunnel without touching the LLM-specific
 // blind-coverage bookkeeping.
+//
+// The reserved LLM hostnames are excluded here explicitly (defense in depth):
+// handleConnect dispatches this branch BEFORE the isLLMHost/mitmLLMHost gate, so
+// if mitmHosts were ever populated with api.anthropic.com/api.openai.com — e.g. a
+// misconfigured or admin-authored EgressRedirect targeting one of them — this
+// check alone stands between that entry and silently swapping a corp artifact
+// token onto real Anthropic/OpenAI traffic, bypassing the mitmLLM intent gate
+// entirely. No caller today populates mitmHosts with either host, but the
+// ordering in handleConnect gives this map veto power over the LLM gate, so it
+// must never trust the map blindly.
 func (p *Proxy) isCorpMITMHost(host string) bool {
-	return p.mitmHosts[strings.TrimSuffix(strings.ToLower(host), ".")]
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == anthropicHost || h == openaiHost {
+		return false
+	}
+	return p.mitmHosts[h]
 }
 
 // channelForHost maps a model host to its request schema for inspection. A host

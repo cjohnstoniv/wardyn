@@ -402,6 +402,7 @@ function FlavorPanel({
                 key={lane}
                 type="button"
                 onClick={() => setBedrockLane(lane)}
+                aria-pressed={bedrockLane === lane}
                 className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${
                   bedrockLane === lane ? "border-primary bg-primary/10" : "border-border hover:border-border-strong"
                 }`}
@@ -552,11 +553,17 @@ function SecretRow({
   /** Never-resident / resident language for THIS secret's delivery. */
   deliveryNote: string;
 }) {
+  // A stable id derived from the label — every SecretRow instance (bearer
+  // token, AWS keys, GitHub App id/key, git PAT, generic header credential)
+  // gets its own Label/Input pairing instead of the two rendering as
+  // unlinked siblings (a11y-blocker: getByLabelText and every screen reader
+  // need this to resolve which input a label names).
+  const id = `secret-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
   return (
     <div className="space-y-1">
-      <Label className="text-xs">{label}</Label>
+      <Label htmlFor={id} className="text-xs">{label}</Label>
       <div className="flex flex-wrap items-center gap-2">
-        <Input value={name} onChange={(e) => onChange(e.target.value)} className="max-w-[260px]" />
+        <Input id={id} value={name} onChange={(e) => onChange(e.target.value)} className="max-w-[260px]" />
         <Button size="sm" variant="outline" onClick={onEnterValue}>
           <KeyRound className="size-3.5" /> Enter value
         </Button>
@@ -648,9 +655,24 @@ function BaseForm({
   // rather than let the operator hit that wall after filling in the form.
   const blockedByDerived = !!collision && !collision.stored;
 
+  // Mirrors buildIntegrationWrite's own branching: the four lanes that ALWAYS
+  // push a secret row regardless of whether the field is empty (bedrock
+  // bearer/static, GitHub App, git host) need that field non-empty here too,
+  // or Save stays clickable on a blank secret name that only a raw server 400
+  // catches. The generic header lane is genuinely optional (buildIntegrationWrite
+  // omits it entirely when blank) and subscription/sso/aws_dir have no secret
+  // name field at all — neither belongs in this check.
+  const requiredSecretsFilled =
+    isBedrock && (bedrockLane ?? "bearer") === "bearer" ? bearerSecret.trim().length > 0
+    : isBedrock && (bedrockLane ?? "bearer") === "static" ? awsKeyId.trim().length > 0 && awsSecret.trim().length > 0
+    : isGithubApp ? appIdSecret.trim().length > 0 && appKeySecret.trim().length > 0
+    : isGitHost ? genericSecret.trim().length > 0
+    : true;
+
   const canSave =
     !blockedByDerived &&
     name.trim().length > 0 &&
+    requiredSecretsFilled &&
     // A generic/header type needs its host(s) named; the closed kinds either
     // carry a fixed host (subscription/bedrock) or the operator names their own.
     (hostList.length > 0 || isSubscription || isBedrock);
@@ -679,8 +701,8 @@ function BaseForm({
 
   return (
     <div className="min-w-0 space-y-4 py-1">
-      <Field label="Name" hint="How this row reads in lists and pickers.">
-        <Input value={name} onChange={(e) => setName(e.target.value)} />
+      <Field label="Name" htmlFor="int-name" hint="How this row reads in lists and pickers.">
+        <Input id="int-name" value={name} onChange={(e) => setName(e.target.value)} />
         <p className="mt-1 text-[0.6875rem] text-muted-foreground">
           Stored as <Mono className="text-[0.6875rem]">{id || "—"}</Mono>
         </p>
@@ -767,12 +789,12 @@ function BaseForm({
           <SectionLabel>Config</SectionLabel>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-xs">Region</Label>
-              <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-east-1" />
+              <Label htmlFor="int-region" className="text-xs">Region</Label>
+              <Input id="int-region" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-east-1" />
             </div>
             <div>
-              <Label className="text-xs">Model</Label>
-              <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="anthropic.claude-3" />
+              <Label htmlFor="int-model" className="text-xs">Model</Label>
+              <Input id="int-model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="anthropic.claude-3" />
             </div>
           </div>
         </div>

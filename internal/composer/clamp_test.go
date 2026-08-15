@@ -382,6 +382,53 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 	}
 }
 
+// TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains is the
+// bug-policy-1 regression: the AllowedDomains intersection above runs BEFORE
+// the LLMInspection ceiling-inherit block, so the narrowed proposal's own
+// AllowedDomains never carried the ceiling's detector_sidecar_url host — and
+// internal/api's validateLLMInspection requires that host to be an EXACT
+// entry on this SAME post-clamp spec's own allowed_domains, so every
+// compose/profile/inline_policy run under an operator that sets
+// detector_sidecar_url self-rejected. The host must land in the clamped
+// output's AllowedDomains even when the PROPOSAL never mentioned it — it
+// comes from the operator's own ceiling config, the same trust level as the
+// DeniedDomains union above.
+func TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains(t *testing.T) {
+	ceiling := operatorCeiling(t) // AllowedDomains: api.anthropic.com, github.com — sidecar host NOT in it
+	ceiling.LLMInspection = &types.LLMInspectionSpec{
+		Mode: "block", DetectSecrets: true,
+		DetectorSidecarURL: "https://detector.acme-corp.internal:8443/scan",
+	}
+
+	// Bare proposal — mentions neither the sidecar host nor any egress at all.
+	got, _ := Clamp(types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}, ceiling)
+	if got.LLMInspection == nil || got.LLMInspection.DetectorSidecarURL != ceiling.LLMInspection.DetectorSidecarURL {
+		t.Fatalf("llm_inspection = %+v, want the ceiling's sidecar config inherited", got.LLMInspection)
+	}
+	found := false
+	for _, d := range got.AllowedDomains {
+		if strings.EqualFold(d, "detector.acme-corp.internal") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("allowed_domains = %v, want the inherited sidecar's host (detector.acme-corp.internal) present so validateLLMInspection's exact-entry check passes", got.AllowedDomains)
+	}
+	// api.anthropic.com must still survive too — this is a union, not a replace.
+	if !domainsContain(got.AllowedDomains, "api.anthropic.com") {
+		t.Errorf("allowed_domains = %v, want api.anthropic.com to survive the union", got.AllowedDomains)
+	}
+}
+
+func domainsContain(domains []string, want string) bool {
+	for _, d := range domains {
+		if strings.EqualFold(d, want) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestClamp_LLMInspectionDroppedUnderNilCeiling is W12-A-1 (CRIT) / W14-S1-1:
 // a member's hand-authored inline_policy.llm_inspection used to pass through
 // COMPLETELY unclamped whenever the ceiling set none — exactly the shipped

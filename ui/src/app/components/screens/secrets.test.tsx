@@ -394,3 +394,49 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-new"));
   });
 });
+
+// go-live findings pinned here (the secrets.tsx side of the same findings
+// policies.test.tsx pins for policies.tsx):
+//  - ui-secretsPolicies-2: AddSecretDialog's save-error must be announced
+//    (role=alert) and wired into the Save button's aria-describedby.
+//  - ui-secretsPolicies-3: required Name/Value fields must be marked required.
+//  - ui-secretsPolicies-4: the empty-state CTA is general-purpose secret
+//    storage copy, not LLM-specific.
+describe("SecretsScreen — empty-state CTA copy (ui-secretsPolicies-4)", () => {
+  it("reads 'Add your first secret', not LLM-specific copy, matching the header button", async () => {
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    render(<SecretsScreen />);
+    await screen.findByText(/no secrets yet/i);
+
+    expect(screen.getByRole("button", { name: /add your first secret/i })).toBeInTheDocument();
+    expect(screen.queryByText(/llm key/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("AddSecretDialog — required fields + error announcement (ui-secretsPolicies-2/3)", () => {
+  beforeEach(() => {
+    setSecretMock.mockReset();
+  });
+
+  it("marks Name and Value as required", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    expect(screen.getByLabelText(/^name/i)).toBeRequired();
+    expect(screen.getByLabelText(/^value/i)).toBeRequired();
+  });
+
+  it("announces a rejected save via role=alert and wires it to the Save button", async () => {
+    setSecretMock.mockRejectedValue(new Error("HTTP 400: invalid secret name"));
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "anthropic-api-key" } });
+    fireEvent.change(screen.getByLabelText(/^value/i), { target: { value: "sk-ant-x" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save secret$/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/invalid secret name/i);
+    expect(screen.getByRole("button", { name: /^save secret$/i })).toHaveAttribute(
+      "aria-describedby",
+      alert.id,
+    );
+  });
+});

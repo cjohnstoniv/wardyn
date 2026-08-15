@@ -6,9 +6,9 @@
 // OnboardingScreen — the first-boot WELCOME (redesign). The old 7-page tour is
 // collapsed into ONE glanceable intro (B1): a hero, the single 5-node
 // how-it-works strip (shared with the funnel shell's intro panel), live readiness chips
-// off the real SetupStatus, and two exits — Get set up / Skip. Rendered inside
-// the AppShell as the "Getting started" nav content; "Get set up" advances to the
-// setup funnel, "Skip" drops the operator into the console.
+// off the real SetupStatus, and a single forward path into the setup funnel — no
+// skip, no demo side-door (see GettingStarted below). Rendered inside the
+// AppShell as the "Getting started" nav content.
 import * as React from "react";
 import { ArrowRight, BrickWall, Compass, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
@@ -176,7 +176,7 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
 
       <div className="mt-6 flex flex-wrap items-center gap-2.5">
         <Button onClick={onGetStarted}>
-          Get started — about 2 minutes <ArrowRight className="size-4" />
+          Get started — a few minutes <ArrowRight className="size-4" />
         </Button>
       </div>
 

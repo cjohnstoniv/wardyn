@@ -16,7 +16,6 @@ import {
   Archive,
   BellRing,
   Check,
-  CircleDot,
   Eye,
   FilterX,
   GitBranch,
@@ -62,11 +61,11 @@ import {
   TableHeader,
   TableRow,
 } from "../ui/table";
-import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
@@ -317,10 +316,13 @@ export function RunsScreen() {
             </SelectContent>
           </Select>
 
-          <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <CircleDot className="size-3 animate-pulse text-success" />
+          {/* fix: this used to be plain muted text + a raw CircleDot icon —
+              a second visual treatment for the same "live" concept Audit
+              already renders as a Chip pill. Shared primitive, same "Live ·
+              …" copy template. */}
+          <Chip tone="success" dot pulse className="ml-auto" title="Polling for new runs">
             Live · refreshes every {POLL_MS / 1000}s
-          </span>
+          </Chip>
           <Button variant="outline" size="icon" onClick={load} aria-label="Refresh now">
             <RotateCw className="size-4" />
           </Button>
@@ -332,7 +334,16 @@ export function RunsScreen() {
       <TruncatedNote count={runs.length} cap={LIST_LIMIT} />
 
       {status === "loading" ? (
-        <BoardSkeleton />
+        // fix: this used to always render the board card-grid skeleton, even
+        // in Table density — flashing the wrong shape on every manual
+        // Refresh / re-navigation while Table mode was active.
+        mode === "table" ? (
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <TableSkeleton rows={8} cols={7} />
+          </div>
+        ) : (
+          <BoardSkeleton />
+        )
       ) : status === "error" ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <ErrorState onRetry={load} />
@@ -523,11 +534,16 @@ function DoneSection({
     (n, g) => n + (expanded[g.key] ? g.runs.length : Math.min(GROUP_PREVIEW, g.runs.length)),
     0,
   );
-  const allExpanded = shownCount >= done.length;
   const hasHidden = done.length > shownCount;
+  // fix: this used to be `shownCount >= done.length` — a count coincidence,
+  // true even with nothing ever expanded whenever every group happens to fit
+  // within GROUP_PREVIEW (small Done sections). That rendered a "Show fewer"
+  // button wired to a toggleAll() that was a no-op (nothing was expanded to
+  // collapse). Derive it from the real per-group expanded state instead.
+  const anyExpanded = Object.values(expanded).some(Boolean);
 
   const toggleAll = () =>
-    setExpanded(allExpanded ? {} : Object.fromEntries(groups.map((g) => [g.key, true])));
+    setExpanded(anyExpanded ? {} : Object.fromEntries(groups.map((g) => [g.key, true])));
 
   return (
     <section aria-label="Done">
@@ -566,9 +582,9 @@ function DoneSection({
         <span className="text-xs text-muted-foreground">
           Showing {shownCount} of {done.length} done runs
         </span>
-        {(hasHidden || allExpanded) && done.length > GROUP_PREVIEW && (
+        {(hasHidden || anyExpanded) && done.length > GROUP_PREVIEW && (
           <Button variant="outline" size="sm" onClick={toggleAll}>
-            {allExpanded ? "Show fewer" : "Show all"}
+            {anyExpanded ? "Show fewer" : "Show all"}
           </Button>
         )}
       </div>
@@ -593,17 +609,15 @@ function RunCard({
   const attachable = !!run.interactive && run.state === "RUNNING";
   const note = attentionNote(run.state);
 
+  // fix: this container used to be role="button" tabIndex={0} — a widget
+  // role directly nesting the real Attach/Review/kebab <button>s below,
+  // which is an invalid ARIA structure (interactive-in-interactive). Mouse
+  // click-to-open stays via the plain onClick; keyboard/AT users already
+  // have a dedicated affordance for the same action (RunActions' "Open
+  // detail" menu item), so no functionality is lost by dropping the role.
   return (
     <div
-      role="button"
-      tabIndex={0}
       onClick={() => onOpen(run.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen(run.id);
-        }
-      }}
       className={cn(
         "group relative flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-border-strong",
         attention ? "border-warning/30" : "border-border",
@@ -709,17 +723,12 @@ function RunsTable({
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
             return (
+              // fix: same nested-interactive-widget issue as the board's
+              // RunCard (role="button" wrapping the real per-row action
+              // buttons) — dropped for the same reason; see RunCard above.
               <TableRow
                 key={run.id}
-                role="button"
-                tabIndex={0}
                 onClick={() => onOpen(run.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onOpen(run.id);
-                  }
-                }}
                 className="cursor-pointer"
               >
                 <TableCell>

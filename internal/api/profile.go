@@ -58,15 +58,27 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// confined=false: this endpoint synthesizes a profile from ANY run's audit
-	// trail (not only a "workspace record" confined-replay session — see
-	// reconcileRecordRun in workspace_run.go for that lane, which passes the
-	// session's actual Confined flag), and AgentRun carries no frozen
-	// AllowAllEgress to derive it from here. Preserves today's behavior: a
-	// deny is treated as an anomaly a synthesis must not silently bless,
-	// which is the conservative/correct default for a run whose confinement
-	// mode is not otherwise known at this call site.
-	obs := recordmode.Capture(events, false)
+	// confined defaults false: AgentRun carries no frozen AllowAllEgress to
+	// derive it from at this call site, and treating a deny as an anomaly a
+	// synthesis must not silently bless is the conservative default for a run
+	// whose confinement mode is otherwise unknown here. But a "workspace
+	// record" run DOES know its mode — its record_results entry (keyed by
+	// RunID, same discriminator reconcileRecordRun uses in workspace_run.go)
+	// carries the session's actual Confined flag. Without this, a confined
+	// verify run's containment-proof denials (the entire point of the replay)
+	// get mislabeled as anomalies "during open recording".
+	confined := false
+	if run.WorkspaceID != nil && run.Task == "workspace record" {
+		if ws, werr := s.cfg.Store.GetWorkspace(ctx, *run.WorkspaceID); werr == nil {
+			for _, v := range recordResultsMap(ws) {
+				if v.RunID == id {
+					confined = v.Confined
+					break
+				}
+			}
+		}
+	}
+	obs := recordmode.Capture(events, confined)
 	synth, synthWarns := recordmode.Synthesize(obs, grants, run)
 
 	// The control plane itself shows up in every capture (the sandbox's

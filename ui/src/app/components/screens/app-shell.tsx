@@ -146,17 +146,21 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 ];
 
 // Member console (B3): a member launches/governs only THEIR OWN runs — nav is
-// Runs · Approvals · Recordings, nothing else (no Policies/Secrets/
+// Runs · Approvals · Demos · Recordings, nothing else (no Policies/Secrets/
 // Integrations/Workspaces/Audit/site-config), and no Getting Started entry
 // (setup is the operator's funnel — see the pinned block below). Filtered by
-// route path, never by re-deriving from a second copy of NAV_GROUPS.
+// route path, never by re-deriving from a second copy of NAV_GROUPS. Demos is
+// included: routes.go has no operatorOnly (or any) gate on it at all — it
+// rides the same run-launch path a member is already allowed to use for their
+// own runs — so hiding it here would just be a discoverability gap with
+// nothing server-side backing it (unlike every path below, which IS gated).
 //
 // Hiding here is COSMETIC ONLY — every route a member can't reach still
 // enforces that itself server-side (internal/api/routes.go's operatorOnly
 // group and the owner-or-admin routes); this just keeps a member from
 // discovering an admin-only screen as a raw 403 or an empty list instead of
 // simply not offering it.
-const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/recordings"]);
+const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/demos", "/recordings"]);
 function navGroupsForRole(role: Role): typeof NAV_GROUPS {
   if (role !== "member") return NAV_GROUPS;
   return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => MEMBER_NAV_PATHS.has(i.to)) })).filter(
@@ -483,11 +487,15 @@ function TopBar({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent">
+            {/* ui-shellAuth-4: the shared Button (not a raw <button>), matching
+                every sibling header control (theme toggle above, mobile nav
+                trigger) — its focus-visible ring is what keyboard focus falls
+                back to instead of the bare unthemed browser outline. */}
+            <Button variant="ghost" className="h-auto gap-2 rounded-md px-1.5 py-1">
               <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">{initials(meta.principal)}</span>
               <span className="hidden text-sm sm:block">{meta.principal.split("@")[0]}</span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>

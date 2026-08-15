@@ -100,7 +100,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick the Fence (CC1) barrier.",
-      "Under Access → Egress, leave the allowed-domains list empty.",
+      "On the Egress step, leave the allowed-domains list empty.",
       "Set First-use approval to 'Always deny'.",
       "Launch interactive and attach the terminal.",
     ],
@@ -128,8 +128,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier (Fence is fine for a demo).",
-      "Under Access → Egress, leave the allow-list empty.",
-      "Set First-use approval to 'Deny with review'.",
+      "On the Egress step, leave the allow-list empty.",
+      "Set First-use approval to 'Deny + review'.",
       "Launch interactive; denied requests surface in the Approvals panel below the terminal.",
     ],
   },
@@ -159,7 +159,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier.",
-      "Under Access → Egress, leave the allow-list empty.",
+      "On the Egress step, leave the allow-list empty.",
       "Set First-use approval to 'Wait for review'.",
       "Launch interactive and keep the Approvals panel visible — you have ~30s to decide each held request.",
     ],
@@ -194,7 +194,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick a barrier (Fence here; nothing is mounted, so the blast radius is a bare sandbox).",
-      "Under Access → Egress, toggle 'Allow all egress' ON.",
+      "On the Egress step, toggle 'Allow all egress' ON.",
       "The cloud-metadata + private-range blocks are not user-configurable — they always apply.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
     ],
@@ -225,7 +225,7 @@ export const DEMOS: Demo[] = [
     setupUi: [
       "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",
       "New Run → pick the Fence (CC1) barrier.",
-      "Under Access → Egress, allow only api.anthropic.com and *.anthropic.com.",
+      "On the Egress step, allow only api.anthropic.com and *.anthropic.com.",
       "Launch interactive, attach the terminal, and run `claude` yourself.",
     ],
   },

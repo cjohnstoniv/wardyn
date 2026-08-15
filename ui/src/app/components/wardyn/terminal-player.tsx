@@ -67,21 +67,21 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-[#0d1117]">
-      <div className="flex items-center gap-1.5 border-b border-border bg-card/60 px-3 py-2">
+      <div className="flex items-center gap-1.5 border-b border-border bg-black/20 px-3 py-2">
         <span className="size-3 rounded-full bg-[#ff5f56]" />
         <span className="size-3 rounded-full bg-[#ffbd2e]" />
         <span className="size-3 rounded-full bg-[#28c840]" />
         {recording.header.title ? (
-          <span className="ml-3 font-mono text-xs text-muted-foreground">{recording.header.title}</span>
+          <span className="ml-3 font-mono text-xs text-white/60">{recording.header.title}</span>
         ) : null}
-        <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+        <span className="ml-auto font-mono text-[0.6875rem] text-white/60">
           {recording.events.length} events
         </span>
         <button
           type="button"
           onClick={download}
           aria-label="Download recording (.cast)"
-          className="inline-flex items-center text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center text-white/60 hover:text-white"
         >
           <Download className="size-3.5" aria-hidden />
         </button>

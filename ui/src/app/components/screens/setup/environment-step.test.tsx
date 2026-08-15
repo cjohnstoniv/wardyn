@@ -11,6 +11,7 @@ import { EnvironmentStep, recommendedTier } from "./environment-step";
 import { CONFINEMENT_CONSTANT_NOTE, CC_META } from "../../wardyn/cc-meta";
 import { BTN, RESIDUAL_PREFIX } from "../../wardyn/copy";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
+import { TIER_GUIDES } from "./setup-guide";
 
 // Only the fields EnvironmentStep reads (runner + platform) carry meaning; the
 // rest satisfy the type. CC1 + CC2 live, KVM-capable host so CC3 is "needs
@@ -92,9 +93,12 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     });
     const { rerender } = renderStep({ status, recheckToken: 0 });
 
-    expect(screen.queryByText(/wardyn setup wall/)).not.toBeInTheDocument();
+    // ui-setup-1's manualSteps disclosure also mentions "wardyn setup wall" in
+    // prose, so scope the command assertion to the <code> element it's the
+    // literal command of.
+    expect(screen.queryByText(/wardyn setup wall/, { selector: "code" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: BTN.showSetupCommand }));
-    expect(screen.getByText(/wardyn setup wall/)).toBeInTheDocument();
+    expect(screen.getByText(/wardyn setup wall/, { selector: "code" })).toBeInTheDocument();
     expect(screen.queryByText(/Still not detected/)).not.toBeInTheDocument();
 
     // A completed host re-check bumps the token while the panel is open.
@@ -107,6 +111,24 @@ describe("EnvironmentStep — matrix-as-picker", () => {
       />,
     );
     expect(screen.getByText(/Still not detected/)).toBeInTheDocument();
+  });
+
+  it("(5b) the revealed command panel also renders the guide's docNote and manualSteps disclosure", async () => {
+    const status = baseStatus({
+      runner: { driver: "docker", confinement_classes: ["CC1"] },
+      platform: { os: "linux", wsl: false, kvm: false },
+    });
+    renderStep({ status });
+    await user.click(screen.getByRole("button", { name: BTN.showSetupCommand }));
+
+    const guide = TIER_GUIDES.CC2!;
+    expect(screen.getByText(guide.docNote!)).toBeInTheDocument();
+
+    const details = screen.getByText("Manual steps").closest("details")!;
+    expect(details).toBeInTheDocument();
+    for (const step of guide.manualSteps!) {
+      expect(within(details).getByText(step)).toBeInTheDocument();
+    }
   });
 
   it("(6) a KVM-less host marks Vault incompatible with the concrete /dev/kvm reason", () => {

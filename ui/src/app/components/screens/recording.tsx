@@ -369,68 +369,72 @@ export function RecordingScreen() {
 function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => void }) {
   const { run, durationSec, bytes } = entry;
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onPlay}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onPlay();
-        }
-      }}
-      className="flex cursor-pointer flex-col overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-border-strong"
-    >
-      {/* skipped a fake per-card terminal-output preview (the design
-          mock used static demo lines) — rendering real captured ANSI output
-          safely at thumbnail size needs its own escaping/parsing pass. This
-          shows real signals only (icon + measured duration); add a genuine
-          text preview later if it earns its complexity. */}
-      <div className="relative flex h-24 items-end border-b border-border bg-surface-2/60 px-4 py-3">
-        <SquareTerminal className="absolute left-4 top-3.5 size-5 text-border" aria-hidden />
-        <span className="pointer-events-none absolute right-3 top-3 inline-flex size-9 items-center justify-center rounded-full border border-primary/40 bg-primary/15 text-primary">
-          <Play className="size-4 translate-x-px" />
-        </span>
-        {durationSec != null && (
-          <span className="absolute bottom-2.5 right-3 rounded-md border border-border bg-background/85 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
-            {formatDuration(durationSec)}
+    // ui-auditRec-4: the "Open run" link used to nest INSIDE this role=button
+    // card (an ARIA nested-interactive anti-pattern — the stopPropagation on
+    // both click and keydown was already papering over the collision that
+    // caused). Only the thumbnail+task surface below is the button now; the
+    // metadata/link row is a separate, non-clickable footer sibling, so
+    // there's exactly one focusable target per subtree and the link needs no
+    // propagation guard at all (it's no longer a descendant of the button).
+    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-border-strong">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onPlay}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onPlay();
+          }
+        }}
+        className="flex cursor-pointer flex-col"
+      >
+        {/* skipped a fake per-card terminal-output preview (the design
+            mock used static demo lines) — rendering real captured ANSI output
+            safely at thumbnail size needs its own escaping/parsing pass. This
+            shows real signals only (icon + measured duration); add a genuine
+            text preview later if it earns its complexity. */}
+        <div className="relative flex h-24 items-end border-b border-border bg-surface-2/60 px-4 py-3">
+          <SquareTerminal className="absolute left-4 top-3.5 size-5 text-border" aria-hidden />
+          <span className="pointer-events-none absolute right-3 top-3 inline-flex size-9 items-center justify-center rounded-full border border-primary/40 bg-primary/15 text-primary">
+            <Play className="size-4 translate-x-px" />
           </span>
-        )}
-      </div>
+          {durationSec != null && (
+            <span className="absolute bottom-2.5 right-3 rounded-md border border-border bg-background/85 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+              {formatDuration(durationSec)}
+            </span>
+          )}
+        </div>
 
-      <div className="flex flex-1 flex-col gap-2.5 p-3.5">
-        <div className="flex items-start gap-2.5">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-foreground" title={run.task}>
-              {run.task}
-            </p>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <AgentBadge agent={run.agent} />
-              <span>·</span>
-              <span className="truncate font-mono">{run.repo}</span>
+        <div className="flex flex-1 flex-col gap-2.5 p-3.5 pb-0">
+          <div className="flex items-start gap-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-foreground" title={run.task}>
+                {run.task}
+              </p>
+              <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <AgentBadge agent={run.agent} />
+                <span>·</span>
+                <span className="truncate font-mono">{run.repo}</span>
+              </div>
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2.5">
-          <ConfinementChip value={run.confinement_class} />
-          <RunStateBadge state={run.state} />
-          <Mono>{fmtBytes(bytes)}</Mono>
-          <span className="text-xs text-muted-foreground" title={run.created_at}>
-            {relativeTime(run.created_at)}
-          </span>
-          <Link
-            to={`/runs/${encodeURIComponent(run.id)}`}
-            onClick={(e) => e.stopPropagation()}
-            // The card's onKeyDown preventDefaults Enter to replay; unguarded,
-            // that cancels the anchor's own activation and Enter here opens the
-            // replay dialog instead of the run.
-            onKeyDown={(e) => e.stopPropagation()}
-            className="ml-auto text-xs font-medium text-primary hover:underline"
-          >
-            Open run →
-          </Link>
-        </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-border p-3.5 pt-2.5">
+        <ConfinementChip value={run.confinement_class} />
+        <RunStateBadge state={run.state} />
+        <Mono>{fmtBytes(bytes)}</Mono>
+        <span className="text-xs text-muted-foreground" title={run.created_at}>
+          {relativeTime(run.created_at)}
+        </span>
+        <Link
+          to={`/runs/${encodeURIComponent(run.id)}`}
+          className="ml-auto text-xs font-medium text-primary hover:underline"
+        >
+          Open run →
+        </Link>
       </div>
     </div>
   );

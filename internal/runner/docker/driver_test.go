@@ -66,6 +66,67 @@ func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
 	}
 }
 
+// TestExecLess_FailsClosedOnUnenforceableCaps is the exec-less (krun/CC3)
+// counterpart of TestCreateSandbox_FailsClosedOnUnenforceableCaps: the
+// exec-based path checks verifyCapsEnforced right after ContainerCreate
+// (in CreateSandbox), but the exec-less path defers ContainerCreate+Start to
+// runAsMainProcess (invoked from Exec) — which used to skip the check
+// entirely and start the untrusted workload uncapped. Locks in that
+// runAsMainProcess applies the identical fail-closed gate (and honors the
+// same AllowUnenforceableCaps override) before ever starting the container.
+func TestExecLess_FailsClosedOnUnenforceableCaps(t *testing.T) {
+	discard := []string{"Your kernel does not support memory limit capabilities or the cgroup is not mounted. Limitation discarded."}
+
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun") // CC3 via krun: exec-less path
+	f.images["busybox:latest"] = true
+	f.createWarnings = discard
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	_, execErr := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"})
+	if execErr == nil {
+		t.Fatal("Exec (main-process create) must fail closed when the daemon discards a cap, got nil")
+	}
+	if !errors.Is(execErr, errCapsUnenforceable) {
+		t.Errorf("error must wrap errCapsUnenforceable, got %v", execErr)
+	}
+
+	// The agent must NEVER have been started, and the container the failed cap
+	// check created must be cleaned up (not left running uncapped).
+	agentName := agentContainerName(spec.RunID)
+	for _, n := range f.startedNames {
+		if n == agentName {
+			t.Errorf("exec-less agent container was STARTED before the cap check; an unenforceable-caps host must never launch it (started: %v)", f.startedNames)
+		}
+	}
+	if c, exists := f.containers[agentName]; exists && !c.removed {
+		t.Errorf("exec-less agent container must be removed after a failed cap check, still present: %v", c)
+	}
+
+	// Opt-out: WARDYN_ALLOW_UNENFORCEABLE_CAPS on a trusted host lets it proceed.
+	f2 := newFakeDocker()
+	f2.info = infoWithRuntimes("krun")
+	f2.images["busybox:latest"] = true
+	f2.createWarnings = discard
+	d2 := newWithClient(f2, Config{ProxyImage: "wardyn-proxy:dev", AllowUnenforceableCaps: true})
+	sb2, err := d2.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox (allow-unenforceable): %v", err)
+	}
+	if _, err := d2.Exec(ctx, sb2.Ref, []string{"agent-run", "task"}); err != nil {
+		t.Errorf("AllowUnenforceableCaps must let the exec-less run proceed, got %v", err)
+	}
+}
+
 func testSpec() runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID:            uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -79,6 +140,28 @@ func testSpec() runner.SandboxSpec {
 
 func newTestDriver(f *fakeDocker) *Driver {
 	return newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+}
+
+// TestDriver_ImageRemove is the bug-workspace-1 regression at the driver
+// level: runner.ImageRemover must actually reclaim a present image and treat
+// an already-absent one as a no-op (idempotent, same StopSandbox-style
+// contract), never surfacing "not found" as an error to a best-effort caller.
+func TestDriver_ImageRemove(t *testing.T) {
+	f := newFakeDocker()
+	f.images["wardyn-workspace/w:old"] = true
+	d := newTestDriver(f)
+
+	if err := d.ImageRemove(context.Background(), "wardyn-workspace/w:old"); err != nil {
+		t.Fatalf("ImageRemove on a present image: %v", err)
+	}
+	if f.images["wardyn-workspace/w:old"] {
+		t.Error("image still present after ImageRemove")
+	}
+	// Already absent (raced by a manual prune, or a repeat call) must be a
+	// silent no-op, not an error.
+	if err := d.ImageRemove(context.Background(), "wardyn-workspace/w:old"); err != nil {
+		t.Errorf("ImageRemove on an already-absent image must be a no-op, got: %v", err)
+	}
 }
 
 // TestEnsureImage_MissingHintsMakeTarget locks in the actionable error: when an

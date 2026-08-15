@@ -53,7 +53,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
         if (alive) setKeys(k);
       })
       .catch(() => {
-        if (alive) setKeys([]);
+        // fix: a failed fetch used to set keys=[] — identical to a
+        // confirmed-empty response — which rendered "no key is registered"
+        // even for an owner who does have keys, on a transient error. Leave
+        // it null (not-yet-loaded) so hasKeys keeps assuming keys exist
+        // instead of asserting a fact the fetch never confirmed.
       });
     return () => {
       alive = false;

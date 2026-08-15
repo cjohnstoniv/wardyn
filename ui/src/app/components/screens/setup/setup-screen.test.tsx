@@ -423,7 +423,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^corporate network$/i });
-      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      // Both PhaseRail landmarks share the "Setup steps" accessible name
+      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+      // renders both — the full rail is the SECOND in DOM order.
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = navs[navs.length - 1];
 
       // Untested (blocked): clicking Integrations in the rail is a no-op.
       await user.click(within(nav).getByRole("button", { name: /integrations/i }));
@@ -475,7 +479,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // rendering, not a hand-rolled duplicate (see integrations-screen.test.tsx
     // for that component's own coverage).
     expect(await screen.findByText("AI providers")).toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: /setup steps/i });
+    // Both PhaseRail landmarks share the "Setup steps" accessible name
+    // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+    // renders both — the full rail is the SECOND in DOM order.
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /integrations/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
@@ -495,7 +503,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
 
-    const nav = screen.getByRole("navigation", { name: /setup steps/i });
+    // Both PhaseRail landmarks share the "Setup steps" accessible name
+    // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+    // renders both — the full rail is the SECOND in DOM order.
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /integrations/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
     expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
@@ -516,7 +528,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
-      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      // Both PhaseRail landmarks share the "Setup steps" accessible name
+      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+      // renders both — the full rail is the SECOND in DOM order.
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /integrations/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
@@ -536,7 +552,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
-      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      // Both PhaseRail landmarks share the "Setup steps" accessible name
+      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+      // renders both — the full rail is the SECOND in DOM order.
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /integrations/i });
       expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
       expect(within(btn).queryByText("Skipped")).not.toBeInTheDocument();
@@ -556,7 +576,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next: the sealed box$/i }));
 
       expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
-      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      // Both PhaseRail landmarks share the "Setup steps" accessible name
+      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+      // renders both — the full rail is the SECOND in DOM order.
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /integrations/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       // …and the checkmark: forward-past is the same per-browser decision the
@@ -583,7 +607,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // localStorage, not in-memory React state that a remount would lose.
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
-      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      // Both PhaseRail landmarks share the "Setup steps" accessible name
+      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
+      // renders both — the full rail is the SECOND in DOM order.
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /integrations/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
@@ -775,9 +803,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Regression the selectable-only radio decision exists to prevent: Vault (CC3)
     // is a todo tier — its radio is disabled, but its "Show setup command" button
     // still reveals the inline command instead of being swallowed by a selection.
-    expect(screen.queryByText(/wardyn setup vault/)).not.toBeInTheDocument();
+    // ui-setup-1's manualSteps disclosure also mentions "wardyn setup vault" in
+    // prose, so scope the command assertion to the <code> element it's the
+    // literal command of.
+    expect(screen.queryByText(/wardyn setup vault/, { selector: "code" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /show setup command/i }));
-    expect(screen.getByText(/wardyn setup vault/)).toBeInTheDocument();
+    expect(screen.getByText(/wardyn setup vault/, { selector: "code" })).toBeInTheDocument();
     // Revealing the todo card's command never disturbs the barrier selection.
     expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();

@@ -39,7 +39,7 @@ import { PageHeader } from "../../wardyn/page-header";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
-import { deleteWireRow, setDefaultFor } from "./actions";
+import { deleteWireRow, setDefaultFor, toggleDisabled } from "./actions";
 import { AddIntegrationDialog } from "./add-integration-dialog";
 
 type Section = "model" | "scm" | "other";
@@ -140,6 +140,14 @@ export function IntegrationsScreen({
       toast.error("Couldn't update the default", { description: getErrorMessage(e) });
     }
   };
+  const setDisabled = async (row: GenericIntegrationRow, disabled: boolean) => {
+    try {
+      await toggleDisabled(row.wire, disabled);
+      load();
+    } catch (e) {
+      toast.error("Couldn't update the integration", { description: getErrorMessage(e) });
+    }
+  };
 
   return (
     <div className={wrapperClass}>
@@ -214,6 +222,7 @@ export function IntegrationsScreen({
                 onTest={test}
                 onDelete={setToDelete}
                 onSetDefault={setDefault}
+                onSetDisabled={setDisabled}
               />
             );
           })
@@ -262,6 +271,7 @@ function SectionBlock({
   onTest,
   onDelete,
   onSetDefault,
+  onSetDisabled,
 }: {
   section: Section;
   rows: GenericIntegrationRow[];
@@ -271,6 +281,7 @@ function SectionBlock({
   onTest: (row: GenericIntegrationRow) => void;
   onDelete: (row: GenericIntegrationRow) => void;
   onSetDefault: (row: GenericIntegrationRow, mark: "agent_runs" | "wardyn_features", on: boolean) => void;
+  onSetDisabled: (row: GenericIntegrationRow, disabled: boolean) => void;
 }) {
   const Icon = SECTION_ICON[section];
   return (
@@ -282,7 +293,7 @@ function SectionBlock({
       </div>
       {rows.length === 0 ? (
         <p className="pl-6 text-[0.8125rem] leading-snug text-muted-foreground">
-          {section === "model" ? T.EMPTY_AI : section === "scm" ? T.EMPTY_SCM : "None."}
+          {section === "model" ? T.EMPTY_AI : section === "scm" ? T.EMPTY_SCM : T.EMPTY_OTHER}
         </p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -298,6 +309,7 @@ function SectionBlock({
               onTest={onTest}
               onDelete={onDelete}
               onSetDefault={onSetDefault}
+              onSetDisabled={onSetDisabled}
             />
           ))}
         </div>
@@ -316,6 +328,7 @@ function Row({
   onTest,
   onDelete,
   onSetDefault,
+  onSetDisabled,
 }: {
   row: GenericIntegrationRow;
   first: boolean;
@@ -326,6 +339,7 @@ function Row({
   onTest: (row: GenericIntegrationRow) => void;
   onDelete: (row: GenericIntegrationRow) => void;
   onSetDefault: (row: GenericIntegrationRow, mark: "agent_runs" | "wardyn_features", on: boolean) => void;
+  onSetDisabled: (row: GenericIntegrationRow, disabled: boolean) => void;
 }) {
   const stored = row.wire.source === "stored";
   const probe = probeChip(row.wire.probe_status);
@@ -348,10 +362,11 @@ function Row({
       </div>
       <div className="text-right">
         {stored ? (
-          <span className="text-[0.6875rem] text-muted-foreground">stored</span>
+          <Chip tone="neutral" className="text-[0.6875rem]">stored</Chip>
         ) : (
-          <Button size="sm" variant="outline" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={() => onAdopt(row)}>
+          <Button size="sm" variant="outline" disabled={!operator} onClick={() => onAdopt(row)}>
             Adopt to edit
+            {!operator && <OperatorOnlyHint />}
           </Button>
         )}
       </div>
@@ -380,6 +395,12 @@ function Row({
                   {!operator && <OperatorOnlyHint />}
                 </DropdownMenuItem>
               </>
+            )}
+            {stored && (
+              <DropdownMenuItem disabled={!operator} onClick={() => onSetDisabled(row, !row.wire.disabled)}>
+                {row.wire.disabled ? "Enable integration" : "Disable integration"}
+                {!operator && <OperatorOnlyHint />}
+              </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-danger focus:text-danger" disabled={!operator} onClick={() => onDelete(row)}>

@@ -228,6 +228,9 @@ func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 	s.updated = ws
 	return ws, nil
 }
+func (s *workspaceStoreFake) DeleteWorkspace(context.Context, uuid.UUID) error {
+	return nil
+}
 
 // TestUpdateWorkspace_ContentChangeClearsEveryReviewedField pins the reset a new
 // field is easy to forget (this is exactly how the verified_* stamp survived it):
@@ -267,6 +270,64 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	if got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
 		got.Requirements != nil || got.RecordResults != nil {
 		t.Errorf("source change must clear every field reviewed against the old source; got %+v", got)
+	}
+}
+
+// TestUpdateWorkspace_SourceChangeReclaimsSupersededImage is the
+// bug-workspace-1 regression: handleUpdateWorkspace resets ws.ImageRef to ""
+// on a content/image change but never reclaimed the docker tag it had just
+// pointed at — every rescan/edit leaked a full docker image forever. The
+// stale ref must be reclaimed via the wired Runner's ImageRemover capability
+// before the row is written back with an empty ImageRef.
+func TestUpdateWorkspace_SourceChangeReclaimsSupersededImage(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &workspaceStoreFake{ws: types.Workspace{
+		ID: id, Name: "w",
+		Sources:  []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/old"}},
+		Status:   types.WorkspaceScanned,
+		ImageRef: "wardyn/ws:abc", BuiltProfileHash: "abc",
+	}}
+	cfg := baseTestConfig(h, fake)
+	rr := &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	srv := New(cfg)
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String(), adminToken,
+		`{"name":"w","kind":"local_dir","source":"/home/u/new"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	rr.mu.Lock()
+	removed := append([]string(nil), rr.removed...)
+	rr.mu.Unlock()
+	if len(removed) != 1 || removed[0] != "wardyn/ws:abc" {
+		t.Errorf("ImageRemove calls = %v, want exactly [wardyn/ws:abc]", removed)
+	}
+}
+
+// TestDeleteWorkspace_ReclaimsBuiltImage is the bug-workspace-1 regression's
+// other half: deleting a workspace drops the ONLY store pointer to its built
+// image tag, so it must be reclaimed at delete time or it leaks forever —
+// nothing else will ever name it again.
+func TestDeleteWorkspace_ReclaimsBuiltImage(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &workspaceStoreFake{ws: types.Workspace{
+		ID: id, Name: "w", ImageRef: "wardyn/ws:deleteme", BuiltProfileHash: "abc",
+	}}
+	cfg := baseTestConfig(h, fake)
+	rr := &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	srv := New(cfg)
+	w := do(t, srv, http.MethodDelete, "/api/v1/workspaces/"+id.String(), adminToken, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("code = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	rr.mu.Lock()
+	removed := append([]string(nil), rr.removed...)
+	rr.mu.Unlock()
+	if len(removed) != 1 || removed[0] != "wardyn/ws:deleteme" {
+		t.Errorf("ImageRemove calls = %v, want exactly [wardyn/ws:deleteme]", removed)
 	}
 }
 

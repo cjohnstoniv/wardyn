@@ -11,6 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../lib/api/core";
 import type { BaseImageEntry, Workspace } from "../../lib/types";
+import { OperatorProvider } from "../wardyn/operator-context";
 
 const listBaseImagesMock = vi.fn();
 const createBaseImageMock = vi.fn();
@@ -106,5 +107,35 @@ describe("ImageCatalog", () => {
     expect(within(dialog).getByText(/derived recommended build/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: /detach everywhere & delete/i }));
     await waitFor(() => expect(deleteBaseImageMock).toHaveBeenLastCalledWith("i-1", true));
+  });
+
+  // ui-sourcesImages-3 regression (a11y): operator-disabled Delete gave no
+  // visible reason, unlike the sibling Workspaces tier on the same page.
+  it("shows an inline operator-only reason on disabled Delete for a non-operator", async () => {
+    listBaseImagesMock.mockResolvedValue([img()]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <OperatorProvider operator={false}>
+        <ImageCatalog workspaces={[]} />
+      </OperatorProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /actions for go-build-base/i }));
+    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+  });
+
+  // ui-sourcesImages-5 regression: the loading skeleton must match the real
+  // table's column count (5: Name, Kind, Image, Used by, actions) — the
+  // shared TableSkeleton defaults to 6, one extra shimmer bar collapsing to
+  // 5 real cells on load.
+  it("loading skeleton renders 5 columns, not TableSkeleton's default 6", () => {
+    listBaseImagesMock.mockReturnValue(new Promise(() => {})); // never resolves — stays "loading"
+    const { container } = render(<ImageCatalog workspaces={[]} />);
+
+    const rows = container.querySelectorAll(".divide-y > div");
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach((row) => {
+      expect(row.querySelectorAll(".animate-pulse")).toHaveLength(5);
+    });
   });
 });

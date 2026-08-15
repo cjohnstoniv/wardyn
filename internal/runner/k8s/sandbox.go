@@ -56,10 +56,22 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, errProxyImageUnset
 	}
 
-	var rollback []func()
+	// fail tears down everything CreateSandbox may have created so far via
+	// teardownByRunID — the SAME wait-before-netpol-drop guard StopSandbox/
+	// KillSandbox use (H3), not a hand-rolled fire-and-forget delete list.
+	// A bare LIFO list of `_ = ...Delete(...)` calls (the prior shape here)
+	// drops the NetworkPolicies the instant the proxy pod's Delete is
+	// ISSUED, not once it's actually gone — a pod mid-Terminating is
+	// unselected by any policy and so default-allow, reopening unconfined
+	// egress on a pod that already holds this run's live MITM CA key and
+	// RunToken (WARDYN_PROXY_CONFIG_JSON) for up to its full grace period.
+	// Zero grace period: a partially-created sandbox was never handed to a
+	// caller, so there is no in-flight work to let drain gracefully.
 	fail := func(err error) (runner.Sandbox, error) {
-		for i := len(rollback) - 1; i >= 0; i-- {
-			rollback[i]()
+		zero := int64(0)
+		if terr := d.teardownByRunID(context.Background(), spec.RunID, &zero); terr != nil {
+			slog.Error("wardynd: k8s substrate: CreateSandbox rollback failed to fully tear down a partially-created sandbox",
+				slog.String("run_id", spec.RunID.String()), slog.String("create_err", err.Error()), slog.String("teardown_err", terr.Error()))
 		}
 		return runner.Sandbox{}, err
 	}
@@ -82,9 +94,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: create proxy config secret: %w", err)
 	}
-	rollback = append(rollback, func() {
-		_ = d.clientset.CoreV1().Secrets(ns).Delete(context.Background(), secretName(spec.RunID), metav1.DeleteOptions{})
-	})
 
 	// (3) BOTH NetworkPolicies BEFORE any pod exists.
 	agentLabels := wardynLabels(spec.RunID, componentAgent, nil)
@@ -105,9 +114,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, agentNetPol, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create agent NetworkPolicy: %w", err))
 	}
-	rollback = append(rollback, func() {
-		_ = d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(context.Background(), agentNetPolName(spec.RunID), metav1.DeleteOptions{})
-	})
 
 	proxyNetPol := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyNetPolName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
@@ -139,9 +145,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, proxyNetPol, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy NetworkPolicy: %w", err))
 	}
-	rollback = append(rollback, func() {
-		_ = d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(context.Background(), proxyNetPolName(spec.RunID), metav1.DeleteOptions{})
-	})
 
 	// (4) Proxy pod, then poll for its CNI-assigned IP.
 	proxyPod := &corev1.Pod{
@@ -172,9 +175,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
-	rollback = append(rollback, func() {
-		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), proxyPodName(spec.RunID), metav1.DeleteOptions{})
-	})
 
 	proxyIP, err := d.waitPodIP(ctx, proxyPodName(spec.RunID))
 	if err != nil {
@@ -231,9 +231,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, agentPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
-	rollback = append(rollback, func() {
-		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), agentPodName(spec.RunID), metav1.DeleteOptions{})
-	})
 
 	// (6) Wait for the main container to actually be Running before handing
 	// the sandbox out. A k8s Pod Create is purely declarative (accepted, not

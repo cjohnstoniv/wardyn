@@ -40,7 +40,7 @@ export function PhaseRail({
   return (
     <>
       {/* Compact icon rail — visible lg only (56px column) */}
-      <div className="hidden lg:flex xl:hidden flex-col gap-2 items-center">
+      <nav aria-label="Setup steps" className="hidden lg:flex xl:hidden flex-col gap-2 items-center">
         {STEP_ORDER.map((stepId) => {
           const badge = badges[stepId];
           const isDone = done[stepId];
@@ -79,7 +79,7 @@ export function PhaseRail({
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {/* Full rail — stacked above content on mobile, hidden at lg (the icon-rail
           band), back at xl+. */}

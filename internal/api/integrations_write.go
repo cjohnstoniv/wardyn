@@ -287,6 +287,23 @@ func validateIntegrationWrite(in types.Integration) error {
 		if (region == "") != (model == "") {
 			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
 		}
+		// bug-integrations-2: resolveBedrockAuth (runs_bedrock.go) reads FOUR
+		// FIXED global secret names in a fixed precedence — bearer > captured
+		// SSO > ~/.aws mount > static keys — never this row's own
+		// secret_name/auth_lane (Bedrock creds are deliberately operator-
+		// global, per that file's own doc comment: "The workspace never
+		// carries credentials — those stay operator-global"). A row that
+		// names anything else here is decorative: the operator renames the
+		// credential field in Add/Edit Integration, the write succeeds, and
+		// the stored secret is silently orphaned — never read by anything.
+		// Reject at write time instead of accepting a field nothing honors.
+		for i, sec := range in.Secrets {
+			if !bedrockGlobalSecretNames[sec.SecretName] {
+				return fmt.Errorf("secrets[%d].secret_name: %q is not a recognized Bedrock credential secret — "+
+					"Bedrock credentials are operator-global, not per-integration; use one of %s "+
+					"(set via the Bedrock setup flow, not this row)", i, sec.SecretName, bedrockGlobalSecretNamesList)
+			}
+		}
 	}
 	return nil
 }
@@ -368,7 +385,11 @@ func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType strin
 		}
 	}
 	for _, in := range sc.Integrations {
-		if !types.AIProviderKind(in.Kind) || !slices.Contains(in.DefaultFor, "agent_runs") {
+		// bug-integrations-1: a Disabled row must never be handed back as
+		// "the site-wide default" — applyIntegrationRequirement's probe path
+		// already refuses one; this fold-time tier is the actual agent-run
+		// model-credential path and had no equivalent guard.
+		if !types.AIProviderKind(in.Kind) || in.Disabled || !slices.Contains(in.DefaultFor, "agent_runs") {
 			continue
 		}
 		if onlyType != "" && in.Kind != onlyType {

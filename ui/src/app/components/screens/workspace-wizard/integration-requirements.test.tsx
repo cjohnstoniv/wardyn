@@ -68,20 +68,30 @@ describe("IntegrationRequirements", () => {
     const { setLane } = renderSection([FEED]);
     expect(screen.getByText("Corp Artifactory")).toBeInTheDocument();
     expect(screen.getByText("artifactory.corp.internal")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /add to this workspace/i }));
+    await userEvent.click(screen.getByRole("button", { name: /use in this workspace/i }));
     expect(setLane).toHaveBeenCalledWith("integration:corp-artifactory", "required");
   });
 
   it("shows a named integration as carrying its hosts and credential", () => {
     renderSection([FEED], { "integration:corp-artifactory": required });
     expect(screen.getByText(/hosts and credential ride along/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /add to this workspace/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use in this workspace/i })).not.toBeInTheDocument();
+  });
+
+  // ui-wsWizard-3: the generic-integrations section used bare, hand-styled
+  // <button> elements for add/remove where step-integrations.tsx's NamedRow
+  // (the AI/SCM rows above it, same step) used the shared Button component
+  // with "Use in this workspace" / "Not used" — two button systems and two
+  // label pairs for the identical action, stacked in one card list.
+  it("the add/remove action is the shared Button component with the NamedRow label pair", () => {
+    renderSection([FEED]);
+    expect(screen.getByRole("button", { name: "Use in this workspace" })).toHaveAttribute("data-slot", "button");
   });
 
   // Removing a row is ABSENCE, not a third lane.
   it("removes a row rather than inventing an off state", async () => {
     const { clear } = renderSection([FEED], { "integration:corp-artifactory": required });
-    await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+    await userEvent.click(screen.getByRole("button", { name: /not used/i }));
     expect(clear).toHaveBeenCalledWith("integration:corp-artifactory");
   });
 
@@ -120,7 +130,7 @@ describe("IntegrationRequirements", () => {
   it("namedOnly hides the picker but keeps named rows honest", () => {
     renderSection([FEED], { "integration:corp-artifactory": required }, true);
     // No picker: an un-named stored feed offers nothing to add.
-    expect(screen.queryByRole("button", { name: /add to this workspace/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use in this workspace/i })).not.toBeInTheDocument();
     // The named row resolves against the stored set: real name, no warning.
     expect(screen.getByText("Corp Artifactory")).toBeInTheDocument();
     expect(screen.queryByText(/not configured/i)).not.toBeInTheDocument();

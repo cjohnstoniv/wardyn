@@ -68,3 +68,28 @@ describe("StepEgress — 'Added by grants:' row (D6/claim3)", () => {
     expect(screen.queryByTestId("egress-implied-hosts")).toBeNull();
   });
 });
+
+// ui-newrun-3: the preset-domain toggle chips signaled on/off state via
+// color classes only (no aria-pressed), unlike every sibling toggle-card on
+// this screen (e.g. step-confinement.tsx's OptionCard).
+describe("StepEgress — preset chip aria-pressed (ui-newrun-3)", () => {
+  it("reflects the toggled-on/off state via aria-pressed, not color alone", () => {
+    render(
+      <StepEgress
+        state={{ ...initialWizardState(), allowedDomains: ["api.anthropic.com"] }}
+        patch={() => {}}
+        workspaces={[] as Workspace[]}
+      />,
+    );
+    // api.anthropic.com is a PRESET_DOMAINS entry and is in allowedDomains above.
+    expect(screen.getByRole("button", { name: "api.anthropic.com" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // github.com is a PRESET_DOMAINS entry NOT in allowedDomains.
+    expect(screen.getByRole("button", { name: "github.com" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+});

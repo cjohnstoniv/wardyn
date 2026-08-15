@@ -90,6 +90,73 @@ func TestGitHubMinter_CredentialRotationPickedUpWithoutRestart(t *testing.T) {
 	}
 }
 
+// TestGitHubMinter_CredentialRotationInvalidatesInstallationCache is the
+// bug-broker-1 regression: rotating the App credentials must clear
+// installByOrg in the SAME step as the client() rebuild, not rely on the
+// next mint's CreateInstallationToken 401/404 to self-heal. On base
+// e2b3a91, the mint immediately after a rotation still uses the id cached
+// under the pre-rotation App and fails outright (a non-401/404 error from
+// the stale-under-the-new-App id, which isStaleInstallation does not treat
+// as a self-heal signal) instead of re-resolving the installation up front.
+func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.T) {
+	ctx := context.Background()
+	store := newMemSecrets()
+	_ = store.Put(ctx, "github-app-id", []byte("111"))
+	_ = store.Put(ctx, "github-app-key", genPEM(t))
+
+	var installLookups atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			n := installLookups.Add(1)
+			if n == 1 {
+				_, _ = w.Write([]byte(`{"id": 42}`)) // pre-rotation App's installation
+			} else {
+				_, _ = w.Write([]byte(`{"id": 77}`)) // post-rotation App's (different) installation
+			}
+		case strings.HasSuffix(r.URL.Path, "/installations/42/access_tokens"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"ghs_first","expires_at":"2099-01-01T00:00:00Z"}`))
+		case strings.HasSuffix(r.URL.Path, "/installations/77/access_tokens"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"ghs_after_rotation","expires_at":"2099-01-01T00:00:00Z"}`))
+		default:
+			// A non-401/404 status: isStaleInstallation must NOT classify this
+			// as a self-heal signal, so relying on the reactive drop alone
+			// would leave the second mint failing.
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"forbidden"}`))
+		}
+	}))
+	defer srv.Close()
+
+	gm, err := NewGitHubMinter(store, GitHubMinterConfig{AppIDSecret: "github-app-id", PrivateKeySecret: "github-app-key"})
+	if err != nil {
+		t.Fatalf("NewGitHubMinter: %v", err)
+	}
+	gm.(*githubMinter).baseURL = srv.URL + "/"
+
+	if _, _, err := gm.MintInstallationToken(ctx, []string{"acme/widgets"}, map[string]string{"contents": "read"}, time.Hour); err != nil {
+		t.Fatalf("first mint: %v", err)
+	}
+
+	// Rotate to a genuinely different App (different id + key): its
+	// installation id for the same owner differs (77, not the cached 42).
+	_ = store.Put(ctx, "github-app-id", []byte("222"))
+	_ = store.Put(ctx, "github-app-key", genPEM(t))
+
+	tok, _, err := gm.MintInstallationToken(ctx, []string{"acme/widgets"}, map[string]string{"contents": "read"}, time.Hour)
+	if err != nil {
+		t.Fatalf("mint right after rotation must succeed by re-resolving the installation, not reuse the stale cached id: %v", err)
+	}
+	if tok != "ghs_after_rotation" {
+		t.Fatalf("token = %q, want ghs_after_rotation", tok)
+	}
+	if n := installLookups.Load(); n != 2 {
+		t.Fatalf("expected a fresh installation lookup on the mint immediately after rotation, got %d total lookups", n)
+	}
+}
+
 // TestGitHubMinter_StaleInstallationIDDroppedOn401 is the second half of
 // W12-W12-B-5: a cached installation id can go stale even without a
 // credential rotation (the App was uninstalled and reinstalled on the org),

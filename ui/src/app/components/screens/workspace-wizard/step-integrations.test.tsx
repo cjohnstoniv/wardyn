@@ -113,3 +113,37 @@ describe("StepIntegrations", () => {
     );
   });
 });
+
+// ui-wsWizard-6: loading, a failed fetch, and a genuinely-empty account used
+// to all render the identical "Nothing connected yet?" copy — the operator
+// couldn't tell an in-flight request from a dead one from an empty account.
+describe("StepIntegrations — loading/error are distinct from the true-empty state (ui-wsWizard-6)", () => {
+  it("shows a loading state before the fetch resolves, not the empty-account copy", async () => {
+    let resolveList!: (v: { ai: never[]; scm: never[] }) => void;
+    listIntegrationsMock.mockReset().mockReturnValue(new Promise((res) => (resolveList = res)));
+    render(<Harness />);
+
+    expect(screen.getByTestId("integrations-loading")).toBeInTheDocument();
+    expect(screen.queryByText(/nothing connected yet/i)).not.toBeInTheDocument();
+
+    resolveList({ ai: [], scm: [] });
+    expect(await screen.findByText(/nothing connected yet/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("integrations-loading")).not.toBeInTheDocument();
+  });
+
+  it("shows a retryable error on a failed fetch, not the empty-account copy — and Retry recovers", async () => {
+    listIntegrationsMock.mockReset().mockRejectedValueOnce(new Error("network down"));
+    render(<Harness />);
+
+    expect(await screen.findByTestId("integrations-error")).toBeInTheDocument();
+    expect(screen.queryByText(/nothing connected yet/i)).not.toBeInTheDocument();
+
+    listIntegrationsMock.mockResolvedValueOnce({
+      ai: [{ id: "ai-anthropic", name: "Anthropic API key", typeLabel: "anthropic · api key" }],
+      scm: [],
+    });
+    await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(await screen.findByText("Anthropic API key")).toBeInTheDocument();
+    expect(screen.queryByTestId("integrations-error")).not.toBeInTheDocument();
+  });
+});

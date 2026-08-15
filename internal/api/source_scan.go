@@ -249,7 +249,28 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		return
 	}
 
+	// launched/scanned accumulate what already succeeded before a failing
+	// source aborts the fan-out (bug-workspace-2): the moment source i fails,
+	// every source 0..i-1 already scanned inline or already launched a
+	// governed run keeps that side effect regardless — dirs already read,
+	// runs already dispatched and billing/consuming egress. Without this,
+	// the failure audit named only the ONE failing source, with no record
+	// that N others actually succeeded first — a genuine gap for whoever
+	// later asks "did source X get scanned" and finds no success event for
+	// it, only the unrelated failure of source Y.
 	launched := []uuid.UUID{}
+	scanned := []uuid.UUID{}
+	partialAudit := func(failedSourceID uuid.UUID, detail string) {
+		data := map[string]any{"detail": detail, "failed_source_id": failedSourceID}
+		if len(scanned) > 0 {
+			data["scanned_source_ids"] = scanned
+		}
+		if len(launched) > 0 {
+			data["scan_run_ids"] = launched
+		}
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+			"workspace.scan", ws.ID.String(), "failure", mustJSON(data)))
+	}
 	for _, id := range sourceIDs {
 		src, found := sources[id]
 		if !found {
@@ -260,16 +281,17 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		switch src.Kind {
 		case types.SourceLocalDir:
 			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
-				s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-					"workspace.scan", ws.ID.String(), "failure", mustJSON(map[string]any{"detail": detail})))
+				partialAudit(id, detail)
 				writeError(w, http.StatusUnprocessableEntity, detail)
 				return
 			}
+			scanned = append(scanned, id)
 		case types.SourceRepo:
 			if src.Status == types.WorkspaceScanning {
 				continue // its own fence already has a run in flight
 			}
 			if s.cfg.Runner == nil {
+				partialAudit(id, "no runner configured to launch a governed scan run")
 				writeError(w, http.StatusServiceUnavailable, "no runner configured to launch a governed scan run")
 				return
 			}
@@ -278,8 +300,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				continue // raced another claim — that run covers it
 			}
 			if lerr != nil {
-				s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-					"workspace.scan", ws.ID.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
+				partialAudit(id, lerr.Error())
 				writeError(w, http.StatusInternalServerError, "launch scan run: "+lerr.Error())
 				return
 			}

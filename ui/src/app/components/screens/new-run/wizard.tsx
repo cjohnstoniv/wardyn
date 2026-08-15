@@ -31,6 +31,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
 import { StepIndicator } from "./step-shell";
 import { StepBasics } from "./step-basics";
 import { StepAccess } from "./step-access";
@@ -104,6 +114,17 @@ export function PermissionWizard({
   const [addWorkspaceOpen, setAddWorkspaceOpen] = React.useState(false);
   const [launching, setLaunching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // ui-newrun-1: the unsaved-work close guard's baseline. NOT captured once
+  // at mount — it's re-stamped at every point the open-effect below SEEDS
+  // `state` (the sync initial seed AND the async post-health-probe reseed),
+  // so it always reflects the state as OPENED (initialState verbatim, or a
+  // fresh default with initialWorkspaces/initialInteractive folded in) and
+  // never a stale pre-seed snapshot — an untouched Cancel/ESC/overlay on a
+  // pre-seeded wizard (e.g. the New-run dialog's workspace-first pick) must
+  // never spuriously prompt. Only a genuine post-seed edit (via patch())
+  // diverges it. null before the first open-effect run.
+  const openSnapshot = React.useRef<WizardState | null>(null);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = React.useState(false);
   // Review preflight (advisory, non-blocking): a DRY-RUN of launch's resolution +
   // gating so Review can show the setup checklist + the confinement class the run
   // will ACTUALLY run at, before the operator commits. null until it resolves.
@@ -209,12 +230,26 @@ export function PermissionWizard({
     mergedWs.current = new Set();
     if (initialState) {
       setState(initialState);
+      openSnapshot.current = initialState;
     } else if (initialWorkspaces?.length || initialInteractive !== undefined) {
-      setState((s) => ({
-        ...s,
-        ...(initialWorkspaces?.length ? { workspaces: initialWorkspaces } : {}),
-        ...(initialInteractive !== undefined ? { mode: initialInteractive ? "interactive" : "batch" } : {}),
-      }));
+      setState((s) => {
+        const next: WizardState = {
+          ...s,
+          ...(initialWorkspaces?.length ? { workspaces: initialWorkspaces } : {}),
+          ...(initialInteractive !== undefined ? { mode: initialInteractive ? "interactive" : "batch" } : {}),
+        };
+        openSnapshot.current = next;
+        return next;
+      });
+    } else {
+      // No prefill of any kind — the snapshot is just whatever `state`
+      // already is (a fresh mount's initialWizardState, or carried over from
+      // a prior open/close cycle). A no-op updater lets us read the latest
+      // value without adding `state` to this effect's deps.
+      setState((s) => {
+        openSnapshot.current = s;
+        return s;
+      });
     }
     setAvailableClasses(null);
     let alive = true;
@@ -241,11 +276,18 @@ export function PermissionWizard({
         setAvailableClasses(classes);
         if (initialState) return; // keep the prefilled proposal verbatim
         const fresh = initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[]));
-        setState({
+        const next: WizardState = {
           ...fresh,
           ...(initialWorkspaces?.length ? { workspaces: initialWorkspaces } : {}),
           ...(initialInteractive !== undefined ? { mode: initialInteractive ? "interactive" : "batch" } : {}),
-        });
+        };
+        setState(next);
+        // Re-stamps the baseline: this reseed lands ASYNCHRONOUSLY (after the
+        // health probe), so the sync seed above is not the final "as opened"
+        // state for a fresh entry — without this, the close guard would read
+        // the probe's own resolution as an operator edit and prompt on a
+        // still-untouched wizard.
+        openSnapshot.current = next;
       });
     };
     probe();
@@ -414,6 +456,29 @@ export function PermissionWizard({
     }
   };
 
+  // ui-newrun-1: the ONE chokepoint every close path funnels through — Cancel's
+  // onClick below, AND (passed as the Dialog's own onOpenChange) Radix's
+  // unmodified default handling of ESC, an overlay click, and the header X,
+  // which already call this same prop with `false` with no onEscapeKeyDown/
+  // onInteractOutside override needed. Prompts only when `state` has
+  // genuinely diverged from openSnapshot (stamped alongside `state` itself,
+  // above) — never on a merely-navigated-between-steps or untouched-since-
+  // open wizard.
+  const requestClose = React.useCallback(
+    (o: boolean) => {
+      if (o || launching || !openSnapshot.current) {
+        onOpenChange(o);
+        return;
+      }
+      if (JSON.stringify(state) !== JSON.stringify(openSnapshot.current)) {
+        setConfirmDiscardOpen(true);
+        return;
+      }
+      onOpenChange(false);
+    },
+    [onOpenChange, launching, state],
+  );
+
   // Shared add-secret recovery (run-warnings.ts): a manual "Add secret" just
   // reloads the list + refreshes the checklist — it must NEVER assume WHICH
   // WizardState field the saved name belongs to (UI-RUN-1: this used to
@@ -436,7 +501,7 @@ export function PermissionWizard({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={requestClose}>
         <DialogContent className="flex max-h-[88vh] flex-col gap-0 sm:max-w-2xl lg:max-w-5xl xl:max-w-6xl">
           <DialogHeader className="border-b border-border pb-4">
             <DialogTitle>New run</DialogTitle>
@@ -583,7 +648,7 @@ export function PermissionWizard({
           )}
 
           <div className="flex items-center justify-between border-t border-border pt-4">
-            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={launching}>
+            <Button variant="ghost" onClick={() => requestClose(false)} disabled={launching}>
               Cancel
             </Button>
             <div className="flex items-center gap-2">
@@ -616,6 +681,33 @@ export function PermissionWizard({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ui-newrun-1: the discard confirm requestClose gates behind. Keeping
+          it OUTSIDE <Dialog> mirrors this file's own AddSecretDialog/
+          WorkspaceWizard siblings below, not a nested-inside-DialogContent
+          placement. */}
+      <AlertDialog open={confirmDiscardOpen} onOpenChange={(o) => !o && setConfirmDiscardOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard this run?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You've configured steps that haven't been launched yet. Closing now discards them —
+              nothing here is saved until you launch.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmDiscardOpen(false);
+                onOpenChange(false);
+              }}
+            >
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AddSecretDialog {...secretFix.dialogProps} existingNames={secrets} />
 

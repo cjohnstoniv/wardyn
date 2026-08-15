@@ -112,6 +112,13 @@ func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("broker: build github client: %w", err)
 	}
+	if m.appClient != nil {
+		// A credential rotation invalidates the per-owner installation-id
+		// cache in the same step as the client rebuild — otherwise a stale
+		// id (from the App now-superseded) only self-heals reactively, after
+		// CreateInstallationToken already 401s/404s against it.
+		clear(m.installByOrg)
+	}
 	m.appClient = c
 	m.credHash = hash
 	return c, nil
