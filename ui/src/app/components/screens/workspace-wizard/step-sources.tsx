@@ -202,7 +202,11 @@ function SourceRowCard({
                 file — the whole point of onboarding it. Granting it is
                 real: changes land on the host. This is the only UI that can
                 set it (the legacy AddWorkspaceDialog had the equivalent
-                checkbox before it was retired). */}
+                checkbox before it was retired). onUpdate (wizard.tsx's
+                updateSource, W8-S1-1) also promotes/clears this path's
+                write:PATH REQUIREMENT in lockstep — the requirement, not
+                this field alone, is what applyWriteNarrowing actually
+                resolves at run time, so the two must never disagree. */}
             <label className="flex items-start gap-2.5 rounded-lg border border-border p-3 text-xs">
               <input
                 type="checkbox"

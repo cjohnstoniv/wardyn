@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, screen } from "@testing-library/react";
+import { render, act, screen, waitFor } from "@testing-library/react";
 
 // HIGH fix (terminal reconnect): on an UNEXPECTED WebSocket drop the component
 // must re-attach to the persistent tmux session with a bounded number of
@@ -55,6 +55,10 @@ vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
 vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
 vi.mock("../lib/api/core", () => ({ getToken: () => null }));
+// Ticket mint (owner-or-admin lane): unused by the operator/cookie-lane tests
+// below (tokenOnlyMode=false, operator=true never takes this path), stubbed
+// for the owner test that does.
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn() } }));
 
 // --- Fake WebSocket --------------------------------------------------------
 class FakeWebSocket {
@@ -90,6 +94,7 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { OperatorProvider } from "./wardyn/operator-context";
+import { runs } from "../lib/api/runs";
 
 describe("AttachTerminal reconnect", () => {
   beforeEach(() => {
@@ -232,5 +237,38 @@ describe("AttachTerminal — role-aware attach", () => {
   it("operator (today's default, no provider needed): connects normally", () => {
     render(<AttachTerminal runId="run_1" />);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // Regression (W17-S1-1): a member who owns the run must be able to attach —
+  // the server's ticket lane is owner-or-admin (getRunAuthorized), not
+  // operator-only, so the UI's gate and connection lane must match it.
+  it("member who owns this run: mints a ticket (owner-or-admin lane) and opens the WS", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    attachTicket.mockResolvedValueOnce("tic_abc");
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="alice@example.com" />
+      </OperatorProvider>,
+    );
+    // Ticket mint is async (a real POST in prod); wait for it to land.
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(attachTicket).toHaveBeenCalledWith("run_1");
+    expect(FakeWebSocket.instances[0].url).toContain("ticket=tic_abc");
+  });
+
+  // A non-owning member (createdBy set, but not to this principal) is still
+  // refused — createdBy alone must not blanket-bypass the gate.
+  it("member who does NOT own this run: still refused, no ticket minted", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(/attaching to a live sandbox requires the operator role/i)).toBeInTheDocument();
+    expect(attachTicket).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });

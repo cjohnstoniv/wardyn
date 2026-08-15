@@ -48,6 +48,8 @@ const validSSOBody = `{
 	"client_secret": "client-secret",
 	"start_url": "https://my-sso.awsapps.com/start",
 	"region": "us-west-2",
+	"account_id": "123456789012",
+	"role_name": "WardynBedrockRole",
 	"expires_at": "2100-01-01T00:00:00Z"
 }`
 
@@ -105,6 +107,33 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	}
 	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
 		t.Error("an invalid blob must not be stored")
+	}
+}
+
+// TestUploadSSOToken_HalfResolvedCaptureRejected is the W5-S1-4 regression:
+// wardyn-aws-sso's account/role resolution (`aws sso list-accounts` /
+// list-account-roles) is best-effort and can come up empty (no accounts, a
+// timeout, a malformed response) while every OTHER field is well-formed. Before
+// the fix, awsSSOBlob.valid() didn't require account_id/role_name, so this
+// half-resolved capture was accepted and stored — and resolveBedrockAuth
+// selects a stored SSO credential ahead of the host-mode ~/.aws mount and
+// static-key lanes, so a capture that can never satisfy GetRoleCredentials
+// would silently pre-empt lanes that might have actually worked.
+func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
+	srv, sec, tok, runID := newSSOUploadSrv(t)
+	halfResolved := `{
+		"access_token": "aws-sso-access-token-value",
+		"start_url": "https://my-sso.awsapps.com/start",
+		"region": "us-west-2",
+		"expires_at": "2100-01-01T00:00:00Z"
+	}`
+
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, halfResolved)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("half-resolved capture (no account_id/role_name): code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+		t.Error("a half-resolved capture must not be stored — it would pre-empt a working Bedrock lane")
 	}
 }
 

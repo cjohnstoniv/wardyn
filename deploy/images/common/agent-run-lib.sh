@@ -255,8 +255,11 @@ configure_git_broker_insteadof() {
     [[ -n "$records" ]] || return 0
     local have_ssh=0
     [[ -n "${WARDYN_SSH_GRANTS:-}" && "${WARDYN_SSH_GRANTS}" != "{}" ]] && have_ssh=1
-    local _u _d slug broker
-    while IFS=$'\t' read -r _u _d slug; do
+    local _u _d slug _ref broker
+    # 4th field (ref, W9-S1-3) is read but unused here — must still be named or
+    # a record with one collapses onto `slug` (read's overflow-into-last-var
+    # behavior), corrupting the slug this function actually cares about.
+    while IFS=$'\t' read -r _u _d slug _ref; do
         slug="${slug%.git}"
         # A full https github URL names the SAME repo as its bare slug, and the
         # control plane derives the broker key from either (gitBrokerKeyFromSlug),
@@ -309,23 +312,46 @@ name_run_branch() {
 
 # Clone the run's repo(s) into the workspace, if requested and not already present.
 # WARDYN_REPOS (multi) supersedes the legacy single WARDYN_REPO_URL: a
-# newline-delimited list of TAB-separated <url>\t<dest>\t<slug> records built by the
-# control plane. Every field is control-plane-sanitised (no whitespace/control
-# chars, repoFieldSafe) and every dest is a validated in-container path — ALWAYS
-# quote, never interpolate into a shell word. A clone is attempted only when the
-# dest has no existing .git, so a pre-populated / bind-mounted repo is never
-# clobbered. Failure is a governance signal, not fatal: log and continue.
-clone_one() {  # $1=url  $2=dest  $3=slug
-    local url="$1" dest="$2" slug="$3"
+# newline-delimited list of TAB-separated <url>\t<dest>\t<slug>\t<ref> records
+# built by the control plane. Every field is control-plane-sanitised (no
+# whitespace/control chars, repoFieldSafe) and every dest is a validated
+# in-container path — ALWAYS quote, never interpolate into a shell word. A
+# clone is attempted only when the dest has no existing .git, so a
+# pre-populated / bind-mounted repo is never clobbered. Failure is a
+# governance signal, not fatal: log and continue.
+clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" = the remote's default branch)
+    local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
     [[ -e "${dest}/.git" ]] && return 0   # never clobber a populated/bind-mounted repo
     mkdir -p "$dest"
-    echo "agent-run: cloning ${slug:-$url} into ${dest} (shallow, via wardyn-proxy)" >&2
-    if git clone --depth 1 -- "$url" "$dest"; then
-        echo "agent-run: clone OK (${dest})" >&2
+    echo "agent-run: cloning ${slug:-$url}${ref:+ @ ${ref}} into ${dest} (shallow, via wardyn-proxy)" >&2
+    if [[ -z "$ref" ]]; then
+        if git clone --depth 1 -- "$url" "$dest"; then
+            echo "agent-run: clone OK (${dest})" >&2
+            name_run_branch "$dest"
+        else
+            echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+        fi
+        return 0
+    fi
+    # A branch/tag clones shallow directly. `--branch` cannot take an arbitrary
+    # commit sha, so that case (and any other failure of the direct attempt)
+    # falls back to a shallow fetch of the exact ref + checkout FETCH_HEAD —
+    # GitHub and the git-broker both support fetching by full sha.
+    if git clone --depth 1 --branch "$ref" -- "$url" "$dest" 2>/dev/null; then
+        echo "agent-run: clone OK (${dest} @ ${ref})" >&2
+        name_run_branch "$dest"
+        return 0
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    if git clone --no-checkout --depth 1 -- "$url" "$dest" 2>/dev/null \
+        && git -C "$dest" fetch --depth 1 origin "$ref" \
+        && git -C "$dest" checkout FETCH_HEAD; then
+        echo "agent-run: clone OK (${dest} @ ${ref}, via fetch)" >&2
         name_run_branch "$dest"
     else
-        echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+        echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
     fi
 }
 
@@ -337,9 +363,9 @@ clone_one() {  # $1=url  $2=dest  $3=slug
 # `workdir` itself, only uses it to compute clone destinations.
 dispatch_repo_clones() {
     if [[ -n "${WARDYN_REPOS:-}" ]]; then
-        while IFS=$'\t' read -r r_url r_dest r_slug; do
+        while IFS=$'\t' read -r r_url r_dest r_slug r_ref; do
             [[ -n "$r_url" ]] || continue
-            clone_one "$r_url" "$r_dest" "$r_slug"
+            clone_one "$r_url" "$r_dest" "$r_slug" "$r_ref"
         done <<< "$WARDYN_REPOS"
     elif [[ -n "${WARDYN_REPO_URL:-}" ]]; then
         # Legacy single-repo fallback (one release; superseded by WARDYN_REPOS).

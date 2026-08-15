@@ -716,8 +716,10 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 **different at-rest posture**:
 
 - **Admin token (the single-operator local path, shipped today).** `wardynd`
-  prints a full-admin bearer on startup; you paste it into the sign-in screen and
-  it is attached as an `Authorization: Bearer` header on every `/api/v1` request.
+  never generates or prints this token — it is the value you (or the compose
+  demo, `demo-admin-token`) started it with, `WARDYN_ADMIN_TOKEN`. You paste it
+  into the sign-in screen and it is attached as an `Authorization: Bearer`
+  header on every `/api/v1` request.
   This token is a full-admin credential held in browser storage, so it carries
   **XSS-equivalent risk**: any script that runs in the console origin can read it.
   By default it is kept in **`sessionStorage`** and is gone when the tab/browser

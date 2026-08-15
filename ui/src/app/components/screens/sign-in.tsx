@@ -144,7 +144,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
               <Input
                 id="token"
                 type="password"
-                placeholder="wardyn_admin_••••••••••••••••"
+                placeholder="demo-admin-token"
                 value={token}
                 onChange={(e) => {
                   setTokenValue(e.target.value);
@@ -155,7 +155,8 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Paste the admin token wardynd printed on startup.
+              Paste the token this control plane was started with (WARDYN_ADMIN_TOKEN; the
+              compose demo uses demo-admin-token).
             </p>
             <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox

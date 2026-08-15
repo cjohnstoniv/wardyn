@@ -103,10 +103,27 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
 
+	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
 		}
+		// W8-S1-3 (mirrors validatePolicyWorkspaces' own unique-target
+		// invariant, policy.go): an EXPLICIT target shared by two sources
+		// resolves to the same in-sandbox mount/clone path, which
+		// validatePolicyWorkspaces then 422s on every subsequent run — an
+		// onboarding-time 400 naming both sources catches it before it's
+		// even possible to run. An EMPTY target (no explicit choice — the
+		// caller relies on the per-attach default) is deliberately not
+		// checked here, same as validatePolicyWorkspaces: the default dest
+		// isn't derived until attach/clone time (buildRepoRecords).
+		if src.Target == "" {
+			continue
+		}
+		if j, dup := seenTargets[src.Target]; dup {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+		}
+		seenTargets[src.Target] = i
 	}
 	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
 		return workspaceRequest{}, msg

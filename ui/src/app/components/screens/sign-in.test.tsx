@@ -44,3 +44,32 @@ describe("SignIn — SSO entry point", () => {
     expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
   });
 });
+
+// W31-S1-2 regression: wardynd never prints an admin token on startup — it
+// only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
+// boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
+// only instruction AND part of the threat model's own token-provenance claim
+// (THREAT-MODEL.md's "Console auth token storage" section, fixed alongside
+// this file); a false instruction here is a bad-first-run trap that sends an
+// operator hunting server logs for output that will never appear.
+describe("SignIn — admin token instructions are honest about provenance", () => {
+  it("tells the operator to paste the token the control plane was STARTED WITH, not one wardynd printed", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(
+      await screen.findByText(/paste the token this control plane was started with/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
+    expect(screen.queryByText(/wardynd printed/i)).not.toBeInTheDocument();
+  });
+
+  it("the token input's placeholder carries no fake fixed-prefix format", () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    const input = screen.getByLabelText(/admin token/i);
+    // Real admin tokens are whatever the operator set WARDYN_ADMIN_TOKEN to
+    // (e.g. openssl rand -hex 32) — there is no "wardyn_admin_" value prefix;
+    // that string is only the UNRELATED localStorage key name (core.ts).
+    expect(input).toHaveAttribute("placeholder", "demo-admin-token");
+  });
+});

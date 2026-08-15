@@ -652,7 +652,7 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 			if run.Repo == "" {
 				run.Repo = src.Source
 			}
-			policy.WorkspaceRepos = append(policy.WorkspaceRepos, types.WorkspaceRepo{Repo: src.Source, Target: src.Target})
+			policy.WorkspaceRepos = append(policy.WorkspaceRepos, types.WorkspaceRepo{Repo: src.Source, Target: src.Target, Ref: src.Ref})
 			if url := repoCloneURL(src.Source); url != "" {
 				cloneURLs = append(cloneURLs, url)
 			}

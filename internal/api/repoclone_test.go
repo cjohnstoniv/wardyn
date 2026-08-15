@@ -312,20 +312,21 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		// bare slug: untouched, original casing preserved (git's insteadOf match is
-		// case-SENSITIVE even though github itself is not).
-		{"octocat/Hello-World", "https://github.com/octocat/Hello-World.git\t/home/agent/work/Hello-World\toctocat/Hello-World"},
+		// case-SENSITIVE even though github itself is not). Trailing \t: the 4th
+		// (ref) field, empty for the legacy no-ref single-repo path (W9-S1-3).
+		{"octocat/Hello-World", "https://github.com/octocat/Hello-World.git\t/home/agent/work/Hello-World\toctocat/Hello-World\t"},
 		// the two spellings the review found mismatching gitBrokerKeyFromSlug:
-		{"https://github.com/octocat/hello-world/", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
-		{"http://github.com/octocat/hello-world", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		{"https://github.com/octocat/hello-world/", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world\t"},
+		{"http://github.com/octocat/hello-world", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world\t"},
 		// already-canonical URL forms collapse to the same record.
-		{"https://github.com/octocat/hello-world.git", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		{"https://github.com/octocat/hello-world.git", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world\t"},
 		// A MIXED-CASE full URL lowercases, dest included (~/work/hello-world, not
 		// ~/work/Hello-World). Deliberate — see the side-effect note in
 		// buildRepoRecords: it is what lets the dest dedup below see two spellings
 		// of one repo as one repo. Bare slugs, the common form, keep their case.
-		{"https://github.com/Octocat/Hello-World", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		{"https://github.com/Octocat/Hello-World", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world\t"},
 		// NOT github: left completely alone (its own lane, its own host allowlist).
-		{"https://gitlab.com/o/r.git", "https://gitlab.com/o/r.git\t/home/agent/work/r\thttps://gitlab.com/o/r.git"},
+		{"https://gitlab.com/o/r.git", "https://gitlab.com/o/r.git\t/home/agent/work/r\thttps://gitlab.com/o/r.git\t"},
 	} {
 		if got := buildRepoRecords(tc.in, nil); got != tc.want {
 			t.Errorf("buildRepoRecords(%q) =\n  %q\nwant\n  %q", tc.in, got, tc.want)
@@ -338,5 +339,31 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	both := buildRepoRecords("octocat/hello-world", []types.WorkspaceRepo{{Repo: "https://github.com/octocat/hello-world/"}})
 	if strings.Contains(both, "\n") {
 		t.Errorf("buildRepoRecords: the same repo in two spellings produced two records:\n%s", both)
+	}
+}
+
+// TestBuildRepoRecordsCarriesRef is the W9-S1-3 regression: a WorkspaceRepo's
+// Ref must ride as the record's 4th tab-separated field — clone_one
+// (agent-run-lib.sh) is the only remaining consumer that can actually check it
+// out, but it can't if buildRepoRecords never emits it in the first place.
+func TestBuildRepoRecordsCarriesRef(t *testing.T) {
+	got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "release-2.0"}})
+	want := "https://github.com/acme/payments.git\t/home/agent/work/payments\tacme/payments\trelease-2.0"
+	if got != want {
+		t.Errorf("buildRepoRecords with Ref =\n  %q\nwant\n  %q", got, want)
+	}
+
+	// No ref declared: the field is still present (empty) — the format is
+	// fixed-arity so agent-run-lib.sh's `read` splits it the same way either way.
+	got = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments"}})
+	if strings.Count(got, "\t") != 3 {
+		t.Errorf("buildRepoRecords with no Ref = %q, want exactly 3 tabs (4 fields, ref empty)", got)
+	}
+
+	// A ref containing a control character/whitespace must be rejected the same
+	// way an unsafe slug or dest already is — never smuggled past the tab framing.
+	got = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "evil\tref"}})
+	if got != "" {
+		t.Errorf("buildRepoRecords with an unsafe ref = %q, want \"\" (record dropped)", got)
 	}
 }

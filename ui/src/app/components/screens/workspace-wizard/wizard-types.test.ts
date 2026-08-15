@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TARGET,
+  applyWritableRequirement,
   baseImageStateFromWorkspace,
   canDriveClaudeCode,
   credFlags,
@@ -103,6 +104,42 @@ describe("defaultTargetFor — auto-derived distinct sub-paths", () => {
     const a = { ...newSourceRow("local_dir"), path: "/x", target: "/custom" };
     const b = newSourceRow("repo");
     expect(defaultTargetFor(a, [a, b])).toBe("/custom");
+  });
+
+  // W8-S1-3 regression: two repos sharing a bare basename ("acme/api" and
+  // "other-org/api") used to both derive DEFAULT_TARGET + "/api" — a
+  // composition the server's unique-target invariant then 422s on every run.
+  // Both must now be org-qualified so the default composition is valid.
+  it("org-qualifies both rows when two repos share the same bare basename", () => {
+    const a = { ...newSourceRow("repo"), source: "acme/api" };
+    const b = { ...newSourceRow("repo"), source: "other-org/api" };
+    const targetA = defaultTargetFor(a, [a, b]);
+    const targetB = defaultTargetFor(b, [a, b]);
+    expect(targetA).toBe(`${DEFAULT_TARGET}/acme-api`);
+    expect(targetB).toBe(`${DEFAULT_TARGET}/other-org-api`);
+    expect(targetA).not.toBe(targetB);
+  });
+
+  it("a repo and a local_dir sharing a leaf name are also qualified apart", () => {
+    const a = { ...newSourceRow("local_dir"), path: "/home/me/acme/api" };
+    const b = { ...newSourceRow("repo"), source: "other-org/api" };
+    expect(defaultTargetFor(a, [a, b])).toBe(`${DEFAULT_TARGET}/acme-api`);
+    expect(defaultTargetFor(b, [a, b])).toBe(`${DEFAULT_TARGET}/other-org-api`);
+  });
+
+  it("does not qualify a row whose basename is unique among the composition", () => {
+    const a = { ...newSourceRow("repo"), source: "acme/api" };
+    const b = { ...newSourceRow("repo"), source: "acme/payments" };
+    expect(defaultTargetFor(a, [a, b])).toBe(`${DEFAULT_TARGET}/api`);
+    expect(defaultTargetFor(b, [a, b])).toBe(`${DEFAULT_TARGET}/payments`);
+  });
+
+  it("an operator-typed target on one colliding row doesn't drag the other into qualification", () => {
+    const a = { ...newSourceRow("repo"), source: "acme/api", target: "/custom" };
+    const b = { ...newSourceRow("repo"), source: "other-org/api" };
+    // Only `b` is still auto-derived; only `b` exists in the "untyped" pool, so
+    // it never collides with anything and keeps the bare name.
+    expect(defaultTargetFor(b, [a, b])).toBe(`${DEFAULT_TARGET}/api`);
   });
 });
 
@@ -305,6 +342,40 @@ describe("operatorOverlay", () => {
   it("is {} for an all-scan_seeded map, and {} for an already-empty one", () => {
     expect(operatorOverlay({ "secret:x": { level: "required", provenance: "scan_seeded" } })).toEqual({});
     expect(operatorOverlay({})).toEqual({});
+  });
+});
+
+// W8-S1-1 regression: the Sources-step "Let agents write" checkbox must
+// promote write:<path> to required+operator_set, or the scan-seeded optional
+// row (deriveInitialRequirements) silently forces the mount back to
+// read-only on every real run (applyWriteNarrowing, runs_create.go) —
+// overwriting the checkbox's own intent.
+describe("applyWritableRequirement — Sources-step write checkbox <-> the write:<path> contract", () => {
+  it("ticking Writable on a local_dir row promotes write:<path> to required+operator_set", () => {
+    const row = { ...newSourceRow("local_dir"), path: "/home/me/payments" };
+    const next = applyWritableRequirement({}, [row], row.id, true);
+    expect(next[requirementKey("write", "/home/me/payments")]).toEqual({
+      level: "required",
+      provenance: "operator_set",
+    });
+  });
+
+  it("unticking clears a prior operator_set override, falling back to the scan-seeded default", () => {
+    const row = { ...newSourceRow("local_dir"), path: "/home/me/payments" };
+    const key = requirementKey("write", "/home/me/payments");
+    const seeded: WorkspaceRequirementsMap = {
+      [key]: { level: "required", provenance: "operator_set" },
+    };
+    expect(applyWritableRequirement(seeded, [row], row.id, false)).toEqual({});
+  });
+
+  it("is a no-op for a repo row (no path to key a write requirement on)", () => {
+    const row = { ...newSourceRow("repo"), source: "acme/payments" };
+    expect(applyWritableRequirement({}, [row], row.id, true)).toEqual({});
+  });
+
+  it("is a no-op for an unknown source id", () => {
+    expect(applyWritableRequirement({}, [], "no-such-id", true)).toEqual({});
   });
 });
 

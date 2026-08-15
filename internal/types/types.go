@@ -491,9 +491,17 @@ func (m WorkspaceMount) ReadOnlyOrDefault() bool {
 // (repoFieldSafe + repoCloneURL, runs.go). Target is an optional in-container
 // clone destination; an empty Target defers to the ~/work/<name> convention a
 // later wave wires up (plan B4, WARDYN_REPOS) — it is NOT resolved here.
+// Ref is an optional git ref (branch/tag/sha) — same field WorkspaceSource
+// carries as part of a repo source's identity (workspace.go); an empty Ref
+// clones the remote's default branch, unchanged from before this field
+// existed. Carried as a 4th tab-separated field in WARDYN_REPOS
+// (buildRepoRecords, runs_scm.go) for agent-run-lib.sh's clone_one to check
+// out (W9-S1-3 — previously advertised on the source's identity but never
+// actually honored by any clone).
 type WorkspaceRepo struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target,omitempty"`
+	Ref    string `json:"ref,omitempty"`
 }
 
 // ResourceLimits caps a sandbox's resource consumption. A ZERO field means "use

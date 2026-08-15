@@ -59,6 +59,7 @@ import {
   initialStepFor,
   isSshRemote,
   newSourceRow,
+  applyWritableRequirement,
   parseRepoSource,
   removeSource,
   seedFloor,
@@ -251,8 +252,14 @@ export function WorkspaceWizard({
       ],
       initialSources: null,
     });
-  const updateSource = (id: string, p: Partial<SourceRow>) =>
-    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)), initialSources: null });
+  const updateSource = (id: string, p: Partial<SourceRow>) => {
+    // W8-S1-1: see applyWritableRequirement's doc — a writable toggle also
+    // stamps/clears the write:<path> requirement that actually governs
+    // runtime writability, not just WorkspaceSource.Writable.
+    const requirements =
+      p.writable !== undefined ? applyWritableRequirement(s.requirements, s.sources, id, p.writable) : s.requirements;
+    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)), requirements, initialSources: null });
+  };
   const removeSourceRow = (id: string) => patch({ sources: removeSource(s.sources, id), initialSources: null });
   const onSecretStored = (name: string) => patch({ secretNames: [...s.secretNames, name] });
 

@@ -73,3 +73,30 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 		t.Errorf("run.WorkspacePath = %q, want %q", run.WorkspacePath, path)
 	}
 }
+
+// TestWireWorkspaceSource_RefIsHonored is the W9-S1-3 regression: a repo
+// source's Ref (git branch/tag/sha — part of the source's identity, same as
+// Path/Source itself) used to be dropped the instant a repo source became a
+// run's types.WorkspaceRepo, so it never reached buildRepoRecords/WARDYN_REPOS
+// and no clone ever checked it out — silently cloning the default branch
+// regardless of what the source declared. Ref must now survive the same
+// wire-through Target already gets.
+func TestWireWorkspaceSource_RefIsHonored(t *testing.T) {
+	var run types.AgentRun
+	var policy types.RunPolicySpec
+	ws := types.Workspace{
+		ID: uuid.New(),
+		Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeRepo, Source: "acme/payments", Ref: "release-2.0"},
+		},
+	}
+
+	wireWorkspaceSource(&run, &policy, ws)
+
+	if len(policy.WorkspaceRepos) != 1 {
+		t.Fatalf("want exactly 1 workspace repo, got %d", len(policy.WorkspaceRepos))
+	}
+	if got := policy.WorkspaceRepos[0].Ref; got != "release-2.0" {
+		t.Errorf("WorkspaceRepos[0].Ref = %q, want %q", got, "release-2.0")
+	}
+}

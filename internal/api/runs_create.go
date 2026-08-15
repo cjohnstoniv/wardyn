@@ -295,7 +295,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
-			newRepos = append(newRepos, types.WorkspaceRepo{Repo: src.Source, Target: target})
+			newRepos = append(newRepos, types.WorkspaceRepo{Repo: src.Source, Target: target, Ref: src.Ref})
 		case types.WorkspaceSourceTypeLocalDir:
 			// Read-only unless the operator ticked Writable on this source — the
 			// same per-source opt-in wireWorkspaceSource honors for import runs.

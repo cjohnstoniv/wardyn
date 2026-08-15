@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,52 @@ func TestCreateWorkspaceValidation(t *testing.T) {
 		w := do(t, h.srv, http.MethodPost, "/api/v1/workspaces", adminToken, c.body)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("create %q: code = %d, want 400; body=%s", c.name, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected is the
+// W8-S1-3 regression: two sources sharing an explicit target both resolve to
+// the SAME in-sandbox mount/clone path — validatePolicyWorkspaces (policy.go)
+// then 422s that composition on every subsequent run. Rejecting it here, at
+// onboarding time, catches it before it's even possible to run — and before a
+// wizard's own basename collision (fixed client-side in wizard-types.ts's
+// defaultTargetFor) could ever reach the server in the first place. Exercises
+// decodeWorkspaceRequest directly (not the full handler) so it needs no store.
+func TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected(t *testing.T) {
+	body := `{"name":"w","sources":[
+		{"type":"repo","source":"acme/api","target":"/home/agent/work/api"},
+		{"type":"repo","source":"other-org/api","target":"/home/agent/work/api"}
+	]}`
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	_, msg := decodeWorkspaceRequest(w, r)
+	if msg == "" {
+		t.Fatal("two sources with the same explicit target: got no rejection, want one")
+	}
+	if !strings.Contains(msg, "sources[1]") || !strings.Contains(msg, "duplicates") {
+		t.Errorf("message = %q, want it to name sources[1] and the duplicate", msg)
+	}
+}
+
+// Distinct explicit targets, or an empty (default-derived) target repeated on
+// several sources, must NOT be rejected here — the empty case isn't resolved
+// until attach/clone time (buildRepoRecords), same as validatePolicyWorkspaces.
+func TestDecodeWorkspaceRequest_DistinctOrEmptyTargetsAccepted(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"w","sources":[
+			{"type":"repo","source":"acme/api","target":"/home/agent/work/api"},
+			{"type":"repo","source":"other-org/payments","target":"/home/agent/work/payments"}
+		]}`,
+		`{"name":"w","sources":[
+			{"type":"repo","source":"acme/api"},
+			{"type":"repo","source":"other-org/api"}
+		]}`,
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		if _, msg := decodeWorkspaceRequest(w, r); msg != "" {
+			t.Errorf("body=%s: got rejection %q, want none", body, msg)
 		}
 	}
 }

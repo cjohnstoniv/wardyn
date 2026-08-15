@@ -513,7 +513,7 @@ function OverviewTab({
           }
         >
           {attachable ? (
-            <AttachTerminal runId={run.id} />
+            <AttachTerminal runId={run.id} createdBy={run.created_by} />
           ) : (
             <EmptyMini
               text={

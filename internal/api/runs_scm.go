@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/url"
 	"strings"
 	"unicode"
@@ -103,21 +104,28 @@ func repoCloneURL(slug string) string {
 }
 
 // buildRepoRecords assembles the WARDYN_REPOS env value: newline-delimited,
-// tab-separated <url>\t<dest>\t<slug> records the agent-run entrypoint iterates to
-// clone each repo. Sources are the legacy single run.Repo (first, keeping its
-// default ~/work/<name> dest) plus each onboarded WorkspaceRepo (already
-// onboarding-gated). Every field is repoFieldSafe (no whitespace/control chars) so
-// the tab/newline framing cannot be smuggled past; every dest is a validated
-// allowed-prefix target, deduped so two repos never target one directory. A slug
-// with no derivable clone URL, an unsafe/out-of-prefix dest, or a duplicate dest is
-// skipped. Returns "" when there is nothing to clone.
+// tab-separated <url>\t<dest>\t<slug>\t<ref> records the agent-run entrypoint
+// iterates to clone each repo. Sources are the legacy single run.Repo (first,
+// keeping its default ~/work/<name> dest, no ref) plus each onboarded
+// WorkspaceRepo (already onboarding-gated). Every field is repoFieldSafe (no
+// whitespace/control chars) so the tab/newline framing cannot be smuggled
+// past; every dest is a validated allowed-prefix target, deduped so two repos
+// never target one directory. A slug with no derivable clone URL, an
+// unsafe/out-of-prefix dest, an unsafe ref, or a duplicate dest is skipped.
+// Ref is optional (branch/tag/sha, or "" for the remote's default branch) —
+// clone_one (agent-run-lib.sh) is the consumer that actually checks it out.
+// Returns "" when there is nothing to clone.
 func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 	const workRoot = "/home/agent/work"
 	seenDest := map[string]bool{}
 	var b strings.Builder
-	add := func(slug, dest string) {
+	add := func(slug, dest, ref string) {
 		slug = strings.TrimSpace(slug)
 		if slug == "" || !repoFieldSafe(slug) {
+			return
+		}
+		ref = strings.TrimSpace(ref)
+		if ref != "" && !repoFieldSafe(ref) {
 			return
 		}
 		url := repoCloneURL(slug)
@@ -154,7 +162,19 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 			}
 			dest = workRoot + "/" + name
 		}
-		if !repoFieldSafe(dest) || runner.ValidateTarget(dest) != nil || seenDest[dest] {
+		if !repoFieldSafe(dest) || runner.ValidateTarget(dest) != nil {
+			return
+		}
+		if seenDest[dest] {
+			// W8-S1-3: loud, not silent — an unqualified caller (no explicit
+			// Target on either source, e.g. a raw API/CLI request that skips
+			// the wizard's own basename-collision disambiguation) can still
+			// reach here with two repos deriving the SAME default dest. A
+			// silently dropped clone is easy to miss until the agent goes
+			// looking for a repo that was never there; a warning at least
+			// makes it observable at run time.
+			slog.Warn("wardynd: repo clone target collides with another repo in this run; dropping the later one",
+				slog.String("slug", slug), slog.String("dest", dest))
 			return
 		}
 		seenDest[dest] = true
@@ -166,10 +186,12 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 		b.WriteString(dest)
 		b.WriteByte('\t')
 		b.WriteString(slug)
+		b.WriteByte('\t')
+		b.WriteString(ref)
 	}
-	add(legacyRepo, "") // legacy single repo → default dest
+	add(legacyRepo, "", "") // legacy single repo → default dest, no ref
 	for _, wr := range repos {
-		add(wr.Repo, wr.Target)
+		add(wr.Repo, wr.Target, wr.Ref)
 	}
 	return b.String()
 }

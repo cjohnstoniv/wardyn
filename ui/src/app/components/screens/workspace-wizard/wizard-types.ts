@@ -118,24 +118,49 @@ export function isRemovable(row: SourceRow, rows: SourceRow[]): boolean {
   return !(row.type === "ephemeral" && rows.length === 1);
 }
 
-function baseNameOf(row: SourceRow): string {
+function pathSegments(row: SourceRow): string[] {
   if (row.type === "repo") {
     const cleaned = (row.source || "repo").replace(/\.git$/, "");
-    return cleaned.split(/[/:]/).filter(Boolean).pop() || "repo";
+    return cleaned.split(/[/:]/).filter(Boolean);
   }
   if (row.type === "local_dir") {
-    return (row.path || "").replace(/\/+$/, "").split("/").filter(Boolean).pop() || "dir";
+    return (row.path || "").replace(/\/+$/, "").split("/").filter(Boolean);
   }
-  return "scratch";
+  return [];
+}
+
+function baseNameOf(row: SourceRow): string {
+  const parts = pathSegments(row);
+  return parts[parts.length - 1] || (row.type === "local_dir" ? "dir" : row.type === "repo" ? "repo" : "scratch");
+}
+
+// W8-S1-3: the org/parent-qualified name for a row whose bare basename
+// collides with another row's — "acme/api" and "other-org/api" both derive
+// the SAME default target from baseNameOf alone, and the server's
+// unique-target invariant (validatePolicyWorkspaces / decodeWorkspaceRequest)
+// then 422s/400s that composition on every run. Prefixing the parent segment
+// ("acme-api" / "other-org-api") disambiguates the two without the operator
+// ever having to type a target manually. Falls back to the bare name when
+// there's no parent segment to qualify with (already as unique as it gets).
+function qualifiedNameOf(row: SourceRow): string {
+  const parts = pathSegments(row);
+  if (parts.length >= 2) return `${parts[parts.length - 2]}-${parts[parts.length - 1]}`;
+  return baseNameOf(row);
 }
 
 // Auto-derives a distinct sub-path once several sources exist, so two mounted
 // sources don't collide on the same in-sandbox target by default. An
-// operator-typed target always wins.
+// operator-typed target always wins. When two OTHER-untyped rows would derive
+// the identical bare basename, both are qualified instead (see
+// qualifiedNameOf) so the default composition is always valid — never left to
+// collide and 422/400 downstream.
 export function defaultTargetFor(row: SourceRow, rows: SourceRow[]): string {
   const typed = row.target.trim();
   if (typed) return typed;
-  return rows.length <= 1 ? DEFAULT_TARGET : `${DEFAULT_TARGET}/${baseNameOf(row)}`;
+  if (rows.length <= 1) return DEFAULT_TARGET;
+  const untyped = rows.filter((r) => !r.target.trim());
+  const collides = untyped.filter((r) => baseNameOf(r) === baseNameOf(row)).length > 1;
+  return `${DEFAULT_TARGET}/${collides ? qualifiedNameOf(row) : baseNameOf(row)}`;
 }
 
 // ---- Repo source parsing (host + SSH-remote detection) ----
@@ -429,6 +454,35 @@ export function setRequirementLane(
   level: RequirementLevel,
 ): WorkspaceRequirementsMap {
   return { ...reqs, [key]: { level, provenance: "operator_set" } };
+}
+
+// W8-S1-1: couples step-sources.tsx's per-row "Let agents write" checkbox to
+// the write:<path> requirement that actually governs runtime writability.
+// Every local_dir path is ALSO scan-seeded as an OPTIONAL write:<path> row
+// (deriveInitialRequirements above), and applyWorkspaceRequirements/
+// applyWriteNarrowing (runs_create.go) resolve that requirement independent
+// of WorkspaceSource.Writable — so without this coupling, the checkbox set
+// Writable=true but the still-optional, not-enabled requirement silently
+// forced every real run's mount back to read-only. Ticking the box now
+// promotes the SAME key to required+operator_set (wins over the scan-seeded
+// default, mirrors flipping it in the Requirements step's Files tab);
+// unticking clears the override back to that scan-seeded default. A no-op
+// for anything but a local_dir row with a path.
+export function applyWritableRequirement(
+  reqs: WorkspaceRequirementsMap,
+  sources: SourceRow[],
+  sourceId: string,
+  writable: boolean,
+): WorkspaceRequirementsMap {
+  const row = sources.find((r) => r.id === sourceId);
+  const path = row?.path.trim();
+  if (row?.type !== "local_dir" || !path) return reqs;
+  const key = requirementKey("write", path);
+  if (writable) return setRequirementLane(reqs, key, "required");
+  if (!(key in reqs)) return reqs;
+  const next = { ...reqs };
+  delete next[key];
+  return next;
 }
 
 // UI-WS-7: only operator-authored rows belong in a workspace's own
