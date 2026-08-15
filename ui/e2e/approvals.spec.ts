@@ -126,8 +126,10 @@ test.describe("Approvals screen", () => {
   });
 
   test("Pending tab lists cards with kind, blast-radius banner, run context and actions", async ({ page }) => {
-    // Default tab is Pending. The credential kind chip renders.
-    await expect(page.getByText("credential", { exact: true }).first()).toBeVisible();
+    // Default tab is Pending. The credential kind chip renders its human copy
+    // ("Credential"), not the raw wire token (ui-approvals-2, copy.ts's
+    // APPROVAL_KIND_LABEL via WIRE_TO_COPY).
+    await expect(page.getByText("Credential", { exact: true }).first()).toBeVisible();
     // The PENDING state badge renders capitalized ("Pending").
     await expect(page.getByText("Pending", { exact: true }).first()).toBeVisible();
     // The egress pending card's derived title carries its unique scope domain.
