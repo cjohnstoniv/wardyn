@@ -35,7 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { Field } from "./new-run/step-shell";
+import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";

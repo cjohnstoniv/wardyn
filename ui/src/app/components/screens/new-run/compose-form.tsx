@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../ui/select";
-import { Field } from "./step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { AskPopover } from "./ask-popover";
 import { ModelAccessCard } from "./step-access";
 import { WorkspacePicker } from "./workspace-picker";

@@ -45,7 +45,7 @@ import {
 import { cn } from "../../ui/utils";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
-import { Field } from "./step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { agentLabel, primaryWorkspaceId, type GitHubPermission, type WizardState } from "./wizard-types";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import {

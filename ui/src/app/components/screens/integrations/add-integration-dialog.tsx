@@ -48,7 +48,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
-import { Field, OptionCard } from "../new-run/step-shell";
+import { Field, OptionCard } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";

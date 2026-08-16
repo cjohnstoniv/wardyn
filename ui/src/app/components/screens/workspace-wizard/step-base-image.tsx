@@ -14,7 +14,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
-import { Field } from "../new-run/step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { baseImagesApi } from "../../../lib/api/sources";
 import type { BaseImageEntry } from "../../../lib/types";
 import { Chip } from "../../wardyn/primitives";

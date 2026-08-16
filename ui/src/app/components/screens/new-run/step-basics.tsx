@@ -17,7 +17,7 @@ import {
 } from "../../ui/select";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
-import { Field } from "./step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { Loader2 } from "lucide-react";
 import { WorkspacePicker } from "./workspace-picker";
 import { useOperator } from "../../wardyn/operator-context";

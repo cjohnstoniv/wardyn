@@ -21,7 +21,7 @@ import {
 import type { FirstUseMode, Workspace } from "../../../lib/types";
 import { cn } from "../../ui/utils";
 import { Chip } from "../../wardyn/primitives";
-import { DomainPillList, Field } from "./step-shell";
+import { DomainPillList, Field } from "../../wardyn/form-primitives";
 import { PRESET_DOMAINS, impliedEgressHosts, isValidDomain, type WizardState } from "./wizard-types";
 
 export function StepEgress({

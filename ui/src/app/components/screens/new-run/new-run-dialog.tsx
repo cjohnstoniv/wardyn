@@ -51,7 +51,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../ui/dialog";
-import { OptionCard } from "./step-shell";
+import { OptionCard } from "../../wardyn/form-primitives";
 import { ComposeForm } from "./compose-form";
 import { ComposeProgress } from "./compose-progress";
 import { ComposeQandA } from "./compose-qanda";

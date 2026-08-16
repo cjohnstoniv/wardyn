@@ -21,7 +21,7 @@ import { CC_META, CONFINEMENT_CONSTANT_NOTE } from "../../wardyn/cc-meta";
 import { TierMatrixDialog } from "../../wardyn/tier-matrix";
 import { RESIDUAL_PREFIX } from "../../wardyn/copy";
 import { StatusChip } from "../../wardyn/status-chip";
-import { Field } from "./step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import type { Lifecycle, WizardState } from "./wizard-types";
 

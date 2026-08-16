@@ -22,7 +22,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { cn } from "../../ui/utils";
-import { Field } from "../new-run/step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";

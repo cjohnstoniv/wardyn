@@ -14,7 +14,7 @@ import { Label } from "../../ui/label";
 import { Mono, YamlBlock } from "../../wardyn/code-block";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
-import { Field } from "./step-shell";
+import { Field } from "../../wardyn/form-primitives";
 import { sourceSubLine } from "../workspaces";
 import {
   agentLabel,

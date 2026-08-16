@@ -56,7 +56,7 @@ import {
   SheetTitle,
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
-import { Field } from "./new-run/step-shell";
+import { Field } from "../wardyn/form-primitives";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";

@@ -3,14 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Shared presentational primitives for the New Run wizard steps. StepIndicator,
-// Field, and OptionCard are lifted from the old new-run-dialog.tsx styling so the
-// wizard matches the existing design-system / token conventions. DomainPillList
-// renders the removable egress-domain pills.
+// The New Run wizard's step rail. Field/OptionCard/DomainPillList moved to
+// components/wardyn/form-primitives.tsx — they outlive this wizard; this does not.
 import * as React from "react";
-import { Check, X } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "../../ui/utils";
-import { Label } from "../../ui/label";
 import { WIZARD_STEPS, type WizardStepId } from "./wizard-types";
 
 // Horizontal numbered step indicator with a connecting rail. The active step is
@@ -92,123 +89,5 @@ export function StepIndicator<T extends string = WizardStepId>({
         );
       })}
     </ol>
-  );
-}
-
-// A labelled form field with optional helper/hint text.
-export function Field({
-  label,
-  htmlFor,
-  hint,
-  required,
-  children,
-  className,
-}: {
-  label: React.ReactNode;
-  htmlFor?: string;
-  hint?: React.ReactNode;
-  /** Marks the label with a visible "*" — pair with `required` on the actual
-   *  control so the requirement is never conveyed by the marker's color alone. */
-  required?: boolean;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("space-y-2", className)}>
-      {/* The "*" is a sibling of Label, not inside it, so it never joins the
-          label's accessible name (getByLabelText("Name") stays exact) — the
-          native `required` attribute on the control is what AT announces. */}
-      <div className="flex items-center gap-1">
-        <Label htmlFor={htmlFor}>{label}</Label>
-        {required && (
-          <span className="text-muted-foreground" aria-hidden="true">
-            *
-          </span>
-        )}
-      </div>
-      {children}
-      {hint && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
-
-// A selectable card (radio-style) lifted from the old confinement-class picker.
-export function OptionCard({
-  selected,
-  disabled,
-  onClick,
-  title,
-  hint,
-  className,
-}: {
-  selected: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  title: React.ReactNode;
-  hint?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-pressed={selected}
-      className={cn(
-        "rounded-lg border p-2.5 text-left transition-colors",
-        selected ? "border-primary bg-primary/10" : "border-border hover:border-border-strong",
-        disabled && "cursor-not-allowed opacity-50 hover:border-border",
-        className,
-      )}
-    >
-      <div className="text-sm font-medium text-foreground">{title}</div>
-      {hint && (
-        <div className="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">{hint}</div>
-      )}
-    </button>
-  );
-}
-
-// A list of removable domain pills (used for custom egress domains + deny-list).
-export function DomainPillList({
-  domains,
-  onRemove,
-  tone = "neutral",
-  emptyHint,
-}: {
-  domains: string[];
-  onRemove: (domain: string) => void;
-  tone?: "neutral" | "danger";
-  emptyHint?: string;
-}) {
-  if (!domains.length) {
-    return emptyHint ? (
-      <p className="text-[0.6875rem] text-muted-foreground">{emptyHint}</p>
-    ) : null;
-  }
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {domains.map((d) => (
-        <span
-          key={d}
-          className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[0.6875rem]",
-            tone === "danger"
-              ? "border-danger/25 bg-danger-subtle text-danger"
-              : "border-border bg-surface-2 text-foreground",
-          )}
-        >
-          {d}
-          <button
-            type="button"
-            onClick={() => onRemove(d)}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            aria-label={`Remove ${d}`}
-          >
-            <X className="size-3" />
-          </button>
-        </span>
-      ))}
-    </div>
   );
 }
