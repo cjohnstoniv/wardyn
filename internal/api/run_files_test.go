@@ -103,6 +103,10 @@ func fileByPath(t *testing.T, resp runFilesResponse, path string) runFileStat {
 // Env, never interpolated into the script.
 func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 	stdout := strings.Join([]string{
+		// Section 0: the directory the script settled on. The response echoes
+		// it so a vcs=none answer can name where it looked.
+		"path=/home/agent/work",
+		runFilesSeparator,
 		"12\t3\tinternal/api/run_files.go",
 		"0\t7\told.go",
 		runFilesSeparator,
@@ -154,7 +158,7 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 // count. Reporting that as +0/−0 would claim a rewritten binary asset changed by
 // nothing — it must come back binary:true with the count fields ABSENT.
 func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
-	stdout := "-\t-\tdocs/logo.png\n" + runFilesSeparator + "\nA  docs/logo.png\n"
+	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n-\t-\tdocs/logo.png\n" + runFilesSeparator + "\nA  docs/logo.png\n"
 	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, "", 0), nil
 	})
@@ -178,8 +182,10 @@ func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
 // workspace (no repo here), not a failure — 200, vcs=none, an empty (never
 // null) list, and no audit row.
 func TestRunFiles_NotAGitWorkTree(t *testing.T) {
+	// The script still prints the directory it looked in before exiting 3 —
+	// that is the whole point of reporting Path (see below).
 	srv, _, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
-		return fakeExecSession("", "fatal: not a git repository\n", 3), nil
+		return fakeExecSession("path=/srv/custom-target\n", "fatal: not a git repository\n", 3), nil
 	})
 
 	w := doRunFiles(srv, run.ID, nil)
@@ -189,6 +195,13 @@ func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"files":[]`) {
 		t.Errorf("files serialized as null, not []: %s", w.Body.String())
+	}
+	// NAMING THE PATH is what makes a wrong answer legible. The mount target is
+	// configurable per workspace source (workspace_run.go), so "not a git
+	// repository" on its own cannot be told apart from "we looked in the wrong
+	// directory" — which, silently, is the worst failure this endpoint has.
+	if resp.Path != "/srv/custom-target" {
+		t.Errorf("path = %q, want the inspected directory echoed back", resp.Path)
 	}
 	if len(audit.events) != 0 {
 		t.Errorf("vcs=none wrote %d audit events, want 0 (it is not a failure)", len(audit.events))
@@ -243,6 +256,7 @@ func TestRunFiles_ForeignRun404(t *testing.T) {
 // mode this pins.
 func TestRunFiles_CapSetsTruncated(t *testing.T) {
 	var b strings.Builder
+	fmt.Fprintf(&b, "path=/home/agent/work\n%s\n", runFilesSeparator)
 	const rows = runFilesMaxFiles + 100
 	for i := 0; i < rows; i++ {
 		fmt.Fprintf(&b, "1\t1\tfile%04d.go\n", i)
@@ -267,7 +281,7 @@ func TestRunFiles_CapSetsTruncated(t *testing.T) {
 // Stderr drain blocks the single demux goroutine and never returns; this test
 // fails on a timer instead of wedging the suite.
 func TestRunFiles_StderrDrainedConcurrently(t *testing.T) {
-	stdout := "4\t0\tnotes.md\n" + runFilesSeparator + "\n M notes.md\n"
+	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n4\t0\tnotes.md\n" + runFilesSeparator + "\n M notes.md\n"
 	stderr := strings.Repeat("warning: this stderr is written first and nobody buffered it\n", 200)
 	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, stderr, 0), nil

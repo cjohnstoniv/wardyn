@@ -25,7 +25,7 @@ const POLL_MS = 4000;
 
 type FilesState =
   | { kind: "loading" }
-  | { kind: "no-vcs" }
+  | { kind: "no-vcs"; path?: string }
   | { kind: "no-sandbox" }
   | { kind: "unsupported" }
   | { kind: "error" }
@@ -39,7 +39,7 @@ export function FilesChangedWidget({ runId, live }: { runId: string; live: boole
       runsApi
         .getFiles(runId)
         .then((data) => {
-          setState(data.vcs === "none" ? { kind: "no-vcs" } : { kind: "ready", data });
+          setState(data.vcs === "none" ? { kind: "no-vcs", path: data.path } : { kind: "ready", data });
         })
         .catch((err) => {
           if (err instanceof HttpError && err.status === 501) setState({ kind: "unsupported" });
@@ -100,7 +100,7 @@ function renderBody(state: FilesState): React.ReactNode {
         </div>
       );
     case "no-vcs":
-      return <Quiet text={RUN_COCKPIT.noVcs} />;
+      return <Quiet text={RUN_COCKPIT.noVcs(state.path)} />;
     case "no-sandbox":
       return <Quiet text={RUN_COCKPIT.noSandboxYet} />;
     case "unsupported":

@@ -177,8 +177,15 @@ export const RUN_COCKPIT = {
   // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
   // honest answer; rendering 0 would claim the sandbox is using no memory.
   metricUnavailable: "not available on this barrier",
-  // The workspace has no git work tree, so there is no diff to state.
-  noVcs: "This workspace isn't a git repository — there's no diff to show.",
+  // The workspace has no git work tree, so there is no diff to state. NAMES the
+  // directory that was inspected when the daemon reports one: the mount target
+  // is configurable per workspace source, so a bare "not a git repository"
+  // cannot be told apart from "we looked in the wrong place" — and that
+  // mistake is otherwise completely silent.
+  noVcs: (path?: string) =>
+    path
+      ? `No git repository at ${path} — there's no diff to show.`
+      : "This workspace isn't a git repository — there's no diff to show.",
   // The substrate has no exec channel, so neither evidence read can run.
   execUnsupported: "This runner can't be inspected while it's running.",
   // Empty/degraded states shared by the two POLLING evidence widgets. They live

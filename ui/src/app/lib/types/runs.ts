@@ -99,6 +99,10 @@ export interface RunFilesResult {
   // (a fact about the workspace, served as 200 — not a failure).
   vcs: "git" | "none" | (string & {});
   files: RunFileStat[];
+  /** The in-sandbox directory actually inspected. On vcs:"none" this is what
+   *  separates "no repo here" from "we looked in the wrong place" — the mount
+   *  target is configurable per workspace source. Show it. */
+  path?: string;
   // We stopped counting. Always present, including when false.
   truncated: boolean;
 }

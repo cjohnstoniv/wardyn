@@ -94,12 +94,32 @@ const (
 // substrate that dropped exec env would otherwise `cd ""`, fail, and report
 // vcs=none for a workspace we never actually looked at.
 //
+// WHY IT SEARCHES rather than trusting one path: /home/agent/work is only the
+// FALLBACK mount target (composerWorkspaceTarget) — a workspace source may set
+// its own Target (workspace_run.go), and the run row does not carry the
+// resolved path, so a hardcoded guess would report vcs=none for a real repo
+// mounted somewhere else. That is the worst failure mode this endpoint has: not
+// an error, but a confident "nothing changed". So it tries W, then the exec's
+// OWN working directory (the image's WORKDIR, i.e. where the agent actually
+// works), and — either way — REPORTS the directory it settled on, so a wrong
+// path shows up in the UI as a named path instead of a silent empty list.
+//
 // exit 3 means "there is no git work tree here" — a fact about the workspace,
 // reported as 200 vcs=none. Any other nonzero exit lands in the same place
 // (git missing from the image, a repo we cannot read): in every case we did
 // not obtain a diff, and saying so beats inventing one.
-const runFilesScript = `cd "${W:-/home/agent/work}" 2>/dev/null || exit 3
-git -c safe.directory='*' rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 3
+const runFilesScript = `D=""
+for c in "${W:-/home/agent/work}" .; do
+  [ -d "$c" ] || continue
+  if (cd "$c" && git -c safe.directory='*' rev-parse --is-inside-work-tree >/dev/null 2>&1); then
+    D=$(cd "$c" && pwd)
+    break
+  fi
+done
+if [ -z "$D" ]; then printf 'path=%s\n' "${W:-/home/agent/work}"; exit 3; fi
+printf 'path=%s\n' "$D"
+printf '\036\n'
+cd "$D"
 git -c safe.directory='*' -c core.quotepath=false diff --numstat --no-renames HEAD
 printf '\036\n'
 git -c safe.directory='*' -c core.quotepath=false status --porcelain
@@ -129,9 +149,14 @@ type runFileStat struct {
 // — "we stopped counting" has to be visible in every response, including the
 // ones where it is false.
 type runFilesResponse struct {
-	VCS       string        `json:"vcs"`
-	Files     []runFileStat `json:"files"`
-	Truncated bool          `json:"truncated"`
+	VCS   string        `json:"vcs"`
+	Files []runFileStat `json:"files"`
+	// Path is the in-sandbox directory actually inspected. Present on BOTH
+	// outcomes on purpose: on vcs:"none" it is the evidence that turns "no repo
+	// here" into "no repo AT THIS PATH", which is what an operator needs when a
+	// workspace is mounted at a non-default target.
+	Path      string `json:"path,omitempty"`
+	Truncated bool   `json:"truncated"`
 }
 
 // handleRunFiles serves GET /api/v1/runs/{id}/files — the per-file diff stat of
@@ -218,7 +243,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
 
-	files, truncated := parseRunFiles(sess.Stdout)
+	inspectedPath, files, truncated := parseRunFiles(sess.Stdout)
 
 	if sess.Wait != nil {
 		code, werr := sess.Wait()
@@ -232,11 +257,20 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		if code != 0 {
 			// Not a git work tree. A FACT about the workspace, not a failure:
 			// 200 with an honest empty list, no audit row.
-			writeJSON(w, http.StatusOK, runFilesResponse{VCS: runFilesVCSNone, Files: []runFileStat{}})
+			// NAME the directory we looked in. A bare "not a git repository"
+			// is indistinguishable from "we looked in the wrong place", and
+			// the mount target is configurable per workspace source — so the
+			// path is the one piece of evidence that makes a wrong answer
+			// legible instead of silent.
+			writeJSON(w, http.StatusOK, runFilesResponse{
+				VCS: runFilesVCSNone, Files: []runFileStat{}, Path: inspectedPath,
+			})
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, runFilesResponse{VCS: runFilesVCSGit, Files: files, Truncated: truncated})
+	writeJSON(w, http.StatusOK, runFilesResponse{
+		VCS: runFilesVCSGit, Files: files, Path: inspectedPath, Truncated: truncated,
+	})
 }
 
 // auditRunFilesFailure records the FAILURE-only run.files audit row (see
@@ -253,28 +287,34 @@ func (s *Server) auditRunFilesFailure(r *http.Request, runID uuid.UUID, err erro
 // It ALWAYS drains stdout to EOF, including after the cap is hit or the scanner
 // gives up on an over-long line: an undrained pipe blocks the demux goroutine
 // and therefore Wait, which is the same hang the stderr drain above avoids.
-func parseRunFiles(stdout io.Reader) (files []runFileStat, truncated bool) {
+func parseRunFiles(stdout io.Reader) (path string, files []runFileStat, truncated bool) {
 	files = []runFileStat{}
 	if stdout == nil {
-		return files, false
+		return "", files, false
 	}
 	defer func() { _, _ = io.Copy(io.Discard, stdout) }()
 
 	byPath := make(map[string]int)
-	statusSection := false
+	// Three sections, separated by runFilesSeparator: the inspected path, the
+	// numstat rows, then the porcelain rows.
+	section := 0
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), runFilesMaxLine)
 	for sc.Scan() {
 		line := sc.Text()
 		if line == runFilesSeparator {
-			statusSection = true
+			section++
+			continue
+		}
+		if section == 0 {
+			path = strings.TrimPrefix(line, "path=")
 			continue
 		}
 		var (
 			f  runFileStat
 			ok bool
 		)
-		if statusSection {
+		if section >= 2 {
 			f, ok = parsePorcelainLine(line)
 		} else {
 			f, ok = parseNumstatLine(line)
@@ -300,7 +340,7 @@ func parseRunFiles(stdout io.Reader) (files []runFileStat, truncated bool) {
 		// output still unread: rows were dropped, so admit it.
 		truncated = true
 	}
-	return files, truncated
+	return path, files, truncated
 }
 
 // parseNumstatLine parses one `git diff --numstat` row: "<added>\t<deleted>\t<path>".

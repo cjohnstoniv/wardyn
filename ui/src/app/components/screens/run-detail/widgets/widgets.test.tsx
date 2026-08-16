@@ -68,7 +68,22 @@ describe("FilesChangedWidget", () => {
   it("shows the no-VCS copy when the workspace isn't a git repo", async () => {
     getFilesMock.mockResolvedValue({ vcs: "none", files: [], truncated: false });
     render(<FilesChangedWidget runId="r1" live={true} />);
-    expect(await screen.findByText(RUN_COCKPIT.noVcs)).toBeInTheDocument();
+    expect(await screen.findByText(RUN_COCKPIT.noVcs(undefined))).toBeInTheDocument();
+  });
+
+  // The mount target is configurable per workspace source, so "not a git
+  // repository" alone cannot be told apart from "we looked in the wrong
+  // directory" — and that mistake would otherwise be completely silent. When
+  // the daemon reports which path it inspected, the widget must NAME it.
+  it("names the inspected directory when the daemon reports one", async () => {
+    getFilesMock.mockResolvedValue({
+      vcs: "none",
+      files: [],
+      truncated: false,
+      path: "/srv/custom-target",
+    });
+    render(<FilesChangedWidget runId="r1" live={true} />);
+    expect(await screen.findByText(/\/srv\/custom-target/)).toBeInTheDocument();
   });
 
   it("shows the exec-unsupported copy on a 501", async () => {
