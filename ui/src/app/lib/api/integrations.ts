@@ -94,7 +94,6 @@ const AI_TYPE_LABEL: Record<string, string> = {
   anthropic_api_key: "anthropic · api key",
   bedrock: "aws · bedrock",
   openai_api_key: "openai · api key",
-  azure_openai: "azure · openai key",
 };
 
 function subscriptionTypeLabel(hostCli: boolean): string {
@@ -115,8 +114,6 @@ export function aiRowName(type: AiType, hostCli?: boolean): string {
       return "AWS Bedrock";
     case "openai_api_key":
       return "OpenAI (API key)";
-    case "azure_openai":
-      return "Azure OpenAI";
   }
 }
 
@@ -127,8 +124,7 @@ const FEATURES_SLOT = /^Wardyn features/;
 // SAME ids deriveAiRows below stamps as serverId, factored out so a caller
 // that hasn't loaded a derived row yet (the Add dialog, before its first
 // reload) can still resolve which wire row to adopt/PUT (UI-WS-2). Undefined
-// for azure_openai: no site-config field / SetupCheck id exists for it yet
-// (see the azure branch below), so there is nothing to adopt.
+// Every AiType now maps to a server-side id.
 export function aiServerId(type: AiType, hostCli?: boolean): string | undefined {
   switch (type) {
     case "anthropic_api_key":
@@ -139,8 +135,6 @@ export function aiServerId(type: AiType, hostCli?: boolean): string | undefined 
       return "bedrock";
     case "openai_api_key":
       return "openai_api_key";
-    case "azure_openai":
-      return undefined;
   }
 }
 
@@ -190,7 +184,6 @@ export function capabilityChips(type: AiType, hostCli?: boolean, wire?: WireInte
 export function aiResidency(type: AiType, hostCli: boolean | undefined, lane: BedrockLane | undefined): ResidencyKind {
   if (type === "anthropic_subscription") return SUBSCRIPTION_LANE_META[hostCli ? "resident_host" : "managed"].residency;
   if (type === "bedrock") return lane ? BEDROCK_LANE_META[lane].residency : "varies";
-  if (type === "azure_openai") return "control_plane";
   return "proxy_injected"; // anthropic_api_key / openai_api_key
 }
 

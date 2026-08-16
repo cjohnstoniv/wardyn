@@ -7,7 +7,6 @@ import { describe, it, expect } from "vitest";
 import {
   T,
   CAPS,
-  CATEGORY_META,
   AI_TYPES,
   RESIDENCY_META,
   SUBSCRIPTION_LANE_META,
@@ -172,10 +171,6 @@ describe("integrations — CAPS capability-line notes", () => {
     expect(CAPS.key()[1]).toEqual({ label: "Codex CLI", fact: T.X_KEY_CODEX });
   });
 
-  it("pins the middle dot in azure()'s combined label", () => {
-    expect(CAPS.azure()[0].label).toBe("Claude Code · Codex CLI");
-  });
-
   it("sub(hostCli) is the only row set that varies by argument (Wardyn features)", () => {
     const off = CAPS.sub(false).find((r) => r.label === "Wardyn features");
     const on = CAPS.sub(true).find((r) => r.label === "Wardyn features");
@@ -185,21 +180,17 @@ describe("integrations — CAPS capability-line notes", () => {
 });
 
 describe("integrations — structured metadata is grounded in the T/CAPS canon above", () => {
-  it("CATEGORY_META's skip-if line IS T.CAT_* (same string, not a re-typed copy)", () => {
-    expect(CATEGORY_META.ai_provider.skipIfLine).toBe(T.CAT_AI);
-    expect(CATEGORY_META.scm_host.skipIfLine).toBe(T.CAT_SCM);
-  });
 
-  // Two categories, not the mock's four: an integration is an account with a
-  // system outside Wardyn, and Corporate network owns the network topology.
-  it("CATEGORY_META has exactly the two surviving categories", () => {
-    expect(Object.keys(CATEGORY_META).sort()).toEqual(["ai_provider", "scm_host"]);
-  });
+  // The two-category pin used to read CATEGORY_META, which existed for the
+  // deleted /integrations page's section headers. The IntegrationCategory type
+  // is what enforces the rule now — an integration is an account with a system
+  // outside Wardyn, and Corporate network owns the network topology.
 
-  it("AI_TYPES.desc IS the matching T.TY_* for the three single-lane key types", () => {
+  // Two single-lane key types now, not three: azure_openai was the third and it
+  // was removed in 0.5 — its one capability powered the deleted AI Run Composer.
+  it("AI_TYPES.desc IS the matching T.TY_* for the single-lane key types", () => {
     expect(AI_TYPES.anthropic_api_key.desc).toBe(T.TY_KEY);
     expect(AI_TYPES.openai_api_key.desc).toBe(T.TY_OPENAI);
-    expect(AI_TYPES.azure_openai.desc).toBe(`${T.TY_AZURE} Key or Entra.`);
   });
 
   it("AI_TYPES.capabilityPreview wires straight to CAPS (no duplicated tables)", () => {
@@ -211,8 +202,6 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
   it("IMPOSSIBLE reasons are the exact same T.X_* strings CAPS' fact rows use", () => {
     expect(IMPOSSIBLE.anthropic_api_key?.codex_cli).toBe(T.X_KEY_CODEX);
     expect(IMPOSSIBLE.anthropic_subscription?.direct_api).toBe(T.X_SUB_DIRECT);
-    expect(IMPOSSIBLE.azure_openai?.claude_code).toBe(T.X_AZURE_HARNESS);
-    expect(IMPOSSIBLE.azure_openai?.codex_cli).toBe(T.X_AZURE_HARNESS);
   });
 
   it("SUBSCRIPTION_LANE_META tooltips ARE T.MANAGED_LINE / T.HOSTCLI_LINE verbatim", () => {

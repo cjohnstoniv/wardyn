@@ -295,9 +295,13 @@ const AGENT_CAPABILITIES: AiCapability[] = ["claude_code", "codex_cli"];
 // compatibility resolveModelAccess's own `compatible` check reads below —
 // never whether it's actually marked/pinned/resolved right now. This is what
 // tells apart "just not wired as a default yet, but some agent could still
-// use it" from "impossible for every agent" (e.g. an Azure-OpenAI-only
-// integration, which powers only Wardyn's own features) — only the latter
-// deserves the amber RD.NONE_LINE instead of the neutral wait-for-review line.
+// use it" from "impossible for every agent" — only the latter deserves the
+// amber RD.NONE_LINE instead of the neutral wait-for-review line.
+//
+// As of 0.5 NO kind satisfies the false branch: azure_openai was the only one
+// impossible for both agents, and it was removed with the Wardyn-features
+// capability it served. Kept as a guard, not live logic — every remaining
+// IMPOSSIBLE entry blocks exactly one of the two agents, never both.
 function couldDriveSomeAgent(row: IntegrationRow): boolean {
   return AGENT_CAPABILITIES.some((cap) => !incompatibleReason(row, cap));
 }

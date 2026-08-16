@@ -46,15 +46,15 @@ export function slugHost(host: string): string {
 // Server-mirrored shape rule for a site-config SCM host: validSiteHost
 // (internal/api/site_config.go:52) -> workspacescan.ValidApprovedHost, i.e.
 // suggestedHostRE plus a REQUIRED dot — so "localhost" is rejected. Mirrored
-// here so the Add Provider dialog can reject a bad host BEFORE the secret is
+// here so the Settings Git host card can reject a bad host BEFORE the secret is
 // stored, instead of the operator only discovering it when the final
 // scm_hosts write 400s with the credential already saved.
 const SITE_HOST_RE = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
 
-// Why the dialog and not slugHost: the server's secret-name limit (secretNameRE,
+// Why here and not slugHost: the server's secret-name limit (secretNameRE,
 // internal/api/secrets.go:21) applies to the PREFIXED name, so a shape-valid
-// host can still be unusable. The dialog's Name field is read-only, so a
-// too-long name there is a dead end — the host is the only field left to fix.
+// host can still be unusable. The card derives the secret name from the host,
+// so the host is the only field left to fix.
 // Returns null when `host` is usable (empty included: that's "not filled in
 // yet", which the caller gates on separately).
 export function hostError(host: string): string | null {
@@ -106,18 +106,12 @@ export const LANE_META: Record<Lane, LaneMeta> = {
   ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
 };
 
-// Pre-convention secret names from before the git-pat-<slug> / ssh-key-<slug>
-// scheme. They are ordinary secrets and remain fully usable — a git_pat grant
-// can name any stored secret (the repo's own fixture pairs dev.azure.com with
-// "ado-pat", internal/api/compose_setup_test.go:126). They just can't be
-// bucketed onto a host by name, so deriveProviders skips them and the SCM
-// Provider step lists them in a footer instead of as a first-class row.
-export const LEGACY_NAMES: readonly string[] = [
-  "github-pat",
-  "gitlab-pat",
-  "ado-pat",
-  "bitbucket-pat",
-];
+// The LEGACY_NAMES list (github-pat, gitlab-pat, ado-pat, bitbucket-pat) lived
+// here. Those pre-convention secret names remain fully usable — a git_pat grant
+// can name any stored secret — they just can't be bucketed onto a host by name,
+// so deriveProviders skips them. The list itself was only ever read by the
+// deleted SCM Provider step, which listed them in a footer; the SKIPPING is in
+// deriveProviders' own name-parsing and is pinned by scm-provider.test.ts.
 
 export interface ProviderRow {
   host: string;

@@ -31,7 +31,7 @@ import { Check, Loader2 } from "lucide-react";
 import { deriveIntegrations, type IntegrationRow } from "../../../lib/api/integrations";
 import { harnessAuth } from "../../../lib/api/harness-auth";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
-import { slugHost } from "../../../lib/scm-provider";
+import { hostError, slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -449,6 +449,12 @@ export function GitHostCard({
   // single global credential.
   const [host, setHost] = React.useState(scm[0]?.typeLabel || "github.com");
   const slug = slugHost(host || "github.com");
+  // Mirrors the server's own validSiteHost rule (site_config.go) AND the secret
+  // store's 128-char name limit, checked BEFORE the write. Without it a
+  // shape-invalid host stores its credential and only fails later when the
+  // scm_hosts write 400s — the credential already saved under a name nothing
+  // will ever read.
+  const hostErr = hostError(host);
 
   const patName = `git-pat-${slug}`;
   const sshName = `ssh-key-${slug}`;
@@ -459,12 +465,17 @@ export function GitHostCard({
   );
 
   const hostField = (
-    <Field label="Host" htmlFor="git-host" hint="The git host these credentials are for.">
+    <Field
+      label="Host"
+      htmlFor="git-host"
+      hint={hostErr ?? "The git host these credentials are for."}
+    >
       <Input
         id="git-host"
         value={host}
         placeholder="github.com"
         disabled={!operator}
+        aria-invalid={!!hostErr}
         onChange={(e) => setHost(e.target.value.trim())}
       />
     </Field>
@@ -488,7 +499,7 @@ export function GitHostCard({
             placeholder="ghp_…"
             secretName={patName}
             stored={present.includes(patName)}
-            disabled={!operator}
+            disabled={!operator || !!hostErr}
             onChanged={onChanged}
             extra={hostField}
             hint={S.STORE_NOTE}
@@ -509,7 +520,7 @@ export function GitHostCard({
             placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
             secretName={sshName}
             stored={present.includes(sshName)}
-            disabled={!operator}
+            disabled={!operator || !!hostErr}
             onChanged={onChanged}
             extra={hostField}
           />

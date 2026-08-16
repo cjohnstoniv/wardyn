@@ -192,23 +192,11 @@ export interface WireIntegrationSecret {
   delivery?: WireIntegrationDelivery;
 }
 
-/** The optional verification request behind "Test" (types.IntegrationProbe). */
-export interface WireIntegrationProbe {
-  method: string;
-  url: string;
-}
+// WireIntegrationProbe / WireIntegrationProbeStatus lived here. The
+// verification-probe framework (POST /integrations/{id}/test) was removed in
+// 0.5 with the integration catalog it served — see internal/types/workspace.go,
+// which carries the same note server-side.
 
-/** Server-cached, read-only last probe result (types.IntegrationProbeStatus). */
-export interface WireIntegrationProbeStatus {
-  state: "passed" | "failed" | "not_tested" | (string & {});
-  checked_at?: string;
-  detail?: string;
-}
-
-// The base-component shape (types.Integration): one `kind` replacing the old
-// Category+Type split, secrets[] with per-row delivery, egress[], kind-
-// validated config. The server folds pre-base-component stored rows forward
-// at read, so this is the ONLY wire shape a client ever sees.
 export interface WireIntegration {
   id: string;
   name?: string;
@@ -217,17 +205,8 @@ export interface WireIntegration {
   secrets?: WireIntegrationSecret[];
   egress?: string[];
   // Kind-validated non-secret config (e.g. "lane", "region", "ecosystems").
-  // UI-LIB-5: PUT /integrations/{id} is a full replacement (IntegrationWrite,
-  // api/integrations.ts), so a round-tripping caller needs this field on the
-  // GET shape too, or it silently writes the zero value back.
   config?: Record<string, unknown>;
-  probe?: WireIntegrationProbe;
-  // Read-only; never sent back on a write.
-  probe_status?: WireIntegrationProbeStatus;
   docs?: string;
-  // Capability ids the operator turned off individually. Same round-trip
-  // reason as `config` above (UI-LIB-5).
-  disabled_capabilities?: string[];
   default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
   // The server's live per-capability matrix for this row

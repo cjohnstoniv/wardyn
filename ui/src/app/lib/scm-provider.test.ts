@@ -10,7 +10,6 @@ import {
   hostError,
   laneOfName,
   LANE_META,
-  LEGACY_NAMES,
   deriveProviders,
 } from "./scm-provider";
 
@@ -133,7 +132,12 @@ describe("LANE_META — honesty canon", () => {
   });
 });
 
-describe("LEGACY_NAMES", () => {
+// The list used to be exported for the deleted SCM Provider step's footer.
+// Inlined here: what matters is that deriveProviders SKIPS these names, which
+// is behavior, not a constant.
+const LEGACY_NAMES = ["github-pat", "gitlab-pat", "ado-pat", "bitbucket-pat"];
+
+describe("legacy pre-convention secret names", () => {
   it("lists exactly the four pre-convention names", () => {
     expect(LEGACY_NAMES).toEqual(["github-pat", "gitlab-pat", "ado-pat", "bitbucket-pat"]);
   });

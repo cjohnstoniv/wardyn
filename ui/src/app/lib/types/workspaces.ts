@@ -117,41 +117,13 @@ export interface WorkspaceLLMCred {
   integration_ref?: string;
 }
 
-// ---- The tier-1 source library + tier-2 image catalog (wire rows) ----
-// Mirror internal/types/workspace_contract.go's Source / BaseImageEntry.
+// The tier-1 source library and tier-2 image catalog wire rows (Source,
+// BaseImageEntry) lived here. Both screens that rendered them —
+// sources-library.tsx and image-catalog.tsx — were deleted in 0.5 when
+// Workspaces collapsed to one table and one dialog. The server routes still
+// exist (Stage 3 owns their removal); this file is the UI's own mirror, and the
+// UI no longer has a consumer for either shape.
 
-// One library source: a repo/dir configured ONCE — its own requirements
-// contract, its own scan profile/status — attached to any number of
-// workspaces. Identity (kind, locator, ref) is deduplicated server-side.
-export interface Source {
-  id: string;
-  kind: "local_dir" | "repo";
-  locator: string;
-  ref?: string;
-  name: string;
-  requirements?: WorkspaceRequirementsMap;
-  profile?: Record<string, unknown> | null;
-  status: WorkspaceStatus;
-  active_run_id?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-// One catalog image: registry ref / custom recipe / BYO — shared across
-// workspaces. "recommended" is never a catalog row (derived per workspace).
-export interface BaseImageEntry {
-  id: string;
-  kind: "registry" | "custom" | "byo";
-  name: string;
-  image: string;
-  steps?: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-// ---- Composition + requirements-contract wire types ----
-// Mirror internal/types/workspace.go + workspace_contract.go 1:1. The request
-// shape doubles as the response shape (identical wire fields either way).
 export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
 
 // One entry in a workspace's composition — a Workspace is one-or-more of
@@ -188,16 +160,9 @@ export interface WorkspaceRequirement {
 }
 export type WorkspaceRequirementsMap = Record<string, WorkspaceRequirement>;
 
-// One attachment in the three-tier model: this workspace mounts a shared
-// library source (source_id) — or an inline ephemeral scratch row — at
-// `target`, with per-ATTACHMENT writability.
-// Ordering is load-bearing: attachments[0] is the primary.
-export interface WorkspaceAttachment {
-  source_id?: string;
-  ephemeral?: boolean;
-  target?: string;
-  writable?: boolean;
-}
+// WorkspaceAttachment (the three-tier model's per-mount row) lived here. The
+// screens that read it went with the sources library; the server field remains
+// until Stage 3.
 
 // The contract a run against `ws` is actually held to: the server's fold of
 // the attached sources' contracts under this workspace's own overlay
@@ -257,9 +222,6 @@ export interface Workspace {
   // The server-side fold of attached sources' contracts under the overlay —
   // read-only, recomputed at every read.
   effective_requirements?: WorkspaceRequirementsMap;
-  // The three-tier attachment list (shared library sources + inline ephemeral
-  // rows, with per-attachment writability).
-  attachments?: WorkspaceAttachment[];
   created_at: string;
   updated_at: string;
 }

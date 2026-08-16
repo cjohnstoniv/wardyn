@@ -24,14 +24,6 @@ export const T = {
   // and its gate is where a redirect proves itself (T.CORP_POINTER).
   FOOTNOTE:
     "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the one exception is the GitHub App's ref-confinement row, which really asks GitHub.",
-  STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
-  EMPTY_TITLE: "No integrations",
-  EMPTY_BODY:
-    "Wardyn runs anything without any of this — add an integration when a run or a Wardyn feature needs one. Governed commands, interactive runs, and terminal recordings need none.",
-  EMPTY_AI:
-    "None. Runs work without a model — add one to have a coding agent drive a run, or to use Wardyn's own AI features.",
-  EMPTY_SCM: "None. Public repos clone without any credential.",
-  EMPTY_OTHER: "None. Add one when a run needs a package feed, registry, cloud provider, data store, or other service.",
   // No "…or add it here" alternative any more — there is exactly one place a
   // proxy is configured, and the banner names it.
   PROXY_BANNER:
@@ -135,43 +127,21 @@ export const T = {
   X_OPENAI_CLAUDE: "Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting.",
   X_SUB_DIRECT:
     "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting.",
-  X_AZURE_HARNESS:
-    "Neither agent tool can be pointed at an Azure OpenAI deployment. Azure powers Wardyn's own features only.",
-  X_AZURE_DIRECT: "No sandbox lane exists — Azure is called from the control plane only.",
   BEDROCK_FEATURES:
     "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses.",
-  CACHE_CAVEAT: "Answers are cached for 5 minutes — Re-check may return the cached one.",
   WRITE_ONLY: "The store is write-only: the value can't be read back.",
   MANAGED_LINE: "One login in a sandbox; the token is injected proxy-side and the sandbox holds only an inert sentinel.",
   HOSTCLI_LINE: "Uses the ~/.claude login on this host, mounted read-only into the run.",
-  SEALED_NOTE:
-    "Sealed control plane — wardynd runs in a container, so it can only see a ~/.claude that's mounted into it. The managed login avoids the problem entirely.",
-  LANE_SWITCH: "One integration; the lane is switchable later.",
   VIEWER_HINT: "Operator role required",
-  VIEWER_LINE:
-    "You're a viewer — everything here is readable; adding, rotating, defaults and deletion need an operator.",
-  STEP_LEDE:
-    "Optional. Wardyn runs governed commands, interactive runs, and recordings with nothing connected. Add an integration when a run or a Wardyn feature needs one.",
-  CAT_AI: "Powers a coding agent's model calls, or Wardyn's own AI features. Skip if you run governed commands or drive runs yourself.",
-  CAT_SCM: "Lets runs clone from a git host. Skip if your repos are public.",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
   TY_OPENAI: "Drives Codex CLI, direct API calls, and Wardyn's features.",
-  TY_AZURE: "Powers Wardyn's own AI features only. Neither agent tool can be pointed at an Azure deployment.",
   // "Agent in the box" Getting-Started step (v0.5 local/design-prompts-v0.5/
   // prompt-v1-demo-step.md) — not a mock-export transcription like the rest of
   // this file (no mockup round covers this step yet); copy is verbatim from
   // that design prompt.
-  HARNESS_LOCKED_LEDE:
-    "A real agent run against your model provider, with egress sealed to that provider alone.",
-  HARNESS_LOCKED_PANEL: "Connect a model provider first",
-  HARNESS_LOCKED_CTA: "Go to Integrations",
   // Claude Code only (H3, post-review fix): the catalog's task/policy are
   // Anthropic-specific, and the codex-cli agent image carries no claude
   // binary — an OpenAI-only deployment stays locked, honestly, with a reason.
-  HARNESS_OPENAI_ONLY_NOTE: "This demo runs Claude Code — connect an Anthropic-capable provider to try it.",
-  HARNESS_PREFLIGHT_UNAVAILABLE: "Preflight unavailable — you can still start.",
-  PROVE_IT_BANNER: "Model connected — prove it live",
-  TRY_AGENT_BOX: "Try Agent in the box",
 };
 
 // ============================ EGRESS REDIRECT SUGGESTIONS (verbatim) ============================
@@ -275,13 +245,6 @@ export const CAPS = {
       { label: "Wardyn features", on: true, note: "Composer and review use it from the control plane." },
     ];
   },
-  azure(): CapabilityRow[] {
-    return [
-      { label: "Claude Code · Codex CLI", fact: T.X_AZURE_HARNESS },
-      { label: "Direct API calls", fact: T.X_AZURE_DIRECT },
-      { label: "Wardyn features", on: true, note: "Composer and review call your Azure deployment from the control plane." },
-    ];
-  },
 };
 
 // ============================ STRUCTURED METADATA (this module's own design) ============================
@@ -298,21 +261,12 @@ export const CAPS = {
 // the type is what enforces that.
 export type IntegrationCategory = "ai_provider" | "scm_host";
 
-export interface CategoryMeta {
-  /** lucide-react export name — a pure module can't import the component itself. */
-  icon: string;
-  title: string;
-  /** Verbatim T.CAT_* — when a run/feature doesn't need this category. */
-  skipIfLine: string;
-}
-
-export const CATEGORY_META: Record<IntegrationCategory, CategoryMeta> = {
-  ai_provider: { icon: "Sparkles", title: "AI provider", skipIfLine: T.CAT_AI },
-  scm_host: { icon: "GitBranch", title: "SCM host", skipIfLine: T.CAT_SCM },
-};
+// CATEGORY_META (icon/title/skipIfLine per category) lived here for the deleted
+// /integrations page's section headers. The Settings cards carry their own
+// titles, so nothing consumes it. T.CAT_AI / T.CAT_SCM go with it.
 
 // ---- AI credential types (mockup's AddTypeAI radio cards) ----
-export type AiType = "anthropic_api_key" | "anthropic_subscription" | "bedrock" | "openai_api_key" | "azure_openai";
+export type AiType = "anthropic_api_key" | "anthropic_subscription" | "bedrock" | "openai_api_key";
 
 export interface AiTypeMeta {
   title: string;
@@ -338,7 +292,6 @@ export const AI_TYPES: Record<AiType, AiTypeMeta> = {
     capabilityPreview: CAPS.bedrock,
   },
   openai_api_key: { title: "OpenAI API key", desc: T.TY_OPENAI, capabilityPreview: CAPS.openai },
-  azure_openai: { title: "Azure OpenAI", desc: `${T.TY_AZURE} Key or Entra.`, capabilityPreview: CAPS.azure },
 };
 
 // ---- Residency (mockup's resChip kinds, generalized into a label+tone+tooltip
@@ -441,5 +394,4 @@ export const IMPOSSIBLE: Partial<Record<AiType, Partial<Record<AiCapability, str
   anthropic_subscription: { codex_cli: T.X_SUB_CODEX, direct_api: T.X_SUB_DIRECT },
   bedrock: { codex_cli: T.X_BEDROCK_CODEX },
   openai_api_key: { claude_code: T.X_OPENAI_CLAUDE },
-  azure_openai: { claude_code: T.X_AZURE_HARNESS, codex_cli: T.X_AZURE_HARNESS, direct_api: T.X_AZURE_DIRECT },
 };

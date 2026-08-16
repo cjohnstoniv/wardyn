@@ -83,22 +83,11 @@ const openaiTeam: IntegrationRow = {
   checkIds: [],
 };
 
-// Wardyn-features-only: azure_openai is impossible for BOTH claude_code and
-// codex_cli (IMPOSSIBLE.azure_openai) — it can never drive any agent, only
-// Wardyn's own features. Distinct from openaiTeam above, which is impossible
-// for claude_code but genuinely compatible with codex_cli.
-const azureFeaturesOnly: IntegrationRow = {
-  id: "ai:azure_openai",
-  category: "ai_provider",
-  name: "Azure OpenAI",
-  typeLabel: "azure · openai key",
-  chips: [],
-  residency: "control_plane",
-  posture: { kind: "configured" },
-  secretNames: ["azure-openai-key"],
-  aiType: "azure_openai",
-  checkIds: [],
-};
+// The azureFeaturesOnly fixture lived here: a row impossible for BOTH agents,
+// proving such a row gets the amber none-line rather than the neutral
+// wait-for-review one. azure_openai was the only kind that could ever be that
+// row, and it was removed in 0.5 — see couldDriveSomeAgent in step-access.tsx,
+// which is now a guard with no reachable false branch.
 
 function renderStep(overrides?: Partial<Parameters<typeof StepAccess>[0]>) {
   return render(
@@ -528,21 +517,6 @@ describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variant
     getSetupStatusMock.mockResolvedValue(baseStatus());
     render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
     expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
-  });
-
-  // MEDIUM fix: a row that can't drive ANY agent (Wardyn-features-only, e.g.
-  // Azure OpenAI) must not hide behind the neutral "wait for review" line —
-  // that implies a different agent might still resolve it, which is false
-  // here no matter which agent the eventual proposal picks.
-  it("renders the amber none-line (not neutral) when the only integration can't drive ANY agent — Wardyn-features-only", async () => {
-    listWorkspacesMock.mockResolvedValue([]);
-    listIntegrationsMock.mockResolvedValue(integrations([azureFeaturesOnly]));
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "azure_openai", kind: "azure_openai" }] }),
-    );
-    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
-    expect(await screen.findByText(RD.NONE_LINE("Claude Code"))).toBeInTheDocument();
-    expect(screen.queryByText(RD.AGENT_AT_REVIEW_LINE)).toBeNull();
   });
 
   // The genuine agent-mismatch case stays neutral: an OpenAI key can't drive

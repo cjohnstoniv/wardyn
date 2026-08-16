@@ -22,9 +22,8 @@ describe("aiServerId", () => {
     expect(aiServerId("openai_api_key")).toBe("openai_api_key");
   });
 
-  it("is undefined for azure_openai — no site-config field/SetupCheck id exists to adopt", () => {
-    expect(aiServerId("azure_openai")).toBeUndefined();
-  });
+  // Every AiType now maps to a server id. azure_openai was the one that didn't
+  // (no site-config field, no SetupCheck id) and it was removed in 0.5.
 });
 
 describe("deriveIntegrations — empty inputs", () => {
