@@ -273,7 +273,6 @@ export interface SetupStatus {
     // by id) — a second, unconsumed copy of the same signal here would just
     // be surface for the two to drift.
   };
-  composer: { enabled: boolean; default?: string; backends: ComposerBackendReadiness[] };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };
   age_key: { durable: boolean };

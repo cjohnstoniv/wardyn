@@ -140,7 +140,6 @@ describe("AppShell — top bar barrier chip (stage-1)", () => {
             checks: [],
             auth: { mode: "sso", local_loopback: false },
             runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] },
-            composer: { enabled: false, backends: [] },
             providers: [],
             secrets: { present: [], github_app: false },
             age_key: { durable: false },

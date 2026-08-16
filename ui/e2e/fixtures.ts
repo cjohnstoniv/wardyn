@@ -73,8 +73,17 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // the current case — it is route-reachable until it folds into Audit as a tab.
 // Use navTo for anything the sidebar actually lists; reaching a sidebar entry
 // this way would stop proving the link works.
+//
+// This is a CLIENT-SIDE navigation, not page.goto(), and that distinction is
+// load-bearing: a full document load re-runs the app's auth probe, so any test
+// that has already installed a failing route intercept would never mount the
+// shell at all. React Router listens to popstate, so pushState + popstate is
+// exactly what a <NavLink> click does.
 export async function navToRoute(page: Page, path: string): Promise<void> {
-  await page.goto(path);
+  await page.evaluate((p) => {
+    window.history.pushState({}, "", p);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, path);
 }
 
 

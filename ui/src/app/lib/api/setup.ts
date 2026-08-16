@@ -20,7 +20,6 @@ const READY_FALLBACK: SetupStatus = {
   checks: [],
   auth: { mode: "local", local_loopback: true },
   runner: { driver: "none", confinement_classes: [] },
-  composer: { enabled: false, backends: [] },
   providers: [],
   secrets: { present: [], github_app: false },
   age_key: { durable: false },

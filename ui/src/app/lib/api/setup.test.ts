@@ -31,7 +31,6 @@ describe("setup.getSetupStatus()", () => {
     checks: [{ id: "gvisor", label: "gVisor runtime", status: "warn" }],
     auth: { mode: "local", local_loopback: true },
     runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] },
-    composer: { enabled: false, backends: [] },
     providers: [],
     secrets: { present: [], github_app: false },
     age_key: { durable: false },

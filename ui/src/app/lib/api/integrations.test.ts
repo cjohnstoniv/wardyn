@@ -158,12 +158,15 @@ describe("deriveIntegrations — AI providers", () => {
     expect(describePosture(row.posture).text).toMatch(/^Session expires \d{1,2}:\d{2}/);
   });
 
-  it("azure_openai derives from a composer backend even with no conventional secret name", () => {
-    const status = baseStatus({ composer: { enabled: true, backends: [{ name: "corp-azure", provider: "azure", model: "gpt-4o", wire: "api", enabled: true, needs_key: true, key_resolved: true, key_secret: "corp-azure-key" }] } });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.name).toBe("corp-azure");
+  it("azure_openai derives from the conventional secret name", () => {
+    // Azure used to also derive from a registered composer backend. That field
+    // left the wire with the AI Run Composer, so the conventional secret is now
+    // the only signal.
+    const status = baseStatus();
+    const [row] = deriveIntegrations(status, null, ["azure-openai-key"]).ai;
+    expect(row.name).toBe("Azure OpenAI");
     expect(row.residency).toBe("control_plane");
-    expect(row.secretNames).toEqual(["corp-azure-key"]);
+    expect(row.secretNames).toEqual(["azure-openai-key"]);
     // Azure can drive neither agent tool — both collapse into ONE fact chip.
     expect(row.chips.some((c) => c.muted && c.label === "Claude Code · Codex CLI · n/a")).toBe(true);
   });

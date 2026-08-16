@@ -363,26 +363,23 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     });
   }
 
-  // W5: no site-config field for an Azure endpoint yet, and no dedicated
-  // SetupCheck id either — the composer backend registry is the only real
-  // signal; the conventional secret name is the fallback so a key stored
-  // ahead of a composer config still surfaces as an integration.
-  const azureBackend = status.composer.backends.find((b) => b.provider === "azure");
-  if (azureBackend || present.includes("azure-openai-key")) {
-    const secretName = azureBackend?.key_secret ?? "azure-openai-key";
-    // key_resolved is composer's own "was this present at boot" verdict for
-    // THIS backend's key — more direct than re-checking the general secret
-    // list, which is what it's for (see ComposerBackendReadiness's doc comment).
-    const resolved = azureBackend ? azureBackend.key_resolved : present.includes(secretName);
+  // W5: no site-config field for an Azure endpoint yet and no dedicated
+  // SetupCheck id, so the conventional secret name is the only signal. It used
+  // to also consult status.composer.backends for a registered Azure backend —
+  // that field left the wire with the AI Run Composer, and reading it was a
+  // live TypeError on every screen that derives readiness (the type still
+  // declared it, so typecheck was happy and only the e2e suite caught it).
+  if (present.includes("azure-openai-key")) {
+    const secretName = "azure-openai-key";
     rows.push({
       id: "ai:azure_openai",
       category: "ai_provider",
-      name: azureBackend?.name ?? "Azure OpenAI",
+      name: "Azure OpenAI",
       typeLabel: AI_TYPE_LABEL.azure_openai,
       chips: capabilityChips("azure_openai"),
       residency: aiResidency("azure_openai", undefined, undefined),
-      posture: resolved ? { kind: "configured" } : { kind: "region_model_unset" },
-      secretNames: resolved ? [secretName] : [],
+      posture: { kind: "configured" },
+      secretNames: [secretName],
       aiType: "azure_openai",
       checkIds: [],
     });

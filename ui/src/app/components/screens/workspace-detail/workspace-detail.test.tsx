@@ -82,7 +82,6 @@ function setupStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
     checks: [],
     auth: { mode: "local", local_loopback: true },
     runner: { driver: "docker", confinement_classes: ["CC1"] },
-    composer: { enabled: false, backends: [] },
     providers: [],
     secrets: { present: [], github_app: false },
     age_key: { durable: false },

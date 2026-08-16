@@ -8,17 +8,15 @@ import type { SetupStatus } from "./types";
 import { hasLlmPath, deriveReadiness } from "./readiness";
 import { baseStatus } from "./test-fixtures";
 
-// A minimal-but-valid SetupStatus. The default `make setup` config is a single
-// `fake` (deterministic stub) composer backend + no CLI login + no key secret —
-// the case that must NOT read as real LLM access anywhere in the funnel. This
-// suite's own pins: ready, CC1-only runner, a non-durable-loopback local auth,
-// an enabled/`dev` composer, no providers, and a durable secret store.
+// A minimal-but-valid SetupStatus: no CLI login and no key secret — the case
+// that must NOT read as real LLM access. This suite's own pins: ready, CC1-only
+// runner, a non-durable-loopback local auth, no providers, and a durable secret
+// store.
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
     ready: true,
     runner: { driver: "docker", confinement_classes: ["CC1"] },
     auth: { mode: "local", local_loopback: false },
-    composer: { enabled: true, default: "dev", backends: [] },
     providers: [],
     age_key: { durable: true },
     platform: { os: "linux", wsl: false },
@@ -26,23 +24,15 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
-const fakeBackend = {
-  name: "dev",
-  provider: "fake",
-  model: "demo",
-  wire: "fake",
-  enabled: true,
-  needs_key: false,
-  key_resolved: true,
-};
-
-// llmReady/llmLabel/composerReady now read the same integration rows
-// /integrations itself derives (lib/api/integrations.ts) instead of a bespoke
-// heuristic over raw SetupStatus fields — see readiness.ts's own header comment
-// for why the fake-backend honesty guard survives this unchanged.
-describe("hasLlmPath — honesty guard for the fake composer backend, now via the integrations adapter", () => {
-  it("does NOT count a fake-only backend as LLM access (default make setup config)", () => {
-    expect(hasLlmPath(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }))).toBe(false);
+// llmReady/llmLabel read the same integration rows /integrations itself derives
+// (lib/api/integrations.ts) instead of a bespoke heuristic over raw SetupStatus
+// fields. The old "fake composer backend must not read as LLM access" guard is
+// gone with the composer itself — there are no backends to mis-count now — but
+// the invariant it protected still matters: a status with no real credential
+// anywhere must report no LLM path.
+describe("hasLlmPath — via the integrations adapter", () => {
+  it("does NOT count a bare status as LLM access (default make setup config)", () => {
+    expect(hasLlmPath(status())).toBe(false);
   });
 
   it("counts a logged-in CLI (auth_mode: subscription — deriveAiRows' own signal for a resident login)", () => {
@@ -50,7 +40,6 @@ describe("hasLlmPath — honesty guard for the fake composer backend, now via th
       hasLlmPath(
         status({
           providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
-          composer: { enabled: true, default: "dev", backends: [fakeBackend] },
         }),
       ),
     ).toBe(true);
@@ -107,22 +96,15 @@ describe("hasLlmPath — honesty guard for the fake composer backend, now via th
     expect(
       hasLlmPath(
         status({
-          composer: {
-            enabled: true,
-            default: "az",
-            backends: [
-              { name: "az", provider: "azure", model: "gpt-4o", wire: "azure_openai", enabled: true, needs_key: true, key_secret: "azure-openai-key", key_resolved: true },
-            ],
-          },
         }),
       ),
     ).toBe(false);
   });
 });
 
-describe("deriveReadiness — must not overclaim a fake backend as a connected model", () => {
-  it("fake-only: llmReady/composerReady false and no label", () => {
-    const r = deriveReadiness(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }));
+describe("deriveReadiness — must not overclaim a connected model", () => {
+  it("nothing configured: llmReady/composerReady false and no label", () => {
+    const r = deriveReadiness(status());
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
     expect(r.composerReady).toBe(false);
@@ -159,16 +141,10 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
   });
 
   it("Azure powers Wardyn features (composerReady) but never counts as an agent-tool path (llmReady)", () => {
+    // Azure derives from the conventional secret now that composer backends
+    // are gone from SetupStatus; the capability split it proves is unchanged.
     const r = deriveReadiness(
-      status({
-        composer: {
-          enabled: true,
-          default: "az",
-          backends: [
-            { name: "az", provider: "azure", model: "gpt-4o", wire: "azure_openai", enabled: true, needs_key: true, key_secret: "azure-openai-key", key_resolved: true },
-          ],
-        },
-      }),
+      status({ secrets: { present: ["azure-openai-key"], github_app: false } }),
     );
     expect(r.llmReady).toBe(false);
     expect(r.composerReady).toBe(true);
