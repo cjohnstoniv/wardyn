@@ -48,7 +48,7 @@ import type {
   Workspace,
 } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
-import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
+import { statusTone, statusWord } from "../../../lib/workspace-status";
 
 // D6/claim3: the Egress summary used to print a bare count — the one screen
 // whose job is "show what you're launching" made the operator open the raw
@@ -443,9 +443,13 @@ export function StepReview({
                           {w?.name ?? sel.workspaceId} ({w?.source ?? "unresolved"})
                           {w?.kind === "local_dir" && mount && ` — ${mount.read_only ? "ro" : "rw"}`}
                         </Mono>
-                        {/* Surface scan status so a still-pending / errored workspace isn't
-                            attached silently at the final gate. */}
-                        {w && !isUsable(w.status) && (
+                        {/* Surface a FAILED workspace so it is never attached silently at
+                            the final gate. Keyed on the failure itself, not on
+                            isUsable: attachment never depended on this status (an
+                            errored workspace attaches fine), so isUsable is now true
+                            for every status — and keying the warning off it silenced
+                            the one place whose whole job is to warn here. */}
+                        {w && statusWord(w.status) === "Import failed" && (
                           <Chip tone={statusTone(w.status).tone} className="px-1.5 py-0 text-[0.625rem]">
                             {statusWord(w.status)}
                           </Chip>

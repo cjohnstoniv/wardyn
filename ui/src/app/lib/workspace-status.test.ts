@@ -101,4 +101,19 @@ describe("isUsable", () => {
   it("is true for every status, including error", () => {
     for (const s of ALL) expect(isUsable(s)).toBe(true);
   });
+
+  // The trap this predicate now sets. Because it answers "can a run attach
+  // this" and the answer is always yes, it is USELESS as a "should we warn"
+  // signal — `!isUsable(...)` is dead code that renders nothing. New Run's
+  // final-gate warning was written that way and went silent; it keys on
+  // statusWord === "Import failed" instead. Anything that wants to WARN must
+  // ask statusWord, never isUsable.
+  it("cannot be inverted into a warning signal — !isUsable is never true", () => {
+    for (const s of [...ALL, "something_future" as WorkspaceStatus]) {
+      expect(!isUsable(s)).toBe(false);
+    }
+    // The signal a warning should use instead still distinguishes the failure.
+    expect(statusWord("error")).toBe("Import failed");
+    expect(statusWord("scanned")).toBe("Ready");
+  });
 });
