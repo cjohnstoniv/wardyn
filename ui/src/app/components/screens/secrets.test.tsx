@@ -27,10 +27,6 @@ vi.mock("../../lib/api/secrets", () => ({
     setSecret: (...a: unknown[]) => setSecretMock(...a),
   },
 }));
-// The screen also lists composer backends (advisory); stub it to an empty list.
-vi.mock("../../lib/api/compose", () => ({
-  composer: { listComposerBackends: () => Promise.resolve([]) },
-}));
 
 import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";

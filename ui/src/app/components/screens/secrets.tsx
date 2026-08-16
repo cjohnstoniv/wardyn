@@ -6,9 +6,7 @@
 import * as React from "react";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch } from "lucide-react";
 import { secrets as secretsApi } from "../../lib/api/secrets";
-import { composer as composerApi } from "../../lib/api/compose";
 import { getErrorMessage } from "../../lib/format";
-import type { ComposerBackend } from "../../lib/types";
 import { LANE_META, laneOfName, type Lane } from "../../lib/scm-provider";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -37,8 +35,7 @@ import {
 } from "../ui/dialog";
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
-import { Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
-import { StatusChip } from "../wardyn/status-chip";
+import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
@@ -98,33 +95,6 @@ export function SecretsScreen() {
       .catch(() => setStatus("error"));
   }, []);
   React.useEffect(load, [load]);
-
-  // AI Run Composer backends (D13) — a secondary, advisory-only section: which
-  // composer backend(s) the daemon has configured at boot. GET /composer/backends
-  // only ever lists backends whose registry build already succeeded (a backend
-  // whose key failed to resolve fails wardynd's boot entirely — see
-  // buildComposerRegistry in cmd/wardynd), so anything returned here is genuinely
-  // ready, never a hopeful "configured but maybe broken" state.
-  const [backends, setBackends] = React.useState<ComposerBackend[]>([]);
-  const [backendsStatus, setBackendsStatus] = React.useState<"loading" | "ready">("loading");
-  React.useEffect(() => {
-    let cancelled = false;
-    Promise.resolve()
-      .then(() => composerApi.listComposerBackends())
-      // a request failure folds into the same "no backends" bucket as a
-      // genuinely empty list — good enough for this advisory-only section; split
-      // out a distinct error state if that ever proves confusing.
-      .catch(() => [] as ComposerBackend[])
-      .then((b) => {
-        if (!cancelled) {
-          setBackends(b);
-          setBackendsStatus("ready");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const filtered = names.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
 
@@ -249,53 +219,6 @@ export function SecretsScreen() {
               ))}
             </TableBody>
           </Table>
-        )}
-      </div>
-
-      <div className="mt-8 space-y-2">
-        <SectionLabel>AI Run Composer backends</SectionLabel>
-        {backendsStatus === "loading" ? (
-          <div className="rounded-xl border border-border bg-card p-4">
-            <StatusChip status="checking" />
-          </div>
-        ) : backends.length > 0 ? (
-          <div className="space-y-2">
-            {backends.map((b) => (
-              <div
-                key={b.name}
-                className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card p-4"
-              >
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Mono className="text-foreground">{b.name}</Mono>
-                    <span className="text-xs text-muted-foreground">
-                      {b.provider}/{b.model}
-                    </span>
-                    {b.is_default && <Chip tone="neutral">default</Chip>}
-                  </div>
-                  <p className="max-w-xl text-xs text-muted-foreground">
-                    Turns a plain-language task into a confined run setup for you to review.
-                    Advisory only — it never creates a run or mints a credential.
-                  </p>
-                </div>
-                <StatusChip status="ready" />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-2 rounded-xl border border-border bg-card p-4">
-            <div className="flex items-center justify-between gap-4">
-              <p className="max-w-xl text-sm text-foreground">
-                Turns a plain-language task into a confined run setup for you to review. Advisory
-                only — it never creates a run or mints a credential.
-              </p>
-              <StatusChip status="needs-setup" />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Optional. Set <Mono className="text-foreground">WARDYN_COMPOSER_CONFIG</Mono> (or the{" "}
-              <Mono className="text-foreground">-composer-config</Mono> flag) to enable it.
-            </p>
-          </div>
         )}
       </div>
 
