@@ -9,15 +9,21 @@ export function PageHeader({
   title,
   description,
   actions,
+  as: Heading = "h1",
 }: {
   title: string;
   description?: string;
   actions?: React.ReactNode;
+  /** Heading level. Defaults to h1 — the page's own title. A pane rendered
+   *  INSIDE another page (SshKeysPane on /settings) passes "h3" so the document
+   *  keeps exactly one h1 and the outline stays honest. */
+  as?: "h1" | "h3";
 }) {
+  const size = Heading === "h1" ? "text-[1.75rem] font-bold" : "text-sm font-medium";
   return (
     <div className="mb-5 flex items-start justify-between gap-4">
       <div className="space-y-1">
-        <h1 className="text-[1.75rem] font-bold leading-tight text-foreground">{title}</h1>
+        <Heading className={`${size} leading-tight text-foreground`}>{title}</Heading>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

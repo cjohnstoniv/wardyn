@@ -110,8 +110,8 @@ function initials(principal: string): string {
 const BARRIER_POLL_MS = 15000;
 
 // Flat sidebar nav — six items, no group headings (stage-1 redesign). Demos,
-// Recordings, and Integrations all left the sidebar: Demos is reachable from
-// the account menu below, Integrations/Recordings stay addressable by route
+// Recordings, and Settings all left the sidebar: Demos and Settings are
+// reachable from the account menu below, Recordings stays addressable by route
 // (deep link, workspace/run actions) without their own nav entry.
 interface NavItem {
   to: string;

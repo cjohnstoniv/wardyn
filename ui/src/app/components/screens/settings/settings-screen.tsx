@@ -81,9 +81,19 @@ function HostCard({
       </div>
 
       <div className="mt-4 divide-y divide-border border-t border-border pt-1">
+        {/* The check's LABEL is "Sandbox image builder" — echoing it next to a
+            row already labelled "Image builder" says nothing. Its status is the
+            fact: "ok" means the per-run builder is wired (devcontainer builds
+            and --image wraps fire), "info" means it's off. */}
         <Row
           label="Image builder"
-          value={envBuilder ? envBuilder.label : <span className="text-muted-foreground">Not wired</span>}
+          value={
+            envBuilder?.status === "ok" ? (
+              "Wired"
+            ) : (
+              <span className="text-muted-foreground">Off — devcontainer builds and --image wraps are unavailable</span>
+            )
+          }
         />
         <Row
           label="Recording store"
@@ -158,7 +168,7 @@ export function SettingsScreen() {
           <HostCard status={status} siteConfig={siteConfig} onRecheck={load} />
           <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={load} />
           <GitHostCard status={status} siteConfig={siteConfig} onChanged={load} />
-          <SshKeysPane />
+          <SshKeysPane heading="h3" />
         </div>
       )}
     </div>

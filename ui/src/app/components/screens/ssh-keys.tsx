@@ -47,7 +47,7 @@ export function SSHKeysScreen() {
   );
 }
 
-export function SshKeysPane() {
+export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [addOpen, setAddOpen] = React.useState(false);
@@ -68,6 +68,7 @@ export function SshKeysPane() {
   return (
     <div>
       <PageHeader
+        as={heading}
         title="Your SSH keys"
         description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; there is no admin view of anyone else's."
         actions={
