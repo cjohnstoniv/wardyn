@@ -66,16 +66,10 @@ import {
   RUN_MODE,
   VIEWER_APPROVAL_BLOCKS_NOTE,
 } from "../wardyn/copy";
-import { ConnectSSHCard } from "./run-detail-ssh";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
-import {
-  CredentialsWidget,
-  EgressWidget,
-  FilesChangedWidget,
-  IdentityWidget,
-  SandboxWidget,
-} from "./run-detail/widgets";
+import { RunCanvas } from "./run-detail/canvas";
+import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -319,8 +313,9 @@ export function RunDetailScreen() {
             }
           />
 
-          {/* Overview is the cockpit: it fills, and nothing inside it scrolls
-              except the evidence rail. */}
+          {/* Overview is the cockpit: it fills, and the CANVAS owns the only
+              scroll inside it (run-detail/canvas.tsx) — <main> still never
+              scrolls, which e2e asserts. */}
           <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
             <Cockpit
               run={run}
@@ -383,8 +378,12 @@ export function RunDetailScreen() {
 // so on a 1080p display the prompt line sat ~1,800px down. The timeline is
 // GONE — the Audit tab owns the trail — and the terminal now fills the pane.
 //
-// Layout: a fixed grid, terminal 1fr + a 400px evidence rail (design board
-// 2a). Nothing here scrolls except the rail.
+// Layout: phase 2 replaced the fixed terminal-1fr + 400px-rail grid with a
+// CONFIGURABLE canvas (design board 2b) — see run-detail/canvas.tsx. This
+// component's whole job now is to assemble the WidgetContext every widget
+// reads from, including the terminal hero itself: the canvas PLACES the
+// terminal, it does not build it, because building it needs the attach /
+// recording / approvals graph that lives here.
 // ---------------------------------------------------------------------------
 function Cockpit({
   run,
@@ -414,67 +413,59 @@ function Cockpit({
   onGoRecording: () => void;
 }) {
   const operator = useOperator();
+  const principal = usePrincipal();
   const viewerBlocked =
     pending.length > 0 && !operator && !pending.some((p) => canDecideApproval(false, p.kind));
-  return (
-    <div
-      className="grid min-h-0 flex-1 gap-2.5 p-2.5"
-      style={{ gridTemplateColumns: "minmax(0,1fr) 400px" }}
-    >
-      {/* Left column: the session, and directly beneath it the approval that
-          is holding the session. The testid is load-bearing for e2e, which
-          asserts this pane's TOP EDGE is above the fold — "the terminal
-          rendered" was true of the old screen too, ~1,120px down. */}
-      <div className="flex min-h-0 flex-col gap-2.5" data-testid="run-terminal-pane">
-        <TerminalPane
-          run={run}
-          terminal={terminal}
-          recording={recording}
-          recState={recState}
-          recordingDisabled={recordingDisabled}
-          onGoRecording={onGoRecording}
-        />
-        {/* THE POINT OF THE REDESIGN: a held egress request renders in the
-            terminal's own column, directly under the output that caused it —
-            not in a sidebar, not a toast. The person who has to decide it is
-            already looking here. Interactive OR autonomous, as long as the run
-            is live. */}
-        {run.state === "RUNNING" && (
-          <div className="shrink-0 space-y-2">
-            {/* Said once, where a viewer actually feels the consequence. This
-                used to be half of the Overview's pending-approval banner; the
-                banner is gone (the command bar states the count and the strip
-                below is the decision surface), but its VIEWER half carries
-                information nothing else on the page does — that the run is
-                stopped and they personally cannot unstick it. Same
-                canDecideApproval kind-question the banner asked: the page is
-                already owner-scoped, so a member here owns every approval
-                shown; egress_domain is theirs to decide, credential and
-                tool_call stay admin-only regardless. */}
-            {viewerBlocked && (
-              <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-[0.75rem] leading-relaxed text-muted-foreground">
-                {VIEWER_APPROVAL_BLOCKS_NOTE}
-              </p>
-            )}
-            <LiveApprovals runId={run.id} />
-          </div>
-        )}
-      </div>
 
-      {/* Evidence rail. It scrolls, and ONLY it does: the board draws this at
-          1080p where every widget fits, but measured at 560px the content is
-          585px in a 396px column — `overflow-hidden` would silently swallow
-          the last widget. The terminal pane still never scrolls. */}
-      <div className="scroll-thin flex min-h-0 flex-col gap-2.5 overflow-y-auto">
-        <EgressWidget egress={egress} onGoAudit={onGoAudit} />
-        <FilesChangedWidget runId={run.id} live={!terminal} />
-        <SandboxWidget runId={run.id} live={!terminal} />
-        <CredentialsWidget grants={grants} audit={audit} />
-        <ConnectSSHCard run={run} />
-        <IdentityWidget run={run} />
-      </div>
-    </div>
+  // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
+  // session, and directly beneath it the approval that is HOLDING the session —
+  // not in a sidebar, not a toast, because the person who has to decide it is
+  // already looking here. Interactive OR autonomous, as long as the run is live.
+  const terminalPane = (
+    <>
+      <TerminalPane
+        run={run}
+        terminal={terminal}
+        recording={recording}
+        recState={recState}
+        recordingDisabled={recordingDisabled}
+        onGoRecording={onGoRecording}
+      />
+      {run.state === "RUNNING" && (
+        <div className="shrink-0 space-y-2 pt-2.5">
+          {/* Said once, where a viewer actually feels the consequence. This
+              used to be half of the Overview's pending-approval banner; the
+              banner is gone (the command bar states the count and the strip
+              below is the decision surface), but its VIEWER half carries
+              information nothing else on the page does — that the run is
+              stopped and they personally cannot unstick it. Same
+              canDecideApproval kind-question the banner asked: the page is
+              already owner-scoped, so a member here owns every approval
+              shown; egress_domain is theirs to decide, credential and
+              tool_call stay admin-only regardless. */}
+          {viewerBlocked && (
+            <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-[0.75rem] leading-relaxed text-muted-foreground">
+              {VIEWER_APPROVAL_BLOCKS_NOTE}
+            </p>
+          )}
+          <LiveApprovals runId={run.id} />
+        </div>
+      )}
+    </>
   );
+
+  const ctx: WidgetContext = {
+    run,
+    finished: terminal,
+    principal,
+    grants,
+    egress,
+    audit,
+    onGoAudit,
+    terminalPane,
+  };
+
+  return <RunCanvas ctx={ctx} />;
 }
 
 // The Terminal widget's run situations (design board 2d). States 1 and 2
@@ -549,7 +540,14 @@ function TerminalPane({
   // lands here too — the honest thing, since the alternative is a terminal that
   // opens and immediately refuses.)
   return (
-    <PaneFrame title="Output" chip={run.interactive ? undefined : RUN_COCKPIT.autonomous}>
+    // "Terminal" vs "Output" is not decoration — the board uses them for two
+    // different situations. An interactive run HAS a PTY (you just may not
+    // drive this one); an autonomous run has none to type into at all, which
+    // is why that tile tails output instead of offering a prompt.
+    <PaneFrame
+      title={run.interactive ? "Terminal" : "Output"}
+      chip={run.interactive ? undefined : RUN_COCKPIT.autonomous}
+    >
       <PaneNotice
         text={
           run.interactive

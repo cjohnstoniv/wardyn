@@ -12,8 +12,6 @@
 // in as `tabs`, rather than this component importing the Tabs primitives
 // itself.
 import * as React from "react";
-import { RUN_COCKPIT } from "../wardyn/copy";
-import { LayoutGrid, Pencil, Plus } from "lucide-react";
 import { cn } from "../ui/utils";
 
 export function RunDetailCommandBar({
@@ -32,36 +30,6 @@ export function RunDetailCommandBar({
       )}
     >
       <div className="flex min-w-0 items-center gap-0.5">{tabs}</div>
-
-      {/* Layout controls from the design board — PHASE-2, no layout engine
-          exists yet (WidgetCard's own doc calls out the "layout engine in
-          phase 2" drag handle). Rendered disabled/inert, matching the
-          board's markup verbatim, so the row reads as "coming soon" rather
-          than a broken control. Do not wire these up here. */}
-      <div className="ml-auto flex shrink-0 items-center gap-1.5" aria-hidden="true">
-        <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 font-mono text-[0.6875rem] text-muted-foreground opacity-60">
-          <LayoutGrid className="size-3" />
-          {RUN_COCKPIT.layoutPreset("Live")}
-        </span>
-        <button
-          type="button"
-          disabled
-          tabIndex={-1}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground opacity-60 disabled:pointer-events-none"
-        >
-          <Plus className="size-3.5" />
-          {RUN_COCKPIT.addWidget}
-        </button>
-        <button
-          type="button"
-          disabled
-          tabIndex={-1}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground opacity-60 disabled:pointer-events-none"
-        >
-          <Pencil className="size-3.5" />
-          {RUN_COCKPIT.editLayout}
-        </button>
-      </div>
     </div>
   );
 }

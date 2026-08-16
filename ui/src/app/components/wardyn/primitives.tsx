@@ -394,12 +394,18 @@ export function SectionCard({
 //
 // `grow` opts the card into filling the leftover column height (the last widget
 // in a rail) instead of sizing to its content.
+//
+// It deliberately has NO drag-handle or overflow-menu props. It shipped with
+// both, on the assumption the phase-2 canvas would want the handle inside each
+// widget header — the canvas instead renders its own handle strip above the
+// card (it has to, since it also drives the SectionCard-based SSH card, which
+// is not a WidgetCard at all). Two unreachable props on a shared primitive are
+// a trap for the next person, so they are gone; re-add them the day something
+// actually passes one.
 export function WidgetCard({
   title,
   Icon,
   right,
-  menu,
-  dragHandleProps,
   grow,
   bodyClassName,
   className,
@@ -408,10 +414,6 @@ export function WidgetCard({
   title: string;
   Icon?: React.ElementType;
   right?: React.ReactNode;
-  /** Overflow-menu trigger (remove widget, …). Rendered after `right`. */
-  menu?: React.ReactNode;
-  /** Spread onto the header by the layout engine in phase 2; absent = not draggable. */
-  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
   grow?: boolean;
   bodyClassName?: string;
   className?: string;
@@ -425,13 +427,7 @@ export function WidgetCard({
         className,
       )}
     >
-      <div
-        {...dragHandleProps}
-        className={cn(
-          "flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2",
-          dragHandleProps && "cursor-grab active:cursor-grabbing",
-        )}
-      >
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2">
         {Icon && <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
         {/* h2, not a div: the cockpit's widgets are the page's section headings
             once the old SectionCard h2s are gone, and a rail of unlabelled
@@ -439,7 +435,6 @@ export function WidgetCard({
             class (theme.css). */}
         <h2 className="label-eyebrow">{title}</h2>
         {right && <div className="ml-auto flex items-center gap-1.5">{right}</div>}
-        {menu && <div className={cn(!right && "ml-auto")}>{menu}</div>}
       </div>
       <div className={cn("min-h-0", grow && "flex-1", bodyClassName ?? "px-2.5 py-2")}>{children}</div>
     </section>

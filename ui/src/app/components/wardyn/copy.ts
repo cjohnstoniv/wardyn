@@ -209,12 +209,21 @@ export const RUN_COCKPIT = {
   // place that fact is visible without scrolling or clicking.
   waiting: (n: number) => `${n} waiting`,
   waitingHeld: (n: number) => `${n} waiting · sandbox held`,
-  // Phase-2 layout controls. Verbatim from the design board; inert until the
-  // canvas lands, but named here so the live versions can't drift from the
-  // placeholders they replace.
+  // Phase-2 layout controls (the canvas + its edit-mode toolbar).
   layoutPreset: (preset: string) => `layout: ${preset}`,
   addWidget: "Add widget",
   editLayout: "Edit layout",
+  editing: "Editing layout",
+  resetLayout: "Reset to default",
+  saveLayoutDefault: "Save as my default",
+  doneEditing: "Done",
+  layoutSaved: "Saved as your default layout",
+  // Honest, not an error: the deployment's store cannot persist layouts (the
+  // endpoint 501s), so the arrangement is real but session-scoped. Said ONCE,
+  // inline in the toolbar — never a toast per drag.
+  layoutNotPersisted:
+    "This deployment can't store layouts — your arrangement lasts for this session.",
+  removeWidget: (label: string) => `Remove ${label}`,
 } as const;
 
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")
