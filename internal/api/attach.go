@@ -195,6 +195,53 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
 		})))
 
+	// HOLDER REGISTRY (attach_holder.go). Attach is a SHARED tmux session: a
+	// fresh Runner.Attach per client lands on the SAME persistent session, so
+	// without this two clients silently compete for one PTY and neither can see
+	// the other. Name the holder; admit a second client READ-ONLY (its input is
+	// dropped server-side in attachPump — never by asking the client to
+	// refrain); make displacing the holder an audited act (handleAttachTakeover).
+	holder := &attachHolder{
+		principal: principal,
+		actorType: principalType,
+		since:     s.cfg.Now().UTC(),
+		source:    attachSourceWeb,
+		cols:      opts.Cols,
+		rows:      opts.Rows,
+		displace: func(reason string) {
+			// Close, do NOT cancel: c.Read honours pumpCtx by tearing the
+			// connection down abruptly, and an abruptly-killed socket delivers no
+			// close frame — the displaced UI would see a bare drop and take its
+			// bounded-reconnect path, landing straight back on top of the new
+			// holder. c.Close writes the 1008 + reason frame FIRST, and that frame
+			// is the entire signal the UI distinguishes "taken over" by.
+			//
+			// On its own goroutine because Close performs the close HANDSHAKE: it
+			// waits for the peer's echo (5s cap) and for the pump goroutines to
+			// exit (15s cap), and the take-over HTTP request must not block on the
+			// displaced client's teardown. Those caps are also the backstop — the
+			// socket dies even if the peer never answers.
+			go func() { _ = c.Close(websocket.StatusPolicyViolation, reason) }()
+		},
+	}
+	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
+	// DEFERRED, not inline beside the session.detach audit below: a panicking
+	// pump would otherwise strand a phantom holder that every later attach reads
+	// as "held" forever, curable only by a restart.
+	defer releaseHolder()
+	if readOnly {
+		// Somebody else holds the PTY. nil holder is what marks this client an
+		// observer for attachPump (input AND resize dropped — see its doc).
+		holder = nil
+	}
+	// Tell the client which mode it got, ALWAYS (read_only=false included) — see
+	// attachModeMsg for the exact shape. Written from THIS goroutine, before the
+	// pump starts, so it is the first frame the client sees and never races the
+	// pump's own writer. A write failure here means the socket is already gone;
+	// the pump below ends on its own, so there is nothing to do about it beyond
+	// not pretending it succeeded.
+	_ = writeAttachMode(ctx, c, readOnly, s.attachHolderFor(id))
+
 	// PROVENANCE (PIECE 3): record this interactive session as a replayable
 	// asciicast so the human-in-sandbox is in the audit trail. We tee the server
 	// -> client PTY OUTPUT (what appeared on the terminal) through a re-snapshotting
@@ -225,8 +272,8 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
-	// masked PTY output for the asciicast.
-	closeReason := s.attachPump(pumpCtx, c, sess, id, castTee)
+	// masked PTY output for the asciicast. holder is nil for a read-only observer.
+	closeReason := s.attachPump(pumpCtx, c, sess, id, castTee, holder)
 	cancel()
 
 	// Persist the recording (best-effort) and emit session.recording when one was
@@ -248,8 +295,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// attribution trail). Record it on finishCtx (the daemon-lifetime BaseCtx /
 	// background fallback computed above), so the close event is durably written
 	// even though the request context is already cancelled.
+	// read_only rides along so the trail distinguishes the human who was DRIVING
+	// this terminal from the one who was watching over their shoulder — the pair
+	// is otherwise indistinguishable after the fact.
 	s.recordAudit(finishCtx, s.auditEvent(&id, principalType, principal, "session.detach",
-		id.String(), "success", mustJSON(map[string]any{"reason": closeReason})))
+		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": readOnly})))
 
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.
 	_ = c.Close(websocket.StatusNormalClosure, "")
@@ -283,7 +333,23 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 // is written to the client) for the session recording. It is the masked
 // asciicast sink. A castTee write error never affects the live session — the
 // recording is best-effort provenance, not part of the data path.
-func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, id uuid.UUID, castTee io.Writer) string {
+//
+// holder is non-nil ONLY for the client that HOLDS this run's PTY (see
+// attach_holder.go). A nil holder marks a READ-ONLY observer, and both
+// client->server directions are dropped for it:
+//
+//   - binary frames (keystrokes), because two clients typing into one shared
+//     tmux session is the exact interleaving this registry exists to prevent;
+//   - resize control frames, because tmux sizes a shared session to its SMALLEST
+//     client, so an observer's window would clamp the holder's terminal — that
+//     clamp is precisely the symptom the UI's Redraw button was invented to mop
+//     up (see refit in attach-terminal.tsx).
+//
+// Dropping happens HERE, server-side, and never by asking the client to refrain
+// from sending: the client is the one component we do not control. A read-only
+// client still learns its mode from the attach-mode control frame the handler
+// sent on open, so it can grey out its input rather than type into a void.
+func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, id uuid.UUID, castTee io.Writer, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -346,15 +412,23 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				// unknown control message is ignored (it is never injected into
 				// the PTY, so it cannot smuggle keystrokes).
 				var msg resizeMsg
-				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" {
+				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && holder != nil {
 					_ = sess.Resize(ctx, msg.Cols, msg.Rows)
+					// Keep the registry's geometry LIVE: the handshake ?cols=&rows=
+					// is stale the moment the operator drags their window, and
+					// GET /runs/{id}/attach-holder reporting a stale size with
+					// confidence is worse than reporting none.
+					holder.setSize(msg.Cols, msg.Rows)
 				}
 			case websocket.MessageBinary:
-				// Raw PTY input (keystrokes).
-				if _, werr := sess.Write(data); werr != nil {
-					reasonCh <- "session write failed"
-					cancel()
-					return
+				// Raw PTY input (keystrokes) — dropped entirely for a read-only
+				// observer (holder == nil).
+				if holder != nil {
+					if _, werr := sess.Write(data); werr != nil {
+						reasonCh <- "session write failed"
+						cancel()
+						return
+					}
 				}
 			}
 		}

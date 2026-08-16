@@ -71,6 +71,79 @@ export interface AgentRun {
   image?: string;
 }
 
+// ============================================================
+// Live-run evidence reads (the run-detail cockpit's widgets). These mirror
+// internal/api/run_files.go and internal/api/run_resources.go — hand-maintained,
+// with no parity test between the two, so a field renamed on the Go side is a
+// runtime TypeError the console only catches in e2e. Change both together.
+
+// ONE changed path in a run's workspace (GET /runs/{id}/files).
+export interface RunFileStat {
+  path: string;
+  // git's porcelain code, position padding trimmed: "M", "A", "D", "??", "MM"…
+  // Absent when the file was in the diff but not in `git status`.
+  status?: string;
+  // OPTIONAL ON PURPOSE, and the widget must keep them optional: a count that
+  // was never read — a binary file, an untracked file (numstat never lists
+  // one) — is ABSENT, not 0. Rendering `+0 −0` for a binary asset the agent
+  // just rewrote is a claim that nothing changed, which is false. Never
+  // `?? 0` these at the render site.
+  added?: number;
+  deleted?: number;
+  // git declined to count lines ("-" in numstat).
+  binary?: boolean;
+}
+
+export interface RunFilesResult {
+  // "git" when we read a work tree; "none" when the workspace simply isn't one
+  // (a fact about the workspace, served as 200 — not a failure).
+  vcs: "git" | "none" | (string & {});
+  files: RunFileStat[];
+  // We stopped counting. Always present, including when false.
+  truncated: boolean;
+}
+
+// Sandbox resource usage (GET /runs/{id}/resources).
+//
+// EVERY metric is optional, and that is the entire point of this shape. gVisor
+// (the Vault tier) presents a synthetic procfs/sysfs and may withhold the
+// cgroup files, so a metric the sandbox did not report comes back ABSENT. The
+// widget renders RUN_COCKPIT.metricUnavailable for it. A 0 here would tell an
+// operator a governed workload is using no memory — do not default these.
+export interface RunResources {
+  /** 0–100, already divided by core count. */
+  cpu_percent?: number;
+  memory_used_bytes?: number;
+  /** Only present when a real limit was readable — `memory.max: "max"` falls
+   *  back to MemTotal, and stays absent if that was unreadable too. */
+  memory_limit_bytes?: number;
+  disk_written_bytes?: number;
+  process_count?: number;
+}
+
+// The ONE server->client control frame on the attach WebSocket, sent as a TEXT
+// frame on connect (binary frames stay raw PTY bytes). The client must LEARN it
+// is read-only from the server — asking a client to refrain from typing is a
+// request, not a control. Sent on every connect, read_only:false included, so
+// the terminal never has to infer its mode from silence.
+export interface AttachModeMsg {
+  type: "attach-mode";
+  read_only: boolean;
+  holder?: AttachHolder;
+}
+
+// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach-holder).
+// Attach is a SHARED session: without this, opening the run page while a CLI
+// holds it silently competes for the same PTY.
+export interface AttachHolder {
+  held: boolean;
+  principal?: string;
+  since?: string;
+  cols?: number;
+  rows?: number;
+  source?: "web" | "ssh" | (string & {});
+}
+
 // Terminal run states: the run has finished and can no longer be killed.
 // Mirrors the backend terminal guard in internal/api/runs.go. COMPLETED is the
 // terminal-success state (agent exited 0) and MUST be included — omitting it

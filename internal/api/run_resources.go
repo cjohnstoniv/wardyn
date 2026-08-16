@@ -15,41 +15,261 @@
 // non-exec read (a substrate with no exec at all, say).
 package api
 
-import "net/http"
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// runResourcesExecTimeout bounds the whole read: launch + the script's own
+// ~200ms CPU sampling window + parse. A stuck sandbox (a hung shell, a
+// gVisor gvisor bug, whatever) must resolve to a clean error, not a
+// handler that never returns — this is the console's poll endpoint.
+const runResourcesExecTimeout = 5 * time.Second
+
+// runResourcesScript runs INSIDE the sandbox via ExecStream and prints one
+// `key=value` line per metric it could actually read. Every read is
+// individually `2>/dev/null`-guarded and presence-checked before it is
+// echoed: a file cgroup v2/procfs does not expose (gVisor/CC3 — see the
+// honesty comment on runResourcesResponse) simply produces no line for that
+// key, never a line claiming a zero it isn't in a position to attest to.
+//
+// Tooling kept to awk/grep/cat/ls/wc/sleep — present on both coreutils
+// (node:*-bookworm-slim, the shipped agent images) and busybox (the
+// conformance-agent image, and any BYOI image). Deliberately NOT used:
+// `nproc` (absent on some minimal images; /proc/cpuinfo's `processor` lines
+// are the same count via a tool every image has) and `date +%s%N`
+// (busybox's `date` has no sub-second resolution). The CPU sample's
+// wall-clock delta instead comes from /proc/uptime's first field
+// (centisecond resolution, and procfs is universal where cgroup files may
+// not be).
+const runResourcesScript = `
+n=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
+case "$n" in ''|0) n=1 ;; esac
+echo "nproc=$n"
+
+u1=$(awk '$1=="usage_usec"{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
+p1=$(awk '{print $1}' /proc/uptime 2>/dev/null)
+[ -n "$u1" ] && echo "cpu_usage_usec_1=$u1"
+[ -n "$p1" ] && echo "uptime_1=$p1"
+
+sleep 0.2
+
+u2=$(awk '$1=="usage_usec"{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
+p2=$(awk '{print $1}' /proc/uptime 2>/dev/null)
+[ -n "$u2" ] && echo "cpu_usage_usec_2=$u2"
+[ -n "$p2" ] && echo "uptime_2=$p2"
+
+mc=$(cat /sys/fs/cgroup/memory.current 2>/dev/null)
+[ -n "$mc" ] && echo "memory_current=$mc"
+
+mm=$(cat /sys/fs/cgroup/memory.max 2>/dev/null)
+[ -n "$mm" ] && echo "memory_max=$mm"
+
+mt=$(awk '$1=="MemTotal:"{print $2}' /proc/meminfo 2>/dev/null)
+[ -n "$mt" ] && echo "mem_total_kb=$mt"
+
+wb=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^wbytes=/){split($i,a,"="); s+=a[2]}} END{print s+0}' /sys/fs/cgroup/io.stat 2>/dev/null)
+[ -n "$wb" ] && echo "disk_wbytes=$wb"
+
+pc=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l)
+echo "proc_count=$pc"
+`
+
+// runResourcesResponse is the Sandbox widget's payload.
+//
+// HONESTY (the whole point of this file): every field is a POINTER, never a
+// bare number. gVisor (CC3/Vault) presents a synthetic procfs/sysfs and may
+// not expose some or all of these cgroup files at all — a key the sandbox
+// did not report comes back ABSENT (nil, omitted from the JSON) so the UI
+// renders "not available on this barrier" for it. A bare int would have to
+// pick some zero value for "did not report", and 0 reads as "this governed
+// workload is using no memory/CPU/disk" — a lie the operator would act on.
+// A pointer to a genuine 0 (the sandbox DID report zero bytes written, say)
+// still serializes as 0: encoding/json's omitempty on a pointer looks only
+// at nilness, never at the pointed-to value.
+type runResourcesResponse struct {
+	CPUPercent       *float64 `json:"cpu_percent,omitempty"`
+	MemoryUsedBytes  *int64   `json:"memory_used_bytes,omitempty"`
+	MemoryLimitBytes *int64   `json:"memory_limit_bytes,omitempty"`
+	DiskWrittenBytes *int64   `json:"disk_written_bytes,omitempty"`
+	ProcessCount     *int     `json:"process_count,omitempty"`
+}
 
 // handleRunResources serves GET /api/v1/runs/{id}/resources.
-//
-// CONTRACT (lane A2 — fill this in):
-//
-//   - Gate: parseIDParam + s.getRunAuthorized (owner-or-admin; a foreign run
-//     404s). Follow handleAttachTicket (attach_ticket.go:113) exactly.
-//
-//   - Read: ONE ExecStream running /bin/sh -c with a script that prints
-//     `key=value` lines, parsed in Go. Precedent: sshgateway_channels.go:527.
-//     Drain Stderr concurrently with Stdout (see ExecSession's doc — an
-//     undrained stderr blocks the demux goroutine, Stdout, AND Wait).
-//
-//     cpu    — /sys/fs/cgroup/cpu.stat usage_usec, sampled TWICE ~200ms apart
-//              inside the same script, divided by the delta and by `nproc`.
-//              One sample cannot yield a percentage; do not pretend it can.
-//     memory — /sys/fs/cgroup/memory.current over memory.max; a literal "max"
-//              means unlimited -> fall back to MemTotal from /proc/meminfo.
-//     disk   — /sys/fs/cgroup/io.stat, wbytes summed across devices.
-//     procs  — count of /proc/[0-9]* entries.
-//
-//   - HONESTY, and this one reaches the UI: gVisor (CC3 / Vault) presents a
-//     synthetic procfs/sysfs and may not expose these cgroup files at all. A
-//     key the sandbox did not report comes back ABSENT (a nil/omitted field),
-//     never 0 — the widget renders "not available on this barrier" for it. A
-//     zero here would read as "this sandbox is using no memory", which is a lie
-//     about a governed workload. Use pointer/omitempty fields, not bare ints.
-//
-//   - errors.Is(err, runner.ErrExecStreamUnsupported) -> 501 with that reason.
-//
-//   - Bound it with a context deadline. Audit on FAILURE only — the console
-//     polls this.
 func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
-	// ponytail: honest 501 until lane A2 lands — the widget already renders an
-	// unsupported state, so an unbuilt endpoint degrades instead of lying.
-	writeError(w, http.StatusNotImplemented, "sandbox resource usage is not implemented on this build")
+	id, ok := parseIDParam(w, r, "id", "run")
+	if !ok {
+		return
+	}
+	run, ok := s.getRunAuthorized(w, r, id)
+	if !ok {
+		return
+	}
+	// A runner must be wired to exec into anything (headless API mode cannot).
+	if s.cfg.Runner == nil {
+		writeError(w, http.StatusServiceUnavailable, "no runner configured; sandbox resource usage unavailable")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
+	defer cancel()
+
+	kv, err := s.execRunResourcesScript(ctx, run)
+	if err != nil {
+		// Audit on FAILURE only — the console polls this endpoint, so an audit
+		// row per tick (the success path) would flood the trail. A failure is
+		// the rare, interesting case an operator would want in the log.
+		at, principal := actorFromRequest(r)
+		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources", id.String(), "failure",
+			mustJSON(map[string]any{"error": err.Error()})))
+		if errors.Is(err, runner.ErrExecStreamUnsupported) {
+			writeError(w, http.StatusNotImplemented, "sandbox resource usage is not supported on this run's confinement tier: "+err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "sandbox resource usage read failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, parseRunResourcesKV(kv))
+}
+
+// execRunResourcesScript launches runResourcesScript in run's sandbox and
+// returns its parsed `key=value` output. The returned error is either the
+// ExecStream launch failure (possibly runner.ErrExecStreamUnsupported) or a
+// Stdout read failure (e.g. ctx's deadline killing the exec mid-read) —
+// never a script exit code, see the Wait comment below.
+func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun) (map[string]string, error) {
+	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+		Argv: []string{"/bin/sh", "-c", runResourcesScript},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// STREAMING CONTRACT (runner.go ExecSession doc): Stdout and Stderr are
+	// unbuffered io.Pipes fed by ONE demux goroutine — a single undrained
+	// stderr byte blocks that goroutine, Stdout, AND Wait. The script's own
+	// reads are all individually `2>/dev/null`-guarded, but a shell-launch
+	// failure itself (a BYOI image with no /bin/sh) writes ITS error to
+	// stderr — drain it concurrently with the Stdout read below regardless,
+	// or exactly that image hangs this handler forever.
+	if sess.Stderr != nil {
+		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
+	}
+	var out []byte
+	if sess.Stdout != nil {
+		out, err = io.ReadAll(sess.Stdout)
+	}
+	if sess.Wait != nil {
+		// Exit code unexamined: every read in the script is individually
+		// presence-checked and guarded, so a partial sandbox (missing cgroup
+		// files) still exits 0 with a partial key set — there's no failure
+		// mode this script can signal via exit code that isn't already
+		// visible as an absent key in its own output.
+		_, _ = sess.Wait()
+	}
+	if sess.Close != nil {
+		_ = sess.Close()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseKVLines(out), nil
+}
+
+// parseKVLines splits the script's stdout into a `key=value` map, ignoring
+// blank and malformed lines rather than erroring on them — the script is the
+// only writer, so this is defensive, not a real expected input shape.
+func parseKVLines(out []byte) map[string]string {
+	kv := make(map[string]string)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		kv[k] = v
+	}
+	return kv
+}
+
+// kvInt64/kvFloat64 look up and parse key from kv, reporting ok=false for
+// both a missing key AND an unparsable value — either way the caller must
+// treat the field as absent, never substitute a zero.
+func kvInt64(kv map[string]string, key string) (int64, bool) {
+	s, ok := kv[key]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
+}
+
+func kvFloat64(kv map[string]string, key string) (float64, bool) {
+	s, ok := kv[key]
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	return f, err == nil
+}
+
+// parseRunResourcesKV turns the script's raw key/value output into the
+// response, leaving every field absent (nil) whose inputs weren't ALL
+// present — see runResourcesResponse's honesty comment.
+func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
+	var resp runResourcesResponse
+
+	// CPU: needs both usage_usec samples, both uptime samples, and nproc — a
+	// single sample cannot yield a percentage, so any one missing input
+	// leaves CPUPercent absent rather than reporting a bogus rate.
+	u1, ok1 := kvInt64(kv, "cpu_usage_usec_1")
+	u2, ok2 := kvInt64(kv, "cpu_usage_usec_2")
+	p1, ok3 := kvFloat64(kv, "uptime_1")
+	p2, ok4 := kvFloat64(kv, "uptime_2")
+	n, ok5 := kvInt64(kv, "nproc")
+	if ok1 && ok2 && ok3 && ok4 && ok5 && n > 0 {
+		if wallSec := p2 - p1; wallSec > 0 {
+			pct := float64(u2-u1) / (wallSec * 1e6) / float64(n) * 100
+			resp.CPUPercent = &pct
+		}
+	}
+
+	if v, ok := kvInt64(kv, "memory_current"); ok {
+		resp.MemoryUsedBytes = &v
+	}
+	if raw, ok := kv["memory_max"]; ok {
+		if raw == "max" {
+			// Unlimited cgroup: fall back to the sandbox host's own MemTotal —
+			// only when that fallback is ITSELF available, never a fabricated
+			// number.
+			if mt, ok := kvInt64(kv, "mem_total_kb"); ok {
+				v := mt * 1024
+				resp.MemoryLimitBytes = &v
+			}
+		} else if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			resp.MemoryLimitBytes = &v
+		}
+	}
+
+	if v, ok := kvInt64(kv, "disk_wbytes"); ok {
+		resp.DiskWrittenBytes = &v
+	}
+
+	if v, ok := kvInt64(kv, "proc_count"); ok {
+		procCount := int(v)
+		resp.ProcessCount = &procCount
+	}
+
+	return resp
 }

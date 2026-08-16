@@ -8,12 +8,15 @@
 // that never touches runs drops this module from its chunk.
 import type {
   AgentRun,
+  AttachHolder,
   CreateRunInput,
   CreateRunResult,
   CredentialGrant,
   PreflightResult,
   ProfileProposal,
+  RunFilesResult,
   RunPolicySpec,
+  RunResources,
 } from "../types";
 import { asJson, ccRank, errText, HttpError, str, unwrapList, wfetch, withLimit } from "./core";
 
@@ -201,5 +204,49 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/grants`, { method: "GET" });
     if (res.status === 404) return [];
     return grantsFromRecords(await asJson<unknown>(res));
+  },
+
+  // GET /api/v1/runs/{id}/files — the per-file diff stat of the run's
+  // workspace, read by running git INSIDE the sandbox.
+  //
+  // The non-200s are all MEANINGFUL and are deliberately left as thrown
+  // HttpErrors (the killRun pattern) rather than flattened into a null: the
+  // widget renders a different sentence for each, and a caller that swallowed
+  // them would render "no files changed" for a run it never managed to read.
+  //   409 — the run has no sandbox yet (nothing to read)
+  //   501 — this runner has no exec primitive, so it cannot be inspected
+  // A workspace that simply isn't a git repo is NOT an error: it comes back
+  // 200 with vcs:"none".
+  async getFiles(runId: string): Promise<RunFilesResult> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/files`, { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunFilesResult>(res);
+  },
+
+  // GET /api/v1/runs/{id}/resources — CPU/memory/disk/process counts read from
+  // cgroup v2 + procfs inside the sandbox. Every field is optional; see
+  // RunResources for why absent must never be rendered as zero.
+  async getResources(runId: string): Promise<RunResources> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/resources`, { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunResources>(res);
+  },
+
+  // GET /api/v1/runs/{id}/attach-holder — who currently holds the run's shared
+  // tmux PTY. `held:false` means "nobody is attached through THIS daemon";
+  // the registry is in-process (see internal/api/attach_holder.go), so the UI
+  // must not phrase it as a stronger claim than that.
+  async getAttachHolder(runId: string): Promise<AttachHolder> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-holder`, { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<AttachHolder>(res);
+  },
+
+  // POST /api/v1/runs/{id}/attach/takeover — displace the current holder and
+  // become the writer. Audited server-side (session.takeover, naming the actor
+  // and the previous holder) because it ends someone else's live session.
+  async takeoverAttach(runId: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 };

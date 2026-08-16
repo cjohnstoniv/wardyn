@@ -406,10 +406,50 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// THE SAME holder registry the web terminal uses (attach_holder.go), with
+	// source "ssh". Not optional: a CLI holder over the gateway is attached to
+	// the identical shared tmux session, so leaving it unregistered would have
+	// the browser confidently report "nobody is attached" while somebody is
+	// typing — and would let the run page silently start competing for the PTY,
+	// which is the whole failure this registry exists to end.
+	holder := &attachHolder{
+		principal: principal,
+		actorType: types.ActorHuman,
+		since:     s.cfg.Now().UTC(),
+		source:    attachSourceSSH,
+		cols:      cols,
+		rows:      rows,
+		displace: func(reason string) {
+			// The SSH lane's equivalent of the WebSocket close frame: a line on
+			// the channel's stderr, which ssh(1) prints to the operator's own
+			// terminal, THEN the pump cancel that ends the session. On a
+			// goroutine so a client that has stopped reading its window cannot
+			// wedge the take-over HTTP request behind a blocked write.
+			go func() {
+				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: "+reason)
+				cancel()
+			}()
+		},
+	}
+	readOnly, releaseHolder := s.registerAttachHolder(runID, holder)
+	// Deferred for the same reason as the web lane's: a panicking pump must
+	// never strand a phantom holder (see registerAttachHolder).
+	defer releaseHolder()
+	if readOnly {
+		// nil holder is what marks this client an observer to sshShellPump.
+		holder = nil
+		msg := "wardyn: read-only — another client holds this terminal"
+		if cur := s.attachHolderFor(runID); cur != nil {
+			msg = "wardyn: read-only — " + cur.principal + " (" + cur.source + ") holds this terminal; take it over from the run page"
+		}
+		_, _ = fmt.Fprintln(channel.Stderr(), msg)
+	}
+
 	_ = s.cfg.Store.TouchRun(pumpCtx, runID)
 	go s.attachKeepalive(pumpCtx, runID)
 
-	closeReason := s.sshShellPump(pumpCtx, channel, sess, runID, castTee, resizeCh)
+	closeReason := s.sshShellPump(pumpCtx, channel, sess, runID, castTee, resizeCh, holder)
 	cancel()
 
 	// Use BaseCtx (daemon-lifetime), not ctx (the connection's, cancelled the
@@ -419,7 +459,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	finishRecording(finishCtx, types.ActorHuman, principal)
 
 	s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
-		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason})))
+		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": readOnly})))
 
 	sendExitStatus(channel, 0)
 }
@@ -430,7 +470,14 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 // via resizeCh by handleSSHSessionChannel). castTee (nil when RecordingStore
 // is unset or the run is unrecordable) receives a copy of every chunk of PTY
 // output, exactly like the web-terminal attach.
-func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, runID uuid.UUID, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg) string {
+//
+// holder mirrors attachPump's: non-nil ONLY for the client HOLDING the PTY, nil
+// for a read-only observer whose keystrokes and window-changes are both dropped
+// here, server-side (an observer's window would otherwise clamp the holder's
+// terminal — tmux sizes a shared session to its smallest client). The channel
+// is still READ from while read-only, because that read is how this pump learns
+// the client hung up.
+func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, runID uuid.UUID, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reasonCh := make(chan string, 2)
@@ -470,10 +517,12 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 			if n > 0 {
 				// Any client traffic counts as activity: keep the session alive.
 				_ = s.cfg.Store.TouchRun(ctx, runID)
-				if _, werr := sess.Write(buf[:n]); werr != nil {
-					reasonCh <- "session write failed"
-					cancel()
-					return
+				if holder != nil {
+					if _, werr := sess.Write(buf[:n]); werr != nil {
+						reasonCh <- "session write failed"
+						cancel()
+						return
+					}
 				}
 			}
 			if rerr != nil {
@@ -492,7 +541,14 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 				if !ok {
 					return
 				}
-				_ = sess.Resize(ctx, uint16(m.Columns), uint16(m.Rows))
+				if holder == nil {
+					continue // observer: never resize the holder's shared tmux window
+				}
+				cols, rows := uint16(m.Columns), uint16(m.Rows)
+				_ = sess.Resize(ctx, cols, rows)
+				// Keep the registry's geometry LIVE — the pty-req value is stale
+				// the moment the operator resizes their terminal.
+				holder.setSize(cols, rows)
 			case <-ctx.Done():
 				return
 			}

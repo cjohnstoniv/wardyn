@@ -140,7 +140,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// above; a foreign fingerprint on the DELETE path is store-level
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
-	"GET /api/v1/me/ssh-keys":                     {class: classMember},
+	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
+	// classOwner. It names no entity in its path — the STORE scopes it to the
+	// caller's own principal, so there is no foreign row to 404 on.
+	"GET /api/v1/me/run-layout":                   {class: classMember},
+	"PUT /api/v1/me/run-layout":                   {class: classMember},
 	"GET /api/v1/policies":                        {class: classMember},
 	"GET /api/v1/policies/{id}":                   {class: classMember},
 	"GET /api/v1/runs":                            {class: classMember},
@@ -167,8 +172,20 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun},
 	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun},
-	"POST /api/v1/approvals/{id}/approve":     {class: classOwner, entity: entityApproval},
-	"POST /api/v1/approvals/{id}/deny":        {class: classOwner, entity: entityApproval},
+	// The run cockpit's live evidence reads. classOwner, same gate as GET
+	// /runs/{id} above: each names a run in its path and each exposes something
+	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
+	// is holding its PTY. A foreign member gets the byte-identical 404.
+	"GET /api/v1/runs/{id}/files":         {class: classOwner, entity: entityRun},
+	"GET /api/v1/runs/{id}/resources":     {class: classOwner, entity: entityRun},
+	"GET /api/v1/runs/{id}/attach-holder": {class: classOwner, entity: entityRun},
+	// Take-over ends another human's live terminal session. Still classOwner
+	// (an owner may reclaim their own run's PTY, and the act is audited as
+	// session.takeover) — NOT classMember, which would let anyone displace
+	// anyone.
+	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun},
+	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval},
+	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval},
 
 	// GET /runs/{id}/attach (the interactive PTY WebSocket) is a SPECIAL case:
 	// its ticket-LESS fallback lane (ticketOrHumanAuth) is plain admin-only

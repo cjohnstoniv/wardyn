@@ -453,6 +453,12 @@ type Server struct {
 	// promote to a PG advisory lock (gt_rotator.go's pattern) if
 	// allowMultiReplica ever becomes real.
 	siteConfigMu sync.Mutex
+	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
+	// second client can be admitted read-only instead of silently competing for
+	// the same terminal (see attach_holder.go). Process-local like sshSessions
+	// and lastTouch above, and correct for the same reason: replicas>1 is
+	// refused by construction (deployment.yaml). Zero value is ready to use.
+	attachHolders attachHolderRegistry
 }
 
 // New constructs a Server and builds its router. It does not start listening.
