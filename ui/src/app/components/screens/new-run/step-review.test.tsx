@@ -10,7 +10,7 @@ import type { PreflightResult, Workspace } from "../../../lib/types";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 import { StepReview } from "./step-review";
 import { initialWizardState } from "./wizard-types";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 import { RD } from "../../../lib/workspace-copy";
 
 const listIntegrationsMock = vi.fn();

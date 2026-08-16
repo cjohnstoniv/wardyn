@@ -20,7 +20,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { statusTone, statusWord, storySentence } from "../../../lib/workspace-status";
-import { hasLlmPath } from "../onboarding/intro";
+import { hasLlmPath } from "../../../lib/readiness";
 import { comesWithLine } from "../new-run/wizard-types";
 import { Button } from "../../ui/button";
 import {

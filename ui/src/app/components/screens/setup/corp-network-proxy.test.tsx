@@ -23,7 +23,7 @@ import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { CorpNetworkStep } from "./corp-network-step";
 import type { CorpNetworkState } from "./steps";
-import { baseStatus } from "./test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 const testProxyMock = vi.fn();
 const testRedirectMock = vi.fn();

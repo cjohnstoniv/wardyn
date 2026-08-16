@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import type { EgressRedirect, SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
 import { T } from "../../../lib/integrations";
-import { deriveReadiness } from "../onboarding/intro";
+import { deriveReadiness } from "../../../lib/readiness";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
@@ -20,7 +20,7 @@ import {
   stepDone,
   type CorpNetworkState,
 } from "./steps";
-import { baseStatus as sharedBaseStatus } from "./test-fixtures";
+import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
 // what these pure functions read.

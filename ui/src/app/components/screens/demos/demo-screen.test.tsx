@@ -43,7 +43,7 @@ vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(.
 
 import { DemoScreen } from "./demo-screen";
 import { DEMOS } from "./demo-catalog";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 import { HttpError } from "../../../lib/api/core";
 
 function renderScreen() {

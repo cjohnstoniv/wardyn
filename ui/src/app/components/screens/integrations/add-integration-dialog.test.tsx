@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 import { SUBSCRIPTION_LANE_META } from "../../../lib/integrations";
 import { AddIntegrationDialog, buildIntegrationWrite, type ExistingIntegrationRef, type IntegrationFormValues } from "./add-integration-dialog";
 import { integrationTypeById } from "../../../lib/integration-catalog";

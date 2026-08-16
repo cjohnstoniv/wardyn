@@ -15,7 +15,7 @@ import {
   MAX_ATTACHMENTS_COUNT,
 } from "./compose-form";
 import type { ComposeAttachment, ComposerBackend, Workspace } from "../../../lib/types";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 // ComposeForm now renders ModelAccessCard (step-access.tsx) in place of the old
 // subscription toggle — same self-fetch mocks its own tests use, so every

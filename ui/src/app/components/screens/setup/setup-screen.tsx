@@ -25,7 +25,7 @@ import { deriveIntegrations, genericIntegrations } from "../../../lib/api/integr
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { NewRunDialog } from "../new-run/new-run-dialog";
-import { deriveReadiness, lastCheckedLabel } from "../onboarding/intro";
+import { deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";

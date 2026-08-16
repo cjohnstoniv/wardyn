@@ -28,7 +28,7 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
 import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
-import { deriveReadiness } from "../onboarding/intro";
+import { deriveReadiness } from "../../../lib/readiness";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { CopyPill } from "../workspace-detail/record-pane";

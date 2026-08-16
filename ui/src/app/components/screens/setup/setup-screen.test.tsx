@@ -93,7 +93,7 @@ vi.mock("../../wardyn/live-approvals", () => ({
 
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
 import { getDefaultCc } from "../../wardyn/default-confinement";
-import { baseStatus as sharedBaseStatus } from "./test-fixtures";
+import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
 // The Integrations step embeds IntegrationsScreen, and its own "Manage in
 // Integrations" link both call useNavigate() — every render needs a Router

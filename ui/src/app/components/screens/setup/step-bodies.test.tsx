@@ -79,8 +79,8 @@ vi.mock("../../../lib/api/integrations", async () => {
 });
 
 import { ImagesStep, LaunchStep, ReviewStep, SourcesStep, WorkspacesStep } from "./step-bodies";
-import { deriveReadiness } from "../onboarding/intro";
-import { baseStatus as sharedBaseStatus } from "./test-fixtures";
+import { deriveReadiness } from "../../../lib/readiness";
+import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import type { Workspace } from "../../../lib/types";
 
 // This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).

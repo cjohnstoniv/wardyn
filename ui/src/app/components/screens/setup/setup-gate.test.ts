@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { dismissSetup, setupGateActive } from "./setup-gate";
-import { baseStatus } from "./test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 describe("setupGateActive — the HARD first-run gate", () => {
   beforeEach(() => localStorage.clear());

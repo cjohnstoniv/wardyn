@@ -21,7 +21,7 @@ import {
   type CorpStepActions,
 } from "./corp-network-step";
 import type { CorpNetworkState } from "./steps";
-import { baseStatus } from "./test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 const testProxyMock = vi.fn();
 const testRedirectMock = vi.fn();

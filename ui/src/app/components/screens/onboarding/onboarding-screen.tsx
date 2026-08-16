@@ -20,7 +20,8 @@ import { useRole } from "../../wardyn/operator-context";
 import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
 import type { SetupStatus } from "../../../lib/types";
-import { HowItWorksStrip, IntroBlurb, deriveReadiness } from "./intro";
+import { HowItWorksStrip, IntroBlurb } from "./intro";
+import { deriveReadiness } from "../../../lib/readiness";
 import { SetupScreen } from "../setup/setup-screen";
 
 // ---------------------------------------------------------------------------

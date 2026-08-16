@@ -10,7 +10,7 @@ import type { SetupStatus } from "../../../lib/types";
 import { EnvironmentStep, recommendedTier } from "./environment-step";
 import { CONFINEMENT_CONSTANT_NOTE, CC_META } from "../../wardyn/cc-meta";
 import { BTN, RESIDUAL_PREFIX } from "../../wardyn/copy";
-import { baseStatus as sharedBaseStatus } from "./test-fixtures";
+import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { TIER_GUIDES } from "./setup-guide";
 
 // Only the fields EnvironmentStep reads (runner + platform) carry meaning; the

@@ -11,7 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../lib/api/core";
 import type { Source, Workspace } from "../../lib/types";
-import { baseStatus } from "./setup/test-fixtures";
+import { baseStatus } from "../../lib/test-fixtures";
 import { OperatorProvider } from "../wardyn/operator-context";
 
 const listSourcesMock = vi.fn();

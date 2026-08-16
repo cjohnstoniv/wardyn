@@ -24,7 +24,7 @@ vi.mock("../../../lib/api/setup", () => ({
 import { StepSources } from "./step-sources";
 import { newSourceRow, removeSource, seedFloor, type SourceRow, type WorkspaceSourceKind } from "./wizard-types";
 import { C, V2C } from "../../../lib/workspace-copy";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 // A thin stateful wrapper standing in for the slice of wizard.tsx's state
 // StepSources is a controlled view over — wires the same pure helpers

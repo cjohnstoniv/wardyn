@@ -17,7 +17,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 import { GettingStarted, OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 import { RoleProvider } from "../../wardyn/operator-context";
 
 // This suite's own pins: ready, CC1-only runner, a logged-in Claude CLI, and a

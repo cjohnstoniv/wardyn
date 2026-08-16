@@ -10,7 +10,7 @@
 // case below). No React here by design — data/derivation only.
 import type { EgressRedirect, SetupStatus, Workspace } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
-import type { Readiness } from "../onboarding/intro";
+import { Readiness } from "../../../lib/readiness";
 import { DEMOS } from "../demos/demo-catalog";
 import { isUsable } from "../../../lib/workspace-status";
 import { T } from "../../../lib/integrations";

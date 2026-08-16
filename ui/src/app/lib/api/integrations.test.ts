@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { baseStatus } from "../../components/screens/setup/test-fixtures";
+import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
 import {
   aiServerId,

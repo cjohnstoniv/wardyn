@@ -17,7 +17,7 @@ import { StepAccess, ModelAccessCard } from "./step-access";
 import { initialWizardState } from "./wizard-types";
 import { T } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
-import { baseStatus } from "../setup/test-fixtures";
+import { baseStatus } from "../../../lib/test-fixtures";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 
 const listIntegrationsMock = vi.fn();

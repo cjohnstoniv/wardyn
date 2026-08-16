@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Shared SetupStatus test fixture (V1) — six suites (setup-screen, step-bodies,
-// steps, environment-step, ../onboarding/intro, ../onboarding/onboarding-screen)
-// used to hand-roll near-identical baseStatus()/status() fixtures. One shared
-// shape here; each suite composes its own value pins as overrides.
-import type { SetupStatus } from "../../../lib/types";
+// Shared SetupStatus test fixture. Lived under screens/setup/ until that
+// funnel was deleted; 18 suites depend on it, most of them nothing to do with
+// setup, so it belongs in lib/.
+import type { SetupStatus } from "./types";
 
 export function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return {

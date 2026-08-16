@@ -30,7 +30,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
 import { useTheme } from "../wardyn/theme-provider";
-import { deriveReadiness, lastCheckedLabel } from "./onboarding/intro";
+import { deriveReadiness, lastCheckedLabel } from "../../lib/readiness";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";

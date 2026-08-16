@@ -42,7 +42,7 @@ import { getDefaultCc } from "../../wardyn/default-confinement";
 import { Chip } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";
 import { Mono } from "../../wardyn/code-block";
-import { deriveReadiness } from "../onboarding/intro";
+import { deriveReadiness } from "../../../lib/readiness";
 import { Button } from "../../ui/button";
 import {
   Dialog,
