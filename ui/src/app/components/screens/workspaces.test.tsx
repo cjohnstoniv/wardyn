@@ -9,42 +9,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Workspace, WorkspaceProfile } from "../../lib/types";
 
-// The workspaces LIST: what a row says about a workspace at a glance (its
-// composition, one status word, its model binding, and whether it needs the
-// operator), plus the two dialogs that still live here. The scan profile's own
-// rendering moved to the requirements surfaces (the wizard's step 3 and the
-// detail page's card), which is where its honesty invariants are now tested.
+// The workspaces LIST: a single table, four columns (Workspace / Source /
+// Image / Model) + an overflow kebab. Stage 2 dropped the tier tabs (Sources
+// library / Base image catalog), the Status column, and the "Needs you"
+// column — this file tests what's left.
 
-const setApprovedEgressMock = vi.fn();
-const getObservedEgressMock = vi.fn();
 const createWorkspaceMock = vi.fn();
 const setWorkspaceLLMCredMock = vi.fn();
 const listWorkspacesMock = vi.fn();
-const getEnvAsCodeMock = vi.fn();
 const deleteWorkspaceMock = vi.fn();
-const updateWorkspaceMock = vi.fn();
 vi.mock("../../lib/api/workspaces", () => ({
   workspaces: {
-    setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
-    getObservedEgress: (...a: unknown[]) => getObservedEgressMock(...a),
     createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a),
     setWorkspaceLLMCred: (...a: unknown[]) => setWorkspaceLLMCredMock(...a),
     listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
-    getEnvAsCode: (...a: unknown[]) => getEnvAsCodeMock(...a),
     deleteWorkspace: (...a: unknown[]) => deleteWorkspaceMock(...a),
-    updateWorkspace: (...a: unknown[]) => updateWorkspaceMock(...a),
   },
-}));
-const listSecretsMock = vi.fn();
-vi.mock("../../lib/api/secrets", () => ({
-  secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a) },
-}));
-// The wizard mounted from "+ Add workspace" fetches these on mount too — both
-// swallow their own rejection (see wizard.tsx), but mocking them keeps the
-// wizard-opens test quiet and mirrors wizard.test.tsx's own convention.
-const getSetupStatusMock = vi.fn();
-vi.mock("../../lib/api/setup", () => ({
-  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 const listIntegrationsMock = vi.fn();
 vi.mock("../../lib/api/integrations", async () => {
@@ -55,7 +35,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { WorkspacesScreen, attentionItems, sourceSubLine } from "./workspaces";
+import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 
 function renderScreen() {
@@ -80,21 +60,19 @@ function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace
   };
 }
 
-
 describe("WorkspacesScreen — list columns", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset();
-    listSecretsMock.mockReset().mockResolvedValue([]);
   });
 
-  it("Workspace column: kind icon, name, and the single-source mono sub-line", async () => {
+  it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments", kind: "repo", source: "acme/payments", ref: "main", status: "scanned" })]);
     renderScreen();
     expect(await screen.findByText("payments")).toBeInTheDocument();
     expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
   });
 
-  it("Workspace column: a multi-source workspace shows the composition summary instead", async () => {
+  it("Source column: a multi-source workspace shows the composition summary instead", async () => {
     const w = ws({}, { status: "scanned" }) as unknown as Workspace & { sources: unknown[] };
     w.sources = [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }];
     listWorkspacesMock.mockResolvedValue([w]);
@@ -102,13 +80,27 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("2 dirs · 1 repo")).toBeInTheDocument();
   });
 
-  it("Status column: ONE chip from the shared statusWord vocabulary", async () => {
-    listWorkspacesMock.mockResolvedValue([ws({}, { status: "error" })]);
+  it("Image column: standard sandbox image when nothing was detected and nothing was pinned", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
     renderScreen();
-    expect(await screen.findByText("Scan failed")).toBeInTheDocument();
+    expect(await screen.findByText("standard sandbox image")).toBeInTheDocument();
   });
 
-  it("Model access column: the binding chip names the bound Integration", async () => {
+  it("Image column: devcontainer.json when the scan detected one", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({ has_devcontainer: true }, { status: "scanned" })]);
+    renderScreen();
+    expect(await screen.findByText("devcontainer.json")).toBeInTheDocument();
+  });
+
+  it("Image column: the mono ref when an explicit image is pinned — never a base-image catalog fetch", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { status: "scanned", base_image: { kind: "byo", image: "ghcr.io/acme/dev@sha256:ab12" } }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("ghcr.io/acme/dev@sha256:ab12")).toBeInTheDocument();
+  });
+
+  it("Model column: the binding chip names the bound Integration", async () => {
     listWorkspacesMock.mockResolvedValue([
       ws({}, { status: "scanned", llm_cred: { integration_ref: "ai-anthropic-key" } }),
     ]);
@@ -116,35 +108,7 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("ai-anthropic-key")).toBeInTheDocument();
   });
 
-  it("Model access column: unbound reads 'Not pinned', not a bare 'None' — the run still falls back to a server default", async () => {
-    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
-    renderScreen();
-    const chip = await screen.findByText("Not pinned");
-    expect(chip).toHaveAttribute("title", "Runs fall back to the server's global provider.");
-    expect(screen.queryByText("None")).not.toBeInTheDocument();
-  });
-
-  it("Needs you: unstored required secrets, hosts awaiting review, then suspected leaks, in that order", async () => {
-    const w = ws(
-      {
-        egress_domains: [],
-        suggested_egress: ["telemetry.acme.io"],
-        leak_findings: [{ path: "src/config.ts", kind: "aws-access-key" }],
-      },
-      { status: "scanned" },
-    );
-    (w as unknown as { requirements: Record<string, { level: string; provenance: string }> }).requirements = {
-      "secret:DATABASE_URL": { level: "required", provenance: "scan_seeded" },
-    };
-    listWorkspacesMock.mockResolvedValue([w]);
-    renderScreen();
-    const secretLine = await screen.findByText("1 secret not stored");
-    const cell = secretLine.closest("td")!;
-    expect(within(cell).getByText("1 host awaiting review")).toBeInTheDocument();
-    expect(within(cell).getByText("⚠ 1 suspected committed secret")).toBeInTheDocument();
-  });
-
-  it("Needs you: an em dash when nothing needs attention", async () => {
+  it("Model column: unbound reads a bare em dash", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
     renderScreen();
     await screen.findByText("payments");
@@ -152,41 +116,21 @@ describe("WorkspacesScreen — list columns", () => {
   });
 });
 
-describe("WorkspacesScreen — kebab is Open · Edit workspace… · Delete… only", () => {
+describe("WorkspacesScreen — kebab is Open · Delete… only", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset();
-    listSecretsMock.mockReset().mockResolvedValue([]);
-    // "Edit workspace…" now mounts the real WorkspaceWizard, whose mount
-    // effect fetches these too (mirrors the "new wizard opens" block below).
-    getSetupStatusMock.mockReset().mockResolvedValue({ secrets: { github_app: false } });
-    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
   });
 
-  it("offers exactly those three items — no Scan now, Resume import, Model access, or Env as code", async () => {
-    listWorkspacesMock.mockResolvedValue([ws({}, { status: "error" })]);
+  it("offers exactly those two items — no Edit workspace, no Scan", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, {})]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: /edit workspace/i })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /delete/i })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /edit workspace/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("menuitem", { name: /scan/i })).not.toBeInTheDocument();
-    expect(within(menu).queryByRole("menuitem", { name: /resume import/i })).not.toBeInTheDocument();
-    expect(within(menu).queryByRole("menuitem", { name: /model access/i })).not.toBeInTheDocument();
-    expect(within(menu).queryByRole("menuitem", { name: /env as code/i })).not.toBeInTheDocument();
-    expect(within(menu).queryByRole("menuitem", { name: /view profile/i })).not.toBeInTheDocument();
-  });
-
-  it("Edit workspace… opens the wizard hydrated on this row, not the legacy dialog", async () => {
-    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderScreen();
-    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: /edit workspace/i }));
-    expect(await screen.findByRole("heading", { name: "Edit workspace" })).toBeInTheDocument();
-    // The wizard's rail, not the old single-form dialog.
-    expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
   });
 
   it("Delete… deletes via the existing confirm dialog", async () => {
@@ -204,7 +148,6 @@ describe("WorkspacesScreen — kebab is Open · Edit workspace… · Delete… o
 describe("WorkspacesScreen — row click navigates to the detail route", () => {
   it("clicking a row (not the kebab) opens /workspaces/:id", async () => {
     listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
-    listSecretsMock.mockReset().mockResolvedValue([]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const { Route, Routes } = await import("react-router-dom");
     render(
@@ -221,7 +164,6 @@ describe("WorkspacesScreen — row click navigates to the detail route", () => {
 
   it("the row is also a keyboard target — Tab then Enter opens the same route", async () => {
     listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
-    listSecretsMock.mockReset().mockResolvedValue([]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const { Route, Routes } = await import("react-router-dom");
     render(
@@ -242,7 +184,6 @@ describe("WorkspacesScreen — row click navigates to the detail route", () => {
 
   it("the kebab is a keyboard target too — Enter on it opens the menu, not the detail route", async () => {
     listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
-    listSecretsMock.mockReset().mockResolvedValue([]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const { Route, Routes } = await import("react-router-dom");
     render(
@@ -261,24 +202,21 @@ describe("WorkspacesScreen — row click navigates to the detail route", () => {
   });
 });
 
-describe("WorkspacesScreen — the new wizard opens from both the header button and the empty state", () => {
+describe("WorkspacesScreen — Add workspace dialog opens from both the header button and the empty state", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset();
-    listSecretsMock.mockReset().mockResolvedValue([]);
-    getSetupStatusMock.mockReset().mockResolvedValue({ secrets: { github_app: false } });
-    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
   });
 
-  it("the empty state's 'Onboard your first workspace' opens the four-step wizard", async () => {
+  it("the empty state's 'Add your first workspace' opens the ONE add-workspace dialog", async () => {
     listWorkspacesMock.mockResolvedValue([]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await user.click(await screen.findByRole("button", { name: /onboard your first workspace/i }));
+    await user.click(await screen.findByRole("button", { name: /add your first workspace/i }));
     expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
-    expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Repository" })).toBeInTheDocument();
   });
 
-  it("the header's '+ Add workspace' opens the SAME wizard", async () => {
+  it("the header's '+ Add workspace' opens the SAME dialog", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
@@ -288,33 +226,26 @@ describe("WorkspacesScreen — the new wizard opens from both the header button 
   });
 });
 
-describe("attentionItems / sourceSubLine — pure helpers", () => {
-  it("attentionItems orders unstored secrets, then pending hosts, then leaks", () => {
-    const w = ws({ suggested_egress: ["h.example.com"], leak_findings: [{ path: "x", kind: "y" }] });
-    (w as unknown as { requirements: Record<string, { level: string; provenance: string }> }).requirements = {
-      "secret:A": { level: "required", provenance: "scan_seeded" },
-    };
-    expect(attentionItems(w, [])).toEqual([
-      { text: "1 secret not stored", tone: "warning" },
-      { text: "1 host awaiting review", tone: "neutral" },
-      { text: "⚠ 1 suspected committed secret", tone: "danger" },
-    ]);
-  });
-
-  it("attentionItems is empty once nothing is pending", () => {
-    expect(attentionItems(ws({}), [])).toEqual([]);
-  });
-
+describe("sourceSubLine / workspaceImage — pure helpers", () => {
   it("sourceSubLine shows the mono source (+ ref for a repo) for a single-source workspace", () => {
     expect(sourceSubLine(ws({}, { kind: "repo", source: "acme/x", ref: "main" }))).toBe("acme/x @main");
     expect(sourceSubLine(ws({}, { kind: "local_dir", source: "/srv/x" }))).toBe("/srv/x");
   });
 
   // UI-LIB-8: ephemeral carries neither Path nor Source (store.go's
-  // deriveWorkspaceMirrors), so ws.source is always "" — the row must name
-  // the kind instead of rendering a blank mono line.
-  it("sourceSubLine names the kind for an ephemeral workspace, whose Source is always empty", () => {
-    expect(sourceSubLine(ws({}, { kind: "ephemeral", source: "" }))).toBe("ephemeral — scratch space");
+  // deriveWorkspaceMirrors), so ws.source is always "" — the row must read
+  // the CANON copy, not a blank mono line.
+  it("sourceSubLine reads 'empty — discarded after the run' for an ephemeral workspace", () => {
+    expect(sourceSubLine(ws({}, { kind: "ephemeral", source: "" }))).toBe("empty — discarded after the run");
+  });
+
+  it("workspaceImage prefers an explicit pinned ref over a detected devcontainer", () => {
+    const w = ws({ has_devcontainer: true }, { base_image: { kind: "registry", image: "mcr.microsoft.com/x" } });
+    expect(workspaceImage(w)).toEqual({ kind: "ref", label: "mcr.microsoft.com/x" });
+  });
+
+  it("workspaceImage falls back to standard sandbox image when nothing was detected or pinned", () => {
+    expect(workspaceImage(ws({}))).toEqual({ kind: "standard", label: "standard sandbox image" });
   });
 });
 
@@ -324,7 +255,6 @@ describe("attentionItems / sourceSubLine — pure helpers", () => {
 describe("WorkspaceLLMCredDialog", () => {
   beforeEach(() => {
     setWorkspaceLLMCredMock.mockReset();
-    listSecretsMock.mockReset().mockResolvedValue([]);
     listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [] });
   });
 

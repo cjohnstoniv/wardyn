@@ -9,11 +9,9 @@ import { setup as setupApi } from "./api/setup";
 // useK8sRunner — the ONE k8s-driver signal (B4), derived from
 // /setup/status's runner.driver (setupRunnerInfo already pipes it), shared by
 // every surface that needs to know "does this control plane run its sandboxes
-// as Kubernetes pods" — today the tier-1 library add dialog
-// (sources-library.tsx) and the workspace wizard's add-source step
-// (step-sources.tsx), both of which must stop offering a local-directory
-// source on k8s (mounts are structurally impossible there — see
-// internal/runner/substrate's package doc).
+// as Kubernetes pods" — today the Add workspace dialog, which must stop
+// offering a local-directory source on k8s (mounts are structurally impossible
+// there — see internal/runner/substrate's package doc).
 //
 // Self-contained: each caller mounts this hook rather than the caller's
 // parent threading a prop down through wizard.tsx/workspaces.tsx/

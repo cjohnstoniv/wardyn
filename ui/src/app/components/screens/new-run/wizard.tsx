@@ -48,7 +48,7 @@ import { StepEgress } from "./step-egress";
 import { StepConfinement } from "./step-confinement";
 import { StepReview } from "./step-review";
 import { AddSecretDialog } from "../secrets";
-import { WorkspaceWizard } from "../workspace-wizard/wizard";
+import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import {
   WIZARD_STEPS,
   applyProfileSpecToState,
@@ -684,7 +684,7 @@ export function PermissionWizard({
 
       {/* ui-newrun-1: the discard confirm requestClose gates behind. Keeping
           it OUTSIDE <Dialog> mirrors this file's own AddSecretDialog/
-          WorkspaceWizard siblings below, not a nested-inside-DialogContent
+          AddWorkspaceDialog siblings below, not a nested-inside-DialogContent
           placement. */}
       <AlertDialog open={confirmDiscardOpen} onOpenChange={(o) => !o && setConfirmDiscardOpen(false)}>
         <AlertDialogContent>
@@ -711,20 +711,17 @@ export function PermissionWizard({
 
       <AddSecretDialog {...secretFix.dialogProps} existingNames={secrets} />
 
-      {/* origin="run": Done's primary action is "Attach to this run" (onAttach)
-          instead of "Open workspace" — the wizard already scans/builds/verifies
-          along the way, so there's no separate scanAndReload kick to make here. */}
       {addWorkspaceOpen && (
-        <WorkspaceWizard
-          origin="run"
+        <AddWorkspaceDialog
+          existingNames={workspaces.map((w) => w.name)}
           onClose={() => {
             setAddWorkspaceOpen(false);
             reloadWorkspaces();
           }}
-          onAttach={(workspaceId) => {
+          onCreated={(created) => {
             // Auto-attach the newly onboarded workspace so the operator
             // doesn't have to re-open the picker for what they just onboarded.
-            patch({ workspaces: [...state.workspaces, { workspaceId }] });
+            patch({ workspaces: [...state.workspaces, { workspaceId: created.id }] });
             setAddWorkspaceOpen(false);
             reloadWorkspaces();
           }}

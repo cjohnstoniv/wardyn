@@ -3,62 +3,63 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// WORKSPACE DETAIL — the addressable hub at /workspaces/:id. Same breadcrumb/
-// header/section-card idiom as run-detail.tsx. Replaces the retired guided
-// Import dialog: everything past onboarding (requirements, detected-but-not-
-// required candidates, sessions, env-as-code) now lives on this page instead
-// of a step rail, so it survives navigation and never has to be "resumed".
+// WORKSPACE DETAIL — the addressable hub at /workspaces/:id. Two cards:
+// Recorded sessions (RecordPane — Record Mode, untouched) and Allowed hosts.
+// A workspace is usable the instant it's created (POST /workspaces already
+// accepts {name, sources[], base_image?}), so this page no longer surfaces
+// scan/build machinery at all — Stage 2 stops calling those endpoints.
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ChevronRight, Loader2, MoreHorizontal } from "lucide-react";
+import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
-import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
-import { statusTone, statusWord, storySentence } from "../../../lib/workspace-status";
 import { hasLlmPath } from "../../../lib/readiness";
-import { comesWithLine } from "../new-run/wizard-types";
 import { Button } from "../../ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../../ui/dropdown-menu";
-import { Mono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
-import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
+import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
-import { KIND_META, attentionItems, sourceSubLine } from "../workspaces";
-import { WorkspaceWizard } from "../workspace-wizard/wizard";
+import { KIND_META, workspaceImage } from "../workspaces";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
-import { RequirementsCard } from "./requirements-card";
-import { DetectedCard } from "./detected-card";
-import { EnvAsCodeCard } from "./env-as-code-card";
+import { AllowedHostsCard } from "./allowed-hosts-card";
 import { RecordPane } from "./record-pane";
 import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
 
 const POLL_MS = 2500;
+
+// The header's muted mono line — kind · source[ · ref], e.g. "repo ·
+// github.com/acme/api · main". Distinct from sourceSubLine (the list's own
+// Source column): this line always names the kind up front, matching the
+// approved mock verbatim for a repo (`repo · github.com/acme/api · main`).
+function detailSourceLine(ws: Workspace): string {
+  if (!ws.source) return "empty — discarded after the run";
+  const kindLabel = KIND_META[ws.kind]?.label ?? ws.kind;
+  return ws.kind === "repo" && ws.ref ? `${kindLabel} · ${ws.source} · ${ws.ref}` : `${kindLabel} · ${ws.source}`;
+}
+
+// The image row's mono value + blurb, per CANON-STRINGS.md's three variants.
+// Only the devcontainer copy is captured verbatim there ("Built as written —
+// we don't modify it."); the other two are written to match its tone since
+// the mock didn't capture them.
+function imageRow(ws: Workspace): { mono: string; blurb: string; rebuildable: boolean } {
+  const image = workspaceImage(ws);
+  if (image.kind === "devcontainer") {
+    const repoSuffix = ws.kind === "repo" ? ` (this repo${ws.ref ? `, @${ws.ref}` : ""})` : "";
+    return { mono: `.devcontainer/devcontainer.json${repoSuffix}`, blurb: "Built as written — we don't modify it.", rebuildable: true };
+  }
+  if (image.kind === "ref") {
+    return { mono: image.label, blurb: "Pinned — Wardyn pulls this image exactly as given.", rebuildable: false };
+  }
+  return { mono: "standard sandbox image", blurb: "Wardyn's baseline container — no project-specific build.", rebuildable: false };
+}
 
 export function WorkspaceDetailScreen() {
   const { id = "" } = useParams();
@@ -67,11 +68,8 @@ export function WorkspaceDetailScreen() {
 
   const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const [llmReady, setLlmReady] = React.useState(false);
-
-  const [editOpen, setEditOpen] = React.useState(false);
-  const [rescanOpen, setRescanOpen] = React.useState(false);
+  const [rebuilding, setRebuilding] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   const load = React.useCallback(
@@ -97,41 +95,38 @@ export function WorkspaceDetailScreen() {
     load(true);
   }, [id, load]);
 
-  const loadSecrets = React.useCallback(() => {
-    secretsApi.listSecrets().then(setSecretNames).catch(() => {});
-  }, []);
   React.useEffect(() => {
-    loadSecrets();
     setupApi
       .getSetupStatus()
       .then((s) => setLlmReady(hasLlmPath(s)))
       .catch(() => setLlmReady(false));
-  }, [loadSecrets]);
+  }, []);
 
-  // Poll while a scan or any session (open record / confined replay) is
-  // in-flight server-side, so the page reflects it without a manual refresh —
-  // paused otherwise so a settled workspace isn't polled forever.
-  const inFlight = !!ws && (ws.status === "scanning" || isRecording(ws));
+  // Poll while a session (open record / confined replay) is in-flight
+  // server-side, so the page reflects it without a manual refresh — paused
+  // otherwise so a settled workspace isn't polled forever.
+  const inFlight = !!ws && isRecording(ws);
   usePoll(() => load(false), POLL_MS, !(id && inFlight));
 
-  // ---------------- scan ----------------
-  const scan = async () => {
+  const rebuild = async () => {
     if (!ws) return;
+    setRebuilding(true);
     try {
-      const { async: isAsync } = await workspacesApi.scanWorkspace(ws.id);
-      if (isAsync) toast.info(`Scan started for "${ws.name}"`, { description: "Watch it under Runs, or wait here." });
-    } catch (e) {
-      toast.error(`Failed to scan "${ws.name}"`, { description: getErrorMessage(e) });
-    } finally {
+      await workspacesApi.buildWorkspace(ws.id);
+      toast.success(`Rebuild started for "${ws.name}"`);
       load(false);
+    } catch (e) {
+      toast.error("Failed to start the rebuild", { description: getErrorMessage(e) });
+    } finally {
+      setRebuilding(false);
     }
   };
 
   // ---------------- sessions (record / confined replay) ----------------
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
   const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
-  // W20-S1-2: the launch's own warnings (open-egress exfiltration window on
-  // weak confinement, the masking caveat) + its REAL confinement class — the
+  // The launch's own warnings (open-egress exfiltration window on weak
+  // confinement, the masking caveat) + its REAL confinement class — the
   // server's own facts about THIS launch, never dropped and never guessed
   // from the operator's persisted default tier.
   const [recordLaunch, setRecordLaunch] = React.useState<{ warnings?: string[]; confinementClass?: string } | null>(null);
@@ -164,7 +159,7 @@ export function WorkspaceDetailScreen() {
   // "Done" on either an open recording or a confined replay — the backend
   // captures on termination either way; the poll above picks up the result.
   // No unmount-time kill anywhere in this screen: a session survives
-  // navigation (C.SESSION_SURVIVES) — stop it explicitly from here or Runs.
+  // navigation — stop it explicitly from here or Runs.
   const doneRecording = async (runId: string) => {
     try {
       await runsApi.killRun(runId);
@@ -199,13 +194,6 @@ export function WorkspaceDetailScreen() {
   // app uses for egress approval — the host names came from a session's
   // observed traffic, not something the operator typed.
   const requestApproveHost = (host: string) => setPendingConfirm({ hosts: [host], run: () => void approveHost(host) });
-  // UI-WS-14: newEgressHosts is the SAME helper that drives the button's own
-  // "Approve N observed host(s)" count (record-pane.tsx) — reusing it here
-  // means the untrusted-content confirm can never list more hosts than the
-  // button that opened it offered (it used to subtract only approved_egress,
-  // missing the profile's own auto-allowed set). W20-S1-1: pass the SAME
-  // selfHost record-pane.tsx does (window.location.hostname), or this dialog
-  // could offer a platform-plumbing host the button itself no longer shows.
   const requestPromoteEgress = (taskKey: string) => {
     if (!ws) return;
     setPendingConfirm({
@@ -259,48 +247,7 @@ export function WorkspaceDetailScreen() {
   }
 
   const kindMeta = KIND_META[ws.kind] ?? KIND_META.local_dir;
-  const tone = statusTone(ws.status);
-  const attention = attentionItems(ws, secretNames);
-  const comesWith = comesWithLine(ws);
-
-  let primary: React.ReactNode;
-  if (ws.status === "scanning") {
-    primary = (
-      <span className="inline-flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!ws.active_run_id}
-          onClick={() => ws.active_run_id && navigate(`/runs/${encodeURIComponent(ws.active_run_id)}`)}
-        >
-          Watch the run →
-        </Button>
-      </span>
-    );
-  } else if (ws.status === "error") {
-    primary = (
-      <Button size="sm" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={() => void scan()}>
-        Retry scan
-      </Button>
-    );
-  } else if (ws.status === "pending_scan") {
-    primary = (
-      <Button size="sm" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={() => void scan()}>
-        Scan now
-      </Button>
-    );
-  } else {
-    // Runs' NewRunDialog opens on a workspace-first picker where this
-    // workspace is already one of the cards — no pre-seed deep-link needed
-    // (#10/D14, pass3-ux-proposal.md §4). Route state just tells /runs to
-    // open the dialog on arrival.
-    primary = (
-      <Button size="sm" onClick={() => navigate("/runs", { state: { openNewRun: true } })}>
-        Start a run
-      </Button>
-    );
-  }
+  const image = imageRow(ws);
 
   return (
     <div className="mx-auto max-w-[1000px] px-6 py-5">
@@ -318,74 +265,56 @@ export function WorkspaceDetailScreen() {
             <kindMeta.Icon className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg font-semibold text-foreground">{ws.name}</h1>
-              <Chip tone={tone.tone} dot pulse={tone.pulse}>
-                {statusWord(ws.status)}
-              </Chip>
+            <h1 className="text-lg font-semibold text-foreground">{ws.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span className="font-mono text-xs text-muted-foreground">{detailSourceLine(ws)}</span>
+              {ws.source && (
+                <CopyButton
+                  text={ws.source}
+                  label="Copy source path"
+                  iconClassName="size-3"
+                  className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground"
+                />
+              )}
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{storySentence(ws)}</p>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <Mono className="text-xs text-foreground" title={sourceSubLine(ws)}>
-                {sourceSubLine(ws)}
-              </Mono>
-              <CopyButton text={ws.source} label="Copy source path" iconClassName="size-3" className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground" />
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              <strong className="text-foreground">Comes with:</strong> {comesWith}
-            </p>
-            {attention.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                {attention.map((a, i) => (
-                  <span
-                    key={i}
-                    className={
-                      "text-[0.6875rem] " +
-                      (a.tone === "danger" ? "text-danger" : a.tone === "warning" ? "text-warning" : "text-muted-foreground")
-                    }
-                  >
-                    {a.text}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
-          {primary}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="ghost" className="size-8 p-0" aria-label="Workspace actions">
-                <MoreHorizontal className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setEditOpen(true)} disabled={!operator}>
-                Edit workspace…
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setRescanOpen(true)} disabled={!operator}>
-                Rescan…
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-danger focus:text-danger"
-                disabled={!operator}
-                onClick={() => setConfirmDelete(true)}
-              >
-                Delete…
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button size="sm" onClick={() => navigate("/runs", { state: { openNewRun: true } })}>
+            Start a run
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="size-8 p-0 text-danger hover:text-danger"
+            disabled={!operator}
+            title={operator ? "Delete this workspace" : undefined}
+            aria-label="Delete this workspace"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 className="size-4" />
+            {!operator && <OperatorOnlyHint />}
+          </Button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-foreground">
+              Image <span className="font-mono">{image.mono}</span>
+            </p>
+            <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">{image.blurb}</p>
+          </div>
+          {image.rebuildable && (
+            <Button size="sm" variant="outline" disabled={!operator || rebuilding} onClick={() => void rebuild()}>
+              Rebuild
+            </Button>
+          )}
         </div>
       </div>
 
       <div className="mt-4 flex flex-col gap-4">
-        <RequirementsCard ws={ws} storedSecretNames={secretNames} onWorkspaceUpdated={setWs} onSecretStored={(n) => setSecretNames((s) => [...s, n])} />
-
-        <DetectedCard ws={ws} onWorkspaceUpdated={setWs} />
-
-        <DetailSectionCard title="Sessions" subtitle="Learn what it really uses: record a live session in an open sandbox, promote what it reached, replay it confined.">
+        <DetailSectionCard
+          title="Recorded sessions"
+          subtitle='Run a task once with everything open. Wardyn watches what it actually did and writes the least-privilege policy. Replay it confined to prove the policy is enough.'
+        >
           <RecordPane
             ws={ws}
             notice={recordNotice}
@@ -404,48 +333,8 @@ export function WorkspaceDetailScreen() {
           />
         </DetailSectionCard>
 
-        <EnvAsCodeCard ws={ws} />
+        <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
       </div>
-
-      {editOpen && (
-        <WorkspaceWizard
-          key={ws.id}
-          origin="library"
-          initial={ws}
-          onClose={() => {
-            setEditOpen(false);
-            load(false);
-          }}
-        />
-      )}
-
-      <AlertDialog open={rescanOpen} onOpenChange={setRescanOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Rescan {ws.name}?</AlertDialogTitle>
-            {/* UX-6: this action is POST /workspaces/{id}/scan — a plain
-                re-read, not the composition-edit PUT that actually clears
-                requirements/sessions (that warning belongs on wizard.tsx's
-                own confirm, where it's true). Reusing C.RESCAN_DESTROYS here
-                deterred the one safe way to refresh a stale profile. */}
-            <AlertDialogDescription>
-              Rescanning re-reads each source from scratch and refreshes what it detected — your requirements,
-              approved egress, and recorded sessions aren&apos;t touched.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setRescanOpen(false);
-                void scan();
-              }}
-            >
-              Rescan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <DeleteConfirmDialog
         name={confirmDelete ? ws.name : null}

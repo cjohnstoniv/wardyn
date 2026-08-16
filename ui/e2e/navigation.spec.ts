@@ -30,7 +30,7 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
-  { label: "Workspaces", heading: "Workspaces", blurb: /three tiers: directories & repos configured once/i },
+  { label: "Workspaces", heading: "Workspaces", blurb: /a run can attach\. runs can only attach what's listed here/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
 ];
 
