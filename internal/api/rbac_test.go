@@ -192,8 +192,6 @@ var gatedRoutes = []struct{ method, path string }{
 	// the LIST/GET stay reads (readRoutes), same split as secrets above.
 	{http.MethodPut, "/api/v1/integrations/i1"},
 	{http.MethodDelete, "/api/v1/integrations/i1"},
-	{http.MethodPost, "/api/v1/integrations/i1/adopt"},
-	{http.MethodPost, "/api/v1/integrations/i1/test"},
 }
 
 // readRoutes are the reads in those same clusters. A member keeps all of them —

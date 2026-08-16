@@ -267,18 +267,22 @@ func (s *Server) routes() chi.Router {
 			// site-config's GET: Credentials only ever holds secret NAMES.
 			r.Get("/integrations", s.handleListIntegrations)
 			// Integration writes: PUT creates-or-replaces a stored row, DELETE
-			// removes one, POST .../adopt persists a derived legacy row
-			// verbatim so it becomes editable. operatorOnly — same corp-wide
-			// blast radius as site-config's PUT (setup_integrations.go).
+			// removes one. operatorOnly — same corp-wide blast radius as
+			// site-config's PUT (setup_integrations.go).
+			//
+			// The 0.5 console has no integration catalog: connections are the
+			// four Settings cards (Host, Model provider, Git host, Your SSH
+			// keys), each a radio group over concrete lanes. Two routes went
+			// with the catalog they existed for. `.../adopt` promoted a DERIVED
+			// legacy row into a stored one so it could be edited in the list —
+			// there is no list, and nothing derived to promote. `.../test`
+			// spent a throwaway confined sandbox to probe one row's egress +
+			// injection; the cards state what is STORED and say so plainly
+			// ("Wardyn stores this — it doesn't dial the provider to check
+			// it"), which is the honest claim for a credential nobody has used
+			// yet. A real run remains the real test.
 			operatorOnly.Put("/integrations/{id}", s.handlePutIntegration)
 			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
-			operatorOnly.Post("/integrations/{id}/adopt", s.handleAdoptIntegration)
-			// "Test": launch a throwaway confined sandbox and actually traverse
-			// THIS integration's own egress + credential injection
-			// (integration_probe.go) — the same real-probe honesty as the two
-			// site-config probes above, and the same operatorOnly posture (it
-			// spends a sandbox and presents the operator's credential).
-			operatorOnly.Post("/integrations/{id}/test", s.handleTestIntegration)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
 			// (item 4): recordingAuthorizer is the SAME ownership rule

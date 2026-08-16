@@ -218,7 +218,7 @@ func subscriptionLane(integ types.Integration) string {
 // applyWorkspaceCreds's api_key/managed/bedrock cases). Returns the
 // Integration Type actually applied ("" = no-op: a non-LLM agent, an
 // unresolvable/absent credential, or a type with no sandbox lane at all —
-// azure_openai, per capabilitiesFor's reasonXAzureDirect) and, for a bedrock
+// per capabilitiesFor) and, for a bedrock
 // integration with a region/model override, that override for dispatch to
 // resolve against (dispatchParams.BedrockRef).
 //
@@ -227,7 +227,7 @@ func subscriptionLane(integ types.Integration) string {
 // generic connection — and turns its proxy-header secret into one api_key grant
 // plus its egress into allowlist entries. anthropic_subscription and bedrock
 // keep bespoke branches because their credential is genuinely not an HTTP
-// header (an OAuth mount/inject lane; SigV4 request signing), and azure_openai
+// header (an OAuth mount/inject lane; SigV4 request signing), and no key
 // has no sandbox lane at all.
 //
 // model_api is deliberately NEVER granted here: resolving an integration for a
@@ -263,10 +263,6 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		return "", nil
 	}
 	switch integ.Kind {
-	case types.IntegrationKindAzureOpenAI:
-		// No sandbox lane at all — model_api is a protocol-fact impossibility
-		// (capabilitiesFor's reasonXAzureDirect). No fold.
-		return "", nil
 	case types.IntegrationKindAnthropicSubscription:
 		// Both lanes (managed / resident_host) displace a competing api-key
 		// grant and ensure Anthropic egress — the part common to the old

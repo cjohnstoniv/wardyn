@@ -315,11 +315,6 @@ func (s *probeStore) CreateGrant(_ context.Context, g types.CredentialGrant) (ty
 	s.grants = append(s.grants, g)
 	return g, nil
 }
-func (s *probeStore) grantSpecs() []types.CredentialGrant {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return slices.Clone(s.grants)
-}
 func (s *probeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

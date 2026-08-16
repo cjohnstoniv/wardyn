@@ -55,9 +55,7 @@ func TestReasonCanonMatchesMock(t *testing.T) {
 		{"X_SUB_CODEX", reasonXSubCodex, "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting."},
 		{"X_BEDROCK_CODEX", reasonXBedrockCodex, "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting."},
 		{"X_OPENAI_CLAUDE", reasonXOpenAIClaude, "Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting."},
-		{"X_AZURE_HARNESS", reasonXAzureHarness, "Neither agent tool can be pointed at an Azure OpenAI deployment. Azure powers Wardyn's own features only."},
 		{"X_SUB_DIRECT", reasonXSubDirect, "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting."},
-		{"X_AZURE_DIRECT", reasonXAzureDirect, "No sandbox lane exists — Azure is called from the control plane only."},
 		{"BEDROCK_FEATURES", reasonBedrockFeatures, "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses."},
 	}
 	for _, tc := range tests {
@@ -305,18 +303,12 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 
-		// ---------------- azure_openai (no gating — a flat protocol/control-plane fact) ----------------
-		{
-			name: "azure_openai: unconditional regardless of credentials",
-			in:   types.Integration{Kind: "azure_openai"},
-			env:  capEnv{},
-			want: []Capability{
-				{ID: "model_api", State: CapImpossible, Reason: reasonXAzureDirect},
-				{ID: "tool:claude-code", State: CapImpossible, Reason: reasonXAzureHarness},
-				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXAzureHarness},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "control_plane"},
-			},
-		},
+		// azure_openai was the fifth AI kind. Its ONLY capability was
+		// wardyn_features (the AI Run Composer, deleted) — it could never drive
+		// an agent tool and had no sandbox lane at all. With the composer gone
+		// it was a connectable credential wired to nothing, so the kind was
+		// removed; capabilitiesFor now falls through to the generic branch for
+		// it like any other unrecognized kind.
 
 		// ---------------- scm: github_app ----------------
 		{

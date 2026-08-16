@@ -79,7 +79,6 @@ type Capability struct {
 // object). Do not paraphrase; keep in sync with that file.
 const (
 	reasonXSubDirect      = "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting."
-	reasonXAzureDirect    = "No sandbox lane exists — Azure is called from the control plane only."
 	reasonBedrockFeatures = "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses."
 	// reasonBedrockUnset states the real dispatch behavior: without both a
 	// region and a model id, resolveBedrockAuth never reports ready and the run
@@ -120,13 +119,6 @@ func capabilitiesFor(in types.Integration, env capEnv) []Capability {
 		caps = bedrockCaps(in, env)
 	case types.IntegrationKindOpenAIAPIKey:
 		caps = directKeyCaps(in, env, "codex-cli", "claude-code")
-	case types.IntegrationKindAzureOpenAI:
-		caps = []Capability{
-			{ID: "model_api", State: CapImpossible, Reason: reasonXAzureDirect},
-			{ID: "tool:claude-code", State: CapImpossible, Reason: harnessProviderReason("claude-code", in.Kind)},
-			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-			{ID: "wardyn_features", State: CapAvailable, Residency: "control_plane"},
-		}
 	case types.IntegrationKindGitHubApp:
 		caps = githubAppCaps(in, env)
 	case types.IntegrationKindGitHost:
@@ -461,9 +453,6 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
-	for i := range rows {
-		rows[i].ProbeStatus = s.probeStatus(rows[i].ID)
-	}
 	return rows
 }
 

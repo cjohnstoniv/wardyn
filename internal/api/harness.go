@@ -43,7 +43,7 @@ type harnessDef struct {
 	Login *harnessLogin
 
 	// ProviderTypes maps an ai-integration TYPE (e.g. "anthropic_api_key",
-	// "bedrock", "azure_openai" — the Integrations screen's vocabulary, see
+	// "bedrock" — the Settings cards' vocabulary, see
 	// integrations.go) to "" when that type CAN drive this harness, or to the
 	// verbatim protocol-fact reason it CANNOT. A type absent from the map
 	// reads as "" (possible); every type this harness's family is ever asked
@@ -64,7 +64,6 @@ const (
 	reasonXSubCodex     = "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting."
 	reasonXBedrockCodex = "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting."
 	reasonXOpenAIClaude = "Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting."
-	reasonXAzureHarness = "Neither agent tool can be pointed at an Azure OpenAI deployment. Azure powers Wardyn's own features only."
 )
 
 // harnessCatalog is the full set of coding-agent harnesses. Order is cosmetic
@@ -91,7 +90,6 @@ var harnessCatalog = []harnessDef{
 			"anthropic_subscription": "",
 			"bedrock":                "",
 			"openai_api_key":         reasonXOpenAIClaude,
-			"azure_openai":           reasonXAzureHarness,
 		},
 	},
 	{
@@ -104,7 +102,6 @@ var harnessCatalog = []harnessDef{
 			"anthropic_subscription": reasonXSubCodex,
 			"bedrock":                reasonXBedrockCodex,
 			"openai_api_key":         "",
-			"azure_openai":           reasonXAzureHarness,
 		},
 	},
 	{

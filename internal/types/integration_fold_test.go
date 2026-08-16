@@ -155,9 +155,18 @@ func TestIntegrationFold_AIKinds(t *testing.T) {
 		t.Errorf("openai api_key delivery = %+v, want the Authorization/Bearer convention", openai.Secrets[0].Delivery)
 	}
 
+	// azure_openai stopped being a kind Wardyn honors in 0.5 (its one capability
+	// powered the deleted AI Run Composer). The read-time fold is deliberately a
+	// passthrough, so a row stored under the old release still DESERIALIZES with
+	// its kind and credential intact — nobody's config is silently rewritten.
+	// It just no longer derives a model provider, and validateIntegrationWrite
+	// refuses it like any other unknown kind on the next write.
 	azure := fixtureRow(t, sc, "acme-azure")
-	if azure.Kind != IntegrationKindAzureOpenAI || azure.RoleSecret("api_key") != "azure-key" {
+	if azure.Kind != "azure_openai" || azure.RoleSecret("api_key") != "azure-key" {
 		t.Errorf("azure row = %+v", azure)
+	}
+	if ClosedIntegrationKinds[azure.Kind] {
+		t.Errorf("azure_openai is still a closed kind — it was removed in 0.5")
 	}
 
 	sub := fixtureRow(t, sc, "acme-sub")
@@ -345,8 +354,12 @@ func TestIntegrationFold_NewShapeRowsPassThrough(t *testing.T) {
 	if len(sc.Integrations) != 2 {
 		t.Fatalf("rows = %d, want 2 (a new-shape row is never dropped, whatever its slug)", len(sc.Integrations))
 	}
+	// The `probe` key in the fixture below is simply ignored now: the
+	// verification-probe framework went with the integration catalog it served
+	// (see the note where IntegrationProbe used to live). An unknown key must
+	// not fail the decode — a row stored under the old release still loads.
 	mirror := fixtureRow(t, sc, "my-mirror")
-	if mirror.Kind != "artifact_mirror" || mirror.Probe == nil || mirror.Probe.URL != "https://mirror.corp.internal/health" {
+	if mirror.Kind != "artifact_mirror" {
 		t.Errorf("mirror row = %+v", mirror)
 	}
 	vault := fixtureRow(t, sc, "corp-vault")

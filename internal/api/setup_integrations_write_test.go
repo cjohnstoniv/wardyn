@@ -23,7 +23,6 @@ func TestIntegrationWriteRoutesRequireAdminAuth(t *testing.T) {
 	cases := []struct{ method, path string }{
 		{http.MethodPut, "/api/v1/integrations/acme-anthropic"},
 		{http.MethodDelete, "/api/v1/integrations/acme-anthropic"},
-		{http.MethodPost, "/api/v1/integrations/acme-anthropic/adopt"},
 	}
 	for _, c := range cases {
 		if w := do(t, h.srv, c.method, c.path, "", ""); w.Code != http.StatusUnauthorized {
@@ -36,7 +35,7 @@ func TestIntegrationWriteRoutesRequireAdminAuth(t *testing.T) {
 }
 
 // integrationWriteHarness builds a Server with a fakeSiteConfigStore seeded
-// with `stored`, for the functional PUT/DELETE/adopt tests below.
+// with `stored`, for the functional PUT/DELETE tests below.
 func integrationWriteHarness(t *testing.T, stored []types.Integration) (*Server, *fakeSiteConfigStore, *recRecorder) {
 	t.Helper()
 	h := newHarness(t)
@@ -114,31 +113,6 @@ func TestHandlePutIntegration_UpdatesExistingRow_PreservesCreatedAt(t *testing.T
 	}
 	if !fake.cfg.Integrations[0].UpdatedAt.After(firstCreated) {
 		t.Errorf("UpdatedAt = %v, want a fresh timestamp after %v", fake.cfg.Integrations[0].UpdatedAt, firstCreated)
-	}
-}
-
-// W11-S1-2: a stale cached "passed" chip must not survive an edit to the row
-// it was probed against — the credential/config it claims to vouch for is no
-// longer the credential/config the row now has.
-func TestHandlePutIntegration_InvalidatesCachedProbeStatus(t *testing.T) {
-	existing := types.Integration{
-		ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
-	}
-	srv, _, _ := integrationWriteHarness(t, []types.Integration{existing})
-	srv.setProbeStatus("acme-anthropic", types.IntegrationProbeStatus{State: "passed", CheckedAt: srv.cfg.Now().UTC()})
-	if st := srv.probeStatus("acme-anthropic"); st == nil || st.State != "passed" {
-		t.Fatalf("precondition: probeStatus = %+v, want the seeded passed result", st)
-	}
-
-	body := `{"name":"Acme Anthropic (rotated)","kind":"anthropic_api_key",` +
-		`"secrets":[{"role":"api_key","secret_name":"acme-anthropic-key"}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if st := srv.probeStatus("acme-anthropic"); st != nil {
-		t.Errorf("probeStatus after PUT = %+v, want nil — the edit must invalidate the cached probe result", st)
 	}
 }
 
@@ -456,22 +430,6 @@ func TestHandleDeleteIntegration_RemovesStoredRow(t *testing.T) {
 	}
 }
 
-// W11-S1-2: a deleted row's last probe result must not keep reading as
-// current — the row it describes no longer exists.
-func TestHandleDeleteIntegration_InvalidatesCachedProbeStatus(t *testing.T) {
-	existing := types.Integration{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey}
-	srv, _, _ := integrationWriteHarness(t, []types.Integration{existing})
-	srv.setProbeStatus("acme-anthropic", types.IntegrationProbeStatus{State: "passed", CheckedAt: srv.cfg.Now().UTC()})
-
-	w := do(t, srv, http.MethodDelete, "/api/v1/integrations/acme-anthropic", adminToken, "")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("code = %d, want 204; body=%s", w.Code, w.Body.String())
-	}
-	if st := srv.probeStatus("acme-anthropic"); st != nil {
-		t.Errorf("probeStatus after DELETE = %+v, want nil — a deleted row's probe result must not outlive it", st)
-	}
-}
-
 func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 	srv, _, _ := integrationWriteHarness(t, nil)
 	w := do(t, srv, http.MethodDelete, "/api/v1/integrations/does-not-exist", adminToken, "")
@@ -480,90 +438,41 @@ func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 	}
 }
 
-// TestHandleAdoptIntegration_PersistsDerivedRowVerbatim exercises a REAL
-// legacy-derived row (the anthropic-api-key secret is present in
-// integrationWriteHarness), adopting it into a stored row with the SAME id,
-// kind, and secret rows the derived row already carried.
-func TestHandleAdoptIntegration_PersistsDerivedRowVerbatim(t *testing.T) {
-	srv, fake, audit := integrationWriteHarness(t, nil)
-	// Legacy derivation keys off "anthropic-api-key" (integrations.go), not the
-	// "acme-anthropic-key" secret integrationWriteHarness seeds for the PUT
-	// tests — seed the one the legacy path actually reads.
-	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-live")}}
-
-	w := do(t, srv, http.MethodPost, "/api/v1/integrations/anthropic_api_key/adopt", adminToken, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if len(fake.cfg.Integrations) != 1 {
-		t.Fatalf("expected exactly one stored row after adopt, got %+v", fake.cfg.Integrations)
-	}
-	got := fake.cfg.Integrations[0]
-	if got.ID != "anthropic_api_key" || got.Kind != types.IntegrationKindAnthropicAPIKey {
-		t.Errorf("adopted row = %+v, want the derived anthropic_api_key row verbatim", got)
-	}
-	if got.RoleSecret("api_key") != "anthropic-api-key" {
-		t.Errorf("adopted secrets = %+v, want api_key -> anthropic-api-key", got.Secrets)
-	}
-	if got.CreatedAt.IsZero() {
-		t.Error("expected the adopted row to be stamped with CreatedAt")
-	}
-	if n := auditCount(audit, "integration.adopt"); n != 1 {
-		t.Errorf("integration.adopt audit events = %d, want 1", n)
-	}
-
-	// Adopting again now that it's stored is a 409.
-	w2 := do(t, srv, http.MethodPost, "/api/v1/integrations/anthropic_api_key/adopt", adminToken, "")
-	if w2.Code != http.StatusConflict {
-		t.Fatalf("second adopt: code = %d, want 409; body=%s", w2.Code, w2.Body.String())
-	}
-}
-
-// TestHandleAdoptIntegration_ColonIDThenPutBack proves the colon-id fix end to
-// end: adopting a legacy row that mints a colon-qualified id
-// ("anthropic_subscription:managed") persists it verbatim (already true
-// before this fix — f1a749f taught the router to unescape it), and — the part
-// this fix adds — PUTting that SAME id back (the round-trip GET-then-edit
-// flow adoption exists to unlock) no longer 400s on validateIntegrationWrite's
-// id gate. The URL uses the percent-encoded colon a real browser fetch()
-// sends (encodeURIComponent), exercising integrationIDParam's unescape too.
-func TestHandleAdoptIntegration_ColonIDThenPutBack(t *testing.T) {
+// TestPutIntegration_ColonIDRoundTrips keeps the colon-id invariant alive now
+// that adoption is gone. A colon-qualified id ("anthropic_subscription:managed")
+// must survive a PUT: the URL carries the percent-encoded colon a real browser
+// fetch() sends (encodeURIComponent), so this exercises integrationIDParam's
+// unescape AND validateIntegrationWrite's id gate, which used to 400 on it.
+// The adopt half of the original test went with the endpoint.
+func TestPutIntegration_ColonIDRoundTrips(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
 	srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
 	const id = "anthropic_subscription:managed"
 	escapedPath := "/api/v1/integrations/" + url.PathEscape(id)
 
-	w := do(t, srv, http.MethodPost, escapedPath+"/adopt", adminToken, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("adopt: code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if len(fake.cfg.Integrations) != 1 || fake.cfg.Integrations[0].ID != id {
-		t.Fatalf("expected exactly one stored row with the colon id, got %+v", fake.cfg.Integrations)
-	}
-
 	body := `{"name":"Claude subscription (managed)","kind":"anthropic_subscription",` +
 		`"config":{"lane":"managed"},"default_for":["agent_runs"]}`
-	w = do(t, srv, http.MethodPut, escapedPath, adminToken, body)
+	w := do(t, srv, http.MethodPut, escapedPath, adminToken, body)
 	if w.Code != http.StatusOK {
-		t.Fatalf("PUT back the adopted colon id: code = %d, want 200; body=%s", w.Code, w.Body.String())
+		t.Fatalf("PUT a colon id: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	if len(fake.cfg.Integrations) != 1 {
-		t.Fatalf("PUT must replace, not duplicate: got %+v", fake.cfg.Integrations)
+		t.Fatalf("expected exactly one stored row, got %+v", fake.cfg.Integrations)
 	}
 	got := fake.cfg.Integrations[0]
 	if got.ID != id {
-		t.Errorf("PUT-back row id = %q, want the colon id retained", got.ID)
+		t.Errorf("stored row id = %q, want the colon id retained", got.ID)
 	}
 	if len(got.DefaultFor) != 1 || got.DefaultFor[0] != "agent_runs" {
-		t.Errorf("PUT-back row DefaultFor = %v, want [agent_runs]", got.DefaultFor)
+		t.Errorf("stored row DefaultFor = %v, want [agent_runs]", got.DefaultFor)
 	}
-}
 
-func TestHandleAdoptIntegration_UnknownIDIs404(t *testing.T) {
-	srv, _, _ := integrationWriteHarness(t, nil)
-	w := do(t, srv, http.MethodPost, "/api/v1/integrations/does-not-exist/adopt", adminToken, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("code = %d, want 404; body=%s", w.Code, w.Body.String())
+	// PUT is create-or-REPLACE: the same id again must not duplicate.
+	if w = do(t, srv, http.MethodPut, escapedPath, adminToken, body); w.Code != http.StatusOK {
+		t.Fatalf("second PUT: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 1 {
+		t.Fatalf("PUT must replace, not duplicate: got %+v", fake.cfg.Integrations)
 	}
 }
 

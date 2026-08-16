@@ -316,7 +316,12 @@ const (
 	IntegrationKindAnthropicSubscription = "anthropic_subscription"
 	IntegrationKindBedrock               = "bedrock"
 	IntegrationKindOpenAIAPIKey          = "openai_api_key"
-	IntegrationKindAzureOpenAI           = "azure_openai"
+	// IntegrationKindAzureOpenAI is GONE as of 0.5. Its single capability was
+	// powering Wardyn's own features — the AI Run Composer — which no longer
+	// exists; no agent tool can be pointed at an Azure OpenAI deployment (see
+	// harness.go's reasonXAzureHarness). A stored row of the old kind now fails
+	// closed at validateIntegrationWrite like any other unknown kind, and an
+	// azure-openai-key secret is left untouched but inert.
 	IntegrationKindGitHubApp             = "github_app"
 	IntegrationKindGitHost               = "git_host"
 )
@@ -327,7 +332,7 @@ const (
 // open slug.
 var ClosedIntegrationKinds = map[string]bool{
 	IntegrationKindAnthropicAPIKey: true, IntegrationKindAnthropicSubscription: true,
-	IntegrationKindBedrock: true, IntegrationKindOpenAIAPIKey: true, IntegrationKindAzureOpenAI: true,
+	IntegrationKindBedrock: true, IntegrationKindOpenAIAPIKey: true,
 	IntegrationKindGitHubApp: true, IntegrationKindGitHost: true,
 }
 
@@ -337,7 +342,7 @@ var ClosedIntegrationKinds = map[string]bool{
 func AIProviderKind(kind string) bool {
 	switch kind {
 	case IntegrationKindAnthropicAPIKey, IntegrationKindAnthropicSubscription,
-		IntegrationKindBedrock, IntegrationKindOpenAIAPIKey, IntegrationKindAzureOpenAI:
+		IntegrationKindBedrock, IntegrationKindOpenAIAPIKey:
 		return true
 	}
 	return false
@@ -384,22 +389,13 @@ type IntegrationSecret struct {
 	Delivery   *IntegrationDelivery `json:"delivery,omitempty"`
 }
 
-// IntegrationProbe is the optional verification request behind the row's
-// "Test" action: a plain method+URL the server probes through the SAME
-// egress+injection path a run uses.
-type IntegrationProbe struct {
-	Method string `json:"method"`
-	URL    string `json:"url"`
-}
-
-// IntegrationProbeStatus is the server-cached, read-only result of the last
-// probe. Cached in-memory only (single replica): "not_tested" after a reboot
-// is the honest state. Never operator-writable.
-type IntegrationProbeStatus struct {
-	State     string    `json:"state"` // passed | failed | not_tested
-	CheckedAt time.Time `json:"checked_at,omitzero"`
-	Detail    string    `json:"detail,omitempty"`
-}
+// The verification-probe framework (IntegrationProbe, IntegrationProbeStatus,
+// POST /integrations/{id}/test) was removed in 0.5 with the integration catalog
+// it served. It spent a throwaway confined sandbox to traverse ONE row's egress
+// and credential injection; the Settings cards state what is STORED and say so
+// plainly ("Wardyn stores this — it doesn't dial the provider to check it"),
+// which is the honest claim about a credential nobody has used yet. A real run
+// is the real test.
 
 // Integration is one operator-configured external connection: a base
 // component — required secrets (each with its delivery), required egress,
@@ -445,11 +441,6 @@ type Integration struct {
 	// app_id/installation_id/host, anthropic_subscription ⇒ lane — an unknown
 	// key 400s by name at write); generic kinds take any string keys.
 	Config map[string]any `json:"config,omitempty"`
-	// Probe is the optional verification request behind "Test".
-	Probe *IntegrationProbe `json:"probe,omitempty"`
-	// ProbeStatus is the server-cached last probe result. READ-ONLY on the
-	// wire; never operator-written.
-	ProbeStatus *IntegrationProbeStatus `json:"probe_status,omitempty"`
 	// Docs optionally points at whatever documents this system, so whoever
 	// comes after the operator who added it can find out what it is.
 	Docs string `json:"docs,omitempty"`
@@ -534,7 +525,7 @@ func AIKeyDelivery(kind string) *IntegrationDelivery {
 	switch kind {
 	case IntegrationKindAnthropicAPIKey:
 		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "x-api-key", Format: "%s"}
-	case IntegrationKindOpenAIAPIKey, IntegrationKindAzureOpenAI:
+	case IntegrationKindOpenAIAPIKey:
 		return &IntegrationDelivery{Mode: DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}
 	}
 	return nil

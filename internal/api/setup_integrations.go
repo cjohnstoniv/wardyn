@@ -135,7 +135,6 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		if in.ID != id {
 			continue
 		}
-		in.ProbeStatus = s.probeStatus(in.ID)
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
 		providers, _ := s.setupProviders()
@@ -158,7 +157,6 @@ type putIntegrationRequest struct {
 	Secrets              []types.IntegrationSecret `json:"secrets,omitempty"`
 	Egress               []string                  `json:"egress,omitempty"`
 	Config               map[string]any            `json:"config,omitempty"`
-	Probe                *types.IntegrationProbe   `json:"probe,omitempty"`
 	Docs                 string                    `json:"docs,omitempty"`
 	DisabledCapabilities []string                  `json:"disabled_capabilities,omitempty"`
 	DefaultFor           []string                  `json:"default_for,omitempty"`
@@ -202,7 +200,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	in := types.Integration{
 		ID: id, Name: req.Name, Kind: req.Kind,
 		Disabled: req.Disabled, Secrets: req.Secrets, Egress: req.Egress,
-		Config: req.Config, Probe: req.Probe, Docs: req.Docs,
+		Config: req.Config, Docs: req.Docs,
 		DisabledCapabilities: req.DisabledCapabilities, DefaultFor: req.DefaultFor,
 	}
 	if err := validateIntegrationWrite(in); err != nil {
@@ -211,8 +209,8 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	// SEAM-1: serializes this read-modify-write against the site config's
-	// other three writers (handleDeleteIntegration, handleAdoptIntegration,
-	// handlePutSiteConfig) — see handleAdoptIntegration's comment for why an
+	// other two writers (handleDeleteIntegration, handlePutSiteConfig) — see
+	// handlePutIntegration's own SEAM-1 comment for why an
 	// unguarded RMW here can silently erase a concurrent one.
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
@@ -227,12 +225,12 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		in.CreatedAt, in.UpdatedAt = rows[idx].CreatedAt, now
 		rows[idx] = in
 	} else {
-		if s.derivedIntegrationExists(ctx, sc, id) {
-			writeError(w, http.StatusConflict, fmt.Sprintf(
-				"integration %q exists only as a derived row; POST /integrations/%s/adopt first (adoption is explicit — "+
-					"a write here would silently freeze a copy of live config)", id, id))
-			return
-		}
+		// A PUT onto an id that so far exists only as a DERIVED row simply
+		// stores it. This used to 409 and demand an explicit POST .../adopt
+		// first, so that freezing a copy of live config was a deliberate act.
+		// That endpoint is gone with the integration catalog, and a 409 naming
+		// a route the router no longer registers is a dead end — the write IS
+		// the adoption now, and it carries the same audit event either way.
 		in.CreatedAt, in.UpdatedAt = now, now
 		rows = append(rows, in)
 	}
@@ -243,7 +241,6 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
-	s.invalidateProbeStatus(id) // W11-S1-2: the edit may change what a probe observes
 	// egress and header are the two facts an incident review actually needs
 	// from this event: what a granted run may now REACH, and what credential
 	// header gets presented there. Both are non-secret by construction (Secrets
@@ -258,21 +255,6 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
 
-// derivedIntegrationExists reports whether id names a row that exists only as
-// a DERIVATION right now (legacyIntegrations) — the "adopt first" gate above.
-// sc is the caller's already-read SiteConfig; stored ids are excluded by
-// legacyIntegrations' own stored-wins rule, so a true here always means
-// "derived and not stored".
-func (s *Server) derivedIntegrationExists(ctx context.Context, sc types.SiteConfig, id string) bool {
-	stored := make(map[string]bool, len(sc.Integrations))
-	for _, in := range sc.Integrations {
-		stored[in.ID] = true
-	}
-	present := s.presentSecretNames(ctx)
-	return slices.ContainsFunc(s.legacyIntegrations(ctx, sc, stored, present, s.setupBedrock(ctx, present)),
-		func(row integrationRow) bool { return row.ID == id })
-}
-
 // handleDeleteIntegration removes a STORED Integration. 404 when id names no
 // stored row — a legacy-derived row was never persisted, so there is nothing
 // to delete; the operator's underlying secret/config is untouched and the row
@@ -283,7 +265,7 @@ func (s *Server) derivedIntegrationExists(ctx context.Context, sc types.SiteConf
 func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
 	id := integrationIDParam(r)
 	ctx := r.Context()
-	// SEAM-1: see handleAdoptIntegration's comment.
+	// SEAM-1: see handlePutIntegration's comment.
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
@@ -302,7 +284,6 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
-	s.invalidateProbeStatus(id) // W11-S1-2: a deleted row's last probe result must not outlive it
 	// Record what stopped being reachable — after the delete the row is gone,
 	// so this event is the only remaining answer to "what did that one open?".
 	// The operator's underlying secrets are NOT deleted (handleDeleteIntegration's
@@ -312,66 +293,6 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 			"kind": gone.Kind, "egress": gone.Egress, "credentials": gone.CredentialsMap(),
 		})))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleAdoptIntegration persists a DERIVED legacy row VERBATIM so it becomes
-// editable. 409 when id already names a STORED row (nothing to adopt — it
-// already is one); 404 when id names neither a stored nor a legacy-derived
-// row; 400 when the derived row itself fails validateIntegrationWrite
-// (PLATFORM-API-2) — a half-set derivation (e.g. Bedrock region set with no
-// model) would otherwise persist as a row every subsequent PUT then rejects,
-// leaving it stored and un-editable through this same endpoint.
-//
-//	POST /api/v1/integrations/{id}/adopt
-func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) {
-	id := integrationIDParam(r)
-	ctx := r.Context()
-	// SEAM-1: brackets the read-modify-write against the other three
-	// site-config writers (handlePutIntegration, handleDeleteIntegration,
-	// this handler) — legacyIntegrations below runs a full secret listing +
-	// CLI detection + subscription/Bedrock peek BETWEEN the read and the
-	// write, a real window for one of the other three to land its own write
-	// in and have this PutSiteConfig silently carry it away.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
-		return
-	}
-	stored := make(map[string]bool, len(sc.Integrations))
-	for _, in := range sc.Integrations {
-		stored[in.ID] = true
-	}
-	if stored[id] {
-		writeError(w, http.StatusConflict, fmt.Sprintf("integration %q is already stored", id))
-		return
-	}
-	present := s.presentSecretNames(ctx)
-	legacy := s.legacyIntegrations(ctx, sc, stored, present, s.setupBedrock(ctx, present))
-	idx := slices.IndexFunc(legacy, func(row integrationRow) bool { return row.ID == id })
-	if idx < 0 {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("no derived integration %q to adopt", id))
-		return
-	}
-	now := s.cfg.Now().UTC()
-	in := legacy[idx].Integration
-	if verr := validateIntegrationWrite(in); verr != nil {
-		writeError(w, http.StatusBadRequest, "invalid integration: "+verr.Error())
-		return
-	}
-	in.CreatedAt, in.UpdatedAt = now, now
-	rows := append(slices.Clone(sc.Integrations), in)
-	applyDefaultForRadio(rows, in.ID, in.DefaultFor) // defensive; a derived row never carries DefaultFor today
-	sc.Integrations = rows
-	saved, err := s.cfg.Store.PutSiteConfig(ctx, sc)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
-		return
-	}
-	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"integration.adopt", id, "success", mustJSON(map[string]any{"kind": in.Kind})))
-	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
 
 // SetupHarnessTool is one coding-agent harness's static catalog metadata

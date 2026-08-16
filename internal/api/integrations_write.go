@@ -175,7 +175,6 @@ var knownIntegrationConfigKeys = map[string]map[string]bool{
 	types.IntegrationKindAnthropicSubscription: {"lane": true},
 	types.IntegrationKindAnthropicAPIKey:       {},
 	types.IntegrationKindOpenAIAPIKey:          {},
-	types.IntegrationKindAzureOpenAI:           {},
 	types.IntegrationKindGitHost:               {},
 }
 
@@ -246,14 +245,6 @@ func validateIntegrationWrite(in types.Integration) error {
 	}
 	if err := validateIntegrationHosts(in.Egress, hasProxyHeaderSecret(in)); err != nil {
 		return err
-	}
-	if in.Probe != nil {
-		if in.Probe.Method != "GET" && in.Probe.Method != "HEAD" {
-			return fmt.Errorf("probe.method: %q (want GET or HEAD)", in.Probe.Method)
-		}
-		if !validSiteURL(in.Probe.URL) {
-			return fmt.Errorf("probe.url: invalid URL %q", in.Probe.URL)
-		}
 	}
 	if len(in.Docs) > 2048 {
 		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))

@@ -318,7 +318,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// SEAM-1: serializes this read-modify-write (it carries the STORED
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
-	// (setup_integrations.go) — see handleAdoptIntegration's comment.
+	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
