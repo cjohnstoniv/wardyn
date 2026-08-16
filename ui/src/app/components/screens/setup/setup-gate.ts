@@ -11,10 +11,15 @@
 // importing these from the screen module dragged the whole terminal stack
 // into the initial bundle and defeated route-level code-splitting.
 //
-// There is NO hard gate here any more: /setup is a route an operator chooses
-// to visit, not one every other route redirects to. The old setupGateActive
-// (mandatory first-run redirect) was deleted along with App.tsx's
-// RequireSetupComplete — do not reintroduce either.
+// There is NO hard gate here any more. The old setupGateActive + App.tsx's
+// RequireSetupComplete redirected EVERY route to /setup until the funnel was
+// finished; both are deleted and should not come back.
+//
+// What replaced them is App.tsx's FirstRunLanding, which redirects "/" alone —
+// so a fresh install still OPENS on the tour (landing on an empty Runs board
+// left operators hunting for where to start) while every other route stays
+// directly reachable and nothing ever bounces you back in. setupDismissed()
+// below is that redirect's off-switch, set by one finish-or-skip.
 //
 // setup-screen re-exports these, so existing importers/tests are unaffected.
 import { lsGet, lsSet } from "../../../lib/storage";
@@ -23,7 +28,11 @@ import type { SetupStepId } from "./steps";
 // ------------------------------------------------------------
 // Dismiss flag — via lib/storage's private-mode-tolerant lsGet/lsSet.
 // ------------------------------------------------------------
-const DISMISS_KEY = "wardyn-setup-dismissed";
+// Suffixed for 0.5: the funnel this flag dismisses was deleted and rebuilt (12
+// steps → 10, new workspace flow), so a mark left against the OLD one must not
+// silently suppress the new tour. Browsers that onboarded a pre-0.5 install keep
+// their stale `wardyn-setup-dismissed` — now inert — and get the tour once.
+const DISMISS_KEY = "wardyn-setup-dismissed-v05";
 
 export function setupDismissed(): boolean {
   return lsGet(DISMISS_KEY) === "1";
@@ -31,6 +40,20 @@ export function setupDismissed(): boolean {
 
 export function dismissSetup(): void {
   lsSet(DISMISS_KEY, "1");
+}
+
+// Where "/" lands — App.tsx's FirstRunLanding is a thin wrapper over this.
+// Lives beside the dismiss flag it reads rather than in App.tsx so the whole
+// decision is one testable function.
+//
+// Both halves must hold to open the tour: the SERVER says this install has
+// never run anything (so `make reset-all` genuinely re-arms it), and THIS
+// BROWSER has never finished or skipped the funnel. An unreachable daemon
+// answers has_runs:false from the synthetic READY_FALLBACK, so it is excluded
+// explicitly — a broken backend belongs on Runs behind the banner, not in a
+// tour whose every step would read as un-ready.
+export function firstRunLanding(status: { unreachable?: boolean; has_runs: boolean }): "/setup" | "/runs" {
+  return !status.unreachable && !status.has_runs && !setupDismissed() ? "/setup" : "/runs";
 }
 
 // Integrations-skip flag — the operator explicitly chose to move past the

@@ -15,6 +15,10 @@ import { WardynMark } from "./components/wardyn/logo";
 import { onUnauthorized, probeAuth, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
+// From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
+// from there drags the whole funnel (→ integrations → harness-login → xterm) into
+// the entry chunk and defeats the /setup route's code-splitting.
+import { firstRunLanding } from "./components/screens/setup/setup-gate";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
@@ -85,6 +89,26 @@ function RouteFallback() {
       <span className="sr-only">Loading…</span>
     </div>
   );
+}
+
+// Where "/" lands. A fresh install opens on the guided tour rather than an
+// empty Runs board — a console whose very first screen is "No runs yet" makes
+// the operator hunt for where to begin.
+//
+// This is NOT the old first-run gate: it redirects "/" only. Every other route
+// stays directly reachable, the nav never hides, and nothing bounces you back
+// into the funnel. `has_runs` is the server's own signal, so it resets with
+// `make reset-all` exactly like the install it describes; `setupDismissed()` is
+// the per-browser "I've done this" flag one finish-or-skip sets for good.
+//
+// An unreachable daemon lands on Runs: getSetupStatus resolves the synthetic
+// READY_FALLBACK (has_runs:false) rather than rejecting, which would otherwise
+// send a broken backend into the tour instead of showing AppShell's banner.
+// Waits for the first /setup/status before deciding — redirecting on the null
+// initial state would always pick Runs and the tour would never open.
+function FirstRunLanding({ status }: { status: SetupStatus | null }) {
+  if (status === null) return <RouteFallback />;
+  return <Navigate to={firstRunLanding(status)} replace />;
 }
 
 // Run states that need an operator's attention — surfaced as the amber count
@@ -239,10 +263,10 @@ export default function App() {
               </React.Suspense>
             }
           />
-          {/* No gate: an operator navigates here on their own (the account menu's
-              "Getting started" entry, or the Runs empty state's guided-tour link) —
-              nothing redirects to it. onDone lands back on Runs, same as every
-              other finished flow. */}
+          {/* Reachable four ways, none of them a gate: a fresh install's "/"
+              (FirstRunLanding), the account menu's "Getting started" entry, the
+              Runs empty state's guided-tour link, or the URL. onDone lands back
+              on Runs, same as every other finished flow. */}
           <Route
             path="/setup"
             element={
@@ -251,7 +275,7 @@ export default function App() {
               </React.Suspense>
             }
           />
-          <Route path="/" element={<Navigate to="/runs" replace />} />
+          <Route path="/" element={<FirstRunLanding status={setupStatus} />} />
           <Route path="/runs" element={<RunsScreen />} />
           <Route
             path="/runs/:id"
