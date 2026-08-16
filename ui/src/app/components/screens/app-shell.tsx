@@ -8,10 +8,9 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import {
   Activity,
   AlertTriangle,
-  Cable,
   ChevronsUpDown,
-  Fingerprint,
   FlaskConical,
+  Fingerprint,
   FolderOpen,
   KeyRound,
   Lock,
@@ -19,18 +18,17 @@ import {
   Menu,
   Moon,
   Plus,
-  Rocket,
   ScrollText,
+  Settings,
   ShieldCheck,
-  SquareTerminal,
   Sun,
   UserCog,
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
-import { Chip, SectionLabel } from "../wardyn/primitives";
-import { StatusChip } from "../wardyn/status-chip";
+import { Chip, ConfinementChip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
-import { deriveReadiness, lastCheckedLabel } from "../../lib/readiness";
+import { strongestAvailable } from "../wardyn/default-confinement";
+import { lastCheckedLabel } from "../../lib/readiness";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -46,8 +44,8 @@ import { ErrorBoundary } from "../wardyn/error-boundary";
 import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
 import { health as api } from "../../lib/api/health";
 import { setup as setupApi } from "../../lib/api/setup";
-import type { StatusKind } from "../wardyn/copy";
 import { usePoll } from "../../lib/use-poll";
+import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -107,65 +105,41 @@ function initials(principal: string): string {
   return (s || base.slice(0, 2)).toUpperCase();
 }
 
-// How often the readiness chip re-checks setup status, in ms.
-const READINESS_POLL_MS = 15000;
+// How often the top bar's barrier chip re-checks setup status, in ms.
+const BARRIER_POLL_MS = 15000;
 
-// Grouped sidebar nav: OPERATE / CONFIGURE / FORENSICS, plus a pinned
-// "Getting started" entry.
+// Flat sidebar nav — six items, no group headings (stage-1 redesign). Demos,
+// Recordings, and Integrations all left the sidebar: Demos is reachable from
+// the account menu below, Integrations/Recordings stay addressable by route
+// (deep link, workspace/run actions) without their own nav entry.
 interface NavItem {
   to: string;
   label: string;
   icon: React.ElementType;
   badge?: "approvals" | "attention";
 }
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: "Operate",
-    items: [
-      { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-      { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
-      { to: "/demos", label: "Demos", icon: FlaskConical },
-    ],
-  },
-  {
-    label: "Configure",
-    items: [
-      { to: "/policies", label: "Policies", icon: UserCog },
-      { to: "/secrets", label: "Secrets", icon: Lock },
-      { to: "/integrations", label: "Integrations", icon: Cable },
-      { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
-    ],
-  },
-  {
-    label: "Forensics",
-    items: [
-      { to: "/audit", label: "Audit", icon: ScrollText },
-      { to: "/recordings", label: "Recordings", icon: SquareTerminal },
-    ],
-  },
+const NAV_ITEMS: NavItem[] = [
+  { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
+  { to: "/policies", label: "Policies", icon: UserCog },
+  { to: "/secrets", label: "Secrets", icon: Lock },
+  { to: "/audit", label: "Audit", icon: ScrollText },
 ];
 
 // Member console (B3): a member launches/governs only THEIR OWN runs — nav is
-// Runs · Approvals · Demos · Recordings, nothing else (no Policies/Secrets/
-// Integrations/Workspaces/Audit/site-config), and no Getting Started entry
-// (setup is the operator's funnel — see the pinned block below). Filtered by
-// route path, never by re-deriving from a second copy of NAV_GROUPS. Demos is
-// included: routes.go has no operatorOnly (or any) gate on it at all — it
-// rides the same run-launch path a member is already allowed to use for their
-// own runs — so hiding it here would just be a discoverability gap with
-// nothing server-side backing it (unlike every path below, which IS gated).
+// Runs · Approvals, nothing else (no Policies/Secrets/Workspaces/Audit).
+// Filtered by route path, never by re-deriving from a second copy of NAV_ITEMS.
 //
 // Hiding here is COSMETIC ONLY — every route a member can't reach still
 // enforces that itself server-side (internal/api/routes.go's operatorOnly
 // group and the owner-or-admin routes); this just keeps a member from
 // discovering an admin-only screen as a raw 403 or an empty list instead of
 // simply not offering it.
-const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/demos", "/recordings"]);
-function navGroupsForRole(role: Role): typeof NAV_GROUPS {
-  if (role !== "member") return NAV_GROUPS;
-  return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => MEMBER_NAV_PATHS.has(i.to)) })).filter(
-    (g) => g.items.length > 0,
-  );
+const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals"]);
+function navItemsForRole(role: Role): NavItem[] {
+  if (role !== "member") return NAV_ITEMS;
+  return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
 }
 
 const navLinkClass = (isActive: boolean) =>
@@ -183,84 +157,49 @@ const navLinkClass = (isActive: boolean) =>
 function SidebarNav({
   pendingApprovals,
   attentionCount,
-  readiness,
   meta,
-  gated,
   onNavigate,
 }: {
   pendingApprovals: number;
   attentionCount: number;
-  readiness: StatusKind;
   meta: ShellMeta;
-  // First-run gate: while active, the operate/configure/forensics groups are
-  // hidden (routes redirect to /setup too — App.tsx) so a fresh operator goes
-  // through Getting started before the app opens up. The pinned Getting-started
-  // entry below stays visible.
-  gated?: boolean;
   onNavigate?: () => void;
 }) {
-  const navGroups = navGroupsForRole(meta.role);
+  const items = navItemsForRole(meta.role);
   return (
     <>
-      <nav className="space-y-4">
-        {!gated &&
-          navGroups.map((group) => (
-          <div key={group.label} className="space-y-0.5">
-            <SectionLabel className="px-2.5 pb-1">{group.label}</SectionLabel>
-            {group.items.map((item) => {
-              const count =
-                item.badge === "approvals"
-                  ? pendingApprovals
-                  : item.badge === "attention"
-                    ? attentionCount
-                    : 0;
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end
-                  onClick={onNavigate}
-                  className={({ isActive }) => navLinkClass(isActive)}
-                >
-                  {({ isActive }) => (
-                    <>
-                      {isActive && (
-                        <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                      )}
-                      <item.icon className={cn("size-4", isActive && "text-foreground")} />
-                      <span className="flex-1 text-left">{item.label}</span>
-                      {count > 0 && (
-                        <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[0.6875rem] font-semibold text-warning">
-                          {count}
-                        </span>
-                      )}
-                    </>
+      <nav className="space-y-0.5">
+        {items.map((item) => {
+          const count =
+            item.badge === "approvals" ? pendingApprovals : item.badge === "attention" ? attentionCount : 0;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end
+              onClick={onNavigate}
+              className={({ isActive }) => navLinkClass(isActive)}
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
                   )}
-                </NavLink>
-              );
-            })}
-          </div>
-        ))}
+                  <item.icon className={cn("size-4", isActive && "text-foreground")} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  {count > 0 && (
+                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[0.6875rem] font-semibold text-warning">
+                      {count}
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       <div className="mt-auto space-y-3">
-        {/* No Getting Started entry for a member — setup is the operator's
-            funnel (same cosmetic-hiding note as MEMBER_NAV_PATHS above). */}
-        {meta.role !== "member" && (
-          <NavLink to="/setup" onClick={onNavigate} className={({ isActive }) => navLinkClass(isActive)}>
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                )}
-                <Rocket className={cn("size-4", isActive && "text-foreground")} />
-                <span className="flex-1 text-left">Getting started</span>
-                <StatusChip status={readiness} />
-              </>
-            )}
-          </NavLink>
-        )}
-
         <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Fingerprint className="size-3.5 text-muted-foreground" />
@@ -283,9 +222,7 @@ function SidebarNav({
 export function MobileNav(props: {
   pendingApprovals: number;
   attentionCount: number;
-  readiness: StatusKind;
   meta: ShellMeta;
-  gated?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -307,16 +244,12 @@ export function AppShell({
   pendingApprovals,
   attentionCount,
   onSignOut,
-  gated,
   unreachable,
   lastOkAt,
 }: {
   pendingApprovals: number;
   attentionCount: number;
   onSignOut: () => void;
-  // First-run setup gate (computed in App.tsx from the same setup status): hides
-  // the nav groups; App.tsx also redirects gated routes to /setup.
-  gated?: boolean;
   // The daemon didn't answer App.tsx's setup-status poll, and when it last did.
   // Every screen's background refresh keeps its last-good data on failure, so
   // this banner is the ONLY thing that tells a quiet board from a dead one.
@@ -331,27 +264,29 @@ export function AppShell({
   const [newRunMounted, setNewRunMounted] = React.useState(false);
   const navigate = useNavigate();
 
-  const [readiness, setReadiness] = React.useState<StatusKind>("checking");
-  const checkReadiness = React.useCallback(() => {
+  // The top bar's permanent barrier chip — the strongest confinement tier this
+  // host can actually run, straight from the same setup-status poll the rest of
+  // the shell already uses (never a second, disagreeing derivation). Empty
+  // (no confinement classes at all) reads "No barrier" — the one honest
+  // state a fresh/broken host can be in.
+  const [confinementClasses, setConfinementClasses] = React.useState<ConfinementClass[]>([]);
+  const checkBarrier = React.useCallback(() => {
     setupApi
       .getSetupStatus()
       .then((s) => {
         // An unreachable daemon resolves to the synthetic READY_FALLBACK, whose
-        // empty providers/runner would read as "Needs setup" — a dead control
-        // plane misdiagnosed as an unfinished one. Keep the last verdict; the
-        // unreachable banner says what actually happened.
+        // empty confinement_classes would flash "No barrier" for a merely quiet
+        // control plane — the unreachable banner already says what happened,
+        // so keep the last-known barrier instead.
         if (s.unreachable) return;
-        // Agree with the funnel's essentials verdict (barrier AND model) —
-        // backend `ready` alone is barrier-only and would overclaim here.
-        const r = deriveReadiness(s);
-        setReadiness(r.ready && r.llmReady ? "ready" : "needs-setup");
+        setConfinementClasses(s.runner?.confinement_classes ?? []);
       })
       .catch(() => {
-        /* leave the last-known readiness in place */
+        /* leave the last-known barrier in place */
       });
   }, []);
-  React.useEffect(checkReadiness, [checkReadiness]);
-  usePoll(checkReadiness, READINESS_POLL_MS, false);
+  React.useEffect(checkBarrier, [checkBarrier]);
+  usePoll(checkBarrier, BARRIER_POLL_MS, false);
 
   // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
   // dialog mounted below) — not just the Outlet — so every screen AND every
@@ -375,8 +310,7 @@ export function AppShell({
         meta={meta}
         pendingApprovals={pendingApprovals}
         attentionCount={attentionCount}
-        readiness={readiness}
-        gated={gated}
+        confinementClasses={confinementClasses}
         onNewRun={() => {
           setNewRunMounted(true);
           setNewRunOpen(true);
@@ -396,9 +330,7 @@ export function AppShell({
           <SidebarNav
             pendingApprovals={pendingApprovals}
             attentionCount={attentionCount}
-            readiness={readiness}
             meta={meta}
-            gated={gated}
           />
         </aside>
 
@@ -438,28 +370,20 @@ function TopBar({
   meta,
   pendingApprovals,
   attentionCount,
-  readiness,
-  gated,
+  confinementClasses,
   onNewRun,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
   pendingApprovals: number;
   attentionCount: number;
-  readiness: StatusKind;
-  gated?: boolean;
+  confinementClasses: ConfinementClass[];
   onNewRun: () => void;
 }) {
   const { theme, toggle } = useTheme();
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
-      <MobileNav
-        pendingApprovals={pendingApprovals}
-        attentionCount={attentionCount}
-        readiness={readiness}
-        meta={meta}
-        gated={gated}
-      />
+      <MobileNav pendingApprovals={pendingApprovals} attentionCount={attentionCount} meta={meta} />
       <Link to="/runs" className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
         <WardynWordmark />
       </Link>
@@ -473,16 +397,14 @@ function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
-        {/* No "New run" while the first-run gate is active — the operator finishes
-            setup first (the funnel offers "Launch your first run" at its end). */}
-        {!gated && (
-          <Button onClick={onNewRun} size="sm">
-            <Plus className="size-4" /> New run
-          </Button>
-        )}
-
         <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
           {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </Button>
+
+        <BarrierChip classes={confinementClasses} />
+
+        <Button onClick={onNewRun} size="sm">
+          <Plus className="size-4" /> New run
         </Button>
 
         <DropdownMenu>
@@ -524,9 +446,25 @@ function TopBar({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {/* Settings has no dedicated route yet (stage-1) — every barrier/
+                model-provider/git-host config it will own today lives on
+                Integrations, so it's the interim landing spot. */}
+            <DropdownMenuItem asChild>
+              {/* TODO(stage-4): /settings */}
+              <Link to="/integrations">
+                <Settings className="size-4" /> Settings
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link to="/ssh-keys">
                 <KeyRound className="size-4" /> SSH keys
+              </Link>
+            </DropdownMenuItem>
+            {/* Demos has no server-side role gate (routes.go), so it's offered
+                here for every role — same reasoning the old sidebar carried. */}
+            <DropdownMenuItem asChild>
+              <Link to="/demos">
+                <FlaskConical className="size-4" /> Demos
               </Link>
             </DropdownMenuItem>
             {/* W31-S1-1: local mode has no session to sign out of — humanOrAdminAuth
@@ -555,5 +493,32 @@ function EnvIndicator({ trustDomain }: { trustDomain: string }) {
       <span className="size-1.5 rounded-full bg-success" />
       <span className="font-mono text-muted-foreground">{trustDomain}</span>
     </span>
+  );
+}
+
+// The permanent top-bar barrier chip (stage-1): the strongest confinement tier
+// this host can run right now, via the same Fence/Wall/Vault metal ramp every
+// other barrier chip uses (ConfinementChip) — never the teal accent, which
+// means "action" elsewhere in this console. An empty confinement-class list
+// (nothing installed, or the daemon hasn't answered yet) is the one state that
+// gets its own honest danger chip instead of guessing a tier. Clicking either
+// state opens Settings, where the barrier's own detail lives.
+function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
+  const strongest = strongestAvailable(classes);
+  return (
+    <Link
+      // TODO(stage-4): /settings
+      to="/integrations"
+      className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      aria-label={strongest ? "Sandbox barrier — open Settings" : "No sandbox barrier — open Settings"}
+    >
+      {strongest ? (
+        <ConfinementChip value={strongest} />
+      ) : (
+        <Chip tone="danger" dot>
+          No barrier
+        </Chip>
+      )}
+    </Link>
   );
 }

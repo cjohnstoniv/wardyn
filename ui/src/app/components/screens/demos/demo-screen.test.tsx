@@ -91,23 +91,31 @@ describe("DemoScreen", () => {
   });
 
   // The OTHER 409 shape ("already terminal") means the run genuinely ended on
-  // its own — that race is benign and End demo must still clean up quietly,
-  // exactly as it did before this distinction existed.
-  it("an already-terminal 409 on End demo still forgets the run quietly (no toast)", async () => {
+  // its own — that race is benign and End demo must still clean up quietly (no
+  // toast, never re-attach on reload). Unlike before, the run stays tracked
+  // in memory rather than being force-forgotten: the next poll tick confirms
+  // the real terminal state and the card settles into its terminated view
+  // ("Turn this into a policy" / Start again) instead of the live terminal.
+  it("an already-terminal 409 on End demo forgets it quietly (no toast); the poll settles the card into the terminated view", async () => {
     renderScreen();
     const startBtn = (await screen.findAllByRole("button", { name: /start demo/i }))[0];
     await user.click(startBtn);
     await screen.findByTestId("attach-terminal");
 
-    killRunMock.mockRejectedValueOnce(new HttpError(409, "run is already terminal (state=FAILED); not re-killing"));
+    killRunMock.mockRejectedValueOnce(new HttpError(409, "run is already terminal (state=KILLED); not re-killing"));
+    getRunMock.mockResolvedValue({ id: "demo-run-1", state: "KILLED" });
     await user.click(screen.getByRole("button", { name: /end demo/i }));
 
     expect(toastErrorMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.queryByTestId("attach-terminal")).not.toBeInTheDocument());
     expect(localStorage.getItem("wardyn-demo-runs")).toBeNull();
+    // The poll ticks every 2s (usePoll's real setInterval) — give it room to fire.
+    await waitFor(() => expect(screen.queryByTestId("attach-terminal")).not.toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    expect(await screen.findByTestId("demo-terminated")).toBeInTheDocument();
   });
 
-  it("renders the four keyless demo cards, and hides the harness demo without a model", async () => {
+  it("renders the five keyless demo cards, and hides the harness demo without a model", async () => {
     renderScreen();
     for (const d of DEMOS.filter((d) => !d.needsModel)) {
       expect(await screen.findByText(d.title)).toBeInTheDocument();
@@ -155,7 +163,7 @@ describe("DemoScreen", () => {
     renderScreen();
     expect(await screen.findByTestId("demos-not-ready")).toBeInTheDocument();
     const starts = screen.getAllByRole("button", { name: /start demo/i });
-    expect(starts).toHaveLength(4);
+    expect(starts).toHaveLength(5);
     for (const b of starts) expect(b).toBeDisabled();
   });
 

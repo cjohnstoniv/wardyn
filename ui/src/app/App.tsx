@@ -5,16 +5,12 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
-// setup-gate holds only the pure auto-open decision, so the funnel itself (and
-// the xterm stack it reaches through harness-login-pane) stays out of the entry
-// chunk. Import these from the screen module and the split below is undone.
-import { setupGateActive } from "./components/screens/setup/setup-gate";
 import { WardynMark } from "./components/wardyn/logo";
 import { onUnauthorized, probeAuth, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
@@ -26,32 +22,9 @@ import type { AgentRun, SetupStatus } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
-// How often the first-run gate re-checks setup status, so nav unlocks promptly
-// once the barrier comes up / the operator finishes (the dismiss flag is read
-// live, so finishing unlocks on the next render regardless of this poll).
+// How often the setup-status poll refreshes, so the top bar's barrier chip and
+// the "control plane unreachable" banner stay fresh.
 const SETUP_POLL_MS = 5000;
-
-// Route guard for the mandatory first-run gate: while the gate is active, every
-// app route redirects to /setup — only Getting started (/setup), the demos
-// that are part of it (/demos), /integrations, and /ssh-keys stay reachable —
-// so a fresh local operator goes through setup before the app opens.
-// /integrations is exempted because the Getting Started Integrations step
-// embeds it (see setup/integrations-step.tsx) and a row's own "Open" action
-// there links out to /integrations/:id — without this, that link would bounce
-// straight back to /setup. /ssh-keys is exempted for the same reason
-// ssh-keys.tsx itself isn't operator-gated: an SSH key is the signed-in
-// human's OWN credential, unrelated to setup — the account-menu link to it
-// (app-shell.tsx) is always rendered, gate or no gate. Nav groups are hidden
-// in parallel (AppShell). Finishing the flow (dismissSetup), a first run, an
-// onboarded console, SSO mode, or an unreachable daemon all clear the gate.
-const GATE_EXEMPT_PATHS = new Set(["/setup", "/demos", "/ssh-keys"]);
-export function RequireSetupComplete({ gated }: { gated: boolean }) {
-  const loc = useLocation();
-  if (gated && !GATE_EXEMPT_PATHS.has(loc.pathname) && !loc.pathname.startsWith("/integrations")) {
-    return <Navigate to="/setup" replace />;
-  }
-  return <Outlet />;
-}
 
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
 // there) so it stays eager — lazying it would only add a load waterfall to the
@@ -95,9 +68,6 @@ const SSHKeysScreen = React.lazy(() =>
 const DemoScreen = React.lazy(() =>
   import("./components/screens/demos/demo-screen").then((m) => ({ default: m.DemoScreen })),
 );
-const GettingStarted = React.lazy(() =>
-  import("./components/screens/onboarding/onboarding-screen").then((m) => ({ default: m.GettingStarted })),
-);
 
 // Shown while a lazy route's chunk is in flight. Deliberately the same mark +
 // spinner as the auth probe above, so a slow chunk reads as the console still
@@ -126,7 +96,6 @@ export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
-  const navigate = useNavigate();
 
   const refreshPending = React.useCallback(() => {
     approvalsApi
@@ -179,11 +148,10 @@ export default function App() {
   }, [refreshAttention, refreshPending]);
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed");
 
-  // The mandatory first-run gate: fetch setup status (poll so it stays fresh as
-  // the barrier comes up / setup finishes) and derive whether the app is gated.
-  // Replaces the old soft auto-open with a hard redirect (RequireSetupComplete)
-  // + hidden nav (AppShell). getSetupStatus never rejects except on 401 (routed
-  // through onUnauthorized), so a rejected probe just leaves the gate as-is.
+  // Setup status feeds the top bar's barrier chip (AppShell) and the "control
+  // plane unreachable" banner below. getSetupStatus never rejects except on
+  // 401 (routed through onUnauthorized), so a rejected probe just leaves the
+  // last-known status in place.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   // When the daemon last actually answered. getSetupStatus resolves the synthetic
   // READY_FALLBACK (unreachable:true) rather than rejecting when it doesn't, so
@@ -208,9 +176,6 @@ export default function App() {
     if (auth === "authed") refreshSetupStatus();
   }, [auth, refreshSetupStatus]);
   usePoll(refreshSetupStatus, SETUP_POLL_MS, auth !== "authed");
-  // setupGateActive reads the dismiss flag live, so finishing the funnel (or a
-  // launched run) unlocks nav on the next render even before the poll refetches.
-  const gated = setupStatus ? setupGateActive(setupStatus) : false;
 
   if (auth === "checking") {
     return (
@@ -244,7 +209,6 @@ export default function App() {
             <AppShell
               pendingApprovals={pendingApprovals}
               attentionCount={attentionCount}
-              gated={gated}
               unreachable={!!setupStatus?.unreachable}
               lastOkAt={lastOkAt}
               onSignOut={async () => {
@@ -260,15 +224,6 @@ export default function App() {
             />
           }
         >
-          {/* Always reachable — Getting started and the demos that are part of it. */}
-          <Route
-            path="/setup"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <GettingStarted onDone={() => navigate("/runs")} />
-              </React.Suspense>
-            }
-          />
           <Route
             path="/demos"
             element={
@@ -277,101 +232,97 @@ export default function App() {
               </React.Suspense>
             }
           />
-          {/* Everything else waits behind the first-run gate (redirects to /setup
-              while active; open once setup is finished). */}
-          <Route element={<RequireSetupComplete gated={gated} />}>
-            <Route path="/" element={<Navigate to="/runs" replace />} />
-            <Route path="/runs" element={<RunsScreen />} />
-            <Route
-              path="/runs/:id"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <RunDetailScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/approvals"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <ApprovalsScreen onChanged={refreshPending} />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/policies"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <PoliciesScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/secrets"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SecretsScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/integrations"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <IntegrationsScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/integrations/:id"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <IntegrationDetailScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/workspaces"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <WorkspacesScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/workspaces/:id"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <WorkspaceDetailScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/audit"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <AuditScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/recordings"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <RecordingScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/ssh-keys"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SSHKeysScreen />
-                </React.Suspense>
-              }
-            />
-            <Route path="*" element={<Navigate to="/runs" replace />} />
-          </Route>
+          <Route path="/" element={<Navigate to="/runs" replace />} />
+          <Route path="/runs" element={<RunsScreen />} />
+          <Route
+            path="/runs/:id"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <RunDetailScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/approvals"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <ApprovalsScreen onChanged={refreshPending} />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/policies"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <PoliciesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/secrets"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <SecretsScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/integrations"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <IntegrationsScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/integrations/:id"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <IntegrationDetailScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/workspaces"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <WorkspacesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/workspaces/:id"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <WorkspaceDetailScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/audit"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <AuditScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/recordings"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <RecordingScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/ssh-keys"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <SSHKeysScreen />
+              </React.Suspense>
+            }
+          />
+          <Route path="*" element={<Navigate to="/runs" replace />} />
         </Route>
       </Routes>
       <Toaster />

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
@@ -22,6 +22,10 @@ vi.mock("../../lib/api/runs", () => ({
     killRun: (...a: unknown[]) => killRunMock(...a),
   },
 }));
+const getSetupStatusMock = vi.fn();
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -36,6 +40,8 @@ vi.mock("./new-run/new-run-dialog", () => ({
 
 import { RunsScreen } from "./runs";
 import { RoleProvider, type Role } from "../wardyn/operator-context";
+import { baseStatus } from "../../lib/test-fixtures";
+import { DEMOS } from "./demos/demo-catalog";
 
 const run: AgentRun = {
   id: "run-1",
@@ -61,8 +67,74 @@ function renderScreen(role?: Role) {
 beforeEach(() => {
   listRunsMock.mockReset();
   killRunMock.mockReset();
+  getSetupStatusMock.mockReset();
   listRunsMock.mockResolvedValue([run]);
   killRunMock.mockResolvedValue(undefined);
+  // Non-blocking default: both barrier tiers available, nothing to re-check.
+  getSetupStatusMock.mockResolvedValue(baseStatus({ ready: true }));
+});
+
+// Stage-1: the deleted 12-step setup funnel's replacement lives entirely on
+// this screen now — the first-run checklist, the demo grid, and the one hard
+// blocker in the product (no sandbox barrier).
+describe("RunsScreen — first-run empty state", () => {
+  it("shows the first-run experience with a real barrier readout and the demo grid when there are no runs", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderScreen();
+
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "A run is a workload in a sealed box. You watch it, approve what it reaches for, and keep the recording.",
+      ),
+    ).toBeInTheDocument();
+    // Derived from the mocked confinement_classes (CC1 + CC2) — never a
+    // hardcoded string.
+    expect(await screen.findByText("Fence, Wall available on this host.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /new run/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /try it without a repo/i })).toHaveAttribute("href", "/demos");
+    for (const d of DEMOS) {
+      const card = within(screen.getByTestId(`runs-empty-demo-${d.id}`));
+      expect(card.getByText(d.title)).toBeInTheDocument();
+      expect(card.getByText(d.teaches)).toBeInTheDocument();
+      if (d.needsModel) {
+        // Muted with a Connect link, not a "Run it" button, since this mock's
+        // setup status carries no model provider.
+        expect(card.queryByRole("link", { name: "Run it" })).toBeNull();
+        expect(card.getByText(/needs a model provider/i)).toBeInTheDocument();
+      } else {
+        expect(card.getByRole("link", { name: "Run it" })).toHaveAttribute("href", "/demos");
+      }
+    }
+  });
+
+  it("renders the non-dismissible no-barrier banner above everything when confinement_classes is empty, even with runs present", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ ready: false, runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No sandbox barrier on this host. Runs cannot start.",
+    );
+    expect(screen.getByText("sudo wardyn setup fence")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-check/i })).toBeInTheDocument();
+    // The board itself still renders underneath — the banner sits above it,
+    // it doesn't replace the screen.
+    expect(await screen.findByText(run.task)).toBeInTheDocument();
+  });
+
+  it("never shows the no-barrier banner for a merely-unreachable daemon", async () => {
+    getSetupStatusMock.mockResolvedValue({
+      ...baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
+      unreachable: true,
+    });
+    renderScreen();
+
+    await screen.findByText(run.task);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("No sandbox barrier on this host. Runs cannot start.")).toBeNull();
+  });
 });
 
 describe("RunsScreen board — Kill run confirms before killing", () => {

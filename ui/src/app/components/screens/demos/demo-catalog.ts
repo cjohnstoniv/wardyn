@@ -229,4 +229,43 @@ export const DEMOS: Demo[] = [
       "Launch interactive, attach the terminal, and run `claude` yourself.",
     ],
   },
+  {
+    id: "record-a-policy",
+    title: "Record a policy",
+    teaches:
+      "Run a task open once, then synthesize the least-privilege policy from what it actually did, and re-run it confined.",
+    overview:
+      "Recording flips the usual order: instead of guessing an allowlist upfront, you let a task run with egress wide open, then Wardyn reads back exactly what it reached — every host, every method — and proposes the least-privilege policy that would have let it through. Approve it and the next run is confined to only that. Same idea Record Mode uses on a real workspace, here with nothing but a terminal.",
+    caution:
+      "Fence (CC1) plus allow-all egress is the weakest combination Wardyn offers — open on purpose, so there's something real to record. It's safe here only because nothing is mounted: no repo, no key, no workspace.",
+    policy: {
+      ...SHARED,
+      allowed_domains: [],
+      allow_all_egress: true,
+      first_use_approval: "always_deny",
+    },
+    steps: [
+      {
+        cmd: "curl -sSI https://pypi.org",
+        text: "Reaches out to a package registry — recorded, not blocked. This is the point: nothing is denied while recording.",
+      },
+      {
+        cmd: "curl -sSI https://registry.npmjs.org",
+        text: "A second registry. Every host you touch becomes a candidate line in the synthesized policy.",
+      },
+      {
+        cmd: "curl -sSI https://example.com",
+        text: "A third, unrelated host — recorded the same way, so you can see the synthesis include (or you could trim) it.",
+      },
+      {
+        text: "Click End demo below, then “Turn this into a policy” — Wardyn proposes an allowlist of exactly the hosts above, ready to save and re-run confined.",
+      },
+    ],
+    setupUi: [
+      "New Run → pick the Fence (CC1) barrier.",
+      "On the Egress step, toggle 'Allow all egress' ON — this is what makes the recording honest.",
+      "Launch interactive, attach the terminal, and run whatever the task actually needs.",
+      "From the run's own page, synthesize a policy from what it did — same action this demo's “Turn this into a policy” takes.",
+    ],
+  },
 ];

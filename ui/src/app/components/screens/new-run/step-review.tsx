@@ -7,13 +7,18 @@
 // enforced (the composed inline_policy, or the STORED spec when the run is
 // attached to a saved policy), and the optional save-as-profile control.
 import * as React from "react";
-import { TriangleAlert, WandSparkles } from "lucide-react";
+import { ArrowUpRight, KeyRound, RefreshCw, TriangleAlert, WandSparkles } from "lucide-react";
 import { Switch } from "../../ui/switch";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
+import { Checkbox } from "../../ui/checkbox";
+import { Button } from "../../ui/button";
+import { cn } from "../../ui/utils";
 import { Mono, YamlBlock } from "../../wardyn/code-block";
-import { ConfinementChip, Chip } from "../../wardyn/primitives";
-import { RUN_MODE } from "../../wardyn/copy";
+import { ConfinementChip, Chip, RiskBadge } from "../../wardyn/primitives";
+import { RUN_MODE, RISK_ATTRIBUTION, SETUP_RESIDENCY_NOTE } from "../../wardyn/copy";
+import type { StatusKind } from "../../wardyn/copy";
+import { StatusChip } from "../../wardyn/status-chip";
 import { Field } from "../../wardyn/form-primitives";
 import { sourceSubLine } from "../workspaces";
 import {
@@ -28,14 +33,20 @@ import {
 // card computes, so Review can't disagree with Access about what this run's
 // model access resolves to.
 import { resolveModelAccess } from "./step-access";
-import { RiskPanel, SetupChecklist } from "./compose-review";
-import { whyRisky } from "./compose-quick-review";
 import { CC_META } from "../../wardyn/cc-meta";
 import { integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
 import { RESIDENCY_META } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
 import { setup as setupApi } from "../../../lib/api/setup";
-import type { PreflightResult, RunPolicy, WireIntegration, Workspace } from "../../../lib/types";
+import type {
+  PreflightResult,
+  RiskItem,
+  RiskLevel,
+  RunPolicy,
+  SetupItem,
+  WireIntegration,
+  Workspace,
+} from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
 
@@ -84,8 +95,8 @@ export function StepReview({
   // (older preflight fixture, or a test) never has to thread it through.
   acknowledged?: boolean;
   onAcknowledge?: (v: boolean) => void;
-  // `kind` is the checklist item's own SetupItem.kind (compose-review.tsx's
-  // SetupChecklistRow forwards it) — UI-RUN-1: the wizard's onAddSecret
+  // `kind` is the checklist item's own SetupItem.kind (SetupChecklistRow
+  // below forwards it) — UI-RUN-1: the wizard's onAddSecret
   // handler branches on it so only a genuine llm_access row can ever route a
   // saved secret name into llmSecretName; every other kind (a git_pat's own
   // "secret" row included) must not.
@@ -190,10 +201,9 @@ export function StepReview({
   const enforced = preflight?.enforced_confinement_class;
   const raised = !!enforced && enforced !== state.confinementClass;
 
-  // Deterministic risk grade (N1 fix): the SAME derivation compose-review.tsx's
-  // ComposeReview does from its (always-present) risk_assessment, here off the
-  // OPTIONAL preflight field — absent/older-server preflight ⇒ empty inputs ⇒
-  // needsAck false ⇒ RiskPanel renders nothing below (never a fake gate).
+  // Deterministic risk grade (N1 fix): derived off the OPTIONAL preflight
+  // field — absent/older-server preflight ⇒ empty inputs ⇒ needsAck false ⇒
+  // RiskPanel renders nothing below (never a fake gate).
   const highItems = React.useMemo(
     () => preflight?.risk_assessment?.filter((r) => r.risk_level === "high") ?? [],
     [preflight],
@@ -468,15 +478,12 @@ export function StepReview({
         <YamlBlock value={inline_policy} className="mt-1.5" />
       </div>
 
-      {/* --- deterministic risk grade + HIGH-only acknowledgment gate (D8) — the
-          SAME RiskPanel the AI Run Composer's Review renders, fed by THIS
-          preflight response. N1's fix: "Edit in wizard" hands its spec to
-          THIS step, which already preflights it — so closing the gap here
-          closes the bypass there too, with no separate wiring. Preflight is
-          advisory: absent/failed (or an older server with no risk_assessment)
-          renders no panel and no gate, the same non-blocking degrade the
-          setup checklist above already has — a preflight outage must never
-          itself block Review. --- */}
+      {/* --- deterministic risk grade + HIGH-only acknowledgment gate (D8),
+          fed by THIS step's own preflight response (POST /runs/preflight).
+          Preflight is advisory: absent/failed (or an older server with no
+          risk_assessment) renders no panel and no gate, the same non-blocking
+          degrade the setup checklist above already has — a preflight outage
+          must never itself block Review. --- */}
       {preflight && preflight.risk_assessment && preflight.risk_assessment.length > 0 && (
         <RiskPanel
           // Fallback direction matters: a response carrying items but no
@@ -534,5 +541,230 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
       <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-foreground">{value}</div>
     </div>
+  );
+}
+
+// whyRisky: the "why" line — HIGH rationales if any, else the top few rationales.
+// All are the grader's already-human-readable strings (never the model's).
+// Moved from the (now-deleted) AI Run Composer's compose-quick-review.tsx —
+// this is a pure function over preflight.risk_assessment, which survives it.
+export function whyRisky(risk_assessment: RiskItem[]): string[] {
+  const high = risk_assessment.filter((r) => r.risk_level === "high").map((r) => r.rationale);
+  const src = high.length > 0 ? high : risk_assessment.map((r) => r.rationale);
+  return src.slice(0, 3);
+}
+
+// Deterministic risk grade (D8): RISK_ATTRIBUTION makes clear Wardyn's rules
+// graded this — not the model — and ONLY a HIGH grade gates launch behind an
+// explicit acknowledgment. Container tone escalates by whether it needs an
+// acknowledgment, not by the raw grade (see `tone` below, §5) — the high items
+// list the grader's plain-language rationales (never the raw wire field /
+// invariant ref — D4).
+// Moved from the (now-deleted) AI Run Composer's compose-review.tsx — the
+// manual wizard was already the SOLE remaining caller (it renders this off
+// its own preflight response, POST /runs/preflight).
+export function RiskPanel({
+  overallRisk,
+  why,
+  highItems,
+  needsAck,
+  acknowledged,
+  onAcknowledge,
+  attribution = RISK_ATTRIBUTION,
+}: {
+  overallRisk: RiskLevel;
+  why: string[];
+  highItems: RiskItem[];
+  needsAck: boolean;
+  acknowledged: boolean;
+  onAcknowledge: (v: boolean) => void;
+  // The composer default ("…not the model") is load-bearing on the AI path;
+  // the manual wizard consulted no model, so it passes its own path-neutral
+  // sentence instead of implying one existed.
+  attribution?: string;
+}) {
+  // Tone by whether it needs YOU, not by grade (§5) — a Medium default (the
+  // typical CC2 host) used to paint itself amber on every run, training
+  // operators to ignore the colour that must survive for the HIGH case.
+  // RiskBadge below still renders the real "Medium" label in amber; only the
+  // container chrome stops alarming for a state that requires no action.
+  const tone = needsAck ? "border-danger/40 bg-danger-subtle" : "border-border bg-muted/30";
+  return (
+    <div className={cn("space-y-2 rounded-xl border p-4", tone)}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-foreground">Risk:</span>
+        <RiskBadge level={overallRisk} />
+        {/* whyRisky() returns the HIGH items' rationales first, so when needsAck is
+            true why[0] === highItems[0].rationale and the "High-risk configuration"
+            list below already prints it — showing it inline too duplicated the
+            sentence on the launch-blocked path. Inline why is for the Medium/Low
+            case (no list); when there's a list, let the list own it. */}
+        {!needsAck && why[0] && <span className="text-[0.7813rem] text-foreground">{why[0]}</span>}
+      </div>
+      {/* Non-exhaustive on purpose — the deterministic grader (composer/risk.go)
+          has more HIGH triggers (weakest barrier tier, never-reap, …) and this
+          copy must never claim to enumerate them. */}
+      <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+        {attribution} High-graded choices — such as the weakest barrier tier, allow-all
+        egress, host-writable mounts, or write-capable credentials — require an explicit
+        acknowledgment before launch.
+      </p>
+
+      {needsAck && (
+        <div className="mt-1 border-t border-danger/30 pt-3" data-testid="high-risk-section">
+          <div className="flex items-center gap-2 text-danger">
+            <TriangleAlert className="size-4" aria-hidden="true" />
+            <span className="text-sm font-semibold">High-risk configuration</span>
+          </div>
+          <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-danger">
+            {highItems.map((item, i) => (
+              <li key={`${item.field}-${i}`}>{item.rationale}</li>
+            ))}
+          </ul>
+          <label className="mt-3 flex items-start gap-2">
+            <Checkbox
+              id="ack-high-risk"
+              checked={acknowledged}
+              onCheckedChange={(c) => onAcknowledge(c === true)}
+              className="mt-0.5"
+            />
+            <span className="text-xs text-foreground">
+              I understand the high-risk items above and want to launch this run anyway.
+            </span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Doctor-style setup readiness (decision 2/3/4): each row is label+detail |
+// StatusChip | action button — the same DOM shape as the (retired) Getting-
+// started funnel's AccessRow used, so the vocabulary never drifted between
+// the two surfaces. Item text (label/detail/required_by) is server-derived
+// but rendered as plain React text nodes ONLY — never dangerouslySetInnerHTML
+// — the same caution as everywhere else a field could in principle be
+// influenced by the analyzer's output.
+// Moved from the (now-deleted) AI Run Composer's compose-review.tsx — the
+// manual wizard was already the sole remaining caller.
+export function SetupChecklist({
+  items,
+  onAddSecret,
+  onFixWorkspace,
+}: {
+  items: SetupItem[];
+  // `kind` is the row's own SetupItem.kind, forwarded verbatim (UI-RUN-1) —
+  // the wizard's onAddSecret handler branches on it so only a genuine
+  // llm_access row can ever route a saved secret name into llmSecretName;
+  // every other kind (a git_pat's own "secret" row included) must not.
+  onAddSecret?: (name: string, kind: string) => void;
+  onFixWorkspace?: (workspaceId: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <span className="label-eyebrow">Setup checklist</span>
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <SetupChecklistRow
+            key={item.id}
+            item={item}
+            onAddSecret={onAddSecret}
+            onFixWorkspace={onFixWorkspace}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// v1 is declared-present, never live-verified (decision 3) — "satisfied" maps to
+// the same green "ready" chip used everywhere else, but the label override below
+// says "Configured", never "Ready"/"Verified", so the checklist can't be misread
+// as a live health probe. Any status this build doesn't recognize degrades to the
+// neutral "unverified" chip rather than crashing.
+function setupStatusKind(status: string): StatusKind {
+  if (status === "satisfied") return "ready";
+  if (status === "missing") return "needs-setup";
+  return "unverified";
+}
+
+function SetupChecklistRow({
+  item,
+  onAddSecret,
+  onFixWorkspace,
+}: {
+  item: SetupItem;
+  onAddSecret?: (name: string, kind: string) => void;
+  onFixWorkspace?: (workspaceId: string) => void;
+}) {
+  const fix = item.fix;
+  // Only a MISSING llm_access/secret gets the destructive treatment (the run will
+  // do nothing, or 422s at launch — H1); every other gap (workspace/repo_credential/
+  // egress/backend/config_pair, or any "unverified" item) stays a plain card — its
+  // StatusChip tone (amber for needs-setup, neutral for unverified) already carries
+  // the signal, so the card itself never needs to escalate too (decision 4). backend
+  // and config_pair are host/config state, not a credential absence, so a missing
+  // one is never destructive even though it blocks the SAME way a missing secret does.
+  const destructive = item.status === "missing" && (item.kind === "llm_access" || item.kind === "secret");
+  const residencyNote = item.residency ? SETUP_RESIDENCY_NOTE[item.residency] : undefined;
+  // Deep-link to the workspace this row is about, when one is resolvable — the
+  // SAME "<kind>:<key>" id-fallback the wizard's own re-flip logic leans on for
+  // a "workspace" item without an explicit fix.workspace_id (compose_setup.go's
+  // stable id contract). There is no per-id /workspaces/:id route yet, so this
+  // lands on the list — still the right next step, just not a precise deep link.
+  const workspaceId =
+    fix?.workspace_id ?? (item.kind === "workspace" ? item.id.slice(item.kind.length + 1) : undefined);
+  return (
+    <li
+      className={cn(
+        "flex flex-wrap items-center gap-3 rounded-xl border p-3.5",
+        destructive ? "border-danger/40 bg-danger-subtle" : "border-border bg-card",
+      )}
+      data-testid={`setup-item-${item.id}`}
+    >
+      <div className="min-w-[200px] flex-1">
+        <div className="text-sm font-semibold text-foreground">{item.label}</div>
+        <p className="mt-0.5 text-xs leading-snug text-muted-foreground">Required by {item.required_by}</p>
+        {item.detail && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{item.detail}</p>}
+        {residencyNote && (
+          <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">{residencyNote}</p>
+        )}
+      </div>
+      <StatusChip
+        status={setupStatusKind(item.status)}
+        label={item.status === "satisfied" ? "Configured" : undefined}
+      />
+      {fix?.action === "add_secret" && fix.secret_name && onAddSecret && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0 gap-1.5"
+          onClick={() => onAddSecret(fix.secret_name!, item.kind)}
+        >
+          <KeyRound className="size-3.5" /> Add secret
+        </Button>
+      )}
+      {fix?.action === "scan_workspace" && fix.workspace_id && onFixWorkspace && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0 gap-1.5"
+          onClick={() => onFixWorkspace(fix.workspace_id!)}
+        >
+          <RefreshCw className="size-3.5" /> Scan workspace
+        </Button>
+      )}
+      {workspaceId && (
+        // Plain <a>, not react-router's <Link>: this checklist is shared with
+        // the (retired) composer Review, which did not guarantee a Router
+        // ancestor in every test/host context — kept as a plain anchor since
+        // it's still cheap and correct here.
+        <Button asChild size="sm" variant="ghost" className="shrink-0 gap-1.5">
+          <a href="/workspaces">
+            Open workspace <ArrowUpRight className="size-3.5" />
+          </a>
+        </Button>
+      )}
+    </li>
   );
 }

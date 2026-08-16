@@ -113,3 +113,130 @@ export interface CreateRunInput {
 // never block. Structurally assignable to AgentRun, so onCreated callbacks that
 // expect an AgentRun keep working.
 export type CreateRunResult = AgentRun & { warnings?: string[] };
+
+// ============================================================
+// Deterministic risk grade + setup-readiness checklist — mirror
+// internal/composer's RiskItem/SetupItem and internal/api's PreflightResult.
+// Moved here from the (now-deleted) AI Run Composer's own types/compose.ts:
+// the composer UI is gone (stage-1 refactor), but the grader/checklist these
+// describe still runs server-side for the manual wizard's own preflight (POST
+// /runs/preflight, wizard.tsx) and Record Mode's profile synthesis
+// (types/profile.ts) — both of which survive it.
+
+// The graded risk level for one config choice / the overall proposal.
+export type RiskLevel = "low" | "medium" | "high";
+
+// One DETERMINISTICALLY graded config choice. risk_level is Wardyn's grade —
+// never the LLM's self-assessment.
+export interface RiskItem {
+  field: string;
+  value: string;
+  risk_level: RiskLevel;
+  rationale: string;
+  invariant_ref?: string;
+}
+
+// The proposed run scalars shared by the run-preview surfaces that echo them
+// back for a human to review before anything launches: the (retired) AI Run
+// Composer's proposal and Record Mode's profile synthesis (ProfileProposal,
+// types/profile.ts). devcontainer_repo is composer-only, kept for that
+// proposal shape's sake.
+export interface ComposeRunProposal {
+  agent: Agent;
+  repo: string;
+  task: string;
+  confinement_class?: ConfinementClass;
+  interactive?: boolean;
+  devcontainer_repo?: string;
+}
+
+// ============================================================
+// Setup readiness checklist — mirrors internal/api/compose_setup.go's
+// SetupItem/SetupFix EXACTLY (snake_case; FROZEN CONTRACT, same PR). Computed
+// DETERMINISTICALLY from the FINAL post-clamp spec — never the model's
+// self-assessment (same trust rule as risk_assessment above). v1 verification
+// depth is declared-present only: "satisfied" means the referenced secret/
+// workspace/grant IS THERE, not that Wardyn live-probed it actually works — so
+// UI copy for it must say "configured", never "verified" (decision 3).
+export type SetupItemKind =
+  | "llm_access"
+  | "secret"
+  | "workspace"
+  | "repo_credential"
+  | "egress"
+  // "backend": can THIS host enforce the proposal's confinement class right now
+  // (setupBackendItem). "config_pair": a reconciled multi-field setting PAIR
+  // (e.g. resolved subscription access <-> the credential-mount bless —
+  // setupSubscriptionMountItem). Both are host/config state, not a credential
+  // absence, so a "missing" row renders amber/neutral, never destructive
+  // (unlike llm_access/secret).
+  | "backend"
+  | "config_pair"
+  // A secret a mounted workspace's own files declare a need for. "missing" rows
+  // carry a fix:{action:"add_secret", secret_name}. Deliberately NOT gated into
+  // the destructive treatment (see step-review.tsx): the run still launches —
+  // the workspace just may lack a credential it wants, an amber gap, not a red one.
+  | "workspace_secret"
+  // An integration a mounted workspace's requirements contract names as
+  // Required. Config state like `backend`, not a credential absence, so a
+  // "missing" row stays amber: the run still launches, it just cannot reach the
+  // system it was promised. The runtime fold degrades silently by design (a
+  // workspace may name an integration before it exists), which is exactly why
+  // preflight has to say so.
+  | "workspace_integration"
+  | (string & {});
+export type SetupItemStatus = "satisfied" | "missing" | "unverified" | (string & {});
+export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string & {});
+
+// WHERE the credential this item concerns actually lives at run time, derived
+// from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
+// doc comment): "proxy_injected" (an api_key grant — the value never leaves the
+// wardyn-proxy sidecar), "resident_mount" (a host credential bind-mounted into
+// the sandbox), or "brokered_mint" (a github_token/git_pat grant minted/resolved
+// at task time). Absent when not applicable (workspace/egress/backend rows
+// carry no single credential).
+export type SetupItemResidency = "proxy_injected" | "resident_mount" | "brokered_mint" | (string & {});
+
+export interface SetupFix {
+  action: SetupFixAction;
+  secret_name?: string;
+  // A Workspace.id, NOT a source path — api.scanWorkspace takes an id.
+  workspace_id?: string;
+}
+
+export interface SetupItem {
+  // Stable "<kind>:<key>", e.g. "secret:anthropic-api-key".
+  id: string;
+  kind: SetupItemKind;
+  label: string;
+  required_by: string;
+  status: SetupItemStatus;
+  detail?: string;
+  fix?: SetupFix;
+  residency?: SetupItemResidency;
+}
+
+// POST /api/v1/runs/preflight response — a DRY-RUN of run-create's resolution +
+// gating (mints/persists/dispatches nothing). setup_items is the SAME
+// deterministic checklist derivation the (retired) composer Review used to
+// show (deriveSetupItems); enforced_confinement_class is the class the run
+// will ACTUALLY run at after the policy floor + blast-radius CC3 raise (may
+// exceed the operator's pick when the run holds a write-capable / third-party
+// production credential). risk_assessment/overall_risk are the SAME
+// composer.Grade/OverallLevel output — optional for older-server tolerance:
+// an absent value renders no risk panel and no acknowledgment gate rather
+// than crashing. Advisory only — rendered on the wizard's Review step, never
+// gating Review itself (only Launch, and only for a HIGH grade — see
+// step-review.tsx's RiskPanel).
+export interface PreflightResult {
+  setup_items: SetupItem[];
+  enforced_confinement_class: ConfinementClass;
+  risk_assessment?: RiskItem[];
+  overall_risk?: RiskLevel;
+  // Clamp notices — non-empty only for a MEMBER whose inline_policy the server
+  // bounded (composer.Clamp) or whose grant it dropped (filterMemberGrants). The
+  // same benign "Tightened by policy:" class the compose Review shows; here it
+  // tells the member WHY the enforced policy differs from what they typed, since
+  // launch itself stays silent. Absent on an older server that predates it.
+  warnings?: string[];
+}

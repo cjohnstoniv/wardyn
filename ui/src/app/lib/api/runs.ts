@@ -87,9 +87,11 @@ export const runs = {
     input: (Partial<AgentRun> | CreateRunInput) & {
       interactive?: boolean;
       inline_policy?: RunPolicySpec;
-      // The compose session this run was launched from (see ComposeRequest.sessionId).
-      // Threaded through so `run.create`'s audit row can be correlated back to the
-      // compose conversation that produced it — absent for a manually-wizarded run.
+      // The (retired) AI Run Composer's session id, so `run.create`'s audit row
+      // could be correlated back to the compose conversation that produced it.
+      // No caller sets this any more (stage-1: the composer UI is gone) — kept
+      // as a harmless, still-accepted optional field rather than a breaking
+      // wire-contract change for its own sake.
       compose_session_id?: string;
       // Per-run half of the requirements contract: which optional requirements
       // this run enables, plus any read-only narrowing, per attached workspace.

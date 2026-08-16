@@ -13,12 +13,17 @@
 // so no model is needed. The one needsModel demo is simply hidden until llmReady
 // — that visibility filter IS the gate.
 //
-// Reusable pieces (also consumed by the Getting-Started per-demo wizard steps in
-// setup/demos-step.tsx): the `useDemoRuns` hook (launch/poll/store), the
+// Once a demo run terminates (any outcome, not just FAILED), its card offers
+// "Turn this into a policy" — the SAME runId-driven ProfileReview sheet
+// workspace-detail.tsx mounts for a recorded session (POST /runs/{id}/profile
+// synthesizes a least-privilege policy from whatever the sandbox actually did).
+// ProfileReview itself needs zero changes for this — it only needs a runId.
+//
+// Reusable pieces: the `useDemoRuns` hook (launch/poll/store), the
 // `DemoRunControls` run UI, and `StepList`.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Loader2, Play, ScrollText, ShieldAlert, Square, TriangleAlert } from "lucide-react";
+import { Loader2, Play, ScrollText, ShieldAlert, Sparkles, Square, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { runs as api } from "../../../lib/api/runs";
 import { HttpError } from "../../../lib/api/core";
@@ -34,6 +39,7 @@ import { LiveApprovals } from "../../wardyn/live-approvals";
 import { CopyPill } from "../workspace-detail/record-pane";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
+import { ProfileReview } from "../profile-review";
 import { DEMOS, markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";
 
 // Resume seam: {demoId: runId} of demos the operator started, so a page reload
@@ -119,17 +125,12 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         continue;
       }
       setRuns((m) => ({ ...m, [demoId]: { id: fresh.id, state: fresh.state } }));
-      if (isTerminalRunState(fresh.state)) {
-        forgetStored(demoId); // never re-attach a dead run on reload
-        // Keep a FAILED run in view so the operator sees it + the run link; drop the rest.
-        if (fresh.state !== "FAILED") {
-          setRuns((m) => {
-            const n = { ...m };
-            delete n[demoId];
-            return n;
-          });
-        }
-      }
+      // Never re-attach a dead run on reload — but keep it tracked in memory
+      // for THIS session regardless of outcome (not just FAILED): a
+      // terminated card still offers "Turn this into a policy" against
+      // whatever the sandbox actually did. Starting again is what forgets it
+      // (start() overwrites this entry with the new run).
+      if (isTerminalRunState(fresh.state)) forgetStored(demoId);
     }
   }, []);
   usePoll(refresh, 2000, !anyPending);
@@ -189,11 +190,10 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         return;
       }
     }
-    setRuns((m) => {
-      const n = { ...m };
-      delete n[demo.id];
-      return n;
-    });
+    // Deliberately NOT dropped from `runs` here — the next poll tick picks up
+    // the real terminal state (KILLED), and the card stays tracked so "Turn
+    // this into a policy" has a runId to work from. Only starting again
+    // forgets it (start() overwrites this entry).
     forgetStored(demo.id);
   }, []);
 
@@ -203,6 +203,10 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
 export function DemoScreen() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [loading, setLoading] = React.useState(true);
+  // "Turn this into a policy" (once a demo run has terminated) opens the SAME
+  // runId-driven ProfileReview sheet workspace-detail.tsx mounts for a
+  // recorded session — local open-state only, ProfileReview needs no changes.
+  const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   // Mount: readiness probe (the barrier gate). The runner owns its own re-attach.
   React.useEffect(() => {
@@ -244,16 +248,24 @@ export function DemoScreen() {
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>
-            Demos need the sandbox runner — finish the{" "}
-            <Link to="/setup" className="font-medium underline underline-offset-2">
-              Environment step
+            Demos need the sandbox runner — set up a barrier under{" "}
+            {/* TODO(stage-4): /settings */}
+            <Link to="/integrations" className="font-medium underline underline-offset-2">
+              Settings
             </Link>{" "}
             first.
           </p>
         </div>
       )}
 
-      <DemoRunner barrierReady={barrierReady} loading={loading} demos={visibleDemos} />
+      <DemoRunner
+        barrierReady={barrierReady}
+        loading={loading}
+        demos={visibleDemos}
+        onTurnIntoPolicy={setProfileRunId}
+      />
+
+      <ProfileReview runId={profileRunId} onClose={() => setProfileRunId(null)} />
     </div>
   );
 }
@@ -264,11 +276,15 @@ export function DemoRunner({
   barrierReady,
   loading = false,
   onStarted,
+  onTurnIntoPolicy,
   demos = DEMOS,
 }: {
   barrierReady: boolean;
   loading?: boolean;
   onStarted?: (demoId: string) => void;
+  // Opens the ProfileReview sheet for a terminated demo run's id. Optional —
+  // omitted entirely hides the "Turn this into a policy" action.
+  onTurnIntoPolicy?: (runId: string) => void;
   demos?: Demo[];
 }) {
   const { runs, starting, start, end } = useDemoRuns(onStarted);
@@ -284,6 +300,7 @@ export function DemoRunner({
           loading={loading}
           onStart={() => start(demo)}
           onEnd={(runId) => end(demo, runId)}
+          onTurnIntoPolicy={onTurnIntoPolicy}
         />
       ))}
     </div>
@@ -298,6 +315,7 @@ function DemoCard({
   loading,
   onStart,
   onEnd,
+  onTurnIntoPolicy,
 }: {
   demo: Demo;
   run?: TrackedRun;
@@ -306,6 +324,7 @@ function DemoCard({
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
+  onTurnIntoPolicy?: (runId: string) => void;
 }) {
   const running = run?.state === "RUNNING";
 
@@ -333,6 +352,7 @@ function DemoCard({
         loading={loading}
         onStart={onStart}
         onEnd={onEnd}
+        onTurnIntoPolicy={onTurnIntoPolicy}
       />
     </div>
   );
@@ -361,6 +381,7 @@ export function DemoRunControls({
   loading,
   onStart,
   onEnd,
+  onTurnIntoPolicy,
 }: {
   demo: Demo;
   run?: TrackedRun;
@@ -369,10 +390,15 @@ export function DemoRunControls({
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
+  onTurnIntoPolicy?: (runId: string) => void;
 }) {
   const running = run?.state === "RUNNING";
   const failed = run?.state === "FAILED";
   const pending = !!run && !running && !failed && !isTerminalRunState(run.state);
+  // Any OTHER terminal outcome (COMPLETED/STOPPED/KILLED/ARCHIVED) — the run
+  // stays tracked (useDemoRuns keeps it, not just FAILED) so its own audit
+  // trail can be replayed into a policy, same as a recorded workspace session.
+  const terminated = !!run && !failed && isTerminalRunState(run.state);
 
   if (running && run) {
     return (
@@ -397,6 +423,31 @@ export function DemoRunControls({
         <Button size="sm" variant="ghost" onClick={() => onEnd(run.id)}>
           Cancel
         </Button>
+      </div>
+    );
+  }
+  if (terminated && run) {
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-2" data-testid="demo-terminated">
+        <p className="text-sm text-muted-foreground">
+          Demo ended — its record is still here.
+        </p>
+        <div className="ml-auto flex items-center gap-2">
+          {onTurnIntoPolicy && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onTurnIntoPolicy(run.id)}
+              data-testid={`demo-turn-into-policy-${demo.id}`}
+            >
+              <Sparkles className="size-3.5" /> Turn this into a policy
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={onStart} disabled={!barrierReady || loading || starting}>
+            {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+            Start again
+          </Button>
+        </div>
       </div>
     );
   }

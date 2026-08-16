@@ -10,15 +10,18 @@
 // Every card / row navigates to the addressable /runs/:id detail page.
 // "New run" lives in the app shell top bar.
 import * as React from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  Activity,
   Archive,
   BellRing,
   Check,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
   Eye,
   FilterX,
   GitBranch,
+  Hexagon,
   LayoutGrid,
   MoreHorizontal,
   Plus,
@@ -31,12 +34,14 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentRun, RunState } from "../../lib/types";
-import { isTerminalRunState } from "../../lib/types";
+import type { AgentRun, ConfinementClass, RunState, SetupStatus } from "../../lib/types";
+import { CC_ORDER, isTerminalRunState } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
+import { setup as setupApi } from "../../lib/api/setup";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
+import { deriveReadiness, type Readiness } from "../../lib/readiness";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -63,12 +68,15 @@ import {
 } from "../ui/table";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
+import { CC_META } from "../wardyn/cc-meta";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { Mono } from "../wardyn/code-block";
+import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
+import { DEMOS } from "./demos/demo-catalog";
 
 // Runs is the eager landing route, so an eager wizard import would park the
 // whole new-run graph (workspaces + secrets screens and their dialogs) in the
@@ -79,6 +87,9 @@ const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m
 // Live-board refresh cadence — a live board shouldn't need a manual reload to
 // feel alive.
 const POLL_MS = 3000;
+
+// How often the first-run checklist / no-barrier blocker re-checks setup status.
+const SETUP_POLL_MS = 5000;
 
 // Which states need an operator's eyes — mirrors App.tsx ATTENTION_STATES (the
 // sidebar amber badge). FAILED needs review; WAITING_FOR_CONFIRMATION needs a
@@ -118,6 +129,22 @@ export function RunsScreen() {
   // Latches on the first open and never resets, so the lazy dialog below keeps
   // its close animation and internal wizard state across dismissals.
   const [newMounted, setNewMounted] = React.useState(false);
+
+  // Backs both the first-run checklist (barrier tiers / model provider) and the
+  // one hard blocker in the product: no sandbox barrier at all. Polled so the
+  // blocked banner clears on its own once `sudo wardyn setup fence` lands,
+  // with no manual reload — Re-check just fires it early.
+  const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  const loadSetupStatus = React.useCallback(() => setupApi.getSetupStatus().then(setSetupStatus), []);
+  React.useEffect(() => {
+    void loadSetupStatus();
+  }, [loadSetupStatus]);
+  usePoll(loadSetupStatus, SETUP_POLL_MS, false);
+  const readiness = setupStatus ? deriveReadiness(setupStatus) : null;
+  const confinementClasses = setupStatus?.runner?.confinement_classes ?? [];
+  // A merely-unreachable daemon (READY_FALLBACK) must never read as "no
+  // barrier installed" — that's a connectivity fact, not a host-config one.
+  const noBarrier = !!setupStatus && !setupStatus.unreachable && confinementClasses.length === 0;
 
   const fetchRuns = React.useCallback(() => {
     return api.listRuns().then((r) => {
@@ -249,6 +276,11 @@ export function RunsScreen() {
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
+      {/* The one hard blocker in the product: with no sandbox barrier, a run
+          cannot start at all, regardless of how many already exist — this sits
+          above everything else on the page, not just the empty state. */}
+      {noBarrier && <NoBarrierBanner onRecheck={loadSetupStatus} />}
+
       <PageHeader
         title="Runs"
         description={description}
@@ -349,23 +381,14 @@ export function RunsScreen() {
           <ErrorState onRetry={load} />
         </div>
       ) : trueEmpty ? (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <EmptyState
-            icon={Activity}
-            title="No runs yet."
-            description="Launch your first run and watch it here live — confined behind its barrier, gated by approvals, recorded end to end."
-            action={
-              <Button
-                onClick={() => {
-                  setNewMounted(true);
-                  setNewOpen(true);
-                }}
-              >
-                <Plus className="size-4" /> Launch your first run
-              </Button>
-            }
-          />
-        </div>
+        <RunsFirstRun
+          readiness={readiness}
+          confinementClasses={confinementClasses}
+          onNewRun={() => {
+            setNewMounted(true);
+            setNewOpen(true);
+          }}
+        />
       ) : noMatches ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <EmptyState
@@ -435,6 +458,171 @@ export function RunsScreen() {
           <NewRunDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => openRun(r.id)} />
         </React.Suspense>
       )}
+    </div>
+  );
+}
+
+// The one hard blocker in the product: no sandbox barrier means no run can
+// start, full stop. Non-dismissible by design — there's nothing to dismiss it
+// TO, every other affordance on this page is dead until this is fixed.
+function NoBarrierBanner({ onRecheck }: { onRecheck: () => void }) {
+  const setupCmd = "sudo wardyn setup fence";
+  return (
+    <div
+      role="alert"
+      className="mb-5 space-y-2.5 rounded-xl border border-danger/40 bg-danger-subtle px-4 py-3.5 text-sm text-danger"
+    >
+      <div className="flex items-start gap-2">
+        <ShieldX className="mt-0.5 size-4 shrink-0" />
+        <p className="font-medium">No sandbox barrier on this host. Runs cannot start.</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 pl-6">
+        <div className="flex items-center gap-1.5 rounded-md border border-danger/30 bg-card px-2 py-1">
+          <Mono className="text-foreground">{setupCmd}</Mono>
+          <CopyButton
+            text={setupCmd}
+            label="Copy setup command"
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          />
+        </div>
+        <Button size="sm" variant="outline" onClick={onRecheck}>
+          <RotateCw className="size-3.5" /> Re-check
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// RunsFirstRun — the Runs screen's own first-run experience, replacing the
+// deleted 12-step setup funnel: a hexagon glyph, two DERIVED-FACT checklist
+// rows (never a numbered stepper — see the two rows below), the primary
+// launch actions, and a "See it work" demo grid that needs no model, key, or
+// repo. `readiness`/`confinementClasses` come straight off the same setup
+// status the no-barrier banner above uses — never a second, disagreeing check.
+function RunsFirstRun({
+  readiness,
+  confinementClasses,
+  onNewRun,
+}: {
+  readiness: Readiness | null;
+  confinementClasses: ConfinementClass[];
+  onNewRun: () => void;
+}) {
+  const barrierLabels = CC_ORDER.filter((cc) => confinementClasses.includes(cc)).map((cc) => CC_META[cc].label);
+  const barrierLoaded = readiness !== null;
+  const llmReady = readiness?.llmReady ?? false;
+
+  return (
+    <div className="flex flex-col items-center gap-10 px-4 py-14">
+      <div className="w-full max-w-[620px] space-y-6 text-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="flex size-14 items-center justify-center rounded-2xl border border-border bg-surface-2 text-muted-foreground">
+            <Hexagon className="size-6" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-semibold text-foreground">No runs yet</h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              A run is a workload in a sealed box. You watch it, approve what it reaches for, and keep
+              the recording.
+            </p>
+          </div>
+        </div>
+
+        {/* Two derived facts, not a stepper — no numbers, no progress. */}
+        <ul className="divide-y divide-border rounded-xl border border-border bg-card text-left">
+          <li className="flex items-start gap-3 p-3.5">
+            {/* Never a green check when there's genuinely nothing available —
+                that would contradict the no-barrier blocker banner above. */}
+            {!barrierLoaded ? (
+              <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            ) : barrierLabels.length > 0 ? (
+              <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" />
+            ) : (
+              <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">Sandbox barrier</div>
+              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                {!barrierLoaded
+                  ? "Checking…"
+                  : barrierLabels.length > 0
+                    ? `${barrierLabels.join(", ")} available on this host.`
+                    : "None available on this host."}
+              </p>
+            </div>
+          </li>
+          <li className="flex items-start gap-3 p-3.5">
+            <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">Model provider</div>
+              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                {llmReady ? (
+                  `Connected${readiness?.llmLabel ? ` — ${readiness.llmLabel}` : ""}.`
+                ) : (
+                  <>
+                    Not connected — agent runs need one. Governed commands run without one.{" "}
+                    <Link to="/integrations" className="font-medium text-primary hover:underline">
+                      Connect →
+                    </Link>
+                  </>
+                )}
+              </p>
+            </div>
+          </li>
+        </ul>
+
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={onNewRun}>
+            <Plus className="size-4" /> New run
+          </Button>
+          <Button variant="outline" asChild>
+            <Link to="/demos">Try it without a repo</Link>
+          </Button>
+        </div>
+      </div>
+
+      <div className="w-full max-w-[900px] space-y-4">
+        <div className="space-y-1 text-center">
+          <h3 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            See it work
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            No model, no key, no repo. Each one runs a real governed sandbox in about a minute.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {DEMOS.map((demo) => {
+            // The flagship agent demo needs a connected model — same gate
+            // demo-screen.tsx itself uses (deriveReadiness's llmReady), so this
+            // card can never promise a "Run it" the demo screen would refuse.
+            const needsModel = demo.needsModel && !llmReady;
+            return (
+              <div
+                key={demo.id}
+                data-testid={`runs-empty-demo-${demo.id}`}
+                className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-4"
+              >
+                <h4 className="text-sm font-semibold text-foreground">{demo.title}</h4>
+                <p className="flex-1 text-xs leading-snug text-muted-foreground">{demo.teaches}</p>
+                {needsModel ? (
+                  <p className="text-xs text-muted-foreground">
+                    Needs a model provider ·{" "}
+                    <Link to="/integrations" className="font-medium text-primary hover:underline">
+                      Connect →
+                    </Link>
+                  </p>
+                ) : (
+                  // Secondary/outline — a teal fill is reserved for the one
+                  // primary action on the page ("New run" above).
+                  <Button variant="outline" size="sm" className="self-start" asChild>
+                    <Link to="/demos">Run it</Link>
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

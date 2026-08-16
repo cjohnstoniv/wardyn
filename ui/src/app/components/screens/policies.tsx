@@ -55,7 +55,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../ui/sheet";
-import { ConfinementChip, Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
+import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
@@ -64,10 +64,6 @@ import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
-// ComposeQuickReview is the composer wizard's CAN/CAN'T projection of a
-// RunPolicySpec — reused here instead of a second prose family, so a stored
-// policy reads in the exact same honest vocabulary as a proposed one.
-import { ComposeQuickReview } from "./new-run/compose-quick-review";
 
 type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
 
@@ -389,16 +385,6 @@ function PolicyDetail({
               <DetailField label="Barrier" value={<ConfinementChip value={policy.spec.min_confinement_class} />} />
               <DetailField label="Created" value={relativeTime(policy.created_at)} />
               <DetailField label="Updated" value={relativeTime(policy.updated_at)} />
-            </div>
-
-            {/* Policy bodies as humane rows (C7) — the same CAN/CAN'T projection
-                the New Run wizard uses, so a stored policy and a proposed one
-                read identically. */}
-            <div>
-              <SectionLabel>What this policy allows</SectionLabel>
-              <div className="mt-2">
-                <ComposeQuickReview inline_policy={policy.spec} />
-              </div>
             </div>
 
             {meta && (

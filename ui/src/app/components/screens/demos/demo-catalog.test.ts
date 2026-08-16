@@ -6,17 +6,26 @@
 import { describe, it, expect } from "vitest";
 import { DEMOS } from "./demo-catalog";
 
-// The showcase quartet: keyless, workspace-free, LLM-free sandboxes an operator
-// drives by hand. DEMOS also carries a fifth, harness-aware demo (needsModel) —
-// kept out of this subset since it trades the shared invariants below (empty
+// Keyless, workspace-free, LLM-free sandboxes an operator drives by hand.
+// DEMOS also carries a sixth, harness-aware demo (needsModel) — kept out of
+// this subset since it trades the shared invariants below (empty
 // allowed_domains, a pasted command) for a real, egress-scoped agent task.
 const KEYLESS = DEMOS.filter((d) => !d.needsModel);
 
+// The original showcase quartet — the first four keyless demos, each covering
+// a distinct first_use_approval / allow-all combo. The fifth keyless demo
+// (record-a-policy) sits on a different axis entirely (Record Mode, not an
+// egress-approval-mode showcase) and deliberately REUSES the open-egress
+// demo's own combo — recording needs egress wide open, that's the point, not
+// a new mode to distinguish — so it's excluded from the distinctness checks
+// below and asserted on separately.
+const SHOWCASE_QUARTET = KEYLESS.filter((d) => d.id !== "record-a-policy");
+
 describe("demo catalog", () => {
-  it("ships exactly four keyless demos with distinct ids/titles", () => {
-    expect(KEYLESS).toHaveLength(4);
-    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(4);
-    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(4);
+  it("ships exactly five keyless demos with distinct ids/titles", () => {
+    expect(KEYLESS).toHaveLength(5);
+    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(5);
+    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(5);
   });
 
   it("every demo (including the harness one) is CC1, auto-stops, and grants/mounts/repos nothing", () => {
@@ -37,8 +46,8 @@ describe("demo catalog", () => {
     }
   });
 
-  it("the four keyless demos cover distinct first_use_approval / allow-all combos", () => {
-    const combos = KEYLESS.map((d) => `${d.policy.first_use_approval}:${d.policy.allow_all_egress ?? false}`);
+  it("the original showcase quartet covers distinct first_use_approval / allow-all combos", () => {
+    const combos = SHOWCASE_QUARTET.map((d) => `${d.policy.first_use_approval}:${d.policy.allow_all_egress ?? false}`);
     expect(new Set(combos).size).toBe(4);
     // The showcase quartet in order.
     expect(combos).toEqual([
@@ -49,11 +58,14 @@ describe("demo catalog", () => {
     ]);
   });
 
-  it("only the open-egress demo carries a caution", () => {
+  it("every wide-open-egress demo carries a caution", () => {
     const withCaution = KEYLESS.filter((d) => d.caution);
-    expect(withCaution).toHaveLength(1);
-    expect(withCaution[0].policy.allow_all_egress).toBe(true);
-    expect(withCaution[0].caution!.length).toBeGreaterThan(40);
+    const openEgress = KEYLESS.filter((d) => d.policy.allow_all_egress);
+    // Every demo that opens egress wide carries the honest Fence-plus-open
+    // caution — lines-that-cant-be-crossed AND record-a-policy both do.
+    expect(withCaution.map((d) => d.id).sort()).toEqual(openEgress.map((d) => d.id).sort());
+    expect(withCaution.length).toBeGreaterThan(0);
+    for (const d of withCaution) expect(d.caution!.length).toBeGreaterThan(40);
   });
 
   it("every keyless demo has at least one command step to paste", () => {

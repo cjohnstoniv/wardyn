@@ -20,7 +20,6 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
       <MobileNav
         pendingApprovals={2}
         attentionCount={0}
-        readiness="ready"
         meta={{
           trustDomain: "example.test",
           identityProvider: "spiffe",
@@ -64,16 +63,17 @@ describe("AppShell (control plane unreachable)", () => {
     expect(screen.queryByText(/Control plane unreachable/)).toBeNull();
   });
 
-  it("banners the outage and leaves the readiness chip alone", async () => {
+  it("banners the outage and leaves the barrier chip at its last-known state", async () => {
     const fetchMock = renderShell(true);
     expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
-    // Its own status probe resolves the synthetic unreachable payload; the chip
-    // must NOT read that as "Needs setup".
+    // Its own status probe resolves the synthetic unreachable payload (empty
+    // confinement_classes) — the barrier chip must not repaint from that fake
+    // data; a fresh mount with nothing real to show yet reads the same honest
+    // "No barrier" a genuinely bare host would.
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/v1/setup/status", expect.anything()),
     );
-    expect(screen.queryByText("Needs setup")).toBeNull();
-    expect(screen.getByText(/Checking/)).toBeInTheDocument();
+    expect(screen.getByText("No barrier")).toBeInTheDocument();
   });
 });
 
@@ -106,6 +106,62 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
     const menu = screen.getByRole("menu");
     expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
     expect(within(menu).queryByText("member", { exact: true })).toBeNull();
+  });
+});
+
+// Stage-1: the top bar's permanent barrier chip reads the strongest tier off
+// the SAME setup-status poll the shell already runs — never a second,
+// disagreeing derivation. The unreachable-daemon case (no confinement_classes
+// to show) is covered above ("leaves the barrier chip at its last-known
+// state"); this pins the positive case.
+describe("AppShell — top bar barrier chip (stage-1)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the strongest available confinement tier once setup status resolves", async () => {
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.endsWith("/healthz")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+        });
+      }
+      if (u.endsWith("/api/v1/me")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ principal: "cj@example.test", method: "sso", operator: true, role: "admin" }),
+        });
+      }
+      if (u.endsWith("/api/v1/setup/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ready: true,
+            checks: [],
+            auth: { mode: "sso", local_loopback: false },
+            runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] },
+            composer: { enabled: false, backends: [] },
+            providers: [],
+            secrets: { present: [], github_app: false },
+            age_key: { durable: false },
+            has_runs: true,
+            platform: { os: "linux", wsl: false },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    // CC1+CC2 available => the strongest is Wall (CC2), never the raw CC2 code.
+    expect(await screen.findByText("Wall")).toBeInTheDocument();
+    expect(screen.queryByText("No barrier")).toBeNull();
   });
 });
 
@@ -211,7 +267,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Secrets", "Audit"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -229,32 +285,32 @@ describe("MobileNav (below-md nav fallback)", () => {
   });
 });
 
-// B3: member nav is Runs · Approvals · Demos · Recordings, nothing else — no
-// Policies/Secrets/Workspaces/Audit/Getting started. Hiding is cosmetic (the
-// server is the real boundary); this pins the UI half of that contract.
-// ui-shellAuth-2: Demos is included on the member side because routes.go has
-// no server-side gate on it at all — hiding it here would be a pure
-// discoverability regression with nothing backing it, unlike its siblings.
+// B3: member nav is Runs · Approvals, nothing else — no Policies/Secrets/
+// Workspaces/Audit. Hiding is cosmetic (the server is the real boundary);
+// this pins the UI half of that contract. Demos/Recordings/Integrations left
+// the sidebar entirely (stage-1 flatten) — Demos moved to the account menu
+// (TopBar), offered to every role since routes.go has no server-side gate on
+// it at all.
 describe("SidebarNav (member role — B3)", () => {
-  it("shows Runs, Approvals, Demos, Recordings — admin-only items and Getting started are absent", async () => {
+  it("shows only Runs and Approvals — admin-only items are absent", async () => {
     const user = userEvent.setup();
     renderMobileNav("member");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Demos", "Recordings"]) {
+    for (const label of ["Runs", "Approvals"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
-    for (const label of ["Policies", "Secrets", "Integrations", "Workspaces", "Audit", "Getting started"]) {
+    for (const label of ["Policies", "Secrets", "Workspaces", "Audit"]) {
       expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
     }
   });
 
-  it("admin nav is unchanged: every item including Getting started is present", async () => {
+  it("admin nav is unchanged: every item is present", async () => {
     const user = userEvent.setup();
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Demos", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Secrets", "Audit"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });

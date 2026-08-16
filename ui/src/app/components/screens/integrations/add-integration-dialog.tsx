@@ -52,7 +52,7 @@ import { Field, OptionCard } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";
-import { HarnessLoginPane } from "../setup/harness-login-pane";
+import { HarnessLoginPane } from "../settings/harness-login-pane";
 
 /** One already-existing row's id + display name — enough to warn on a slug
  *  collision before Save either silently replaces it (a STORED row: PUT is

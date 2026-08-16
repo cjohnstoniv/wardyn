@@ -3,18 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// First-run readiness — GET /api/v1/setup/status, with a permissive fallback so
-// the Getting-started wizard never auto-opens against a build that can't answer.
+// Host/barrier readiness — GET /api/v1/setup/status, with a permissive
+// fallback so a daemon that can't answer never reads as a genuinely bare host.
 import type { SetupStatus } from "../types";
 import { HttpError, wfetch } from "./core";
 
 // GET /api/v1/setup/status permissive fallback — an endpoint-less build (older
 // backend, the endpoint mid-rollout, or a daemon that simply didn't answer)
-// must never trap the operator behind an auto-opened wizard. `unreachable`
-// marks the payload as synthetic/untrustworthy: setupGateActive never activates
-// on it (ready:true alone was NOT enough — has_runs:false would otherwise force
-// the gate on anyway), and the funnel renders a "couldn't reach Wardyn"
-// panel instead of a scary no-runner card built from made-up fields.
+// must never read as "no barrier installed" (empty confinement_classes).
+// `unreachable` marks the payload as synthetic/untrustworthy: consumers (the
+// top bar's barrier chip, Runs' no-barrier blocker) keep their last-known
+// state instead of repainting from these made-up fields.
 const READY_FALLBACK: SetupStatus = {
   unreachable: true,
   ready: true,

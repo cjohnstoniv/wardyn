@@ -71,9 +71,8 @@ export function WorkspacePicker({
   onAddWorkspace: () => void;
   // The "Available if you need it" optional-requirement checkboxes write into
   // enabledOptional. The manual wizard's buildSpec forwards it onto
-  // CreateRunRequest.Workspaces; the AI Run Composer forwards it onto
-  // ComposeRequest.WorkspaceSelections (toRunWorkspacesWire, new-run-dialog.tsx)
-  // — both wire it now, so this defaults true for every caller.
+  // CreateRunRequest.Workspaces (toRunWorkspacesWire, wizard-spec.ts) — wired
+  // now, so this defaults true for every caller.
   optionalRequirementsEnabled?: boolean;
 }) {
   const byId = new Map(workspaces.map((w) => [w.id, w]));

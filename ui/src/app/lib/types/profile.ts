@@ -7,7 +7,7 @@
 // ADVISORY + read-only: Wardyn replays a recording run's observed behaviour
 // (egress, exec, file writes, connects) into a PROPOSED least-privilege run +
 // inline_policy for a human to review. It never creates a run or mints a credential.
-import type { ComposeRunProposal, RiskItem, RiskLevel } from "./compose";
+import type { ComposeRunProposal, RiskItem, RiskLevel } from "./runs";
 import type { RunPolicySpec } from "./policy";
 
 // One observed egress host: the HTTP methods seen and the allow/deny/pending
