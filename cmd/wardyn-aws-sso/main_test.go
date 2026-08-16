@@ -146,7 +146,7 @@ func write(t *testing.T, dir, name, content string) string {
 // a spinner forever with a credential already captured. Both sides are read from
 // source (Go and TypeScript cannot share the constant).
 func TestSuccessMarker_UIParity(t *testing.T) {
-	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "setup", "harness-login-pane.tsx")
+	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx")
 	ts, err := os.ReadFile(uiPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", uiPath, err)
