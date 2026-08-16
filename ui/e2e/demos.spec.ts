@@ -32,7 +32,7 @@ test.describe("Demo sandboxes", () => {
     // The harness-aware fifth demo's llmReady-gated visibility (needsModel —
     // demo-screen.tsx's visibleDemos filter) is NOT asserted here: this
     // shared hermetic backend runs fullyParallel alongside specs that seed a
-    // real AI secret (composer.spec.ts), so a negative "it's absent"
+    // real AI secret, so a negative "it's absent"
     // assertion here would race it. That gating is deterministic unit
     // coverage instead — demo-screen.test.tsx's "hides the harness demo
     // without a model".

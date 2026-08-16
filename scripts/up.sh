@@ -75,30 +75,31 @@ pick_policy() {
   esac
 }
 
-# composer_wants_llm ENV_FILE -> "1" | ""
-# "1" when the operator has opted into a real model path: a non-fake composer
-# backend is configured, or a host LLM API key is exported. THIS PROCESS'S env
-# only — see llm_ready_from_status below for the lane this can never see.
-composer_wants_llm() {
-  _cwl_cfg=$(env_get "$1" WARDYN_COMPOSER_CONFIG)
-  case "${_cwl_cfg}" in
-    ''|*'"wire":"fake"'*|*'"wire": "fake"'*) : ;;  # unset or the fake default → no signal from config
-    *) echo 1; return ;;                            # a real (non-fake) backend is configured
-  esac
+# host_llm_key_present ENV_FILE -> "1" | ""
+# "1" when the operator has exported a host LLM API key, i.e. opted into a real
+# model path before the stack is even up. THIS PROCESS'S env only — see
+# llm_ready_from_status below for the lane this can never see.
+#
+# This used to also read WARDYN_COMPOSER_CONFIG (a non-"fake" backend counted as
+# a real model path). No Go code has read that variable since the AI Run Composer
+# was cut; up.sh was writing it into .env and reading it straight back, so the
+# whole config branch was talking to itself. The ENV_FILE argument is kept —
+# llm_ready_from_status's caller passes it and the key lookup may need it again.
+host_llm_key_present() {
   [ -n "${ANTHROPIC_API_KEY:-}" ] && { echo 1; return; }
   [ -n "${OPENAI_API_KEY:-}" ]    && { echo 1; return; }
   echo ""
 }
 
 # llm_ready_from_status STATUS_JSON -> "1" | ""
-# W1-S1-3: composer_wants_llm is blind to a managed subscription connected in a
+# W1-S1-3: host_llm_key_present is blind to a managed subscription connected in a
 # PRIOR `up` (no token re-supplied this run) and to a key added through the
 # UI — neither ever touches this process's env. cmd_up instead asks the
 # already-running daemon's own GET /api/v1/setup/status, whose llm_ready
 # aggregates every lane (subscription, composer backend, secret-name
 # heuristic, Bedrock, an AI-provider Integration) for the Getting-started
 # readiness banner. Split out as a pure string check (matching
-# composer_wants_llm's own case-pattern style) so test-up-policy.sh can pin
+# host_llm_key_present's own case-pattern style) so test-up-policy.sh can pin
 # the match on a canned body with no docker/network.
 llm_ready_from_status() {
   case "$1" in
@@ -565,19 +566,16 @@ cmd_up() {
 
   _prev_policy=$(env_get "${ENV_FILE}" WARDYN_DEFAULT_POLICY)
   _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-  _policy=$(resolve_default_policy "${ENV_FILE}" "${WARDYN_DEFAULT_POLICY:-}" "${_runtimes}" "$(composer_wants_llm "${ENV_FILE}")")
+  _policy=$(resolve_default_policy "${ENV_FILE}" "${WARDYN_DEFAULT_POLICY:-}" "${_runtimes}" "$(host_llm_key_present "${ENV_FILE}")")
   if [ "${_policy}" != "${_prev_policy}" ]; then
     log "Auto-picked default policy: ${_policy}"
     case "${_policy}" in
       */claude-llm.json)
-        log "  (composer-capable ceiling — a real model path is configured; a composed run can reach its LLM)" ;;
+        log "  (LLM-capable ceiling — a real model path is configured; an agent run can reach its model)" ;;
     esac
   fi
   unset _prev_policy
 
-  if [ -z "$(env_get "${ENV_FILE}" WARDYN_COMPOSER_CONFIG)" ]; then
-    env_set "${ENV_FILE}" WARDYN_COMPOSER_CONFIG '{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}'
-  fi
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   # A stale WARDYN_AGENT_IMAGES override in .env silently breaks every run at
@@ -675,8 +673,8 @@ cmd_up() {
     fi
   fi
 
-  # W1-S1-3: the pick above ran BEFORE wardynd existed — composer_wants_llm can
-  # only see THIS process's env (WARDYN_COMPOSER_CONFIG/*_API_KEY), never a
+  # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can
+  # only see THIS process's env (*_API_KEY), never a
   # managed subscription (just connected above, OR left over from a PRIOR `up`
   # with no token re-supplied this time) or a key added through the UI in a
   # browser session up.sh never sees. Ask the daemon itself instead, reachable

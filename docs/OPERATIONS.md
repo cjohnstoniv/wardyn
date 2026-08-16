@@ -455,11 +455,10 @@ host, write access to a directory, a named integration — is a row with ONE
 axis: **Required** rides along with every run that attaches the workspace,
 **Optional** is a per-run opt-in. `PUT /api/v1/workspaces/{id}/requirements`
 writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`,
-`internal/api/workspaces.go`) from four real UI surfaces — the wizard's
-Requirements step, the wizard's Integrations step (which persists the
-integration picks as `integration:<id>` rows before Build reads them), the
-workspace detail page's requirements editor, and its detected-candidates
-card. Launch and preflight both read
+`internal/api/workspaces.go`). The 7-step workspace wizard that used to write
+them from its Requirements and Integrations steps was retired in 0.5 — adding a
+workspace is one dialog now — so the workspace detail page is the surface that
+writes them. Launch and preflight both read
 `effectiveRequirements(ws)` — the same fold — so Review can never predict
 something launch won't do. A `scan_seeded` requirement can never auto-grant a
 secret on its own — the scanner reads untrusted repo content, so only an
@@ -490,37 +489,43 @@ external system Wardyn talks to on a run's behalf, and never an installer
 - `config{}` — non-secret knobs, key-validated per closed kind (bedrock ⇒
   `region`/`model`/`auth_lane`, `github_app` ⇒ `app_id`/`installation_id`/
   `host`, `anthropic_subscription` ⇒ `lane`); an unknown key on a closed kind
-  400s by name. A generic kind takes any string keys.
-- `probe` — an optional method+URL behind the row's **Test** action.
+  400s by name.
 
-`kind` is the ONE field that says what this connects to. The closed set —
-`anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`,
-`azure_openai`, `github_app`, `git_host` — has behavior in code
-(`capabilitiesFor`), so a new one there is a code change. **Anything else is
-a generic connection**: an open slug (`"jira"`, `"artifactory"`, …) validated
-for shape only, whose row IS its whole contract. The page groups by kind
-alone — AI providers, source control, and one flat Connections set.
+`kind` is the ONE field that says what this connects to, and as of 0.5 the
+closed set is the ONLY writable set: `anthropic_api_key`,
+`anthropic_subscription`, `bedrock`, `openai_api_key`, `github_app`, `git_host`.
+Each has behavior in code (`capabilitiesFor`), so a new one is a code change,
+and a write naming anything else 400s with the accepted list.
 
-The Integrations page (`/integrations`) is the one surface for these. Rows are
-also DERIVED from what already exists (stored secret names, site config, setup
-status), so an operator who never opens the page keeps identical run behavior;
-adopting a derived row is what makes it editable, and it is EXPLICIT — a write
-to a derived id answers 409 and points at the adopt action, rather than
-silently freezing a snapshot of live configuration. Host proxy and Egress
-redirection are deliberately NOT here: that is network topology, its
+Two things left in 0.5 and are worth knowing if you are upgrading. Generic
+kinds — an open slug (`"jira"`, `"artifactory"`, …) validated for shape only,
+whose row WAS its whole contract — are no longer writable; a row stored under an
+earlier release still loads, still sits in `SiteConfig`, and is still injected by
+`internal/api/integrations_run.go`, it simply cannot be edited through the API
+any more. `azure_openai` is gone as a kind: its one capability powered the AI Run
+Composer, which was also removed, and no agent tool can be pointed at an Azure
+deployment.
+
+**Settings** (account menu) is the one surface for these — a Model provider card
+and a Git host card, each a radio group over concrete lanes. The standalone
+`/integrations` page is deleted and redirects there. Rows are also DERIVED from
+what already exists (stored secret names, site config, setup status), so an
+operator who never opens Settings keeps identical run behavior. Host proxy and
+Egress redirection are deliberately NOT here: that is network topology, its
 configuration lives under **Corporate network** (below) on the same
 `SiteConfig` document, and this surface neither derives nor displays it.
 
-### Test is a real probe, not a green tick
+### Wardyn does not dial the provider
 
-`POST /api/v1/integrations/{id}/test` (admin) launches a throwaway confined
-sandbox and curls the row's own `probe` URL through the row's own egress
-allowlist and proxy-side credential injection — the same fold a granted run
-gets (`internal/api/integration_probe.go`, reusing the site-config probe
-machinery). A probe URL outside the row's own egress is refused rather than
-quietly allowed: a run granted this integration could not reach it either.
-The verdict is cached IN MEMORY and served as `probe_status`, so after a
-restart a row honestly reads "not tested" rather than showing a stale pass.
+There is no "Test" action. `POST /api/v1/integrations/{id}/test` used to launch
+a throwaway confined sandbox and curl the row's own probe URL through the row's
+own egress and proxy-side injection; that probe framework was removed in 0.5
+along with the catalog page whose rows it verified.
+
+Settings states what is STORED and says so plainly — "Wardyn stores this, it
+doesn't dial the provider to check it" — which is the honest claim about a
+credential nobody has used yet. A real run is the real test, and it fails loudly
+with an audit trail if the credential is wrong.
 
 ### Nothing is ambient
 

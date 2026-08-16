@@ -166,17 +166,6 @@ the compose host with `127.0.0.1 dex` added to `/etc/hosts`, or simply use the
 admin-token CLI path (what `scripts/demo.sh` does) — the headless demo never
 needs the browser.
 
-## AI Run Composer (optional)
-
-The New Run wizard's "Describe your task" flow proposes a confined run from a plain-
-English prompt. `.env.example` seeds the no-key `fake` backend, so copying it (what
-`make setup` does) leaves the composer **on**; point `WARDYN_COMPOSER_CONFIG` at a real
-backend for real proposals. Ready-made configs live in
-[`../../examples/composer-configs/`](../../examples/composer-configs/): `fake.json` (no
-key, deterministic demo), `claude-cli-opus.json` (host-mode + Claude subscription), and
-`anthropic-api` / `openai-api` templates (need a key via `wardyn secret set`). Empty
-disables it and the compose tab is hidden.
-
 ## What the demo proves
 
 The audit trail printed at the end shows the governance chain end to end:

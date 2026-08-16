@@ -8,6 +8,42 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING — generic integration kinds.** `PUT /api/v1/integrations/{id}` now
+  answers 400 for any kind outside the closed set (`anthropic_api_key`,
+  `anthropic_subscription`, `bedrock`, `openai_api_key`, `github_app`,
+  `git_host`), and the error names what is accepted. Generic kinds — package
+  feeds, container registries, cloud providers, data stores, MCP servers, work
+  tracking, observability, "other service" — were the operator-extensibility
+  surface behind the Integrations catalog, and that catalog is gone. **A row
+  stored under an earlier release is not destroyed:** it still deserializes,
+  still sits in `SiteConfig`, and is still injected into a granted run by
+  `internal/api/integrations_run.go`. It simply cannot be edited through the API
+  any more.
+- **BREAKING — `azure_openai` as an integration kind.** Its one capability
+  powered the AI Run Composer, which was also removed; no agent tool can be
+  pointed at an Azure OpenAI deployment. An `azure-openai-key` left in the
+  secret store is untouched and inert.
+- **BREAKING — `pkg/client`'s `CreateRunRequest.ComposeSessionID`**, with its
+  server-side UUID validation and `run.create` audit stamping. The only thing
+  that ever produced a real value was the composer, so the field had become one
+  that accepted any UUID and correlated it to a conversation that can no longer
+  exist.
+- **The `/integrations` page** (and `/integrations/:id`). Both redirect to the
+  new `/settings`. Connections are four cards there — Host, Model provider, Git
+  host, Your SSH keys — each a radio group over concrete lanes, replacing a
+  catalog of seven kinds plus a generic escape hatch and a 931-line Add dialog.
+- **The integration verification-probe framework**: `POST
+  /api/v1/integrations/{id}/test`, `IntegrationProbe`, `IntegrationProbeStatus`
+  and the in-memory probe cache. Settings states what is STORED and says so
+  plainly rather than dialing the provider; a real run is the real test. A
+  `probe` key on a row stored under an earlier release is ignored, not rejected.
+- **`POST /api/v1/integrations/{id}/adopt`.** Adoption promoted a derived row
+  into a stored one so the catalog could edit it. A `PUT` onto a derived id used
+  to answer 409 pointing at that route — a dead end once it was unregistered —
+  so the write IS the adoption now, carrying the same audit event.
+
 ### Security
 
 - **Go-live hardening: 29 confirmed ship-blockers closed across two adversarial
@@ -33,8 +69,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The live e2e suite no longer calls a deleted route.** `test/e2e/live`
+  (`-tags docker`) still POSTed `/api/v1/runs/compose`, so its composer sub-test
+  would have 404'd on the next run. It is daemon-gated and not part of
+  `make ci`, so nothing caught it.
+- **The Settings Git host card validates the host before storing a credential.**
+  Without it a shape-invalid host stored its secret under `git-pat-<slug>` and
+  only failed later when the `scm_hosts` write was rejected — leaving a
+  credential saved under a name nothing would ever read.
+
 - **~180 additional go-live findings** across the first-run/setup funnel, the
-  new-run and workspace wizards, integrations, approvals, recordings, and the
+  new-run flow, workspaces, integrations, approvals, recordings, and the
   audit/policy/secrets screens — broken promises, misleading copy, dead ends,
   and **WCAG 2.1 AA accessibility** gaps (keyboard operability, `aria-current`
   /`aria-pressed`/`aria-label` on custom controls, theme-invariant contrast on
@@ -43,11 +88,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The Getting Started funnel is 10 steps, not 12.** The Directories & repos
+  and Base images steps are gone; "Your work" is one step (Workspaces). The
+  connection step renders the same two Settings cards rather than embedding the
+  whole Integrations page.
+- **A fresh install opens on Getting Started.** `/` redirects to `/setup` when
+  the server reports no runs and this browser has never finished the funnel.
+  Every other route stays directly reachable — this is not the old first-run
+  gate, which redirected everything until setup was complete.
+- `examples/policies/composer-dev.json` → **`claude-llm.json`** and
+  `composer-dev-subscription.template.json` → **`claude-subscription.template.json`**.
+  Same ceilings, names that no longer point at a deleted feature.
+- `WARDYN_COMPOSER_CONFIG` is no longer read, written or passed through
+  (`scripts/up.sh`, `deploy/compose/`). Nothing in the binary had consumed it
+  since the composer was cut.
+
 - **Integrations are now base components: one `kind` field plus
-  `secrets[]`/`egress[]`/`config{}`/`probe`.** The stored Category/Type split
-  is gone — `kind` is either one of the closed set (`anthropic_api_key`,
-  `anthropic_subscription`, `bedrock`, `openai_api_key`, `azure_openai`,
-  `github_app`, `git_host`) or any other slug, which is a generic connection
+  `secrets[]`/`egress[]`/`config{}`.** The stored Category/Type split
+  is gone — `kind` is one of the closed set (`anthropic_api_key`,
+  `anthropic_subscription`, `bedrock`, `openai_api_key`,
+  `github_app`, `git_host`)
   whose row carries its whole contract: each secret names its store ref and
   its **delivery** (`proxy_header` — never resident), `egress` is where the
   system lives, and `config` keys are validated per closed kind (an unknown
@@ -91,12 +151,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   deployment that never set those env vars reported `needs_setup` forever
   while its runs authenticated fine.
 
-- **Adopting a derived integration is now explicit.** `PUT
-  /api/v1/integrations/{id}` naming a row that exists only as a derivation
-  answers 409 and points at `POST /api/v1/integrations/{id}/adopt`. Previously
-  any write to a derived id — the default-for checkbox being the one every
-  operator hit — silently persisted a frozen snapshot of live configuration.
-
 - **Integrations no longer install tools; the tool side of the integration
   concept is removed.** An integration is a connection — secrets + egress —
   and never decides what is installed in an image. Concretely: naming an
@@ -112,18 +166,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   claude-code CLI as standard tooling".)
 
 ### Added
-
-- **`POST /api/v1/integrations/{id}/test`** (admin) probes an integration for
-  real: a throwaway confined sandbox curls the row's own `probe` URL through
-  the row's own egress allowlist and proxy-side credential injection — the same
-  fold a granted run gets — reusing the site-config probe machinery. The result
-  is served as `probe_status` on `GET /api/v1/integrations`. It is cached **in
-  memory only**, so after a restart a row honestly reads "not tested" rather
-  than showing a stale green tick, and a probe URL outside the row's own egress
-  is refused rather than quietly widened (a run granted that integration could
-  not reach it either).
-
-### Removed
 
 - **The Integrations page's Tools tab**, the integration→tool "carries"
   chips in the workspace wizard (base-image, build, and verify steps), and

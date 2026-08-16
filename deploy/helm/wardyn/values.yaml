@@ -99,7 +99,7 @@ env: {}
 
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
 # must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
-# WARDYN_OIDC_CLIENT_SECRET, WARDYN_COMPOSER_API_KEY, and WARDYN_AUDIT_SINKS
+# WARDYN_OIDC_CLIENT_SECRET and WARDYN_AUDIT_SINKS
 # (its inline JSON carries the SIEM bearer_token). Full EnvVar schema, so
 # valueFrom.secretKeyRef / configMapKeyRef / fieldRef all work:
 #   extraEnv:

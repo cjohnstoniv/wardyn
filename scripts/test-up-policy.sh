@@ -27,7 +27,7 @@ UP_SH="${REPO_ROOT}/scripts/up.sh"
 extract_func() {  # $1=function name -> its body, verbatim
   sed -n "/^$1() {/,/^}/p" "${UP_SH}"
 }
-for fn in pick_policy composer_wants_llm llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix; do
+for fn in pick_policy host_llm_key_present llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix; do
   body="$(extract_func "$fn")"
   [ -n "$body" ] || { echo "test-up-policy: '$fn' not found in ${UP_SH} (renamed/removed?)" >&2; exit 1; }
   eval "$body"
@@ -57,11 +57,11 @@ got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
 [ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY)" = "/examples/policies/claude-llm.json" ] || fail "claude-llm.json pick did not persist to .env"
 
 # 3b) W1-S1-3 regression: llm_ready_from_status is the signal cmd_up uses when
-# composer_wants_llm sees NOTHING in this process's env — a subscription
+# host_llm_key_present sees NOTHING in this process's env — a subscription
 # connected in a PRIOR `up` (no token re-supplied this run) or a key added
-# through the UI. Neither ever touches WARDYN_COMPOSER_CONFIG or
-# *_API_KEY, so composer_wants_llm alone must still say "no signal" here...
-[ -z "$(composer_wants_llm "${env_file}")" ] || fail "composer_wants_llm found a signal from an empty env — test setup is wrong"
+# through the UI. Neither ever exports *_API_KEY, so host_llm_key_present alone
+# must still say "no signal" here...
+[ -z "$(host_llm_key_present "${env_file}")" ] || fail "host_llm_key_present found a signal from an empty env — test setup is wrong"
 # ...while llm_ready_from_status reads it straight off a canned /setup/status
 # body (compact encoding/json.Marshal shape, no space after the colon).
 got="$(llm_ready_from_status '{"ready":true,"llm_ready":true,"providers":[]}')"

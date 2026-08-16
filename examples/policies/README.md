@@ -29,8 +29,8 @@ source; the gate is un-bypassable). All three are commented.
 
 ## default.json
 
-The out-of-the-box policy (`WARDYN_DEFAULT_POLICY`, also the composer's clamp
-ceiling when no override is set). `allowed_domains` carries the standard
+The out-of-the-box policy (`WARDYN_DEFAULT_POLICY`, also the ceiling every run
+is clamped to — `composer.Clamp` — when no override is set). `allowed_domains` carries the standard
 registries for common dev tooling — npm/yarn, PyPI, GitHub (clone/API/release
 assets), Go modules, and crates.io — so a first manual run works without an
 egress-approval round trip for ordinary `npm install`/`pip install`/`go get`/
@@ -78,17 +78,19 @@ human), empty egress allowlist (add exactly what the task needs), no grants,
 `auto_stop_after_sec` bound. `scripts/ci-run.sh` uses it as the default
 `--policy-file`.
 
-## composer-dev.json
+## claude-llm.json
 
-The developer ceiling for composed runs: `default.json`-style registry egress
-plus `api.anthropic.com`/`api.openai.com`, a no-approval `api_key` grant
-(`anthropic-api-key`) so a composed run can actually reach a model, and an
-approval-gated `github_token` grant (contents + pull-requests write). Host
-mode picks it when a real model path is configured.
+The developer ceiling for a run that needs a model: `default.json`-style
+registry egress plus `api.anthropic.com`/`api.openai.com`, a no-approval
+`api_key` grant (`anthropic-api-key`) so the run can actually reach a model, and
+an approval-gated `github_token` grant (contents + pull-requests write). Both
+`scripts/up.sh`'s `pick_policy` and host mode pick it when a real model path is
+configured. (It replaced `composer-dev.json`, which was named for the AI Run
+Composer and went with it in 0.5 — same ceiling, honest name.)
 
-## composer-dev-subscription.template.json
+## claude-subscription.template.json
 
 A TEMPLATE, not a usable policy — do not point `WARDYN_DEFAULT_POLICY` at it.
 `scripts/stage-claude-creds.sh` replaces `__WARDYN_CRED_DIR__` with a
 machine-specific read-only staging dir and writes the real policy to
-`~/.wardyn/composer-dev-subscription.json`.
+`~/.wardyn/claude-subscription.json`.

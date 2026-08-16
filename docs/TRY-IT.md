@@ -4,17 +4,16 @@ The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 `wardyn setup status` says what model access is still missing. Easiest first: a
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
-key), **record, then replay confined** to onboard your own work, and the **AI
-Composer**.
+key), and **record, then replay confined** to onboard your own work.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. The rail runs 12 steps: 3 essentials, 4 hands-on
-demos, 3 **Your work** steps that onboard what you'll actually run against
-(**Directories & repos**, **Base images**, **Workspaces**), and 2 to finish.
+straight into your first run. The rail runs 10 steps: 3 essentials, 4 hands-on
+demos, 1 **Your work** step that onboards what you'll actually run against
+(**Workspaces**), and 2 to finish.
 Inside a corporate network, the **Corporate network** step — seated right
 before Integrations, because nothing downstream can be verified until the
 network path works — chains the sandbox proxy through your proxy and
@@ -28,11 +27,10 @@ past. Nothing on the step has to be configured; on an open network,
 Test connectivity then Next is the whole visit. Whatever IS configured,
 though, has to prove itself before you can move past it — whenever
 there is a runner to prove it with.
-**Integrations** (the same page as
-`/integrations`) is where you then name the systems outside Wardyn a run has to
-reach — a model provider, GitHub Enterprise / Azure DevOps (see
-[`docs/adoption/`](adoption/)), a private package feed, a container registry, an
-MCP server, a ticket tracker, or anything else under **Other service**. Each one
+**Model & git host** — the same two cards as **Settings** — is where you then
+name the systems outside Wardyn a run has to reach: a model provider for agent
+runs, and a git credential for private repos on GitHub Enterprise / Azure DevOps
+(see [`docs/adoption/`](adoption/)). Each one
 bundles where the system lives, what credential it takes, and how that credential
 reaches the request; adding it is what puts its hosts within a run's reach.
 Nothing is ambient — a run gets an integration when the workspace
@@ -46,13 +44,13 @@ default for agent runs folds into every run regardless of workspace (see
 A couple of config facts before you customize:
 
 - **Policy defaults are launch-path-specific.** A bare hand-launched `wardynd`
-  loads `examples/policies/default.json` (CC2, no `api_key` grant — composed runs
+  loads `examples/policies/default.json` (CC2, no `api_key` grant — an agent run
   can't reach a model under it); `make setup` / `scripts/up.sh` auto-pick one:
   containerized picks `demo.json` (CC1) on a runc-only host, `default.json` (CC2)
-  when gVisor is registered, and `composer-dev.json` once a real model path is
-  configured; host mode picks `composer-dev.json` or your staged subscription
-  ceiling. The Getting Started **Model access for composed runs** check warns when
-  your stored credential and the live `WARDYN_DEFAULT_POLICY` disagree.
+  when gVisor is registered, and `claude-llm.json` once a real model path is
+  configured; host mode picks `claude-llm.json` or your staged subscription
+  ceiling. The Getting Started **Review** step warns when your stored credential
+  and the live `WARDYN_DEFAULT_POLICY` disagree.
 - **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
   `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
   key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a
@@ -300,30 +298,6 @@ The session idles for `wardyn attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
 profile (or promote the observed egress from the workspace page's
 recorded-session pane — **Promote to approved egress**).
-
-## Level 3 — the AI Composer (describe a task, get a proposed run)
-
-The **AI Run Composer** turns a plain-English task into a *proposed* confined run
-(agent, repo, confinement, egress, grants) that Wardyn grades for you to review
-before launch. `make setup` already seeded the no-API-key `fake` backend into
-`deploy/compose/.env`, so the Describe surface is live in the New Run dialog with
-deterministic demo proposals. Clear `WARDYN_COMPOSER_CONFIG` there to turn it off —
-with no backend configured, the dialog falls back to the manual wizard.
-
-Real prompt-driven proposals — Anthropic API + Opus:
-
-```sh
-wardyn secret set anthropic-api-key   # paste your key (write-only; no API path returns it)
-echo 'WARDYN_COMPOSER_CONFIG={"default":"claude","backends":[{"name":"claude","wire":"anthropic","transport":"api","model":"claude-opus-4-8","api_key_secret":"anthropic-api-key"}]}' >> deploy/compose/.env
-docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
-```
-
-`wardynd` logs `AI Run Composer enabled (backends=[...] default="...")` on boot, and
-the New Run dialog then offers **Describe your task**: type a task and review the
-proposal — the provider/model is shown, every choice is risk-graded, and you can
-pick **Interactive** (attach and drive) vs **Autonomous**. More templates (incl. the
-Claude CLI via your subscription, and OpenAI) are in
-[`examples/composer-configs/`](../examples/composer-configs/).
 
 ## Stop / Reset
 

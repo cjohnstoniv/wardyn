@@ -154,7 +154,7 @@ checks it.
   wall` can unlock without virtualization. `make setup` auto-picks a policy
   (`scripts/up.sh` `pick_policy`): `default.json` (CC2) on a runsc-registered
   host with no model configured, `demo.json` (CC1) on a runc-only host, and
-  `composer-dev.json` (CC1 floor) once a real model path is configured —
+  `claude-llm.json` (CC1 floor) once a real model path is configured —
   `wardyn setup status` reports which tier you actually got. Pick a tier per run,
   and if the host can't enforce it the run *refuses to start* — it never silently
   downgrades, and the tier you actually got is a queryable fact of the run record;
@@ -184,11 +184,6 @@ checks it.
   synthesized policy can only ever subset what the observed run already reached, so
   genuine least-privilege *discovery* still needs the open record route
   — [TRY-IT Level 2.5](docs/TRY-IT.md). **[shipped]**
-
-- **AI Run Composer (optional).** Describe a task in plain English and Wardyn
-  proposes a confined run and grades it deterministically — advisory; the binary
-  ships with no backend, and `make setup` seeds a no-API-key `fake` one so the
-  flow works out of the box — [TRY-IT Level 3](docs/TRY-IT.md). **[shipped]**
 
 ---
 

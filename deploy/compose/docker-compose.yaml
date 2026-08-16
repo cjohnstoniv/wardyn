@@ -268,16 +268,6 @@ services:
       # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
       # on a CC2-capable host (the default.json policy demands CC2).
       WARDYN_DEFAULT_POLICY: "${WARDYN_DEFAULT_POLICY:-/examples/policies/demo.json}"
-      # AI Run Composer: a JSON registry ({default,backends}) the New Run wizard
-      # uses to turn a plain-English task into a proposed sandbox spec. Empty
-      # DISABLES the composer (the wizard's "Describe your task" tab is hidden). Set
-      # it (shell export or a deploy/compose/.env file — copy .env.example) to enable.
-      # Ready-made configs: ../../examples/composer-configs/ (fake, claude-cli-opus,
-      # anthropic-api, openai-api). No-API-key demo backend (deterministic):
-      #   WARDYN_COMPOSER_CONFIG='{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}'
-      # Real suggestions (needs an api key in the secret store):
-      #   WARDYN_COMPOSER_CONFIG='{"default":"claude","backends":[{"name":"claude","wire":"anthropic","transport":"api","model":"claude-opus-4-8","api_key_secret":"anthropic-api-key"}]}'
-      WARDYN_COMPOSER_CONFIG: "${WARDYN_COMPOSER_CONFIG:-}"
       WARDYN_RECORDING_DIR: "/data/recordings"
       # Recording delivery: wardyn-rec uploads finished casts through the
       # proxy's brokered route (run-token injected proxy-side; cross-run

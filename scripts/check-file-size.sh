@@ -25,7 +25,6 @@ declare -A ALLOWLIST=(
   ["./internal/runner/docker/driver.go"]=1230 # 1137 at freeze
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
-  ["./ui/src/app/components/screens/import-workspace/import-panel.tsx"]=1420 # 1312 at freeze
   ["./ui/src/app/components/screens/setup/step-bodies.tsx"]=1150 # 1062 at freeze
   # The build-plumbing shell was unpoliced until 2026-07-29 and the three biggest
   # files are already near THRESHOLD. Their caps are frozen BELOW it so they stop
@@ -44,7 +43,6 @@ declare -A ALLOWLIST=(
   ["./internal/api/workspaces.go"]=1150 # 1069 at v0.5 merge
   ["./internal/envbuild/builder.go"]=1100 # 1020 at v0.5 merge
   ["./ui/src/app/components/screens/new-run/wizard-types.ts"]=1180 # 1092 at v0.5 merge
-  ["./ui/src/app/components/screens/new-run/new-run-dialog.test.tsx"]=1240 # 1149 at v0.5 merge
 )
 
 fail=0

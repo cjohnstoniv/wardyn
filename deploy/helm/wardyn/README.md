@@ -386,7 +386,7 @@ See `values.yaml` for all options. Key settings:
   images built before it was baked.
 - `extraEnv`: raw `EnvVar` entries (so `valueFrom.secretKeyRef` works) for the
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
-  `WARDYN_COMPOSER_API_KEY`, and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM
+  and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM
   `bearer_token`).
 - `persistence.enabled`: also decides `WARDYN_RECORDING_DIR` —
   `<mountPath>/recordings` when on, empty (replay disabled) when off. wardynd's

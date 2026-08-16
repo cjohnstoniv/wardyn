@@ -98,8 +98,7 @@ These run in the control plane / proxy *around* the seam, not inside it.
    on `-runner docker`). Seams **without** a registry are wired through their own
    config knobs and surface elsewhere at runtime, not in `components`: the LLM
    gateway and content detection are builtin (proxy-side), audit sinks via
-   `WARDYN_AUDIT_SINKS` (boot log), composer backends via
-   `WARDYN_COMPOSER_CONFIG` (`/api/v1/setup/status`), eBPF ground-truth via
+   `WARDYN_AUDIT_SINKS` (boot log), eBPF ground-truth via
    `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via
    `/healthz.confinement_substrates`.
 
@@ -133,7 +132,6 @@ not a second roadmap.
 | LLM gateway | none — the route is hard-wired in `internal/egress/proxy/local_routes.go` (no swap point) | `direct` (pinned-IP RoundTrip) | LiteLLM / Portkey / Envoy AI GW behind wardyn-proxy | external gateway (planned) | — (nothing to conform to) | no seam yet; external gateway planned |
 | Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **LLM Guard / Presidio** sidecar | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
 | Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped (non-registry: struct-field JSON parse, `internal/audit/sinks/config.go` — not a `/healthz` component) |
-| Composer backends | `composer.Registry` | none in the binary; the compose demo's `.env.example` seeds a `fake` backend | — | `anthropic` / `openai` / `cli` / `sandbox` / `fake` via `WARDYN_COMPOSER_CONFIG` | — | shipped |
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
 
 All recommended-prod candidates are Apache-2.0 / permissive, self-hostable, and

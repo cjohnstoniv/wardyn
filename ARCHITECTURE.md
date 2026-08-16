@@ -102,14 +102,6 @@ audit streams".
   `deploy/images/common/agent-run-lib.sh`). `scripts/ci-run.sh` composes it:
   fresh compose stack → preflight → run → artifacts → teardown. Docs:
   `docs/CI.md`.
-- **AI Run Composer** *(optional, advisory)* — describe a task in plain English
-  and the Composer proposes a confined run, then grades it deterministically
-  (`internal/composer`, `POST /api/v1/runs/compose`; the proposal is
-  policy-clamped before anything runs — `internal/api/policy.go`, "composer/
-  profile clamp"). Advisory only: the binary ships with no backend, `make setup`
-  seeds a no-API-key `fake` composer (`composer.FakeComposer`) so the flow works
-  out of the box, and nothing it proposes launches until the operator starts the
-  run. Docs: [TRY-IT Level 3](docs/TRY-IT.md).
 
 ## The four nouns (`internal/types`)
 

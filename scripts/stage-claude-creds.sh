@@ -2,7 +2,7 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Stage Claude subscription credentials for Wardyn's composer subscription mode.
+# Stage Claude subscription credentials for Wardyn's subscription mode.
 #
 # What this does (and why):
 #   1. COPIES ~/.claude and ~/.claude.json to a staging dir OUTSIDE any repo
@@ -11,12 +11,12 @@
 #      ~/.claude is never exposed to a sandbox at all. Outside the repo tree on
 #      purpose — a gitignored in-tree dir is one `git add -f` away from leaking
 #      a long-lived OAuth token into history.
-#   2. GENERATES the composer-capable subscription ceiling policy
+#   2. GENERATES the LLM-capable subscription ceiling policy
 #      (~/.wardyn/claude-subscription.json) from the committed template,
 #      substituting this machine's staging dir. Mount sources are machine-
 #      specific, so no committed example carries a real path.
 #
-# A composed run receives these mounts ONLY when the human ticks "Use my Claude
+# A run receives these mounts ONLY when the human ticks "Use my Claude
 # subscription" on that request (per-run opt-in) — staging alone grants nothing.
 #
 # SENTINEL (default): the staged .credentials.json is SANITIZED into an inert
