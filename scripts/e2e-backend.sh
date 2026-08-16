@@ -147,16 +147,12 @@ cmd_up() {
   log "Resetting ${PG_DBNAME} schema for deterministic fixtures"
   psql_e2e -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1 || true
   log "Starting wardynd (runner=none) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
-  # AI Run Composer: a deterministic 'fake' backend (no keys/network) so the UI
-  # describe-mode + compose endpoints are exercisable hermetically.
-  local composer_cfg='{"default":"fake-claude","backends":[{"name":"fake-claude","wire":"fake","model":"claude-opus-4-8"},{"name":"fake-gpt","wire":"fake","model":"gpt-5.5"},{"name":"fake-risky","wire":"fake","transport":"high","model":"claude-opus-4-8"},{"name":"fake-interview","wire":"fake","transport":"interview","model":"claude-opus-4-8"}]}'
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     "${BIN_DIR}/wardynd" \
       -runner none \
       -listen "${ADDR}" \
       -ui-dir "${REPO_ROOT}/ui/dist" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
-      -composer-config "${composer_cfg}" \
       >"${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
   cmd_wait

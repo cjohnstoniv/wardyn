@@ -19,7 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -30,7 +29,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
@@ -193,16 +191,14 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runn
 }
 
 // optionalFeatures groups the off-by-default subsystems run() wires into
-// api.Config: recording replay, human SSO, devcontainer builds, the AI Run
-// Composer, the subscription/managed LLM credential providers, and the advisory
-// AI scan fallback. Each is nil/zero when unconfigured (fail closed / feature
-// off), exactly as before the extraction.
+// api.Config: recording replay, human SSO, devcontainer builds, the
+// subscription/managed LLM credential providers, and the advisory AI scan
+// fallback. Each is nil/zero when unconfigured (fail closed / feature off),
+// exactly as before the extraction.
 type optionalFeatures struct {
 	recStore         recording.Store
 	authn            *oidc.Authenticator
 	imgBuilder       api.ImageBuilder
-	composerReg      *composer.Registry
-	composerBackends []api.ComposerBackendReadiness
 	subToken         subscription.Provider
 	disableSubInject bool
 	managedToken     subscription.Provider
@@ -355,42 +351,6 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 		of.imgBuilder = b
 		slog.Info("wardynd: devcontainer builds enabled")
-	}
-
-	// AI Run Composer (optional): build the backend registry from
-	// -composer-config, or (when that's unset) derive it from the operator's
-	// Integrations (Task 3 — see cmd/wardynd/composer.go). The site config read
-	// is best-effort: a fetch failure degrades to the zero value (no stored
-	// integrations), matching effectiveIntegrations' own "never fail, degrade"
-	// discipline (internal/api/integrations.go) rather than failing boot over a
-	// convenience derivation. Nil registry disables the compose endpoints (fail
-	// closed) either way.
-	var siteCfg types.SiteConfig
-	if got, scErr := store.NewPG(pool).GetSiteConfig(bootCtx); scErr == nil {
-		siteCfg = got
-	} else {
-		slog.Warn("wardynd: read site config for composer-registry derivation failed; treating as unconfigured", slog.Any("err", scErr))
-	}
-	composerReg, composerReadiness, err := buildComposerRegistry(*f.composerCfg, secrets, siteCfg, *f.bedrockRegion, *f.bedrockModel)
-	if err != nil {
-		return of, fmt.Errorf("composer: %w", err)
-	}
-	of.composerReg = composerReg
-	// Map the boot-snapshot readiness onto the api wire type for /setup/status.
-	// backends.BackendReadiness and api.ComposerBackendReadiness have identical
-	// fields/types/order, so this is a plain Go struct conversion (tags ignored).
-	for _, b := range composerReadiness {
-		of.composerBackends = append(of.composerBackends, api.ComposerBackendReadiness(b))
-	}
-	if composerReg != nil && composerReg.Enabled() {
-		names := make([]string, 0)
-		for _, b := range composerReg.List() {
-			names = append(names, b.Name)
-		}
-		slog.Info("wardynd: AI Run Composer enabled",
-			slog.Any("backends", names),
-			slog.String("default", composerReg.Default()),
-		)
 	}
 
 	// Subscription OAuth token provider: yields the operator's LIVE Anthropic

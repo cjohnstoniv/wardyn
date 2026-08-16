@@ -229,9 +229,9 @@ func run() error {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 
-	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds, the
-	// AI Run Composer, subscription/managed LLM credential providers, advisory AI
-	// scan fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
+	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
+	// subscription/managed LLM credential providers, advisory AI scan
+	// fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
 	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies)
 	if err != nil {
 		return err
@@ -278,7 +278,6 @@ func run() error {
 		SubscriptionToken:         feats.subToken,
 		ManagedToken:              feats.managedToken,
 		DisableSubscriptionInject: feats.disableSubInject,
-		Composer:                  feats.composerReg,
 		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
@@ -288,7 +287,6 @@ func run() error {
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:       *f.oidcRedirectURL,
 		OIDCSecureCookies:     posture.secureCookies,
-		ComposerBackends:      feats.composerBackends,
 		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either

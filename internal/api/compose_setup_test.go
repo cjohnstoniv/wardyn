@@ -68,6 +68,14 @@ func githubTokenGrant() types.GrantSpec {
 	return types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope}
 }
 
+func secretsWith(names ...string) map[string]bool {
+	m := map[string]bool{}
+	for _, n := range names {
+		m[n] = true
+	}
+	return m
+}
+
 func findItem(items []SetupItem, id string) (SetupItem, bool) {
 	for _, it := range items {
 		if it.ID == id {

@@ -85,8 +85,6 @@ log them.
 | `WARDYN_ENVBUILD` | bool | **binary: `false`**; compose: `true` | enable devcontainer image builds for create-run (`-tags docker`) (flag `-envbuild`). Gates BOTH the BYOI wrap and the devcontainer-build lane — see [OPERATIONS.md](OPERATIONS.md#recommended-builds-on-compose) and `threatmodel/THREAT-MODEL.md` residual #13 |
 | `WARDYN_ENVBUILD_IMAGE` | string | (unset = upstream) | envbuilder OCI image override (flag `-envbuild-image`) |
 | `WARDYN_ENVBUILD_CACHE_REPO` | string | **binary: (unset)**; compose: `registry:5000/wardyn/devcontainers` | OCI registry ref for layer cache / daemonless push (flag `-envbuild-cache-repo`). The compose value is the build container's OWN reach to the registry sidecar, by compose service name over the `wardyn-internal` bridge — see `WARDYN_ENVBUILD_PUSHED_REF` below for the HOST daemon's separate loopback address to the same registry |
-| `WARDYN_COMPOSER_CONFIG` | string (JSON/path) | (unset) | AI Run Composer registry config (flag `-composer-config`) |
-| `WARDYN_COMPOSER_API_KEY` 🔒 | string | (unset) | composer API-key fallback (`cmd/wardynd/composer.go`) |
 | `WARDYN_CONFINEMENT_MAP` | string | (unset) | per-class substrate/runtime pins, e.g. `CC2=runsc;CC3=kata-qemu` (flag `-confinement-map`) |
 | `WARDYN_CONTROL_PLANE_URL` | string | `http://wardynd:8080` | externally-reachable control plane URL for sidecars (flag `-control-plane-url`) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`) |
@@ -221,13 +219,6 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
 | `WARDYN_PROBE_FROM_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `from` URL the probe fetches directly (`--noproxy`), to check whether the mirror is actually enforced |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
-| `WARDYN_COMPOSE_ONLY` | bool | (unset) | compose-only run flag: run claude in plan mode for a run proposal |
-| `WARDYN_COMPOSE_SYSTEM_B64` | base64 | (unset) | compose run: system prompt (base64) |
-| `WARDYN_COMPOSE_PROMPT_B64` | base64 | (unset) | compose run: user prompt (base64) |
-| `WARDYN_COMPOSE_SCHEMA_B64` | base64 | (unset) | compose run: proposal JSON schema (base64) |
-| `WARDYN_COMPOSE_DISALLOWED_TOOLS` | string | (unset) | compose run: claude --disallowedTools list |
-| `WARDYN_COMPOSE_MAX_TURNS` | string | (unset) | compose run: claude --max-turns cap |
-| `WARDYN_COMPOSE_MODEL` | string | (unset) | compose run: optional claude model override |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |

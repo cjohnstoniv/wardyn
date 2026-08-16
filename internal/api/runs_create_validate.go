@@ -24,7 +24,6 @@ import (
 //     (handleUploadSSOToken, runIsUnrecordable/attach.go) trust run.Task ALONE,
 //     with no second trusted-linkage field to fall back on, so this is the
 //     only defense for them.
-//   - composeRunTask (composeresult.go): gates the compose-result upload.
 //   - "workspace record" (workspace_run.go/record.go): gates record + confined-
 //     verify upload/reconcile. Belt-and-suspenders here — those consumers are
 //     additionally gated on run.WorkspaceID, a column an ordinary create-run
@@ -34,7 +33,6 @@ import (
 //     test fixtures) — blocked defensively in case anything still recognizes it.
 var reservedRunTasks = map[string]bool{
 	harnessLoginTask:   true,
-	composeRunTask:     true,
 	"workspace record": true,
 	"workspace verify": true,
 }

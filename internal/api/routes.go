@@ -90,11 +90,6 @@ func (s *Server) routes() chi.Router {
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
 			// manual wizard fires it on the Review step (advisory, non-gating).
 			r.Post("/runs/preflight", s.handlePreflightRun)
-			r.Post("/runs/compose", s.handleComposeRun)
-			// Escalation-only Ask help agent (advisory only; same composer-enabled
-			// gate + hardened backend transport as compose).
-			r.Post("/runs/compose/assist", s.handleComposeAssist)
-			r.Get("/composer/backends", s.handleListComposerBackends)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
@@ -346,13 +341,6 @@ func (s *Server) routes() chi.Router {
 			// run token). Cross-run uploads are rejected (token run id must match
 			// the path run id).
 			r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
-
-			// Compose-result upload: PUT /api/v1/internal/compose-results/{runID}
-			// The in-sandbox claude compose wire PUTs its raw proposal JSON from a
-			// governed compose run (via the proxy's brokered compose-result route,
-			// which injects the run token) for the waiting RunClaudeCompose to read.
-			// Same cross-run guard as scan (token run id must match the path run id).
-			r.Put("/internal/compose-results/{runID}", s.handleUploadComposeResult)
 
 			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
 			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the

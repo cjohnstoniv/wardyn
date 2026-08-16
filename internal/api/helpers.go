@@ -55,17 +55,6 @@ func notFoundIf(w http.ResponseWriter, err error, entity string) bool {
 	return false
 }
 
-// composerEnabledOrNotFound writes the standard "AI Run Composer is not
-// enabled" 404 and reports true when the composer is unconfigured or
-// disabled. Callers must return immediately when this reports true.
-func (s *Server) composerEnabledOrNotFound(w http.ResponseWriter) bool {
-	if s.cfg.Composer == nil || !s.cfg.Composer.Enabled() {
-		writeError(w, http.StatusNotFound, "AI Run Composer is not enabled on this control plane")
-		return true
-	}
-	return false
-}
-
 // claimsForRunUpload verifies claimsFromContext succeeds and its RunID
 // matches the {runID} path param — the cross-run-pollution guard shared by
 // every authenticated in-sandbox upload endpoint (scan result, verify

@@ -131,12 +131,11 @@ var routeMatrix = map[string]classifiedRoute{
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
-	"GET /api/v1/approvals":         {class: classMember},
-	"GET /api/v1/audit":             {class: classMember},
-	"GET /api/v1/base-images":       {class: classMember},
-	"GET /api/v1/composer/backends": {class: classMember},
-	"GET /api/v1/integrations":      {class: classMember},
-	"GET /api/v1/me":                {class: classMember},
+	"GET /api/v1/approvals":    {class: classMember},
+	"GET /api/v1/audit":        {class: classMember},
+	"GET /api/v1/base-images":  {class: classMember},
+	"GET /api/v1/integrations": {class: classMember},
+	"GET /api/v1/me":           {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
 	// self-service registry scoped to the caller's OWN principal AT THE
 	// STORE (sshkeys.go's package doc), same shape as GET/POST /secrets
@@ -160,8 +159,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/auth/logout":                    {class: classMember},
 	"POST /api/v1/me/ssh-keys":                    {class: classMember},
 	"POST /api/v1/runs":                           {class: classMember},
-	"POST /api/v1/runs/compose":                   {class: classMember},
-	"POST /api/v1/runs/compose/assist":            {class: classMember},
 	"POST /api/v1/runs/preflight":                 {class: classMember},
 	"DELETE /api/v1/me/ssh-keys/{fingerprint}":    {class: classMember},
 
@@ -188,17 +185,16 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
 
 	// ── internal (run-token / ground-truth-token bearer only) ──
-	"GET /api/v1/internal/approvals/{id}":          {class: classInternal},
-	"GET /api/v1/internal/injection/{grantID}":     {class: classInternal},
-	"POST /api/v1/internal/approvals":              {class: classInternal},
-	"POST /api/v1/internal/credentials/mint":       {class: classInternal},
-	"POST /api/v1/internal/decisions":              {class: classInternal},
-	"POST /api/v1/internal/groundtruth":            {class: classInternal},
-	"POST /api/v1/internal/token/renew":            {class: classInternal},
-	"PUT /api/v1/internal/compose-results/{runID}": {class: classInternal},
-	"PUT /api/v1/internal/recordings/{runID}":      {class: classInternal},
-	"PUT /api/v1/internal/scan-results/{runID}":    {class: classInternal},
-	"PUT /api/v1/internal/sso-token/{runID}":       {class: classInternal},
+	"GET /api/v1/internal/approvals/{id}":       {class: classInternal},
+	"GET /api/v1/internal/injection/{grantID}":  {class: classInternal},
+	"POST /api/v1/internal/approvals":           {class: classInternal},
+	"POST /api/v1/internal/credentials/mint":    {class: classInternal},
+	"POST /api/v1/internal/decisions":           {class: classInternal},
+	"POST /api/v1/internal/groundtruth":         {class: classInternal},
+	"POST /api/v1/internal/token/renew":         {class: classInternal},
+	"PUT /api/v1/internal/recordings/{runID}":   {class: classInternal},
+	"PUT /api/v1/internal/scan-results/{runID}": {class: classInternal},
+	"PUT /api/v1/internal/sso-token/{runID}":    {class: classInternal},
 }
 
 // routeParamRe matches a chi path parameter segment like "{id}" or "{runID}".

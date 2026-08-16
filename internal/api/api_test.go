@@ -203,6 +203,20 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	return w
 }
 
+// lastAuditEvent returns the LAST recorded event with the given action (a
+// pipeline can record several of the same action across rounds/subtests; the
+// last one is the one the current round just wrote). Fails the test if none.
+func lastAuditEvent(t *testing.T, events []types.AuditEvent, action string) types.AuditEvent {
+	t.Helper()
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Action == action {
+			return events[i]
+		}
+	}
+	t.Fatalf("no %q audit event recorded (have %d events)", action, len(events))
+	return types.AuditEvent{}
+}
+
 // ─── tests ─────────────────────────────────────────────────────────────────
 
 func TestHealthz(t *testing.T) {

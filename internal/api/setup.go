@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -45,8 +44,6 @@ type SetupStatus struct {
 	// Runner is the sandbox runner + the confinement classes actually live on
 	// this host (from Runner.Capabilities, same source as /healthz).
 	Runner SetupRunner `json:"runner"`
-	// Composer is the AI Run Composer enablement + per-backend readiness snapshot.
-	Composer SetupComposer `json:"composer"`
 	// Providers reports resident coding-agent CLIs detected on the wardynd host.
 	Providers []SetupProvider `json:"providers"`
 	// Secrets reports which known secrets are present (NAMES only, reserved
@@ -91,11 +88,11 @@ type SetupStatus struct {
 	// subscription. Distinct from Harness above (a CAPTURED credential's live
 	// readiness). ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
-	// LLMReady is the server-computed "does SOME run/compose LLM access path
-	// exist" verdict (HIGH-4 review fix) — the same winning-signal logic that
-	// already decides llmProvenance's detail (resident CLI login, a real
-	// composer backend, a secret-name heuristic, Bedrock, a managed harness
-	// token) OR'd with an AI-provider Integration being configured. It exists
+	// LLMReady is the server-computed "does SOME run's LLM access path exist"
+	// verdict (HIGH-4 review fix) — the same winning-signal logic that already
+	// decides llmProvenance's detail (resident CLI login, a secret-name
+	// heuristic, Bedrock, a managed harness token) OR'd with an AI-provider
+	// Integration being configured. It exists
 	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
 	// the checks/providers/secret-name detail that would otherwise let the
 	// console derive this itself — LLMReady is computed BEFORE redaction and
@@ -220,31 +217,6 @@ type SetupRunner struct {
 	ConfinementSubstrates map[string]string `json:"confinement_substrates,omitempty"`
 }
 
-// SetupComposer is the composer enablement plus each configured backend's
-// readiness (a BOOT snapshot, so it can surface disabled + needs-key states the
-// live registry alone can't show).
-type SetupComposer struct {
-	Enabled  bool                       `json:"enabled"`
-	Default  string                     `json:"default,omitempty"`
-	Backends []ComposerBackendReadiness `json:"backends"`
-}
-
-// ComposerBackendReadiness is the boot-snapshot readiness of one configured
-// composer backend. KeySecret is a secret NAME (never a value); KeyResolved is
-// whether that secret (or the env fallback) was present at boot.
-type ComposerBackendReadiness struct {
-	Name        string `json:"name"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	Wire        string `json:"wire"`
-	Transport   string `json:"transport,omitempty"` // normalized (HTTP wires => "api"); cli tool / fake variant
-	Auth        string `json:"auth,omitempty"`      // openai azure only: apikey|entra
-	Enabled     bool   `json:"enabled"`
-	NeedsKey    bool   `json:"needs_key"`
-	KeySecret   string `json:"key_secret,omitempty"`
-	KeyResolved bool   `json:"key_resolved"`
-}
-
 // SetupProvider is a resident coding-agent CLI (claude|codex) detected on PATH.
 // LoggedIn is ADVISORY (a home-dir credential-file heuristic, not a live check).
 type SetupProvider struct {
@@ -297,20 +269,15 @@ func deploymentHostLike(providers []SetupProvider) bool {
 }
 
 // llmProvenance is the single LLM-access predicate: it returns the human detail
-// for the WINNING signal (resident CLI login > enabled real composer backend >
-// api-key-ish secret) and "" when none is present — readiness is simply
-// "llmProvenance != \"\"", so the boolean and the rendered detail can never drift.
-//
-// The `fake` exclusion is the honesty guard: a `wire:"fake"` backend resolves
-// trivially (it needs no key) but calls no model, so counting it would render an
-// "LLM access ✓" for a user whose only backend is the demo stub (exactly the
-// default `make setup` config) — a lie.
+// for the WINNING signal (resident CLI login > api-key-ish secret) and "" when
+// none is present — readiness is simply "llmProvenance != \"\"", so the boolean
+// and the rendered detail can never drift.
 //
 // claudeDetail is the precomputed subscription-aware sentence for a resident
 // Claude CLI login (see subscriptionLLMDetail); it is used only when a logged-in
 // claude CLI is the winner, and falls back to a generic sentence when empty (the
 // subscription provider was unwired, so no peek was possible).
-func llmProvenance(providers []SetupProvider, backends []ComposerBackendReadiness, secretNames []string, claudeDetail string) string {
+func llmProvenance(providers []SetupProvider, secretNames []string, claudeDetail string) string {
 	for _, p := range providers {
 		// A logged-in CLI is real access; merely installed-but-not-logged-in is not.
 		if !p.LoggedIn {
@@ -320,11 +287,6 @@ func llmProvenance(providers []SetupProvider, backends []ComposerBackendReadines
 			return claudeDetail
 		}
 		return fmt.Sprintf("Resident %s CLI is logged in (advisory: a credential file is present).", p.Tool)
-	}
-	for _, b := range backends {
-		if b.Enabled && b.KeyResolved && b.Wire != "fake" {
-			return fmt.Sprintf("AI Run Composer backend %q (%s) has a resolved API key.", b.Name, b.Provider)
-		}
 	}
 	for _, n := range secretNames {
 		l := strings.ToLower(n)
@@ -393,83 +355,6 @@ func subscriptionLLMDetail(tok subscription.Token, peekErr error, injectEnabled 
 	}
 	b.WriteString(".")
 	return b.String()
-}
-
-// llmCeilingAdmits reports whether the DefaultPolicy ceiling would let a COMPOSED
-// run actually reach provider p's model, given which agent credentials are present.
-// It mirrors the EXACT predicates compose applies (ensureLLMGrant adds the grant +
-// exact-host egress; clampGrants drops any grant KIND absent from the ceiling and
-// force-tightens approval; reconcileLLMAccess's positive note) so this setup check
-// can never disagree with what the clamp actually does at compose time.
-//   - api-key path: the ceiling egress-allows p.host AND carries an auto-mint
-//     (non-approval) api_key grant KIND (clampGrants matches by kind, any host).
-//   - subscription path (Claude only): the ceiling blesses the /home/agent/.claude
-//     mount AND allows api.anthropic.com egress (applyLLMCredMount's gates).
-func llmCeilingAdmits(ceiling types.RunPolicySpec, p llmProvider, hasKey, hasSub bool) bool {
-	if hasKey {
-		hostAllowed := ceiling.AllowAllEgress || domainAllowedExact(ceiling.AllowedDomains, p.host)
-		if hostAllowed && slices.ContainsFunc(ceiling.EligibleGrants, func(g types.GrantSpec) bool {
-			return g.Kind == types.GrantAPIKey && !g.RequiresApproval
-		}) {
-			return true
-		}
-	}
-	if hasSub && p.host == "api.anthropic.com" && ceilingBlessesClaudeCreds(ceiling) && anthropicReachable(&ceiling) {
-		return true
-	}
-	return false
-}
-
-// composerCeilingCheck is the "will a composed run actually reach the model"
-// readiness row. It fires ONLY when the operator already has an agent credential (a
-// stored anthropic/openai key, or a resident Claude subscription login) — when none
-// is present the llm_provider check already says "add one", so this would be noise.
-// The gap it catches: a credential is stored and every other check reads green, yet
-// the DefaultPolicy ceiling won't broker it, so a first composed run boots and 404s
-// on its first model call. Pure (host I/O done by the caller) so it is unit-testable.
-func composerCeilingCheck(ceiling types.RunPolicySpec, hasAnthropicKey, hasOpenAIKey, hasClaudeSub bool) (SetupCheck, bool) {
-	type cred struct {
-		agent  string
-		label  string
-		hasKey bool
-		hasSub bool
-	}
-	var creds []cred
-	if hasAnthropicKey || hasClaudeSub {
-		creds = append(creds, cred{agent: "claude-code", label: "Anthropic (Claude)", hasKey: hasAnthropicKey, hasSub: hasClaudeSub})
-	}
-	if hasOpenAIKey {
-		creds = append(creds, cred{agent: "codex-cli", label: "OpenAI (Codex)", hasKey: hasOpenAIKey})
-	}
-	if len(creds) == 0 {
-		return SetupCheck{}, false
-	}
-	var blocked, admitted []string
-	for _, c := range creds {
-		p, ok := agentLLMProvider(c.agent)
-		if !ok {
-			continue
-		}
-		if llmCeilingAdmits(ceiling, p, c.hasKey, c.hasSub) {
-			admitted = append(admitted, c.label)
-		} else {
-			blocked = append(blocked, c.label)
-		}
-	}
-	if len(blocked) == 0 {
-		return SetupCheck{
-			ID: "composer_llm_ceiling", Label: "Model access for composed runs", Status: "ok",
-			Detail: "The default policy brokers model access for a composed run (" + strings.Join(admitted, ", ") + ").",
-		}, true
-	}
-	return SetupCheck{
-		ID: "composer_llm_ceiling", Label: "Model access for composed runs", Status: "warn",
-		Detail: "A credential for " + strings.Join(blocked, ", ") + " is stored, but WARDYN_DEFAULT_POLICY does not broker an " +
-			"auto-mint api_key grant with matching egress (or bless a Claude credential mount) — so a composed run's first " +
-			"model call will 404 even though every credential check reads green.",
-		Fix: "Point WARDYN_DEFAULT_POLICY (helm: env.WARDYN_DEFAULT_POLICY) at a composer-capable ceiling (e.g. " +
-			"examples/policies/composer-dev.json) and restart wardynd. `make setup` now auto-picks it when a real model path is configured.",
-	}, true
 }
 
 // claudeSubscriptionStagingCheck is the "will a resident-host Claude
@@ -574,16 +459,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	rnr, k8sNetpolProven := setupRunnerInfo(ctx, s.cfg.Runner)
 
-	// composer: enablement + boot-snapshot backends.
-	comp := SetupComposer{Backends: s.cfg.ComposerBackends}
-	if comp.Backends == nil {
-		comp.Backends = []ComposerBackendReadiness{}
-	}
-	if s.cfg.Composer != nil && s.cfg.Composer.Enabled() {
-		comp.Enabled = true
-		comp.Default = s.cfg.Composer.Default()
-	}
-
 	providers, claudeDetail := s.setupProviders()
 
 	// secrets: names only (reserved excluded); github_app iff both App secrets present.
@@ -609,19 +484,19 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	hostProxy := setup.DetectHostProxy()
 	scmPosture := setup.DetectSCMPosture()
 
-	// LLM access provenance: the detail of the WINNING signal (resident CLI login,
-	// a REAL non-fake composer backend, or an api-key-ish secret), "" when none.
-	// the secret-name scan is a loose substring signal; the exact truth
-	// (a working model call) is only known at run time — this just decides whether
-	// to warn the operator up front. See llmProvenance for the honesty guard.
-	llmDetail := llmProvenance(providers, comp.Backends, secretNames, claudeDetail)
+	// LLM access provenance: the detail of the WINNING signal (resident CLI
+	// login, or an api-key-ish secret), "" when none. The secret-name scan is a
+	// loose substring signal; the exact truth (a working model call) is only
+	// known at run time — this just decides whether to warn the operator up
+	// front.
+	llmDetail := llmProvenance(providers, secretNames, claudeDetail)
 
 	// Bedrock readiness: region/model are boot-time config (non-secret, safe to
 	// echo to the UI); CredsPresent mirrors resolveBedrockAuth's secret-name
 	// check (presence, not the value). Folded into llmDetail as an ADDITIONAL
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
-	// existing CLI/composer/secret-name signals or their tests.
+	// existing CLI/secret-name signals or their tests.
 	bedrock := s.setupBedrock(ctx, present)
 	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
@@ -635,8 +510,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// llm_ready (HIGH-4 review fix): llmDetail's own winning signal (resident
-	// CLI login, a real composer backend, a secret-name heuristic, Bedrock, or
-	// a managed harness token — everything folded in above) OR'd with an
+	// CLI login, a secret-name heuristic, Bedrock, or a managed harness token —
+	// everything folded in above) OR'd with an
 	// AI-provider Integration being configured, computed ONCE here and reused
 	// below for resp.Integrations so effectiveIntegrations() is not walked
 	// twice. Computed BEFORE redaction and left untouched by it (see
@@ -667,14 +542,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, chk)
 	}
 
-	// composer_llm_ceiling: a credential is present but does the DEFAULT POLICY
-	// ceiling actually let a COMPOSED run use it? Catches the "everything green, first
-	// run 404s" trap where WARDYN_DEFAULT_POLICY (e.g. demo.json/default.json) carries
-	// no api_key grant. A resident Claude CLI login signals the subscription path.
 	hasClaudeSub, claudeLoginVia := claudeLoginSignal(providers)
-	if chk, ok := composerCeilingCheck(s.cfg.DefaultPolicy, present["anthropic-api-key"], present["openai-api-key"], hasClaudeSub); ok {
-		checks = append(checks, chk)
-	}
 
 	// claude_subscription_staging: the login is detected, but is it STAGED so a
 	// resident-host subscription integration can actually reach it? Catches the
@@ -692,7 +560,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks = append(checks, composerCheck(comp), ageKeyCheck(s.cfg.AgeKeyDurable),
+	checks = append(checks, ageKeyCheck(s.cfg.AgeKeyDurable),
 		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
@@ -731,8 +599,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ready: CONSERVATIVE — false when the runner is nil / has no live class, so
-	// the wizard opens rather than hiding a half-configured bootstrap. Composer /
-	// credentials are warnings, not readiness gates.
+	// the wizard opens rather than hiding a half-configured bootstrap.
+	// Credentials are warnings, not readiness gates.
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	resp := SetupStatus{
@@ -740,7 +608,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Checks:     checks,
 		Auth:       SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
 		Runner:     rnr,
-		Composer:   comp,
 		Providers:  providers,
 		Secrets:    sec,
 		AgeKey:     SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
@@ -768,12 +635,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // resident-CLI login detection, and secret NAMES (item 2's explicit drop list:
 // checks/providers/secret names/runner detail) — while keeping everything a
 // member's own console needs: Ready/Auth (App.tsx's reachability gate) and
-// HasRuns, plus every field the run-launch/compose UI reads (Composer,
-// Bedrock, Deployment, Harness*, Integrations, Platform, HostProxy, SCM,
-// AgeKey) so a member can still launch and compose runs normally. This only
-// ZEROES fields on an already-computed, already-200 response — it can never
-// itself produce an error state (no non-401 error is possible for a member
-// here, by construction).
+// HasRuns, plus every field the run-launch UI reads (Bedrock, Deployment,
+// Harness*, Integrations, Platform, HostProxy, SCM, AgeKey) so a member can
+// still launch runs normally. This only ZEROES fields on an already-computed,
+// already-200 response — it can never itself produce an error state (no
+// non-401 error is possible for a member here, by construction).
 func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}

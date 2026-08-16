@@ -49,7 +49,6 @@ type bootFlags struct {
 	trustDomain            *string
 	controlURL             *string
 	policyPath             *string
-	composerCfg            *string
 	ageKey                 *string
 	proxyImage             *string
 
@@ -142,7 +141,6 @@ func parseBootFlags() *bootFlags {
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
-		composerCfg:            flagEnv("composer-config", "WARDYN_COMPOSER_CONFIG", "", "AI Run Composer registry config: a JSON file path or inline JSON ({default,backends}); empty disables the composer"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
 		proxyImage:             flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 

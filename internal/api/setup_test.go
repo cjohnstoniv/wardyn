@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -37,26 +36,16 @@ func decodeSetupSSO(t *testing.T, srv *Server, cookie *http.Cookie) (int, SetupS
 // TestSetupStatus_MemberRedactionPreservesLLMReady is the HIGH-4 review fix:
 // a member's response drops checks/providers/secret-names/runner-detail (item
 // 2's redaction) but LLMReady survives it — computed BEFORE redaction from
-// the SAME signal llmProvenance already folds (here, a resolved composer
-// backend key), matching exactly what an admin sees for the identical server
-// state. Without this a member's console has no way to answer "is there any
-// LLM access at all" once the detail that used to imply it is gone.
+// the SAME signal llmProvenance already folds (here, a stored anthropic-api-key
+// secret), matching exactly what an admin sees for the identical server state.
+// Without this a member's console has no way to answer "is there any LLM
+// access at all" once the detail that used to imply it is gone.
 func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
-	reg, err := composer.NewRegistry("primary", []composer.RegistryEntry{
-		{Info: composer.BackendInfo{Name: "primary", Provider: "anthropic", Model: "m"}, Composer: &composer.FakeComposer{}},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	backends := []ComposerBackendReadiness{
-		{Name: "primary", Provider: "anthropic", Model: "m", Wire: "anthropic", Enabled: true, NeedsKey: true, KeySecret: "anthropic-api-key", KeyResolved: true},
-	}
 	srv := New(Config{
-		Runner:           &fakeRunner{},
-		Composer:         reg,
-		AdminToken:       adminToken,
-		OIDC:             &oidc.Authenticator{},
-		ComposerBackends: backends,
+		Runner:     &fakeRunner{},
+		Secrets:    &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}},
+		AdminToken: adminToken,
+		OIDC:       &oidc.Authenticator{},
 	})
 
 	adminCode, adminSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
@@ -64,7 +53,7 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 		t.Fatalf("admin: code = %d, want 200", adminCode)
 	}
 	if !adminSt.LLMReady {
-		t.Fatalf("admin: llm_ready = false, want true (a resolved composer backend key is configured)")
+		t.Fatalf("admin: llm_ready = false, want true (a stored anthropic-api-key secret is configured)")
 	}
 	if len(adminSt.Checks) == 0 {
 		t.Fatalf("admin: checks unexpectedly empty — the fixture is not exercising the signal this test needs")
@@ -172,31 +161,18 @@ func TestSetupStatus_IntegrationsAndHarnessesAdditive(t *testing.T) {
 	}
 }
 
-// Full assembly: a fake Runner + fake Composer + in-memory Secrets + injected
-// ComposerBackends snapshot + AgeKeyDurable are echoed correctly, and reserved
-// secret names are excluded from secrets.present.
+// Full assembly: a fake Runner + in-memory Secrets + AgeKeyDurable are echoed
+// correctly, and reserved secret names are excluded from secrets.present.
 func TestSetupStatus_Assembly(t *testing.T) {
-	reg, err := composer.NewRegistry("primary", []composer.RegistryEntry{
-		{Info: composer.BackendInfo{Name: "primary", Provider: "anthropic", Model: "m"}, Composer: &composer.FakeComposer{}},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
 	sec := &memSecrets{m: map[string][]byte{
 		"anthropic-api-key":  []byte("sk"),
 		"wardyn-signing-key": []byte("reserved"), // must be excluded from present
 	}}
-	backends := []ComposerBackendReadiness{
-		{Name: "primary", Provider: "anthropic", Model: "m", Wire: "anthropic", Enabled: true, NeedsKey: true, KeySecret: "anthropic-api-key", KeyResolved: true},
-		{Name: "off", Provider: "openai", Model: "g", Wire: "openai", Enabled: false, NeedsKey: true, KeySecret: "openai-key", KeyResolved: false},
-	}
 	srv := New(Config{
-		Runner:           &fakeRunner{},
-		Composer:         reg,
-		Secrets:          sec,
-		AdminToken:       adminToken,
-		AgeKeyDurable:    true,
-		ComposerBackends: backends,
+		Runner:        &fakeRunner{},
+		Secrets:       sec,
+		AdminToken:    adminToken,
+		AgeKeyDurable: true,
 	})
 
 	code, st := decodeSetup(t, srv, adminToken)
@@ -210,27 +186,6 @@ func TestSetupStatus_Assembly(t *testing.T) {
 	}
 	if st.Runner.Driver != "fake" {
 		t.Errorf("runner.driver = %q, want fake", st.Runner.Driver)
-	}
-
-	// Composer reflects the injected snapshot verbatim.
-	if !st.Composer.Enabled || st.Composer.Default != "primary" {
-		t.Errorf("composer enabled/default = %v/%q, want true/primary", st.Composer.Enabled, st.Composer.Default)
-	}
-	if len(st.Composer.Backends) != 2 {
-		t.Fatalf("composer.backends = %d, want 2", len(st.Composer.Backends))
-	}
-	byName := map[string]ComposerBackendReadiness{}
-	for _, b := range st.Composer.Backends {
-		byName[b.Name] = b
-	}
-	if b := byName["off"]; b.Enabled {
-		t.Errorf("backend off should be disabled: %+v", b)
-	}
-	if b := byName["off"]; !b.NeedsKey || b.KeyResolved {
-		t.Errorf("backend off should be needs-key + unresolved: %+v", b)
-	}
-	if b := byName["primary"]; !b.NeedsKey || !b.KeyResolved || b.KeySecret != "anthropic-api-key" {
-		t.Errorf("backend primary readiness wrong: %+v", b)
 	}
 
 	// Reserved secret names are excluded; the user secret is present.
@@ -350,34 +305,6 @@ func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
 	}
 }
 
-// llmProvenance must NOT count a `fake` (deterministic stub) composer backend
-// as real LLM access — otherwise the first-run page shows "LLM access ✓" for the
-// default `make setup` config (a single fake backend), which is an overclaim: the
-// stub calls no model. Real backends, logged-in CLIs, and api-key secrets DO count.
-func TestLLMProvenance_FakeBackendIsNotAccess(t *testing.T) {
-	llmAccessAvailable := func(p []SetupProvider, b []ComposerBackendReadiness, s []string) bool {
-		return llmProvenance(p, b, s, "") != ""
-	}
-	fakeOnly := []ComposerBackendReadiness{{Name: "dev", Wire: "fake", Enabled: true, KeyResolved: true}}
-	if llmAccessAvailable(nil, fakeOnly, nil) {
-		t.Error("fake-only backend counted as LLM access; want false (the deterministic stub calls no model)")
-	}
-	real := []ComposerBackendReadiness{{Name: "primary", Wire: "anthropic", Enabled: true, KeyResolved: true}}
-	if !llmAccessAvailable(nil, real, nil) {
-		t.Error("real resolved backend not counted as LLM access; want true")
-	}
-	if !llmAccessAvailable([]SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}}, fakeOnly, nil) {
-		t.Error("logged-in CLI not counted as LLM access even with a fake backend; want true")
-	}
-	if !llmAccessAvailable(nil, fakeOnly, []string{"anthropic-api-key"}) {
-		t.Error("anthropic-api-key secret not counted as LLM access; want true")
-	}
-	// A fake backend that is disabled/unresolved is obviously not access either.
-	if llmAccessAvailable(nil, []ComposerBackendReadiness{{Name: "dev", Wire: "fake", Enabled: false, KeyResolved: true}}, nil) {
-		t.Error("disabled fake backend counted as access; want false")
-	}
-}
-
 // deploymentHostLike is true only for a claude provider that is BOTH installed
 // and logged in (host mode); anything less (not the claude tool, only one of
 // the two, or no providers at all) is false (compose/blind).
@@ -399,38 +326,33 @@ func TestDeploymentHostLike(t *testing.T) {
 	}
 }
 
-// llmProvenance must follow llmAccessAvailable's priority (CLI login > real backend
-// > api-key secret) and return the winning detail; a logged-in claude uses the
-// precomputed subscription detail, everything else its own sentence. "" iff there
-// is no signal (the lockstep that keeps readiness and the rendered detail from
-// drifting — see llmAccessAvailable).
+// llmProvenance must follow its priority (CLI login > api-key secret) and
+// return the winning detail; a logged-in claude uses the precomputed
+// subscription detail, everything else its own sentence. "" iff there is no
+// signal (the lockstep that keeps readiness and the rendered detail from
+// drifting).
 func TestLLMProvenance_PriorityAndDetail(t *testing.T) {
 	claudeLoggedIn := []SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}}
-	realBackend := []ComposerBackendReadiness{{Name: "primary", Provider: "anthropic", Wire: "anthropic", Enabled: true, KeyResolved: true}}
 
 	// Logged-in claude wins and uses the injected subscription detail verbatim.
-	if got := llmProvenance(claudeLoggedIn, realBackend, []string{"anthropic-api-key"}, "SUB-DETAIL"); got != "SUB-DETAIL" {
-		t.Errorf("claude winner detail = %q, want SUB-DETAIL (CLI login outranks backend/secret)", got)
+	if got := llmProvenance(claudeLoggedIn, []string{"anthropic-api-key"}, "SUB-DETAIL"); got != "SUB-DETAIL" {
+		t.Errorf("claude winner detail = %q, want SUB-DETAIL (CLI login outranks secret)", got)
 	}
 	// Logged-in claude with no peeked detail falls back to a generic sentence.
-	if got := llmProvenance(claudeLoggedIn, nil, nil, ""); !strings.Contains(got, "claude CLI is logged in") {
+	if got := llmProvenance(claudeLoggedIn, nil, ""); !strings.Contains(got, "claude CLI is logged in") {
 		t.Errorf("generic claude detail = %q, want a 'logged in' sentence", got)
 	}
 	// codex login (non-claude) never consumes the claude detail.
 	codex := []SetupProvider{{Tool: "codex", LoggedIn: true}}
-	if got := llmProvenance(codex, nil, nil, "SUB-DETAIL"); got == "SUB-DETAIL" || !strings.Contains(got, "codex") {
+	if got := llmProvenance(codex, nil, "SUB-DETAIL"); got == "SUB-DETAIL" || !strings.Contains(got, "codex") {
 		t.Errorf("codex detail = %q, want a codex sentence, not the claude subscription detail", got)
 	}
-	// No CLI => a real backend wins; fake is skipped.
-	if got := llmProvenance(nil, realBackend, nil, ""); !strings.Contains(got, "primary") {
-		t.Errorf("backend detail = %q, want it to name the backend", got)
-	}
-	fakeOnly := []ComposerBackendReadiness{{Name: "dev", Wire: "fake", Enabled: true, KeyResolved: true}}
-	if got := llmProvenance(nil, fakeOnly, []string{"anthropic-api-key"}, ""); !strings.Contains(got, "anthropic-api-key") {
-		t.Errorf("secret detail = %q, want it to name the secret (fake backend skipped)", got)
+	// No CLI => a secret wins.
+	if got := llmProvenance(nil, []string{"anthropic-api-key"}, ""); !strings.Contains(got, "anthropic-api-key") {
+		t.Errorf("secret detail = %q, want it to name the secret", got)
 	}
 	// Nothing at all => "" (readiness false).
-	if got := llmProvenance(nil, fakeOnly, nil, ""); got != "" {
+	if got := llmProvenance(nil, nil, ""); got != "" {
 		t.Errorf("no-signal detail = %q, want empty", got)
 	}
 }
@@ -474,76 +396,6 @@ func TestSubscriptionLLMDetail(t *testing.T) {
 	d = subscriptionLLMDetail(subscription.Token{Value: ""}, nil, true, "", "/usr/bin/claude", now)
 	if !strings.Contains(d, "no readable Claude subscription token") {
 		t.Errorf("empty-token detail wrong: %q", d)
-	}
-}
-
-// composerCeilingCheck / llmCeilingAdmits: the ceiling-aware "will a composed run
-// actually reach the model" row. It mirrors clampGrants (kind-keyed), ensureLLMGrant
-// (exact-host egress), and applyLLMCredMount (subscription mount), so it MUST agree
-// with the real clamp: a stored key under a github-token-only ceiling (demo.json) is
-// a WARN; the same key under composer-dev.json is OK; and no credential => no row.
-func TestComposerCeilingCheck(t *testing.T) {
-	// demo.json-shaped ceiling: github_token only, no anthropic egress, no api_key.
-	demo := types.RunPolicySpec{
-		AllowedDomains: []string{"github.com", "*.githubusercontent.com"},
-		EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitHubToken}},
-	}
-	// composer-dev.json-shaped ceiling: auto-mint api_key + anthropic/openai egress.
-	apiKeyScope, _ := json.Marshal(map[string]string{"host": "api.anthropic.com", "header": "x-api-key"})
-	composerDev := types.RunPolicySpec{
-		AllowedDomains: []string{"api.anthropic.com", "api.openai.com", "github.com"},
-		EligibleGrants: []types.GrantSpec{
-			{Kind: types.GrantAPIKey, Scope: apiKeyScope, RequiresApproval: false},
-			{Kind: types.GrantGitHubToken},
-		},
-	}
-
-	// No credential at all => no row (llm_provider already covers "add one").
-	if _, ok := composerCeilingCheck(demo, false, false, false); ok {
-		t.Fatalf("no-credential case should produce no composer_llm_ceiling row")
-	}
-
-	// Anthropic key present but demo ceiling brokers no api_key grant => WARN.
-	chk, ok := composerCeilingCheck(demo, true, false, false)
-	if !ok || chk.Status != "warn" || !strings.Contains(chk.Detail, "Anthropic") {
-		t.Fatalf("anthropic key under demo ceiling: ok=%v status=%q detail=%q, want warn naming Anthropic", ok, chk.Status, chk.Detail)
-	}
-	if !strings.Contains(chk.Fix, "composer-dev.json") {
-		t.Errorf("warn Fix should name composer-dev.json; got %q", chk.Fix)
-	}
-
-	// Same key under a composer-capable ceiling => OK.
-	if chk, ok := composerCeilingCheck(composerDev, true, false, false); !ok || chk.Status != "ok" {
-		t.Fatalf("anthropic key under composer-dev ceiling: ok=%v status=%q, want ok", ok, chk.Status)
-	}
-
-	// An api_key grant that REQUIRES APPROVAL does not auto-inject => WARN (mirrors
-	// clampGrants force-tightening approval + reconcileLLMAccess's approval branch).
-	approvalScope, _ := json.Marshal(map[string]string{"host": "api.anthropic.com"})
-	approvalCeiling := types.RunPolicySpec{
-		AllowedDomains: []string{"api.anthropic.com"},
-		EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: approvalScope, RequiresApproval: true}},
-	}
-	if chk, ok := composerCeilingCheck(approvalCeiling, true, false, false); !ok || chk.Status != "warn" {
-		t.Fatalf("approval-required api_key grant: ok=%v status=%q, want warn", ok, chk.Status)
-	}
-
-	// OpenAI key resolves against the same kind-keyed clamp: OK under composer-dev.
-	if chk, ok := composerCeilingCheck(composerDev, false, true, false); !ok || chk.Status != "ok" {
-		t.Fatalf("openai key under composer-dev ceiling: ok=%v status=%q, want ok", ok, chk.Status)
-	}
-
-	// Subscription path: demo ceiling doesn't bless /home/agent/.claude => WARN; a
-	// ceiling that blesses the mount + allows anthropic egress => OK.
-	if chk, ok := composerCeilingCheck(demo, false, false, true); !ok || chk.Status != "warn" {
-		t.Fatalf("claude subscription under demo ceiling: ok=%v status=%q, want warn", ok, chk.Status)
-	}
-	subCeiling := types.RunPolicySpec{
-		AllowedDomains:  []string{"api.anthropic.com"},
-		WorkspaceMounts: []types.WorkspaceMount{{Target: claudeCredTarget}},
-	}
-	if chk, ok := composerCeilingCheck(subCeiling, false, false, true); !ok || chk.Status != "ok" {
-		t.Fatalf("claude subscription under blessed ceiling: ok=%v status=%q, want ok", ok, chk.Status)
 	}
 }
 

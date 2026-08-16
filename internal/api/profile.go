@@ -9,13 +9,21 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// composeProposed is the proposed run setup in the EXACT shape the New Run
+// wizard's buildSpec emits — the same {run, inline_policy} shape POST /runs
+// takes — so the review UI can launch it via the unchanged createRun path.
+type composeProposed struct {
+	Run          composer.RunInput   `json:"run"`
+	InlinePolicy types.RunPolicySpec `json:"inline_policy"`
+}
 
 // profileResponse is the Recording Mode synthesis output for human review: the
 // proposed least-privilege sandbox profile derived from what the run ACTUALLY
 // did, Wardyn's DETERMINISTIC risk grade, and the raw observations the proposal
-// was built from. It mirrors composeResponse so the UI can reuse the
-// compose-review surface, plus an observations block.
+// was built from.
 type profileResponse struct {
 	Kind           string                  `json:"kind"` // always "profile_proposal"
 	Proposed       composeProposed         `json:"proposed"`
@@ -98,9 +106,9 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 		synth.AllowedDomains = kept
 	}
 
-	// Clamp to the operator ceiling, validate, and deterministically grade —
-	// identical to the composer path (see compose.go) so a recording can never
-	// mint a profile beyond operator policy and the grade is spec-derived.
+	// Clamp to the operator ceiling, validate, and deterministically grade so a
+	// recording can never mint a profile beyond operator policy and the grade
+	// is spec-derived.
 	//
 	// W23-S1-3: composer.Clamp now treats an EMPTY ceiling github_token repo
 	// list as deny-all (the RBAC floor a hand-authored/member inline_policy

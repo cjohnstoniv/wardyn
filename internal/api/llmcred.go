@@ -568,6 +568,17 @@ func (s *Server) subscriptionInjectEnabled() bool {
 	return s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 }
 
+// composeLLMAccess is the structured model-access verdict for a run's resolved
+// LLM credential (resolveRunLLMAccess, runs.go) so a review/setup surface need
+// never prose-sniff a warning to tell "this run will do nothing" from "tightened
+// by policy". Despite the name (a holdover from the deleted AI Run Composer,
+// which first introduced this verdict shape), it backs the general create-run
+// path — every run's model-access check, not an AI-composed one.
+type composeLLMAccess struct {
+	Provisioned bool   `json:"provisioned"`
+	Note        string `json:"note"`
+}
+
 // reconcileLLMAccess inspects the FINAL (post-clamp) spec and returns ONE
 // authoritative, deterministic statement of the composed LLM run's model access —
 // either a positive "provisioned" note or an honest "no model access" warning

@@ -1,12 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Short-lived control-plane handoff rows (migration 0026): single-use WS attach
-// tickets and compose-run proposal uploads. Both were in-process maps, so a
-// second control plane never saw them and a restart dropped them. Both are
-// consume-once, and here that is a single DELETE ... RETURNING — the atomic form
-// of the map's delete-on-read, exact under concurrency AND across processes.
-// Kept out of store.go on purpose (it sits at a lint size boundary).
+// Short-lived control-plane handoff row (migration 0026): single-use WS attach
+// tickets. Was an in-process map, so a second control plane never saw it and a
+// restart dropped it. Consume-once, and here that is a single
+// DELETE ... RETURNING — the atomic form of the map's delete-on-read, exact
+// under concurrency AND across processes. Kept out of store.go on purpose (it
+// sits at a lint size boundary).
 package store
 
 import (
@@ -99,58 +99,4 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	}
 	t.ActorType = types.ActorType(actorType)
 	return t, true, nil
-}
-
-// composeResultTTL is how long an untaken compose upload lingers before the next
-// PutComposeResult sweeps it. Generously larger than the launcher's whole wait
-// window (composeRunWaitTimeout, 4m), so it can only ever collect rows whose
-// waiter died — never one still being waited on.
-const composeResultTTL = time.Hour
-
-// PutComposeResult parks a compose run's RAW proposal upload for the launcher
-// waiting on it, and sweeps abandoned rows in the same statement. A re-upload
-// for the same run overwrites (the sync.Map's Store did too).
-//
-// The payload column is BYTEA: this is claude's raw stdout wrapper, which can
-// legitimately be empty, non-JSON, or (in a crash) non-UTF-8 — the control
-// plane deliberately does not parse or constrain it here (facts-out), exactly
-// like the in-process map it replaced. See migration 0026.
-func (s PG) PutComposeResult(ctx context.Context, runID uuid.UUID, payload []byte) error {
-	_, err := s.Pool.Exec(ctx, `
-		WITH swept AS (DELETE FROM compose_results WHERE created_at < now() - $3::interval)
-		INSERT INTO compose_results (run_id, payload) VALUES ($1, $2)
-		ON CONFLICT (run_id) DO UPDATE SET payload = EXCLUDED.payload, created_at = now()`,
-		runID, payload, composeResultTTL.String(),
-	)
-	if err != nil {
-		return fmt.Errorf("store: put compose result: %w", err)
-	}
-	return nil
-}
-
-// TakeComposeResult returns the parked upload for runID and deletes it in the
-// same statement (delete-on-read), so exactly one waiter takes it no matter
-// which control plane the sandbox uploaded to. A missing row is (false, nil) —
-// "the run uploaded nothing" is the expected miss, not an error.
-func (s PG) TakeComposeResult(ctx context.Context, runID uuid.UUID) ([]byte, bool, error) {
-	var payload []byte
-	err := s.Pool.QueryRow(ctx,
-		`DELETE FROM compose_results WHERE run_id = $1 RETURNING payload`, runID,
-	).Scan(&payload)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("store: take compose result: %w", err)
-	}
-	return payload, true, nil
-}
-
-// DiscardComposeResult drops an upload no one will take (the launcher's wait
-// timed out). Idempotent: discarding a missing row is nil.
-func (s PG) DiscardComposeResult(ctx context.Context, runID uuid.UUID) error {
-	if _, err := s.Pool.Exec(ctx, `DELETE FROM compose_results WHERE run_id = $1`, runID); err != nil {
-		return fmt.Errorf("store: discard compose result: %w", err)
-	}
-	return nil
 }

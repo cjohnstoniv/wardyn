@@ -14,14 +14,12 @@ import (
 // zero_ai_test.go pins the owner's #1 constraint: Wardyn is not agent-specific.
 // A control plane with ZERO integrations and no AI env/secrets configured must
 // still be a complete, working sandboxed-execution product: a governed command
-// launches, an interactive/record session works, first-run readiness reads
-// green, nothing renders "you haven't configured an AI agent" as a failure or
-// a warning, and the AI-only surfaces (the Compose endpoints) fail closed with
-// an honest message rather than a fake success.
+// launches, an interactive/record session works, and first-run readiness reads
+// green with nothing rendering "you haven't configured an AI agent" as a
+// failure or a warning.
 //
 // Every sub-test below builds its own zero-AI Config: no Secrets, no
-// SubscriptionToken, no ManagedToken, no Composer, and no Bedrock knob
-// touched.
+// SubscriptionToken, no ManagedToken, and no Bedrock knob touched.
 
 // ─── (a) + (b): dispatch needs a real Store, so this reuses the same
 // Postgres-gated harness task_mode_test.go and interactive_test.go already use
@@ -96,8 +94,6 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 var zeroAIRelatedCheckIDs = map[string]bool{
 	"llm_provider":                true,
 	"bedrock_provider":            true,
-	"composer":                    true,
-	"composer_llm_ceiling":        true,
 	"claude_subscription_staging": true,
 	"harness_credential":          true,
 	"harness_credential_aws":      true,
@@ -139,7 +135,7 @@ func TestZeroAI_SetupStatus(t *testing.T) {
 	t.Run("ready depends only on the runner", func(t *testing.T) {
 		if !status.Ready {
 			t.Errorf("Ready = false, want true — a live runner is the ONLY readiness gate, and no AI provider/secret/" +
-				"composer/subscription/bedrock was configured")
+				"subscription/bedrock was configured")
 		}
 	})
 
@@ -152,48 +148,13 @@ func TestZeroAI_SetupStatus(t *testing.T) {
 				t.Errorf("AI-related check %q status = %q, want ok or info (never fail/warn) — Wardyn is not agent-specific", c.ID, c.Status)
 			}
 		}
-		// llm_provider and composer are the two AI-related rows ALWAYS rendered
-		// (the rest are gated on some AI signal being present, so they are absent
-		// here by construction) — assert them by name so this test cannot pass
-		// vacuously if the gating around them ever widens.
+		// llm_provider is the one AI-related row ALWAYS rendered (the rest are
+		// gated on some AI signal being present, so they are absent here by
+		// construction) — assert it by name so this test cannot pass vacuously
+		// if the gating around it ever widens.
 		llm, ok := findCheck(status.Checks, "llm_provider")
 		if !ok || llm.Status != "info" {
 			t.Errorf("llm_provider = %+v (present=%v), want present and info", llm, ok)
 		}
-		comp, ok := findCheck(status.Checks, "composer")
-		if !ok || comp.Status != "info" {
-			t.Errorf("composer = %+v (present=%v), want present and info", comp, ok)
-		}
 	})
-}
-
-// ─── (e): compose endpoints fail closed ──────────────────────────────────────
-
-// TestZeroAI_ComposeEndpointsFailClosed is Task 1(e): every AI Run Composer
-// endpoint 404s with an honest, actionable message when no Composer is
-// configured — never a fake-green (e.g. an empty 200 backends list, or a
-// composed run silently proceeding with no model).
-func TestZeroAI_ComposeEndpointsFailClosed(t *testing.T) {
-	h := newHarness(t) // Composer is nil: zero AI Run Composer configured
-	cases := []struct {
-		method, path string
-	}{
-		{http.MethodPost, "/api/v1/runs/compose"},
-		{http.MethodPost, "/api/v1/runs/compose/assist"},
-		{http.MethodGet, "/api/v1/composer/backends"},
-	}
-	for _, c := range cases {
-		w := do(t, h.srv, c.method, c.path, adminToken, "{}")
-		if w.Code != http.StatusNotFound {
-			t.Errorf("%s %s: code = %d, want 404 (fail closed, not a fake-green)", c.method, c.path, w.Code)
-			continue
-		}
-		var body map[string]string
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatalf("%s %s: decode error body: %v; body=%s", c.method, c.path, err, w.Body.String())
-		}
-		if body["error"] != "AI Run Composer is not enabled on this control plane" {
-			t.Errorf("%s %s: error = %q, want the honest \"not enabled\" message", c.method, c.path, body["error"])
-		}
-	}
 }

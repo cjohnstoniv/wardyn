@@ -4,7 +4,6 @@
 package composer
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -674,23 +673,6 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	}
 	if !hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("expected an auto_stop_after_sec warning clamping never-reap, got %v", warns)
-	}
-}
-
-// FakeComposer round-trips the request and returns the preset proposal (used by
-// the endpoint tests). No network.
-func TestFakeComposer_RecordsRequestAndReturnsResult(t *testing.T) {
-	want := Proposal{Run: RunInput{Agent: "claude-code", Repo: "acme/widgets"}, Summary: "ok"}
-	f := &FakeComposer{Result: want}
-	got, err := f.Propose(context.Background(), ComposeRequest{Prompt: "do a thing"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Run.Agent != "claude-code" {
-		t.Errorf("proposal not returned: %+v", got)
-	}
-	if f.Last.Prompt != "do a thing" {
-		t.Errorf("request not recorded: %+v", f.Last)
 	}
 }
 

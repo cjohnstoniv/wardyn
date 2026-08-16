@@ -122,15 +122,12 @@ type Store interface {
 	GetRef(ctx context.Context, ref string) (substrateName string, found bool, err error)
 	DeleteRef(ctx context.Context, ref string) error
 
-	// Short-lived cross-process handoff rows (see store_ephemeral.go): single-use
-	// WS attach tickets and compose-run proposal uploads. Both are consume-once,
-	// and the consumer is a single DELETE ... RETURNING, so two racing
-	// redemptions — on one control plane or two — can only have one win.
+	// Short-lived cross-process handoff row (see store_ephemeral.go): single-use
+	// WS attach tickets. Consume-once, and the consumer is a single
+	// DELETE ... RETURNING, so two racing redemptions — on one control plane or
+	// two — can only have one win.
 	MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error
 	ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error)
-	PutComposeResult(ctx context.Context, runID uuid.UUID, payload []byte) error
-	TakeComposeResult(ctx context.Context, runID uuid.UUID) ([]byte, bool, error)
-	DiscardComposeResult(ctx context.Context, runID uuid.UUID) error
 
 	// SSH gateway key registry (migration 0033, self-service via
 	// /api/v1/me/ssh-keys). AddSSHKey returns ErrConflict when the fingerprint

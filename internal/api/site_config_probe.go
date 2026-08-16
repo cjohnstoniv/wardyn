@@ -49,7 +49,28 @@ const (
 	// Same reserved range and same rule as redirectProbeBypassCode: reached
 	// only via an explicit `exit`, never a passed-through curl code.
 	proxyProbeInterceptedCode = 251
+	// waitForRunTerminalPollInterval is how often waitForRunTerminal polls the
+	// run row.
+	waitForRunTerminalPollInterval = 500 * time.Millisecond
 )
+
+// waitForRunTerminal polls the run row until it reaches a terminal state,
+// returning that state. It errors on ctx cancellation/timeout (the caller
+// reclaims the run). Server-side twin of the CLI's `run --wait` poll.
+func (s *Server) waitForRunTerminal(ctx context.Context, runID uuid.UUID) (types.RunState, error) {
+	ticker := time.NewTicker(waitForRunTerminalPollInterval)
+	defer ticker.Stop()
+	for {
+		if run, err := s.cfg.Store.GetRun(ctx, runID); err == nil && isTerminalRunState(run.State) {
+			return run.State, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 
 // proxyProbeTargets are the endpoints a connectivity probe tries, in order,
 // each paired with a substring its REAL response is known to contain.
@@ -238,14 +259,12 @@ type probeRunResult struct {
 }
 
 // runSiteConfigProbe launches ONE throwaway, one-shot exec run (task_mode:
-// exec) and waits for it to finish, reusing the exact mint -> CreateRun ->
-// dispatchRun -> wait -> reclaim-on-timeout shape RunClaudeCompose already
-// uses (composeresult.go) -- no second dispatch path. script is a FIXED shell
-// command, never interpolated with operator-authored data (extraEnv carries
-// the actual probe target(s) as plain, non-secret env vars the script reads
-// by name -- the same channel compose uses for WARDYN_COMPOSE_*). It returns
-// the run id (so a launch failure can still be audited against it) and what
-// was actually observed.
+// exec) and waits for it to finish, via the mint -> CreateRun -> dispatchRun ->
+// wait -> reclaim-on-timeout shape -- no second dispatch path. script is a FIXED
+// shell command, never interpolated with operator-authored data (extraEnv
+// carries the actual probe target(s) as plain, non-secret env vars the script
+// reads by name). It returns the run id (so a launch failure can still be
+// audited against it) and what was actually observed.
 //
 // grants are the eligible credential grants the probe run should carry (nil for
 // the two site-config probes, which authenticate to nothing). They are
@@ -256,7 +275,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	start := s.cfg.Now()
 	// Detach the durable launch work from request cancellation -- a client
 	// that walks away before the mint/CreateRun lands must not abort it and
-	// leave an orphaned identity/row (same rationale as RunClaudeCompose).
+	// leave an orphaned identity/row.
 	launchCtx := context.WithoutCancel(ctx)
 	runID := uuid.New()
 	// Read-only, ephemeral, holds no credentials -- the operator's floor still
@@ -292,17 +311,16 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		ExtraEnv:   extraEnv,
 	})
 
-	// The wait stays on the CALLER's ctx (a client disconnect stops it early,
-	// same as RunClaudeCompose) but is hard-bounded regardless.
+	// The wait stays on the CALLER's ctx (a client disconnect stops it early)
+	// but is hard-bounded regardless.
 	waitCtx, cancel := context.WithTimeout(ctx, siteConfigProbeWaitTimeout)
 	defer cancel()
 	finalState, werr := s.waitForRunTerminal(waitCtx, runID)
 	elapsed := s.cfg.Now().Sub(start)
 	if werr != nil {
 		// Timed out, or the client left before the probe finished: reclaim the
-		// run + its sandbox so a hung probe can never hold one open (same
-		// precedent as reclaimComposeRun, composeresult.go). This is still a
-		// real, definite answer ("no clean response within the budget"), not a
+		// run + its sandbox so a hung probe can never hold one open. This is
+		// still a real, definite answer ("no clean response within the budget"), not a
 		// transport-level failure of the ENDPOINT -- report it as an incomplete
 		// probe (classify* turns that into `blocked`), never a 5xx.
 		s.reclaimProbeRun(context.WithoutCancel(ctx), runID)

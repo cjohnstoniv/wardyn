@@ -1,6 +1,0 @@
-{
-  "default": "dev",
-  "backends": [
-    { "name": "dev", "wire": "fake", "model": "demo" }
-  ]
-}

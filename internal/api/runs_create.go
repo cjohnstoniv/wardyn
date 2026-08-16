@@ -22,6 +22,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// composerWorkspaceTarget is the in-sandbox path a local-directory workspace
+// source is bind-mounted at when its own Target is unset — the agent's working
+// dir (matches the New Run wizard). Despite the name (a holdover from the
+// deleted AI Run Composer, which first introduced this default), it is the
+// general fallback every workspace-source resolution path uses (here and
+// workspace_run.go), not a composer-specific concern.
+const composerWorkspaceTarget = "/home/agent/work"
+
 // seedRequestWorkspace attaches the workspace named by req.WorkspaceID to the
 // RESOLVED spec. Without it the only way to launch against an onboarded
 // workspace is to hand-reproduce its exact source string in a policy file — the

@@ -44,7 +44,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -324,13 +323,6 @@ type Config struct {
 	// context.Background() when unset (the watcher then only stops on process
 	// exit).
 	BaseCtx context.Context
-	// Composer, when set and Enabled(), powers the AI Run Composer endpoints
-	// (POST /api/v1/runs/compose, GET /api/v1/composer/backends): a registry of
-	// LLM backends turns a natural-language task description into a PROPOSED
-	// {run, inline_policy} that Wardyn risk-grades deterministically and clamps to
-	// DefaultPolicy before returning for human approval. Nil / not-Enabled
-	// disables the endpoints (404), so the feature is strictly opt-in.
-	Composer *composer.Registry
 	// Components advertises, per pluggable seam (identity, secret_store,
 	// recording, policy_engine, sandbox, ...), the SELECTED running implementation
 	// and the recommended production default, for honest /healthz visibility. Nil
@@ -375,10 +367,6 @@ type Config struct {
 	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
 	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
 	OIDCSecureCookies bool
-	// ComposerBackends is the BOOT-snapshot readiness of every configured composer
-	// backend (including disabled + needs-key ones the live registry can't show).
-	// Surfaced by /setup/status. Nil when the composer is unconfigured.
-	ComposerBackends []ComposerBackendReadiness
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -488,19 +476,6 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg}
 	s.router = s.routes()
-	// Late-bind the sandbox composer backend's run launcher. The composer registry
-	// (and its backends) are built at boot BEFORE the Server exists, but the
-	// sandbox backend runs its claude wire INSIDE a governed run this Server
-	// launches — so it needs the Server's RunClaudeCompose. Wire it now that s
-	// exists (mirrors how a func on cfg is set at construction). No-op unless a
-	// sandbox backend is configured.
-	if cfg.Composer != nil {
-		for _, c := range cfg.Composer.Composers() {
-			if sink, ok := c.(composeRunnerSink); ok {
-				sink.SetRunClaude(s.RunClaudeCompose)
-			}
-		}
-	}
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible
 	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives

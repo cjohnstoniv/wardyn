@@ -142,16 +142,16 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
 // detail, "" when there is none). INFO, never a warning, when there is none: a
-// model provider is OPTIONAL — needed only for agent-harness runs or the AI Run
-// Composer, so "no model" is a deliberate non-blocking state, never a gap the
-// operator must clear.
+// model provider is OPTIONAL — needed only for agent-harness runs, so "no
+// model" is a deliberate non-blocking state, never a gap the operator must
+// clear.
 func llmProviderCheck(llmDetail string) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
-		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs or the AI Run Composer. Bring-your-own-container and interactive runs work without one.",
+		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
 		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (the Integrations step, \"Connect what's outside Wardyn\"), or bind creds to a workspace/container.",
 	}
 }
@@ -184,22 +184,6 @@ func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
 		Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
 	}, true
-}
-
-// composerCheck reports whether the AI Run Composer is enabled — optional, so
-// "not enabled" is info.
-func composerCheck(comp SetupComposer) SetupCheck {
-	if comp.Enabled {
-		return SetupCheck{
-			ID: "composer", Label: "AI Run Composer", Status: "ok",
-			Detail: "The AI Run Composer is enabled (default backend: " + comp.Default + ").",
-		}
-	}
-	return SetupCheck{
-		ID: "composer", Label: "AI Run Composer", Status: "info",
-		Detail: "The AI Run Composer is not enabled (optional); runs can still be configured manually.",
-		Fix:    "Set -composer-config / WARDYN_COMPOSER_CONFIG (helm: env.WARDYN_COMPOSER_CONFIG) to enable natural-language run composition.",
-	}
 }
 
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets

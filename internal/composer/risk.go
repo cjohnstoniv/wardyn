@@ -12,6 +12,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// RunInput is the scalar create-run fields graded by Grade — the same fields
+// the wizard's buildSpec puts on `run`. Mapped onto the create-run request by
+// the API layer (this package must not import internal/api).
+type RunInput struct {
+	Agent            string `json:"agent"`
+	Repo             string `json:"repo"`
+	Task             string `json:"task"`
+	ConfinementClass string `json:"confinement_class,omitempty"`
+	Interactive      bool   `json:"interactive,omitempty"`
+	DevcontainerRepo string `json:"devcontainer_repo,omitempty"`
+}
+
 // RiskLevel is Wardyn's deterministic grade for a single config choice.
 type RiskLevel string
 
