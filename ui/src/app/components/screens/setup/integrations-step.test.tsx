@@ -3,60 +3,67 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// IntegrationsStep is a thin wrapper: the lede, the embedded list (its own
-// coverage lives in integrations/integrations-screen.test.tsx — mocked out
-// here so this suite stays scoped to what THIS component owns), and the
-// scope note. It has NO footer of its own any more: "Manage in Integrations"
-// duplicated the embed (this IS that page), and "Skip this step" duplicated
-// Next — skipping is what clicking Next past the step means now
-// (setup-screen.test.tsx covers that orchestrator rule).
-import type { ComponentProps } from "react";
+// IntegrationsStep is now a thin composition of the two SHARED connection cards
+// (../settings/connection-cards) plus its lede — it no longer embeds the whole
+// /integrations page, which is what let an operator-extensibility framework
+// (seven kinds, a probe system, an adopt lifecycle) surface during first-run
+// setup. The cards' own behaviour is covered in connection-cards.test.tsx; what
+// THIS suite owns is that the step renders both of them, in order, wired to the
+// step's status and recheck.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { IntegrationsStep } from "./integrations-step";
-import { T } from "../../../lib/integrations";
+import { IntegrationsStep, STEP_LEDE } from "./integrations-step";
+import { S } from "../settings/connection-cards";
+import { baseStatus } from "../../../lib/test-fixtures";
 
-const integrationsScreenPropsSpy = vi.fn();
-vi.mock("../integrations/integrations-screen", () => ({
-  IntegrationsScreen: (props: unknown) => {
-    integrationsScreenPropsSpy(props);
-    return <div data-testid="embedded-list" />;
-  },
-}));
-
-function renderStep(props: Partial<ComponentProps<typeof IntegrationsStep>> = {}) {
+function renderStep() {
   return render(
     <MemoryRouter>
-      <IntegrationsStep onRecheck={vi.fn()} {...props} />
+      <IntegrationsStep status={baseStatus()} siteConfig={null} onRecheck={vi.fn()} />
     </MemoryRouter>,
   );
 }
 
 describe("IntegrationsStep", () => {
-  it("renders the step lede verbatim and embeds the real list, not a second copy", () => {
+  it("renders the step lede verbatim", () => {
     renderStep();
-    expect(screen.getByText(T.STEP_LEDE)).toBeInTheDocument();
-    expect(screen.getByTestId("embedded-list")).toBeInTheDocument();
+    expect(screen.getByText(STEP_LEDE)).toBeInTheDocument();
   });
 
-  // Corporate-network consolidation: host proxy + egress redirection are gone
-  // from the Integrations page itself, so there's nothing for this embed to
-  // hide — it passes no hideCategories at all. The note explaining where they
-  // went always renders (not just once something's connected — a first, empty
-  // visit is exactly when someone wonders where those two categories are).
-  it("passes no hideCategories — the two categories are gone from the page, not hidden from the embed", () => {
+  it("renders BOTH shared connection cards — model provider first, git host second", () => {
     renderStep();
-    expect(integrationsScreenPropsSpy).toHaveBeenCalledWith(expect.objectContaining({ embedded: true }));
-    expect(integrationsScreenPropsSpy.mock.calls[0][0]).not.toHaveProperty("hideCategories");
-    expect(screen.getByText(T.EMBED_SCOPE_NOTE)).toBeInTheDocument();
+    const model = screen.getByRole("radiogroup", { name: S.MODEL_TITLE });
+    const git = screen.getByRole("radiogroup", { name: S.GIT_TITLE });
+    expect(model).toBeInTheDocument();
+    expect(git).toBeInTheDocument();
+    // A model is what gates a first agent run; the git credential only matters
+    // once there's a private repo. Order is the teaching, so it is pinned.
+    expect(model.compareDocumentPosition(git) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  // The two dead affordances, pinned dead: the manage link pointed at the
-  // page this step already embeds, and the skip button duplicated Next.
-  it("renders neither a 'Manage in Integrations' link nor a 'Skip this step' button", () => {
+  // The regression this whole rework exists to prevent: the step used to embed
+  // IntegrationsScreen, so the funnel showed a catalog with an "Add integration"
+  // button during first-run setup.
+  it("offers no integration catalog — no Add integration affordance anywhere", () => {
     renderStep();
-    expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No integrations/i)).not.toBeInTheDocument();
+  });
+
+  it("names the three model lanes the mock settled on", () => {
+    renderStep();
+    expect(screen.getByRole("radio", { name: /Claude subscription/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /API key/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /AWS Bedrock/ })).toBeInTheDocument();
+    // Azure was the fifth AI kind; it only ever powered the deleted composer.
+    expect(screen.queryByText(/Azure/i)).not.toBeInTheDocument();
+  });
+
+  it("names the three git-host lanes", () => {
+    renderStep();
+    expect(screen.getByRole("radio", { name: /Personal access token/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /SSH key/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /GitHub App/ })).toBeInTheDocument();
   });
 });

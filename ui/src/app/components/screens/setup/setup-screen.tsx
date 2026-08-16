@@ -473,7 +473,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onTabChange={setCorpTab}
           />
         )}
-        {stepId === "integrations" && <IntegrationsStep onRecheck={recheck} />}
+        {stepId === "integrations" && (
+          <IntegrationsStep status={status} siteConfig={siteConfig} onRecheck={recheck} />
+        )}
         {DEMOS.some((d) => d.id === stepId) && (
           <React.Suspense
             fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}

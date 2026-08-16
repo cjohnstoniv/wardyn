@@ -35,7 +35,19 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { absoluteTime, relativeTime } from "../../lib/format";
 
+// The page at /ssh-keys. The body is SshKeysPane so Settings can render the
+// same card ("Your SSH keys") without a second copy of the list, the dialogs,
+// or their reload wiring — the account menu keeps both entries, and they show
+// exactly the same thing.
 export function SSHKeysScreen() {
+  return (
+    <div className="mx-auto max-w-[900px] px-6 py-6">
+      <SshKeysPane />
+    </div>
+  );
+}
+
+export function SshKeysPane() {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [addOpen, setAddOpen] = React.useState(false);
@@ -54,9 +66,9 @@ export function SSHKeysScreen() {
   React.useEffect(load, [load]);
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-6">
+    <div>
       <PageHeader
-        title="SSH keys"
+        title="Your SSH keys"
         description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; there is no admin view of anyone else's."
         actions={
           <Button onClick={() => setAddOpen(true)}>

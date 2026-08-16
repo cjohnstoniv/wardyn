@@ -30,7 +30,7 @@ describe("SetupLayout", () => {
 
   it("renders the step heading from STEP_HEADING and an Optional chip on an optional step", () => {
     renderLayout({ current: "integrations" });
-    expect(screen.getByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
     expect(screen.getByText("Optional")).toBeInTheDocument();
   });
 

@@ -166,7 +166,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
       ["corp_network", "Corporate network"],
-      ["integrations", "Integrations"],
+      ["integrations", "Model & git host"],
       // The four Demos sub-steps — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
       ["fail-then-approve", "Fail, then approve"],
@@ -181,7 +181,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
     expect(STEP_HEADING.corp_network).toBe("Corporate network");
-    expect(STEP_HEADING.integrations).toBe("Connect what's outside Wardyn");
+    expect(STEP_HEADING.integrations).toBe("Connect your model");
   });
 
   it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {

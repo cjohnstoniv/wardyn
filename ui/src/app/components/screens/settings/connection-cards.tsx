@@ -1,0 +1,549 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// The two connection cards — Model provider and Git host.
+//
+// These replace the /integrations page and its 931-line Add dialog. The old
+// surface asked an abstract question ("which of seven integration kinds?") in a
+// catalog; these ask the two concrete ones an operator actually has: what runs
+// my agent, and how do you clone my private repos. Each card is a radio group
+// over real lanes, not a list you add rows to.
+//
+// ONE component, rendered in TWO places: /settings and the Getting Started
+// "Connect your model" step. That is deliberate — the funnel step used to be a
+// thin embed of the whole Integrations page, which is exactly how it drifted
+// into showing an operator-extensibility framework during first-run setup.
+// Sharing the component makes drift impossible rather than merely discouraged.
+//
+// Reads go through deriveIntegrations (lib/api/integrations.ts) — the SAME
+// derivation lib/readiness.ts uses, so a lane that reads "Connected" here can
+// never disagree with the app-shell chip or the Runs first-run checklist. The
+// wire-shaped genericIntegrations model dies with the page it was built for.
+//
+// Writes reuse what already exists: secrets.setSecret for every key/token lane
+// (a credential IS a named secret server-side), and harnessAuth for the two
+// interactive logins.
+import * as React from "react";
+import { toast } from "sonner";
+import { Check, Loader2 } from "lucide-react";
+import { deriveIntegrations, type IntegrationRow } from "../../../lib/api/integrations";
+import { harnessAuth } from "../../../lib/api/harness-auth";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { slugHost } from "../../../lib/scm-provider";
+import { getErrorMessage } from "../../../lib/format";
+import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
+import { Field } from "../../wardyn/form-primitives";
+import { Mono } from "../../wardyn/code-block";
+import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { useOperator } from "../../wardyn/operator-context";
+import { cn } from "../../ui/utils";
+import { HarnessLoginPane } from "./harness-login-pane";
+
+// Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
+// rather than in lib/integrations.ts's T, which belongs to the page being
+// deleted and shrinks with it.
+export const S = {
+  MODEL_TITLE: "Model provider",
+  MODEL_LEDE: "Agent runs need one. Governed commands don't.",
+  MODEL_FOOTER: "Keys never enter the sandbox — the egress proxy injects them on the wire.",
+  GIT_TITLE: "Git host",
+  GIT_LEDE: "How Wardyn clones your private repos.",
+  GIT_FOOTER: "Public repos clone with no credential at all.",
+  // Bedrock's region/model are OPERATOR BOOT-TIME config (runs_bedrock.go:116),
+  // not writable over the API — so the card states where they come from instead
+  // of offering an input the server would ignore. The mock implied they were
+  // editable here; the runtime disagrees, and the runtime wins.
+  BEDROCK_CONFIG_NOTE:
+    "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
+  STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
+} as const;
+
+// ---------------------------------------------------------------------------
+// Card shell + lane rows
+// ---------------------------------------------------------------------------
+
+function Card({
+  title,
+  lede,
+  footer,
+  children,
+}: {
+  title: string;
+  lede: string;
+  footer?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-surface-1 p-4">
+      <h3 className="text-sm font-medium text-foreground">{title}</h3>
+      <p className="mt-0.5 text-[0.8125rem] leading-snug text-muted-foreground">{lede}</p>
+      <div className="mt-3 space-y-2">{children}</div>
+      {footer && <p className="mt-3 text-[0.6875rem] leading-snug text-muted-foreground">{footer}</p>}
+    </section>
+  );
+}
+
+// One lane. Selecting it expands its form; a connected lane shows its state and
+// a Disconnect instead. Radio semantics (not aria-pressed) because these are
+// mutually-exclusive choices within one group, which is what a screen reader
+// needs to announce "2 of 3".
+function Lane({
+  id,
+  title,
+  hint,
+  connected,
+  connectedDetail,
+  selected,
+  onSelect,
+  children,
+}: {
+  id: string;
+  title: string;
+  hint: string;
+  connected: boolean;
+  connectedDetail?: string;
+  selected: boolean;
+  onSelect: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border transition-colors",
+        selected ? "border-primary bg-primary/5" : "border-border",
+      )}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        id={id}
+        onClick={onSelect}
+        className="flex w-full items-start gap-2.5 p-3 text-left"
+      >
+        <span
+          aria-hidden="true"
+          className={cn(
+            "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+            selected ? "border-primary" : "border-border-strong",
+          )}
+        >
+          {selected && <span className="size-2 rounded-full bg-primary" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className="text-sm font-medium text-foreground">{title}</span>
+            {connected && (
+              <span className="inline-flex items-center gap-0.5 rounded-md border border-ok/25 bg-ok-subtle px-1.5 py-px text-[0.625rem] font-medium text-ok">
+                <Check className="size-2.5" />
+                Connected
+              </span>
+            )}
+          </span>
+          <span className="mt-0.5 block text-[0.6875rem] leading-snug text-muted-foreground">
+            {connected && connectedDetail ? connectedDetail : hint}
+          </span>
+        </span>
+      </button>
+      {selected && children && <div className="border-t border-border px-3 py-3">{children}</div>}
+    </div>
+  );
+}
+
+// A one-secret lane form: a single write-only value + Save, and Disconnect once
+// stored. Every key/token lane in both cards is this shape.
+function SecretLane({
+  label,
+  placeholder,
+  hint,
+  secretName,
+  stored,
+  onChanged,
+  extra,
+  disabled,
+}: {
+  label: string;
+  placeholder: string;
+  hint?: React.ReactNode;
+  secretName: string;
+  stored: boolean;
+  onChanged: () => void;
+  /** Rendered above the value field (e.g. the Git host's Host input). */
+  extra?: React.ReactNode;
+  disabled?: boolean;
+}) {
+  const [value, setValue] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await secretsApi.setSecret(secretName, value.trim());
+      setValue("");
+      toast.success(`Saved ${secretName}`);
+      onChanged();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await secretsApi.deleteSecret(secretName);
+      toast.success(`Removed ${secretName}`);
+      onChanged();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {extra}
+      <Field label={label} htmlFor={`v-${secretName}`} hint={hint}>
+        <Input
+          id={`v-${secretName}`}
+          type="password"
+          autoComplete="off"
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled || busy}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </Field>
+      <div className="flex items-center gap-2">
+        <Button size="sm" disabled={disabled || busy || !value.trim()} onClick={save}>
+          {busy && <Loader2 className="size-3.5 animate-spin" />}
+          {stored ? "Replace" : "Save"}
+        </Button>
+        {stored && (
+          <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={disconnect}>
+            Disconnect
+          </Button>
+        )}
+        <span className="text-[0.6875rem] text-muted-foreground">
+          Stored as <Mono>{secretName}</Mono>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Model provider
+// ---------------------------------------------------------------------------
+
+type ModelLane = "subscription" | "api_key" | "bedrock";
+
+function rowFor(rows: IntegrationRow[], match: (r: IntegrationRow) => boolean): IntegrationRow | undefined {
+  return rows.find(match);
+}
+
+export function ModelProviderCard({
+  status,
+  siteConfig,
+  onChanged,
+}: {
+  status: SetupStatus;
+  siteConfig: SiteConfig | null;
+  onChanged: () => void;
+}) {
+  const operator = useOperator();
+  const present = status.secrets.present;
+  const ai = deriveIntegrations(status, siteConfig, present).ai;
+
+  const subRow = rowFor(ai, (r) => r.aiType === "anthropic_subscription");
+  const keyRow = rowFor(ai, (r) => r.aiType === "anthropic_api_key" || r.aiType === "openai_api_key");
+  const bedrockRow = rowFor(ai, (r) => r.aiType === "bedrock");
+
+  // Open on whatever is already connected, so the card reads as a state first
+  // and a form second. Falls back to the lane most operators want.
+  const [lane, setLane] = React.useState<ModelLane>(
+    subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
+  );
+  const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const disconnectHarness = async (provider: string) => {
+    setBusy(true);
+    try {
+      await harnessAuth.harnessDisconnect(provider);
+      toast.success("Disconnected");
+      onChanged();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The managed (container-login) subscription is the only lane Wardyn can
+  // disconnect — a host-CLI login lives in the operator's own ~/.claude and is
+  // not Wardyn's to revoke, so the lane says so rather than offering a button
+  // that would silently do nothing.
+  const managedSub = !!subRow && !subRow.hostCli;
+  const bedrockConfigured = !!status.bedrock?.region && !!status.bedrock?.model;
+
+  return (
+    <>
+      <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
+        {!operator && <OperatorOnlyHint />}
+        <div role="radiogroup" aria-label={S.MODEL_TITLE} className="space-y-2">
+          <Lane
+            id="lane-subscription"
+            title="Claude subscription"
+            hint="Sign in through a throwaway sandbox — the token never touches disk."
+            connected={!!subRow}
+            connectedDetail={subRow?.name}
+            selected={lane === "subscription"}
+            onSelect={() => setLane("subscription")}
+          >
+            {subRow ? (
+              <div className="flex items-center gap-2">
+                <span className="text-[0.8125rem] text-muted-foreground">
+                  {managedSub
+                    ? "Captured through a login sandbox and stored by Wardyn."
+                    : "A login in this host's own Claude CLI — Wardyn reads it, but can't revoke it. Sign out with the CLI itself."}
+                </span>
+                {managedSub && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!operator || busy}
+                    onClick={() => disconnectHarness("anthropic")}
+                  >
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
+                Sign in
+              </Button>
+            )}
+          </Lane>
+
+          <Lane
+            id="lane-api-key"
+            title="API key"
+            hint="ANTHROPIC_API_KEY or OPENAI_API_KEY."
+            connected={!!keyRow}
+            connectedDetail={keyRow?.name}
+            selected={lane === "api_key"}
+            onSelect={() => setLane("api_key")}
+          >
+            <div className="space-y-4">
+              <SecretLane
+                label="Anthropic API key"
+                placeholder="sk-ant-…"
+                secretName="anthropic-api-key"
+                stored={present.includes("anthropic-api-key")}
+                disabled={!operator}
+                onChanged={onChanged}
+                hint={S.STORE_NOTE}
+              />
+              <SecretLane
+                label="OpenAI API key"
+                placeholder="sk-…"
+                secretName="openai-api-key"
+                stored={present.includes("openai-api-key")}
+                disabled={!operator}
+                onChanged={onChanged}
+              />
+            </div>
+          </Lane>
+
+          <Lane
+            id="lane-bedrock"
+            title="AWS Bedrock"
+            hint="A bearer key, or an SSO device-code sign-in."
+            connected={!!bedrockRow}
+            connectedDetail={
+              bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
+            }
+            selected={lane === "bedrock"}
+            onSelect={() => setLane("bedrock")}
+          >
+            <div className="space-y-4">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                {bedrockConfigured ? (
+                  <>
+                    Region <Mono>{status.bedrock?.region}</Mono> · model <Mono>{status.bedrock?.model}</Mono>.{" "}
+                    {S.BEDROCK_CONFIG_NOTE}
+                  </>
+                ) : (
+                  S.BEDROCK_CONFIG_NOTE
+                )}
+              </p>
+              <SecretLane
+                label="Bedrock bearer key"
+                placeholder="Bearer token"
+                secretName="bedrock-api-key"
+                stored={present.includes("bedrock-api-key")}
+                disabled={!operator}
+                onChanged={onChanged}
+              />
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
+                  Sign in with SSO
+                </Button>
+                <span className="text-[0.6875rem] text-muted-foreground">
+                  Device-code flow in a throwaway sandbox — exchanged per run for short-lived role credentials.
+                </span>
+              </div>
+            </div>
+          </Lane>
+        </div>
+      </Card>
+
+      <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && setLoginOpen(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogTitle>{loginOpen === "aws" ? "Sign in with AWS SSO" : "Sign in to Claude"}</DialogTitle>
+          {loginOpen && (
+            <HarnessLoginPane
+              provider={loginOpen}
+              onDone={() => {
+                setLoginOpen(null);
+                onChanged();
+              }}
+              onCancel={() => setLoginOpen(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Git host
+// ---------------------------------------------------------------------------
+
+type GitLane = "pat" | "ssh" | "app";
+
+export function GitHostCard({
+  status,
+  siteConfig,
+  onChanged,
+}: {
+  status: SetupStatus;
+  siteConfig: SiteConfig | null;
+  onChanged: () => void;
+}) {
+  const operator = useOperator();
+  const present = status.secrets.present;
+  const scm = deriveIntegrations(status, siteConfig, present).scm;
+
+  // Most installs have exactly one git host; the field exists so the lanes can
+  // name a secret per host (git-pat-<slug>) rather than pretending there is a
+  // single global credential.
+  const [host, setHost] = React.useState(scm[0]?.typeLabel || "github.com");
+  const slug = slugHost(host || "github.com");
+
+  const patName = `git-pat-${slug}`;
+  const sshName = `ssh-key-${slug}`;
+  const appStored = status.secrets.github_app;
+
+  const [lane, setLane] = React.useState<GitLane>(
+    present.includes(sshName) ? "ssh" : appStored ? "app" : "pat",
+  );
+
+  const hostField = (
+    <Field label="Host" htmlFor="git-host" hint="The git host these credentials are for.">
+      <Input
+        id="git-host"
+        value={host}
+        placeholder="github.com"
+        disabled={!operator}
+        onChange={(e) => setHost(e.target.value.trim())}
+      />
+    </Field>
+  );
+
+  return (
+    <Card title={S.GIT_TITLE} lede={S.GIT_LEDE} footer={S.GIT_FOOTER}>
+      {!operator && <OperatorOnlyHint />}
+      <div role="radiogroup" aria-label={S.GIT_TITLE} className="space-y-2">
+        <Lane
+          id="lane-pat"
+          title="Personal access token"
+          hint="The simplest lane — stored once, injected on the wire per run."
+          connected={present.includes(patName)}
+          connectedDetail={`${host} · stored as ${patName}`}
+          selected={lane === "pat"}
+          onSelect={() => setLane("pat")}
+        >
+          <SecretLane
+            label="Access token"
+            placeholder="ghp_…"
+            secretName={patName}
+            stored={present.includes(patName)}
+            disabled={!operator}
+            onChanged={onChanged}
+            extra={hostField}
+            hint={S.STORE_NOTE}
+          />
+        </Lane>
+
+        <Lane
+          id="lane-ssh"
+          title="SSH key"
+          hint="Minted per run, wiped after clone."
+          connected={present.includes(sshName)}
+          connectedDetail={`${host} · stored as ${sshName}`}
+          selected={lane === "ssh"}
+          onSelect={() => setLane("ssh")}
+        >
+          <SecretLane
+            label="Private key"
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+            secretName={sshName}
+            stored={present.includes(sshName)}
+            disabled={!operator}
+            onChanged={onChanged}
+            extra={hostField}
+          />
+        </Lane>
+
+        <Lane
+          id="lane-app"
+          title="GitHub App"
+          hint="Repo-scoped tokens brokered per run — the narrowest blast radius."
+          connected={appStored}
+          connectedDetail="Installation credentials stored"
+          selected={lane === "app"}
+          onSelect={() => setLane("app")}
+        >
+          <div className="space-y-4">
+            <SecretLane
+              label="App ID"
+              placeholder="123456"
+              secretName="github-app-id"
+              stored={present.includes("github-app-id")}
+              disabled={!operator}
+              onChanged={onChanged}
+            />
+            <SecretLane
+              label="Private key (PEM)"
+              placeholder="-----BEGIN RSA PRIVATE KEY-----"
+              secretName="github-app-key"
+              stored={present.includes("github-app-key")}
+              disabled={!operator}
+              onChanged={onChanged}
+            />
+          </div>
+        </Lane>
+      </div>
+    </Card>
+  );
+}

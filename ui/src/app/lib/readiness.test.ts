@@ -92,13 +92,8 @@ describe("hasLlmPath — via the integrations adapter", () => {
     ).toBe(true);
   });
 
-  it("Azure never counts — X_AZURE_HARNESS is a stated fact, not a toggle (composer-only capability)", () => {
-    expect(
-      hasLlmPath(
-        status({
-        }),
-      ),
-    ).toBe(false);
+  it("a stored Azure key is never an LLM path — the kind no longer derives a row at all", () => {
+    expect(hasLlmPath(status({ secrets: { present: ["azure-openai-key"], github_app: false } }))).toBe(false);
   });
 });
 
@@ -140,14 +135,15 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
     expect(r.composerReady).toBe(false);
   });
 
-  it("Azure powers Wardyn features (composerReady) but never counts as an agent-tool path (llmReady)", () => {
-    // Azure derives from the conventional secret now that composer backends
-    // are gone from SetupStatus; the capability split it proves is unchanged.
-    const r = deriveReadiness(
-      status({ secrets: { present: ["azure-openai-key"], github_app: false } }),
-    );
+  // Azure was the one integration that satisfied composerReady without ever
+  // satisfying llmReady — it powered Wardyn's own features and no agent tool.
+  // Those features (the AI Run Composer) are deleted, so the kind is gone and
+  // its stored secret is inert: readiness must not resurrect it as anything.
+  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false } }));
     expect(r.llmReady).toBe(false);
-    expect(r.composerReady).toBe(true);
+    expect(r.llmLabel).toBe("");
+    expect(r.composerReady).toBe(false);
   });
 });
 

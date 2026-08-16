@@ -210,7 +210,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // picker (host proxy / egress redirection moved to the step just visited).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i }),
+      await screen.findByRole("heading", { name: /connect your model/i }),
     ).toBeInTheDocument();
 
     // The four Demos sub-steps — each renders one demo (heading = its title). The
@@ -303,7 +303,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Blocked gate with an action: there IS no Next button — the fix-it
       // action stands in its place, under the state's own headline.
-      expect(screen.queryByRole("button", { name: /^next: integrations$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: model \& git host$/i })).not.toBeInTheDocument();
       expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
       // …and exactly ONE launch point on the whole screen: the footer's (the
       // panel's own button is suppressed while the gate row carries it).
@@ -324,7 +324,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // One more click, not a demand: the quiet empty line, then the exit.
       await user.click(toEgress);
       await screen.findByText(/nothing redirected on this host/i);
-      const next = screen.getByRole("button", { name: /^next: integrations$/i });
+      const next = screen.getByRole("button", { name: /^next: model \& git host$/i });
       expect(next).toBeEnabled();
       // Back from here returns to Host proxy — the mirror — without leaving
       // the step; then forward again.
@@ -332,8 +332,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(await screen.findByText("What Wardyn found on this host")).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /^next: egress redirection$/i }));
 
-      await user.click(screen.getByRole("button", { name: /^next: integrations$/i }));
-      expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^next: model \& git host$/i }));
+      expect(await screen.findByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
     });
 
     it("no_runner unlocks Next immediately with its standing note — nothing was proven, and the note keeps saying so", async () => {
@@ -343,7 +343,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /^corporate network$/i });
 
       await clearCorpNetworkGate();
-      expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
       expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
       expect(screen.getByText(/nothing was proven here/i)).toBeInTheDocument();
     });
@@ -363,7 +363,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Reached, but the configured redirect is untested — the gate holds
       // with its own head/sentence, and the footer's action is the fix.
-      expect(screen.queryByRole("button", { name: /^next: integrations$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: model \& git host$/i })).not.toBeInTheDocument();
       expect(screen.getByText("Redirects aren't proven yet")).toBeInTheDocument();
       expect(screen.getByText(/every configured redirect has to prove reached/i)).toBeInTheDocument();
 
@@ -372,7 +372,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
       await user.click(screen.getByRole("button", { name: /^test the redirect$/i }));
       await screen.findByText("Reached");
-      expect(await screen.findByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+      expect(await screen.findByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
     });
 
     it("the gate survives leaving and re-entering the step — no re-test needed", async () => {
@@ -381,7 +381,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
 
       // Back to Corporate network: the step body remounted, but the gate AND
       // the sub-tab — held by the orchestrator, not the step — still remember
@@ -389,7 +389,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^back$/i }));
       await screen.findByRole("heading", { name: /^corporate network$/i });
       expect(screen.getByText(/nothing redirected on this host/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
       // The mirror again: Back inside the step returns to Host proxy, where
       // the remembered no_runner verdict is still on screen.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
@@ -412,7 +412,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       const nav = navs[navs.length - 1];
 
       // Untested (blocked): clicking Integrations in the rail is a no-op.
-      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
+      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
       expect(screen.getByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
 
       // Backward is never gated — only forward click-PAST is what the rule guards.
@@ -423,7 +423,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // while sitting on corp_network itself. A rail click straight from
       // Environment to Integrations (skipping over corp_network entirely,
       // never having visited it this render) must be a no-op just the same.
-      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
+      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
       expect(screen.getByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
 
       await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
@@ -431,12 +431,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Proven: the identical rail click now works.
       await clearCorpNetworkGate();
-      await user.click(within(nav).getByRole("button", { name: /integrations/i }));
-      expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
+      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
+      expect(await screen.findByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
     });
   });
 
-  it("the Integrations step embeds the real list (not a second copy) and the rail badge counts a connection", async () => {
+  it("the connection step renders the shared cards (not the old catalog) and the rail badge counts a connection", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
     );
@@ -455,18 +455,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await clearCorpNetworkGate();
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
     expect(
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i }),
+      await screen.findByRole("heading", { name: /connect your model/i }),
     ).toBeInTheDocument();
-    // The embedded list's own category section — proof it's IntegrationsScreen
-    // rendering, not a hand-rolled duplicate (see integrations-screen.test.tsx
-    // for that component's own coverage).
-    expect(await screen.findByText("AI providers")).toBeInTheDocument();
+    // The two SHARED Settings cards, not the deleted /integrations catalog.
+    // (connection-cards.test.tsx owns their own behaviour; this asserts the
+    // orchestrator mounts them.) The old assertion here looked for the embed's
+    // "AI providers" section heading — that section, and the page it belonged
+    // to, are gone.
+    expect(await screen.findByRole("radiogroup", { name: /model provider/i })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: /git host/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
     // Both PhaseRail landmarks share the "Setup steps" accessible name
     // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
     // renders both — the full rail is the SECOND in DOM order.
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
-    const btn = within(nav).getByRole("button", { name: /integrations/i });
+    const btn = within(nav).getByRole("button", { name: /model \& git host/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
 
@@ -490,7 +494,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // renders both — the full rail is the SECOND in DOM order.
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
-    const btn = within(nav).getByRole("button", { name: /integrations/i });
+    const btn = within(nav).getByRole("button", { name: /model \& git host/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
     expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
   });
@@ -507,7 +511,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
       // Both PhaseRail landmarks share the "Setup steps" accessible name
@@ -515,7 +519,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /integrations/i });
+      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
     });
@@ -531,7 +535,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
       // Both PhaseRail landmarks share the "Setup steps" accessible name
@@ -539,7 +543,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /integrations/i });
+      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
       expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
       expect(within(btn).queryByText("Skipped")).not.toBeInTheDocument();
     });
@@ -551,7 +555,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
       // The two dead affordances stay dead: Next is the one forward control.
       expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
@@ -563,7 +567,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /integrations/i });
+      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       // …and the checkmark: forward-past is the same per-browser decision the
       // old explicit control recorded (persisted via markIntegrationsSkipped).
@@ -571,7 +575,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Backing INTO the step decides nothing extra and the state holds.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
 
@@ -581,7 +585,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+      await screen.findByRole("heading", { name: /connect your model/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
       unmount();
 
@@ -594,7 +598,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /integrations/i });
+      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
   });
@@ -697,11 +701,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // grouped headings prove the rollup, not a flat dump
     expect(screen.getByText("Blocking")).toBeInTheDocument();
 
-    // 1 from the orchestrator's own mount + 1 from the embedded IntegrationsScreen's
-    // own independent fetch when the walk passed through the Integrations step
-    // (its FIRST load never cascades into a caller recheck — see
-    // integrations-screen.tsx's loadedOnceRef).
-    expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
+    // Exactly 1 — the orchestrator's own mount. This used to be 2: the embedded
+    // IntegrationsScreen ran a SECOND, independent getSetupStatus when the walk
+    // passed through the connection step. The shared cards take `status` as a
+    // prop from the orchestrator instead, so walking the funnel no longer
+    // re-fetches the same status a second time.
+    expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
     // Two Re-check buttons now share this step: the persistent HostStatusBar (first
     // in DOM order) and ReviewStep's own (rendered after it in the step body). Both
     // invoke the same re-check; click the ReviewStep's own and assert getSetupStatus
@@ -709,7 +714,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     const rechecks = screen.getAllByRole("button", { name: /re-check/i });
     expect(rechecks).toHaveLength(2);
     await user.click(rechecks[rechecks.length - 1]);
-    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
   });
 
   it("barrier step shows tiers only; the Review step carries the checks + 'About this host'", async () => {

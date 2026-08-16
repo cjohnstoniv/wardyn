@@ -158,17 +158,20 @@ describe("deriveIntegrations — AI providers", () => {
     expect(describePosture(row.posture).text).toMatch(/^Session expires \d{1,2}:\d{2}/);
   });
 
-  it("azure_openai derives from the conventional secret name", () => {
-    // Azure used to also derive from a registered composer backend. That field
-    // left the wire with the AI Run Composer, so the conventional secret is now
-    // the only signal.
-    const status = baseStatus();
-    const [row] = deriveIntegrations(status, null, ["azure-openai-key"]).ai;
-    expect(row.name).toBe("Azure OpenAI");
-    expect(row.residency).toBe("control_plane");
-    expect(row.secretNames).toEqual(["azure-openai-key"]);
-    // Azure can drive neither agent tool — both collapse into ONE fact chip.
-    expect(row.chips.some((c) => c.muted && c.label === "Claude Code · Codex CLI · n/a")).toBe(true);
+  // Azure OpenAI is gone as a model provider. It only ever powered Wardyn's own
+  // features (the AI Run Composer, deleted), and harness.go is explicit that
+  // neither agent tool can be pointed at an Azure deployment — so a row for it
+  // was a connected-looking credential wired to nothing.
+  it("azure_openai no longer derives a row, even with its conventional secret stored", () => {
+    const rows = deriveIntegrations(baseStatus(), null, ["azure-openai-key"]).ai;
+    expect(rows).toHaveLength(0);
+  });
+
+  // The stored secret is NOT deleted by this — an operator's existing key stays
+  // in the secret store, inert, and is still visible/removable on /secrets.
+  it("an azure key alongside a real provider leaves the real one untouched", () => {
+    const rows = deriveIntegrations(baseStatus(), null, ["azure-openai-key", "anthropic-api-key"]).ai;
+    expect(rows.map((r) => r.aiType)).toEqual(["anthropic_api_key"]);
   });
 });
 

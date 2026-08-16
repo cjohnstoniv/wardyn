@@ -456,12 +456,11 @@ function TopBar({
                 <Compass className="size-4" /> Getting started
               </Link>
             </DropdownMenuItem>
-            {/* Settings has no dedicated route yet (stage-1) — every barrier/
-                model-provider/git-host config it will own today lives on
-                Integrations, so it's the interim landing spot. */}
+            {/* Settings is the one home for connections — Host · Model provider ·
+                Git host · Your SSH keys. It replaced /integrations, which now
+                redirects here, and the barrier chip above points at it too. */}
             <DropdownMenuItem asChild>
-              {/* TODO(stage-4): /settings */}
-              <Link to="/integrations">
+              <Link to="/settings">
                 <Settings className="size-4" /> Settings
               </Link>
             </DropdownMenuItem>
@@ -518,7 +517,7 @@ function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
   return (
     <Link
       // TODO(stage-4): /settings
-      to="/integrations"
+      to="/settings"
       className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       aria-label={strongest ? "Sandbox barrier — open Settings" : "No sandbox barrier — open Settings"}
     >

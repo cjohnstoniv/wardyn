@@ -48,11 +48,8 @@ const PoliciesScreen = React.lazy(() =>
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({ default: m.SecretsScreen })),
 );
-const IntegrationsScreen = React.lazy(() =>
-  import("./components/screens/integrations/integrations-screen").then((m) => ({ default: m.IntegrationsScreen })),
-);
-const IntegrationDetailScreen = React.lazy(() =>
-  import("./components/screens/integrations/integration-detail").then((m) => ({ default: m.IntegrationDetailScreen })),
+const SettingsScreen = React.lazy(() =>
+  import("./components/screens/settings/settings-screen").then((m) => ({ default: m.SettingsScreen })),
 );
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({ default: m.WorkspacesScreen })),
@@ -309,22 +306,20 @@ export default function App() {
               </React.Suspense>
             }
           />
+          {/* /integrations is gone — Settings is the one home for connections
+              now (Host · Model provider · Git host · Your SSH keys). The
+              redirect is kept because the barrier chip, the old account menu
+              and any operator bookmark pointed here. */}
+          <Route path="/integrations" element={<Navigate to="/settings" replace />} />
           <Route
-            path="/integrations"
+            path="/settings"
             element={
               <React.Suspense fallback={<RouteFallback />}>
-                <IntegrationsScreen />
+                <SettingsScreen />
               </React.Suspense>
             }
           />
-          <Route
-            path="/integrations/:id"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <IntegrationDetailScreen />
-              </React.Suspense>
-            }
-          />
+          <Route path="/integrations/:id" element={<Navigate to="/settings" replace />} />
           <Route
             path="/workspaces"
             element={

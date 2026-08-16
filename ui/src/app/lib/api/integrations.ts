@@ -363,27 +363,13 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     });
   }
 
-  // W5: no site-config field for an Azure endpoint yet and no dedicated
-  // SetupCheck id, so the conventional secret name is the only signal. It used
-  // to also consult status.composer.backends for a registered Azure backend —
-  // that field left the wire with the AI Run Composer, and reading it was a
-  // live TypeError on every screen that derives readiness (the type still
-  // declared it, so typecheck was happy and only the e2e suite caught it).
-  if (present.includes("azure-openai-key")) {
-    const secretName = "azure-openai-key";
-    rows.push({
-      id: "ai:azure_openai",
-      category: "ai_provider",
-      name: "Azure OpenAI",
-      typeLabel: AI_TYPE_LABEL.azure_openai,
-      chips: capabilityChips("azure_openai"),
-      residency: aiResidency("azure_openai", undefined, undefined),
-      posture: { kind: "configured" },
-      secretNames: [secretName],
-      aiType: "azure_openai",
-      checkIds: [],
-    });
-  }
+  // Azure OpenAI is deliberately NOT derived. Its only capability was powering
+  // Wardyn's own features — the AI Run Composer — which no longer exists, and
+  // harness.go states the rest outright: "Neither agent tool can be pointed at
+  // an Azure OpenAI deployment." A row for it would be a connected-looking
+  // credential wired to nothing. An `azure-openai-key` left in the secret store
+  // from an earlier release stays there, untouched and inert; it simply stops
+  // rendering as a model provider.
 
   return rows;
 }

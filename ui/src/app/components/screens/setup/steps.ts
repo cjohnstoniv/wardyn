@@ -63,7 +63,7 @@ const DEMO_TITLES = Object.fromEntries(
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
   corp_network: "Corporate network",
-  integrations: "Integrations",
+  integrations: "Model & git host",
   ...DEMO_TITLES,
   workspaces: "Workspaces",
   review: "Review",
@@ -75,7 +75,7 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   // Same string as the rail label — the mock's own gsScaffold title for this
   // step, not a distinct noun-phrase like the other steps get.
   corp_network: "Corporate network",
-  integrations: "Connect what's outside Wardyn",
+  integrations: "Connect your model",
   ...DEMO_TITLES,
   workspaces: "Onboard a workspace",
   review: "Review readiness",
