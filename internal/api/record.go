@@ -35,10 +35,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // Record task result statuses (task-scoped — NOT WorkspaceStatus values).
@@ -450,7 +450,7 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 		if _, skip := skipHost[host]; skip {
 			continue
 		}
-		if !workspacescan.ValidApprovedHost(host) {
+		if !hostrules.ValidApprovedHost(host) {
 			continue // e.g. an IP literal or junk — the approve lane wouldn't take it either
 		}
 		promotable[host] = struct{}{}

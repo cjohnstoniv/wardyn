@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // integration_probe.go is the Integrations surface's "Test" action: POST
@@ -114,7 +114,7 @@ func (s *Server) handleTestIntegration(w http.ResponseWriter, r *http.Request) {
 			"integration %q is disabled, so a run granted it reaches nothing — there is no path to probe", id))
 		return
 	}
-	host := workspacescan.HostOf(integ.Probe.URL)
+	host := hostrules.HostOf(integ.Probe.URL)
 	if !egressCovers(integ.Egress, host) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
 			"probe url host %q is not in this integration's egress, so a run granted this integration could not reach "+

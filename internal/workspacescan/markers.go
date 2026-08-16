@@ -54,31 +54,6 @@ var (
 	egressPub      = []string{"pub.dev"}
 )
 
-// ecosystemPublicHosts maps an artifact ecosystem key (matching the
-// types.SiteConfig.ArtifactOverrides keys — npm|pip|go|cargo|maven|nuget) to the
-// public-registry hosts a corporate redirect REPLACES. Values REFERENCE the same
-// egress* literals the marker table uses, so markers.go stays the single source
-// of truth: the corporate substitution happens at the composition layer that
-// reads site-config, never by editing these literals. maven maps to Central's
-// mirror hosts (the plugins.gradle.org plugin-portal host is a separate concern a
-// mirror override does not touch).
-var ecosystemPublicHosts = map[string][]string{
-	"npm":   egressNPM,
-	"pip":   egressPyPI,
-	"go":    egressGo,
-	"cargo": egressCargo,
-	"maven": egressMaven,
-	"nuget": egressNuGet,
-}
-
-// PublicRegistryHosts returns the public-registry hosts a corporate redirect
-// replaces for an artifact ecosystem (npm|pip|go|cargo|maven|nuget), or nil for
-// an unknown key. The egress-substitution layer drops these and adds the corp
-// host when the operator configures a redirect for that ecosystem.
-func PublicRegistryHosts(ecosystem string) []string {
-	return ecosystemPublicHosts[ecosystem]
-}
-
 // marker is one filename/path-pattern → meaning row.
 type marker struct {
 	id              string // canonical marker id == ManifestHit.Marker

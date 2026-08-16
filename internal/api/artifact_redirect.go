@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // artifactRedirectPlan carries the dispatch-time artifact-redirect wiring derived
@@ -43,9 +43,9 @@ type artifactRedirectPlan struct {
 // treats the row as contributing nothing — fail safe).
 func redirectPublicHosts(r types.EgressRedirect) []string {
 	if r.Ecosystem != "" {
-		return workspacescan.PublicRegistryHosts(r.Ecosystem)
+		return hostrules.PublicRegistryHosts(r.Ecosystem)
 	}
-	if from := strings.ToLower(workspacescan.HostOf(r.From)); from != "" {
+	if from := strings.ToLower(hostrules.HostOf(r.From)); from != "" {
 		return []string{from}
 	}
 	return nil
@@ -182,7 +182,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		return plan
 	}
 	have := artifactRunHostSet(preDomains)
-	files, env := workspacescan.EmitArtifactConfig(artifactBaseURLs(sc))
+	files, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc))
 	if len(env) > 0 {
 		plan.env = env
 	}
@@ -217,7 +217,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if !artifactRedirectApplies(r, have) {
 			continue
 		}
-		host := strings.ToLower(workspacescan.HostOf(r.To))
+		host := strings.ToLower(hostrules.HostOf(r.To))
 		if host == "" || seenHost[host] {
 			continue
 		}

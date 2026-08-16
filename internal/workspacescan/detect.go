@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 )
 
 // Collection-side bounds (per scan unless noted). DeriveProfile enforces the
@@ -68,11 +69,6 @@ var (
 	// like "credentials.json" survive, but still rejects whitespace, ANSI,
 	// unicode tricks, and anything value-shaped enough to matter.
 	needNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9._-]{0,63}$`)
-	// suggestedHostRE is the post-validation charset for a suggested egress
-	// host (lowercased, port/path already stripped). A dot is required so a
-	// bare word can't masquerade as a host.
-	suggestedHostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
-
 	// dotenvKeyRE captures a dotenv-template key: optional comment marker,
 	// optional `export`, then the key up to '='. Group 1 = comment marker
 	// (commented ⇒ optional integration), group 2 = the key. Nothing past
@@ -311,14 +307,6 @@ type collectState struct {
 	sourceFiles int
 	yamlFiles   int
 	leakFiles   int
-}
-
-// ValidApprovedHost reports whether h is a plain lowercase dotted host of the
-// exact shape the content lane emits into SuggestedEgress — the only shape the
-// approved-egress API accepts for operator promotion (no scheme, port, path,
-// or wildcard; wildcards remain a policy-allowlist privilege).
-func ValidApprovedHost(h string) bool {
-	return strings.Contains(h, ".") && suggestedHostRE.MatchString(h)
 }
 
 func classifySecretKind(name string) string {
@@ -794,7 +782,7 @@ func detectMavenRepos(path string, facts *ScanFacts) {
 		}
 		if depth > 0 {
 			if m := mavenRepoURLRE.FindStringSubmatch(line); m != nil {
-				if h := HostOf(m[1]); h != "" {
+				if h := hostrules.HostOf(m[1]); h != "" {
 					addSuggestedHost(facts, h)
 				}
 			}
@@ -815,7 +803,7 @@ func detectMavenRepos(path string, facts *ScanFacts) {
 func detectGradleRepos(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range gradleRepoURLRE.FindAllStringSubmatch(line, -1) {
-			if h := HostOf(m[1]); h != "" {
+			if h := hostrules.HostOf(m[1]); h != "" {
 				addSuggestedHost(facts, h)
 			}
 		}
@@ -1063,22 +1051,6 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 	return out
 }
 
-// HostOf extracts the lowercase host of an http(s) URL, or "" if unparseable.
-func HostOf(rawURL string) string {
-	s := strings.TrimSpace(rawURL)
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
-	}
-	if i := strings.IndexAny(s, "/:"); i >= 0 {
-		s = s[:i]
-	}
-	s = strings.ToLower(s)
-	if ValidApprovedHost(s) {
-		return s
-	}
-	return ""
-}
-
 // xmxToMiB converts a -Xmx numeric+unit to MiB (k/m/g), bounded.
 func xmxToMiB(numStr, unit string) int {
 	n := atoiBounded(numStr)
@@ -1216,7 +1188,7 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []string {
 	set := map[string]struct{}{}
 	for _, h := range raw {
-		host := HostOf(h) // trim/strip-scheme/strip-port/lowercase + validity, or "" if invalid
+		host := hostrules.HostOf(h) // trim/strip-scheme/strip-port/lowercase + validity, or "" if invalid
 		if host == "" {
 			continue
 		}

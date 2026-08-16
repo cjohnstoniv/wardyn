@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -553,7 +554,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 			set := map[string]struct{}{}
 			for _, d := range req.Domains {
 				d = strings.ToLower(strings.TrimSpace(d))
-				if !workspacescan.ValidApprovedHost(d) {
+				if !hostrules.ValidApprovedHost(d) {
 					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
 				if _, dead := deadHosts[d]; dead {
@@ -677,7 +678,7 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 			return fmt.Sprintf("requirement %q: invalid integration id", key)
 		}
 	case "egress":
-		if !workspacescan.ValidApprovedHost(rest) {
+		if !hostrules.ValidApprovedHost(rest) {
 			return fmt.Sprintf("requirement %q: invalid egress host (plain lowercase host, no scheme/port/wildcard)", key)
 		}
 	case "write":
@@ -843,7 +844,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || allowed[host] || !workspacescan.ValidApprovedHost(host) {
+			if host == "" || allowed[host] || !hostrules.ValidApprovedHost(host) {
 				continue
 			}
 			denied[host] = struct{}{}

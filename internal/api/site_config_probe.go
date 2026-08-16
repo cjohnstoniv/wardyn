@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // Wardyn deliberately has no test-connection buttons anywhere else: a green
@@ -81,7 +81,7 @@ var proxyProbeTargets = []struct{ url, want string }{
 var proxyProbeHosts = func() []string {
 	hosts := make([]string, 0, len(proxyProbeTargets))
 	for _, t := range proxyProbeTargets {
-		if h := workspacescan.HostOf(t.url); h != "" {
+		if h := hostrules.HostOf(t.url); h != "" {
 			hosts = append(hosts, h)
 		}
 	}
@@ -675,9 +675,9 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		// makes an HTTP error status a failure, the closest thing to a
 		// correctness signal available without a known payload.
 		script = fmt.Sprintf("curl -fsS -o /dev/null --connect-timeout 5 --max-time 15 %q\n", custom)
-		hosts = []string{workspacescan.HostOf(custom)}
+		hosts = []string{hostrules.HostOf(custom)}
 		subj = proxyProbeSubject{
-			endpoints: stripURLScheme(custom), hosts: workspacescan.HostOf(custom),
+			endpoints: stripURLScheme(custom), hosts: hostrules.HostOf(custom),
 			upstream: upstream, custom: true, resolveFailReason: upstreamFailReason,
 		}
 	}
@@ -746,8 +746,8 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	toHost := workspacescan.HostOf(red.To)
-	fromHost := workspacescan.HostOf(red.From)
+	toHost := hostrules.HostOf(red.To)
+	fromHost := hostrules.HostOf(red.From)
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, redirectProbeScript,
 		[]string{toHost}, nil, map[string]string{

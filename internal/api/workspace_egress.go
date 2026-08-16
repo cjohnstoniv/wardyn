@@ -8,8 +8,8 @@ import (
 	neturl "net/url"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // workspace_egress.go computes what a workspace contributes to a run's egress
@@ -152,7 +152,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	var add []string
 	added := map[string]bool{}
 	for _, r := range sc.EgressRedirects {
-		to := strings.ToLower(workspacescan.HostOf(r.To))
+		to := strings.ToLower(hostrules.HostOf(r.To))
 		if to == "" {
 			continue // malformed To: this redirect contributes nothing
 		}
@@ -211,7 +211,7 @@ func appendNetworkRedirectDenials(denied []string, sc types.SiteConfig) []string
 		if r.Ecosystem != "" {
 			continue
 		}
-		from := strings.ToLower(workspacescan.HostOf(r.From))
+		from := strings.ToLower(hostrules.HostOf(r.From))
 		if from == "" || have[from] {
 			continue
 		}

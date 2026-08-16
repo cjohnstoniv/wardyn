@@ -18,10 +18,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // ─── classify* pure state-mapping tables ─────────────────────────────────────
@@ -630,7 +630,7 @@ func TestProxyProbeScript_ChecksBodyAndCoversEveryTarget(t *testing.T) {
 		t.Fatal("want at least two independent targets: one blocked endpoint must not fail the whole probe")
 	}
 	for _, tg := range proxyProbeTargets {
-		h := workspacescan.HostOf(tg.url)
+		h := hostrules.HostOf(tg.url)
 		if !slices.Contains(proxyProbeHosts, h) {
 			t.Errorf("target %s: host %q missing from the probe egress allowlist", tg.url, h)
 		}

@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package workspacescan
+package hostrules
 
 import (
 	"strings"
@@ -104,4 +104,15 @@ func TestEmitArtifactConfig_PartialAndEmpty(t *testing.T) {
 	if env != nil {
 		t.Errorf("blank go base must not emit env, got %v", env)
 	}
+}
+
+// keysOf mirrors the helper this test used in its previous home
+// (internal/workspacescan/gen_test.go) — copied rather than exported, so the
+// two packages' tests stay independent.
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }

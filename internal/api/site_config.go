@@ -17,8 +17,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // validArtifactEcosystems is the closed set of ArtifactOverrides keys (the
@@ -67,15 +67,15 @@ func validSiteURL(raw string) bool {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
-	host := workspacescan.HostOf(raw)
-	return host != "" && workspacescan.ValidApprovedHost(host)
+	host := hostrules.HostOf(raw)
+	return host != "" && hostrules.ValidApprovedHost(host)
 }
 
 // validSiteHost reports whether h is a bare host suitable for ScmHosts — the
 // same shape the scanner's approved-egress promotion accepts (no scheme, port,
 // path, or wildcard).
 func validSiteHost(h string) bool {
-	return workspacescan.ValidApprovedHost(strings.ToLower(strings.TrimSpace(h)))
+	return hostrules.ValidApprovedHost(strings.ToLower(strings.TrimSpace(h)))
 }
 
 // validSecretRef reports whether ref names a real, non-reserved secret (the
@@ -113,7 +113,7 @@ func validSiteURLOrHost(raw string) bool {
 	if strings.ContainsAny(raw, "`$;&|<>\"'\\") {
 		return false
 	}
-	return workspacescan.HostOf(raw) != "" // tolerates a trailing /path or :port
+	return hostrules.HostOf(raw) != "" // tolerates a trailing /path or :port
 }
 
 // validateSiteConfig enforces the structural + security invariants of an

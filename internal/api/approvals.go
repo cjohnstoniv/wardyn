@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // decisionRequest is the approve/deny body.
@@ -226,7 +226,7 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 		return
 	}
 	host := strings.ToLower(strings.TrimSpace(scope.Host))
-	if host == "" || !workspacescan.ValidApprovedHost(host) {
+	if host == "" || !hostrules.ValidApprovedHost(host) {
 		return
 	}
 	key := "egress:" + host

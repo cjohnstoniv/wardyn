@@ -58,6 +58,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 )
 
 // genDevcontainerPath is the single file GenerateDevcontainer emits, at the
@@ -292,7 +294,7 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef 
 	}
 	// Artifact-redirect config: go rides containerEnv (GOPROXY/GOSUMDB); the
 	// other ecosystems emit their own config files (merged into the return below).
-	artifactFiles, artifactEnv := EmitArtifactConfig(artifactBases)
+	artifactFiles, artifactEnv := hostrules.EmitArtifactConfig(artifactBases)
 	for k, v := range artifactEnv {
 		if dc.ContainerEnv == nil {
 			dc.ContainerEnv = map[string]string{}
@@ -315,104 +317,6 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef 
 		out[path] = content
 	}
 	return out, nil
-}
-
-// artifactEcosystems is EmitArtifactConfig's deterministic emit order and the
-// closed set of ecosystems it can configure (mirrors api.validArtifactEcosystems;
-// kept in sync by the shared R5 findings).
-var artifactEcosystems = []string{"npm", "pip", "cargo", "maven", "go", "nuget"}
-
-// EmitArtifactConfig turns operator-configured artifact-registry redirects
-// (ecosystem -> corporate base URL) into the per-tool config each toolchain reads
-// to pull from the corporate mirror instead of the public registry. Returns
-// (files, env):
-//   - files: path -> content, keyed by each tool's real config location relative
-//     to HOME (npm .npmrc, pip .config/pip/pip.conf, cargo .cargo/config.toml,
-//     maven .m2/settings.xml, nuget .nuget/NuGet/NuGet.Config). A dispatch-time
-//     writer drops them under $HOME; a committable export drops the
-//     repo-cascading ones (.npmrc/.cargo) usefully at the repo root and the
-//     rest as documentation.
-//   - env: the go-toolchain variables (go redirects via GOPROXY/GOSUMDB env, not
-//     a file).
-//
-// The output is URL-ONLY and carries NO secret — an injected registry token is
-// applied proxy-side, never written into a committable/readable config file.
-// Maven's settings.xml is intentionally MIRRORS-ONLY: the sandbox reaches the
-// mirror THROUGH wardyn-proxy via MAVEN_OPTS (set platform-wide at dispatch), so
-// no <proxies> block is emitted here — which also keeps a committed settings.xml
-// free of the sandbox-only wardyn-proxy hostname (mirrors=which-URL is additive
-// to proxies=how-to-reach, which lives in MAVEN_OPTS). GOPRIVATE is deliberately
-// NOT set: GOPRIVATE="*" would route modules to direct VCS and defeat the corp
-// GOPROXY, and GOSUMDB=off already disables the checksum DB the corp proxy may
-// not serve. Pure + deterministic; unknown/empty ecosystems are skipped.
-//
-// Injection safety: base URLs come from site-config, which validateSiteConfig
-// already rejects if they contain control chars or shell/XML metacharacters
-// (`$;&|<>"'\), so embedding base verbatim into TOML/XML/ini here is safe.
-func EmitArtifactConfig(bases map[string]string) (files map[string]string, env map[string]string) {
-	files = map[string]string{}
-	env = map[string]string{}
-	for _, eco := range artifactEcosystems {
-		base := strings.TrimSpace(bases[eco])
-		if base == "" {
-			continue
-		}
-		switch eco {
-		case "npm":
-			files[".npmrc"] = "registry=" + base + "\n"
-		case "pip":
-			files[".config/pip/pip.conf"] = "[global]\nindex-url = " + base + "\n"
-		case "cargo":
-			files[".cargo/config.toml"] = "[source.crates-io]\nreplace-with = \"corp\"\n\n" +
-				"[registries.corp]\nindex = \"sparse+" + base + "\"\n"
-		case "maven":
-			files[".m2/settings.xml"] = mavenMirrorSettings(base)
-		case "go":
-			env["GOPROXY"] = base
-			env["GOSUMDB"] = "off"
-		case "nuget":
-			files[".nuget/NuGet/NuGet.Config"] = nugetConfig(base)
-		}
-	}
-	if len(files) == 0 {
-		files = nil
-	}
-	if len(env) == 0 {
-		env = nil
-	}
-	return files, env
-}
-
-// mavenMirrorSettings is a self-contained ~/.m2/settings.xml with a single
-// mirror-of-* pointing at the corporate base URL. No <servers> credentials
-// (token injection is proxy-side) and no <proxies> (MAVEN_OPTS carries the
-// how-to-reach at dispatch).
-func mavenMirrorSettings(base string) string {
-	return `<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
-  <mirrors>
-    <mirror>
-      <id>corp</id>
-      <name>Corporate Artifact Mirror</name>
-      <mirrorOf>*</mirrorOf>
-      <url>` + base + `</url>
-    </mirror>
-  </mirrors>
-</settings>
-`
-}
-
-// nugetConfig is a ~/.nuget/NuGet/NuGet.Config that clears the default public
-// source and adds the corporate feed (no <packageSourceCredentials> — token
-// injection is proxy-side).
-func nugetConfig(base string) string {
-	return `<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="corp" value="` + base + `" />
-  </packageSources>
-</configuration>
-`
 }
 
 // genAgentsMD documents the detected environment + setup commands in the

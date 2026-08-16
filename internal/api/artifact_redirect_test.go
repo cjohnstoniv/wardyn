@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // TestSubstituteArtifactEgress_CorpReplacesPublic: for a CONFIGURED ecosystem the
@@ -294,8 +294,8 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 		"pip": "https://artifactory.corp/api/pip/pip-remote/",
 		"go":  "https://go-mirror.corp/repo",
 	}
-	wantFiles, wantEnv := workspacescan.EmitArtifactConfig(wantBases)
-	gotFiles, gotEnv := workspacescan.EmitArtifactConfig(artifactBaseURLs(folded))
+	wantFiles, wantEnv := hostrules.EmitArtifactConfig(wantBases)
+	gotFiles, gotEnv := hostrules.EmitArtifactConfig(artifactBaseURLs(folded))
 	if !reflect.DeepEqual(wantFiles, gotFiles) {
 		t.Errorf("emitted config files diverged after fold:\n want: %v\n got:  %v", wantFiles, gotFiles)
 	}
@@ -341,7 +341,7 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 	// map-iteration code's "first alphabetically" winner.
 	first := ""
 	for _, red := range folded.EgressRedirects {
-		if strings.EqualFold(workspacescan.HostOf(red.To), "artifactory.corp") {
+		if strings.EqualFold(hostrules.HostOf(red.To), "artifactory.corp") {
 			first = red.TokenSecretRef
 			break
 		}
@@ -355,11 +355,11 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 // public hosts to drop; junk yields nil.
 func TestPublicRegistryHostsCoverage(t *testing.T) {
 	for _, e := range []string{"npm", "pip", "go", "cargo", "maven", "nuget"} {
-		if len(workspacescan.PublicRegistryHosts(e)) == 0 {
+		if len(hostrules.PublicRegistryHosts(e)) == 0 {
 			t.Errorf("ecosystem %q has no public hosts", e)
 		}
 	}
-	if workspacescan.PublicRegistryHosts("bogus") != nil {
+	if hostrules.PublicRegistryHosts("bogus") != nil {
 		t.Errorf("unknown ecosystem must return nil")
 	}
 }
