@@ -24,7 +24,7 @@ import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/typ
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { deriveIntegrations, genericIntegrations } from "../../../lib/api/integrations";
+import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { NewRunDialog } from "../new-run/new-run-dialog";
@@ -332,18 +332,19 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     );
   }
 
-  // The one number the rail's Integrations badge and the embedded step body
-  // both need — the SAME rows /integrations itself derives and totals
-  // (integrations-screen.tsx's totalRows), so the funnel can never disagree
-  // with that page: AI + SCM (deriveIntegrations) PLUS the eight generic
-  // categories (genericIntegrations — pkg/registry/cloud/data/mcp/work/obs/
-  // other). Host proxy / egress redirection are NOT counted here: those moved
-  // to their own Corporate network step (its own "Ready · proxy + N redirects"
-  // badge below) — counting them here too would double-count the same
-  // configuration under two steps.
+  // The one number the rail's "Model & git host" badge needs: AI + SCM, the two
+  // categories the step's two cards actually configure. It used to add a third
+  // term for the eight GENERIC categories (package feeds, registries, cloud,
+  // data, MCP, work tracking, observability, other) that the old /integrations
+  // catalog could hold — those kinds are gone in 0.5, so counting them would be
+  // counting something that can no longer exist.
+  //
+  // Host proxy / egress redirection are NOT counted here: those moved to their
+  // own Corporate network step (its own "Ready · proxy + N redirects" badge
+  // below) — counting them here too would double-count one configuration under
+  // two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
-  const integrationsCount =
-    integrationsData.ai.length + integrationsData.scm.length + genericIntegrations(status.integrations ?? []).length;
+  const integrationsCount = integrationsData.ai.length + integrationsData.scm.length;
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {

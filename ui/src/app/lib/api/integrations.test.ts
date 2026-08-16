@@ -6,18 +6,8 @@
 import { describe, it, expect } from "vitest";
 import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
-import {
-  aiServerId,
-  deriveIntegrations,
-  proxyBannerNeeded,
-  describePosture,
-  blastRadius,
-  genericIntegrations,
-  groupForKind,
-  type IntegrationRow,
-} from "./integrations";
-import type { SetupStatus, SiteConfig } from "../types";
-import type { WireIntegration } from "../types/setup";
+import { aiServerId, deriveIntegrations } from "./integrations";
+import type { SiteConfig } from "../types";
 
 // UI-WS-2: the Add dialog resolves which wire row to adopt/PUT via this
 // helper, BEFORE its first reload can hand it a derived IntegrationRow of its
@@ -126,17 +116,17 @@ describe("deriveIntegrations — AI providers", () => {
   it("a managed subscription reads Captured Xd ago when fresh, and Reconnect soon when aging", () => {
     const fresh = baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: new Date(Date.now() - 3 * 86400_000).toISOString() }] });
     const freshRow = deriveIntegrations(fresh, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(describePosture(freshRow.posture)).toEqual({ text: "Captured 3d ago", tone: "muted" });
+    expect(freshRow.posture).toEqual({ kind: "captured", ageLabel: "3d ago" });
 
     const aging = baseStatus({ harness: [{ provider: "anthropic", captured: true, aging: true }] });
     const agingRow = deriveIntegrations(aging, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(describePosture(agingRow.posture)).toEqual({ text: "Reconnect soon", tone: "warning" });
+    expect(agingRow.posture).toEqual({ kind: "reconnect_soon" });
   });
 
   it("Bedrock: region/model unset wins over an active lane", () => {
     const status = baseStatus({ bedrock: { creds_present: true } });
     const [row] = deriveIntegrations(status, null, []).ai;
-    expect(describePosture(row.posture)).toEqual({ text: "Region/model unset", tone: "warning" });
+    expect(row.posture).toEqual({ kind: "region_model_unset" });
   });
 
   it("Bedrock: precedence picks bearer over static keys, and residency/secrets follow the active lane", () => {
@@ -155,7 +145,8 @@ describe("deriveIntegrations — AI providers", () => {
     const [row] = deriveIntegrations(status, null, []).ai;
     expect(row.bedrockLane).toBe("sso");
     expect(row.harnessProvider).toBe("aws");
-    expect(describePosture(row.posture).text).toMatch(/^Session expires \d{1,2}:\d{2}/);
+    expect(row.posture.kind).toBe("session_expires");
+    expect((row.posture as { when: string }).when).toMatch(/^\d{1,2}:\d{2}/);
   });
 
   // Azure OpenAI is gone as a model provider. It only ever powered Wardyn's own
@@ -215,7 +206,7 @@ describe("deriveIntegrations — SCM hosts", () => {
     const [row] = deriveIntegrations(status, { scm_hosts: ["github.com"] }, []).scm;
     expect(row.isGithubApp).toBe(true);
     expect(row.canReCheck).toBe(true);
-    expect(describePosture(row.posture)).toEqual({ text: "Unknown · checked not yet", tone: "muted" });
+    expect(row.posture).toEqual({ kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" });
   });
 });
 
@@ -247,120 +238,10 @@ describe("deriveIntegrations — network topology is not an integration", () => 
   });
 });
 
-// The banner survived the consolidation — it's detection, not configuration,
-// and it points at Corporate network (T.PROXY_BANNER).
-describe("proxyBannerNeeded", () => {
-  it("fires only when a proxy was detected AND nothing is connected yet", () => {
-    const detected: SetupStatus = baseStatus({ host_proxy: { has_credentials: false, http_proxy: { value: "proxy.corp:8080", source: "env", has_credentials: false } } });
-    expect(proxyBannerNeeded(detected, null)).toBe(true);
-    expect(proxyBannerNeeded(detected, { upstream_proxy_secret_ref: "x" })).toBe(false);
-    // A plain-URL proxy counts as connected too, not just a secret ref.
-    expect(proxyBannerNeeded(detected, { upstream_proxy_url: "http://proxy.corp.acme.com:8080" })).toBe(false);
-    expect(proxyBannerNeeded(baseStatus(), null)).toBe(false);
-  });
-});
-
-describe("blastRadius", () => {
-  it("names the held defaults and leaves the secret un-deleted for a generic AI credential", () => {
-    const row: IntegrationRow = {
-      id: "ai:anthropic_api_key",
-      category: "ai_provider",
-      name: "Anthropic (API key)",
-      typeLabel: "anthropic · api key",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: ["anthropic-api-key"],
-      checkIds: [],
-    };
-    const lines = blastRadius(row, { isDefaultAgent: true, isDefaultFeatures: true });
-    expect(lines[0]).toBe("Agent runs that resolve the server default lose model access — their first model call fails.");
-    expect(lines.some((l) => l.includes("Composer loses its backend"))).toBe(true);
-    expect(lines.at(-1)).toBe("The stored secret anthropic-api-key is not deleted — remove it under Secrets.");
-  });
-
-  it("a harness-backed subscription says disconnecting IS the removal, not 'not deleted'", () => {
-    const row: IntegrationRow = {
-      id: "ai:anthropic_subscription:managed",
-      category: "ai_provider",
-      name: "Claude subscription (managed)",
-      typeLabel: "anthropic · managed login",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: [],
-      harnessProvider: "anthropic",
-      checkIds: [],
-    };
-    const lines = blastRadius(row);
-    expect(lines.some((l) => /disconnecting IS the removal/.test(l))).toBe(true);
-    expect(lines.some((l) => /not deleted — remove it under Secrets/.test(l))).toBe(false);
-  });
-});
-
-// Moved here from the now-deleted generic-sections.test.tsx (B3): the
-// Integrations list no longer has a separate "eight generic sections"
-// component, but genericIntegrations/groupForKind/deliveryForRow are the same
-// functions, now reading rows directly and, with allKinds, driving the
-// base-component list's three sections (AI providers / Source control /
-// Connections) too.
-describe("genericIntegrations / groupForKind", () => {
-  const FEED: WireIntegration = {
-    id: "corp-artifactory",
-    name: "Corp Artifactory",
-    kind: "artifactory",
-    egress: ["artifactory.corp.internal"],
-    secrets: [
-      { role: "token", secret_name: "artifactory-token", delivery: { mode: "proxy_header", header: "Authorization", format: "Bearer %s" } },
-    ],
-    source: "stored",
-  };
-
-  it("by default selects only the generic categories, leaving legacy AI/SCM ids to the richer wizard derivation", () => {
-    const rows = genericIntegrations([
-      FEED,
-      { id: "anthropic_api_key", kind: "anthropic_api_key" },
-      { id: "github_app", kind: "github_app" },
-      { id: "artifact_mirror:x", kind: "artifact_mirror" },
-    ]);
-    expect(rows.map((r) => r.wire.id)).toEqual(["corp-artifactory"]);
-  });
-
-  it("allKinds:true renders AI/SCM rows too — the base-component list's own reading, minus topology", () => {
-    const rows = genericIntegrations(
-      [FEED, { id: "anthropic_api_key", kind: "anthropic_api_key" }, { id: "artifact_mirror:x", kind: "artifact_mirror" }],
-      { allKinds: true },
-    );
-    expect(rows.map((r) => r.wire.id).sort()).toEqual(["anthropic_api_key", "corp-artifactory"]);
-    expect(rows.find((r) => r.wire.id === "anthropic_api_key")!.group.id).toBe("model");
-  });
-
-  it("states delivery from the ROW, not from the type's ideal", () => {
-    expect(genericIntegrations([FEED])[0].delivery).toBe("proxy_injected");
-    const naked = { ...FEED, secrets: undefined };
-    expect(genericIntegrations([naked])[0].delivery).toBe("notbuilt");
-  });
-
-  it("a closed kind with a bespoke (no-delivery) secret states its real lane, not the dishonest 'notbuilt'", () => {
-    const app: WireIntegration = {
-      id: "github_app",
-      kind: "github_app",
-      secrets: [{ role: "app_id", secret_name: "github-app-id" }, { role: "app_key", secret_name: "github-app-key" }],
-    };
-    const gitHost: WireIntegration = { id: "git_host:gitlab.com", kind: "git_host", secrets: [{ role: "pat", secret_name: "gitlab-pat" }] };
-    expect(genericIntegrations([app], { allKinds: true })[0].delivery).toBe("brokered_mint");
-    expect(genericIntegrations([gitHost], { allKinds: true })[0].delivery).toBe("resident_mount");
-  });
-
-  it("an unknown kind with no catalog entry falls to the catch-all group, honestly egress-only", () => {
-    const mystery: WireIntegration = { id: "x", kind: "mystery-service", egress: ["x.example.com"] };
-    const [row] = genericIntegrations([mystery]);
-    expect(row.group.id).toBe("other");
-    expect(row.delivery).toBe("notbuilt");
-  });
-
-  it("groupForKind drops the two topology kinds — Corporate network owns them", () => {
-    expect(groupForKind("artifact_mirror")).toBeUndefined();
-    expect(groupForKind("host_proxy")).toBeUndefined();
-  });
-});
+// proxyBannerNeeded, blastRadius, describePosture and the whole
+// genericIntegrations/groupForKind suite were pinned here. Each of those
+// symbols existed for the deleted /integrations catalog page and went with it;
+// generic integration kinds are no longer a shape Wardyn accepts. What this
+// file still covers — AI providers, SCM hosts, and the ABSENCE pin above for
+// network topology — is the half lib/readiness.ts and
+// settings/connection-cards.tsx read.

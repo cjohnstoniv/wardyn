@@ -61,17 +61,9 @@ vi.mock("../../../lib/api/runs", () => ({
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
   runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
-// The embedded IntegrationsScreen (B3) reads GET /integrations directly now,
-// independent of SetupStatus.integrations — mock it alongside setup/health so
-// the step body doesn't fall through to a real, unmocked wfetch call.
-const listIntegrationsMock = vi.fn();
-vi.mock("../../../lib/api/integrations", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
-  return {
-    ...actual,
-    genericIntegrationsApi: { ...actual.genericIntegrationsApi, list: (...a: unknown[]) => listIntegrationsMock(...a) },
-  };
-});
+// The connection step's cards derive from the SetupStatus/site-config/secrets
+// mocks above — there is no separate GET /integrations fetch to stub any more
+// (genericIntegrationsApi went with the catalog page it served).
 // The Demos step embeds AttachTerminal (xterm) + LiveApprovals; neither renders in
 // jsdom. Stub them to trivial nodes so the step's body mounts without a real PTY.
 vi.mock("../../attach-terminal", () => ({
@@ -140,9 +132,6 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // independent one both GET on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
-    // Default: nothing connected. Individual tests override to match whatever
-    // they pass to getSetupStatusMock's own `integrations`/`secrets` fixture.
-    listIntegrationsMock.mockReset().mockResolvedValue([]);
     // no_runner (this suite mocks no real sandbox runner) is the honest,
     // non-blocking default — see clearCorpNetworkGate for why that's the
     // right fixture for walkthroughs that aren't testing the gate itself.
@@ -445,9 +434,6 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // integrationsCount); the embedded IntegrationsScreen renders off its own
     // independent GET /integrations read — give both the same one row so the
     // two agree, exactly as the real server-derived set would.
-    listIntegrationsMock.mockResolvedValue([
-      { id: "anthropic_api_key", kind: "anthropic_api_key", name: "Anthropic API key", source: "legacy", secrets: [{ role: "api_key", secret_name: "anthropic-api-key" }] },
-    ]);
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 
@@ -474,13 +460,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
 
-  // UX-1: integrationsCount used to add up only the two legacy categories
-  // (AI + SCM) — the eight generic categories this range shipped (package
-  // feeds, container registries, cloud, data, MCP, work tracking,
-  // observability, other) read as nothing connected no matter how many rows
-  // the step body itself showed, and a Next past the step would stamp
-  // "Skipped" on an operator who had just connected one.
-  it("the Integrations badge counts a generic-category connection too, not just AI/SCM", async () => {
+  // The inverse of the old UX-1 rule. That wave made the badge count the eight
+  // GENERIC categories (package feeds, registries, cloud, data, MCP, work
+  // tracking, observability, other) alongside AI/SCM, because the step body
+  // showed them. 0.5 removed generic kinds and the catalog that held them — the
+  // step is two cards, Model provider and Git host — so a stored generic row
+  // must NOT earn the badge for something the step cannot configure.
+  it("the badge ignores a generic-kind row — the step configures model + git host only", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ integrations: [{ id: "jira-1", kind: "jira", name: "Jira" }] }),
     );
@@ -495,8 +481,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /model \& git host/i });
-    expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
-    expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
+    expect(await within(btn).findByText("Optional")).toBeInTheDocument();
+    expect(within(btn).queryByText(/connected/)).not.toBeInTheDocument();
   });
 
   // A4 — "Skipped" state: an optional step the operator navigated past without

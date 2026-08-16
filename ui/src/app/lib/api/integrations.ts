@@ -24,18 +24,11 @@
 // per-integration "default" persistence, an Azure endpoint URL, workspace
 // pin-counts for the blast radius).
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
-import { AI_TYPES, BEDROCK_LANE_META, RESIDENCY_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
+import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
-import {
-  INTEGRATION_GROUPS,
-  integrationTypeById,
-  type IntegrationGroup,
-  type IntegrationTypeMeta,
-} from "../integration-catalog";
-import type { WireIntegration, WireIntegrationProbe, WireIntegrationProbeStatus, WireIntegrationSecret } from "../types/setup";
-import { HttpError, wfetch, errText } from "./core";
+import type { WireIntegration } from "../types/setup";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
 import { secrets as secretsApi } from "./secrets";
@@ -445,22 +438,13 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
 // ---- Host proxy / egress redirection: NOT derived here ----------------------
 // Both used to be categories on this page. They aren't integrations: an
 // integration is an account with a system outside Wardyn, while a proxy and an
-// internal mirror are network topology — and a redirect carries a proof
-// obligation the Corporate network step's gate enforces (every configured row
-// must test "reached" before that step hands off). Corporate network is their
-// single home now; nothing below derives a row for either. The one thing that
-// stayed is the detection banner, which points there.
-
-// A corporate proxy was DETECTED on the host but nothing is connected yet —
-// the one condition T.PROXY_BANNER exists for. A plain upstream_proxy_url
-// counts as configured just as much as a secret ref does (the two are
-// mutually exclusive in practice — see SiteConfig.upstream_proxy_url's doc
-// comment), so either one silences the banner.
-export function proxyBannerNeeded(status: SetupStatus, siteConfig: SiteConfig | null): boolean {
-  if (siteConfig?.upstream_proxy_url || siteConfig?.upstream_proxy_secret_ref) return false;
-  const d = status.host_proxy;
-  return !!(d && (d.http_proxy || d.https_proxy || d.all_proxy || d.pac));
-}
+// internal mirror are network topology. Corporate network is their single home
+// now; nothing here derives a row for either.
+//
+// proxyBannerNeeded() lived here to raise the "a proxy was DETECTED but nothing
+// is connected" banner on the deleted /integrations page. Its replacement is
+// isProxyConfigured/proxyDetected (screens/setup/corp-network-proxy.tsx), which
+// the Corporate network step already uses.
 
 export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig | null, secretNames: string[]): IntegrationsData {
   const present = secretNames.length ? secretNames : status.secrets.present;
@@ -470,68 +454,14 @@ export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig |
   };
 }
 
-export function findRow(data: IntegrationsData, id: string): IntegrationRow | undefined {
-  return [...data.ai, ...data.scm].find((r) => r.id === id);
-}
-
-// ---- Posture -> display text/tone -------------------------------------------
-
-const GH_VERDICT_LABEL = { ref_confined: "Ref-confined", unconfined: "Unconfined", unknown: "Unknown" } as const;
-const GH_VERDICT_TONE = { ref_confined: "success", unconfined: "warning", unknown: "muted" } as const;
-
-export function describePosture(p: Posture): { text: string; tone: "success" | "warning" | "muted" } {
-  switch (p.kind) {
-    case "configured":
-      return { text: "Configured", tone: "muted" };
-    case "captured":
-      return { text: `Captured ${p.ageLabel}`, tone: "muted" };
-    case "reconnect_soon":
-      return { text: "Reconnect soon", tone: "warning" };
-    case "session_expires":
-      return { text: `Session expires ${p.when}`, tone: "muted" };
-    case "region_model_unset":
-      return { text: "Region/model unset", tone: "warning" };
-    case "gh_verdict":
-      return { text: `${GH_VERDICT_LABEL[p.verdict]} · checked ${p.checkedLabel}`, tone: GH_VERDICT_TONE[p.verdict] };
-  }
-}
-
-// ---- Danger zone / blast radius ----------------------------------------------
-
-// Computed from what THIS adapter can actually see — never a fabricated
-// workspace count (W5: workspace LLM-cred pins aren't one of this module's
-// three source endpoints, so that line is a plain statement, not a number).
-export function blastRadius(row: IntegrationRow, opts: { isDefaultAgent?: boolean; isDefaultFeatures?: boolean } = {}): string[] {
-  const lines: string[] = [];
-  if (row.category === "ai_provider") {
-    if (opts.isDefaultAgent) lines.push("Agent runs that resolve the server default lose model access — their first model call fails.");
-    if (opts.isDefaultFeatures) lines.push("Wardyn’s Composer loses its backend — ‘Describe your task’ disappears from New Run.");
-    lines.push("Workspaces pinned to this integration fall back to the server default.");
-    if (row.harnessProvider) {
-      lines.push(`The stored session is not deleted by this — disconnecting IS the removal for a harness login.`);
-    } else if (row.secretNames.length) {
-      lines.push(`The stored secret ${row.secretNames.join(" and ")} is not deleted — remove it under Secrets.`);
-    }
-  } else if (row.category === "scm_host") {
-    lines.push(`Runs stop inheriting ${row.typeLabel} in their egress allowlist.`);
-    if (row.secretNames.length) lines.push(`The stored credential is not deleted — remove it under Secrets.`);
-  }
-  return lines;
-}
-
 export const integrationsApi = {
-  // POST /api/v1/integrations/{id}/adopt — persist a DERIVED legacy row so it
-  // becomes a real stored Integration (verbatim, same id). 409 = already
-  // stored, which callers treat as success (the goal state holds).
-  async adoptIntegration(serverId: string): Promise<void> {
-    const res = await wfetch(`/integrations/${encodeURIComponent(serverId)}/adopt`, { method: "POST" });
-    if (!res.ok && res.status !== 409) throw new HttpError(res.status, await errText(res));
-  },
-
-  // GET /api/v1/integrations exists, but returns the flat wire row (see the
-  // module header above) — no posture, no SCM lane breakdown, no capability
-  // chips — so this composes the three endpoints that carry those facts and
-  // derives rows client-side, same as it always has.
+  // GET /api/v1/integrations exists, but returns the flat wire row — no posture,
+  // no SCM lane breakdown, no capability chips — so this composes the three
+  // endpoints that carry those facts and derives rows client-side.
+  //
+  // adoptIntegration() sat here too, POSTing /integrations/{id}/adopt to promote
+  // a derived row into a stored one so the old catalog could edit it. That route
+  // and that catalog are both gone, and nothing ever called this client for it.
   async list(): Promise<IntegrationsData> {
     const [status, siteConfig, secretNames] = await Promise.all([
       setupApi.getSetupStatus(),
@@ -542,272 +472,11 @@ export const integrationsApi = {
   },
 };
 
-// ─── Generic integrations: the server's own rows ─────────────────────────────
-//
-// Everything above derives the two LEGACY categories (AI providers, SCM hosts)
-// client-side from the endpoints that predate the entity. Everything below is
-// the real thing: the server returns the effective set on SetupStatus, and the
-// eight GENERIC categories — package feeds, container registries, cloud, data
-// stores, MCP, work tracking, observability and the catch-all — have no
-// client-side derivation at all, because there is nothing older to derive them
-// from. A row carries its own hosts, header and secret, which is the whole
-// contract.
-
-/** One generic integration ready to render: the wire row plus its catalog facts. */
-export interface GenericIntegrationRow {
-  wire: WireIntegration;
-  group: IntegrationGroup;
-  /** The catalog entry when the type is one Wardyn knows; absent for a hand-named service. */
-  meta?: IntegrationTypeMeta;
-  name: string;
-  hosts: string[];
-  /** Stated fact, derived from the row itself — never an operator's choice. */
-  delivery: ResidencyKind;
-}
-
-/** id -> group, so a derived section id finds its group object. */
-const GROUP_BY_ID = new Map(INTEGRATION_GROUPS.map((g) => [g.id, g]));
-
-// The section a wire row belongs in DERIVES from kind alone — there is no
-// stored category any more (the base-component fold left one `kind` field):
-// the AI set -> model, github_app/git_host -> scm, a catalog-known slug -> its
-// catalog group, anything else -> the catch-all. The two legacy topology
-// slugs get NO section here (Corporate network owns them; the server only
-// ever derives them read-only).
-export const AI_KINDS = new Set(["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"]);
-export function groupForKind(kind: string): IntegrationGroup | undefined {
-  if (kind === "artifact_mirror" || kind === "host_proxy") return undefined;
-  if (AI_KINDS.has(kind)) return GROUP_BY_ID.get("model");
-  if (kind === "github_app" || kind === "git_host") return GROUP_BY_ID.get("scm");
-  const meta = integrationTypeById(kind);
-  return GROUP_BY_ID.get(meta?.group ?? "other");
-}
-
-/** The first proxy_header-delivered secret row — the generic proxy-injected
- *  credential lane — or undefined when this row delivers none. */
-export function proxyHeaderSecret(wire: WireIntegration) {
-  return wire.secrets?.find((s) => s.delivery?.mode === "proxy_header");
-}
-
-// Closed kinds whose secrets carry no `delivery` field at all — a bespoke
-// transport (broker-minted, credential-helper-read, container-login), not the
-// generic proxy_header/resident_file/resident_env system. The catalog's own
-// `meta` lookup can't find these by wire.kind (a catalog id like "github" or
-// "anthropic" differs from the kind string the wire actually carries, and
-// several catalog ids share one kind — gitlab/bitbucket/ado/gitssh are all
-// "git_host"), so state the fact directly instead of falling through to the
-// dishonest "notbuilt" ("no lane exists") for a row that works today.
-const BESPOKE_KIND_DELIVERY: Partial<Record<string, ResidencyKind>> = {
-  github_app: "brokered_mint",
-  git_host: "resident_mount",
-  anthropic_subscription: "varies",
-  bedrock: "varies",
-  azure_openai: "control_plane",
-};
-
-// deliveryForRow states how THIS row's credential reaches a request, from the
-// row itself rather than from its type: a proxy_header-delivered secret is
-// proxy-injected, and anything else honestly has no lane. The catalog's own
-// delivery is the fallback for a generic type with bespoke lanes (varies,
-// brokered) that a plain header+secret row never has; BESPOKE_KIND_DELIVERY
-// is the same fallback for a closed kind the catalog can't look up by kind.
-function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): ResidencyKind {
-  if (proxyHeaderSecret(wire)?.secret_name) return "proxy_injected";
-  if (meta && meta.delivery !== "proxy_injected") return meta.delivery;
-  if (!meta && BESPOKE_KIND_DELIVERY[wire.kind]) return BESPOKE_KIND_DELIVERY[wire.kind]!;
-  return "notbuilt";
-}
-
-// The ids deriveAiRows/deriveScmRows above stamp on a legacy row — built from
-// aiServerId (UI-WS-2's own "what id does a legacy AI row get" source of
-// truth) plus the two fixed SCM schemes (internal/api/integrations.go:517,
-// :660), so this can't drift from what the derivation above actually claims.
-// genericIntegrations uses it to skip ONLY the ids legacy derivation already
-// renders (with real posture/lanes/capability chips a generic row can't
-// produce) — never the whole model/scm category, which would also hide a
-// stored row under any OTHER id (UI-LIB-1: e.g. a hand-named "corp-anthropic").
-const LEGACY_AI_IDS = new Set<string>(
-  (["anthropic_api_key", "anthropic_subscription", "bedrock", "openai_api_key", "azure_openai"] as AiType[]).flatMap(
-    (t) => [aiServerId(t), aiServerId(t, true), aiServerId(t, false)].filter((id): id is string => !!id),
-  ),
-);
-function isLegacyClaimedId(id: string): boolean {
-  return LEGACY_AI_IDS.has(id) || id === "github_app" || id.startsWith("git_host:");
-}
-
-// Delivery language for a single secret row — shared by the Add dialog's
-// "Required secrets" section and the Detail page's "Secrets" section so the
-// never-resident/resident/brokered claim can't read differently in the two
-// places an operator sees the same fact.
-export const SECRET_DELIVERY_NOTE = {
-  proxy_header: "Never resident — held by Wardyn's store; the egress proxy injects it into outbound calls.",
-  resident: "Resident — read by the credential helper inside the sandbox.",
-  brokered: "Brokered — never a long-lived credential itself; a short-lived scoped token is minted per run from it.",
-} as const;
-
-// ---- Probe (verification) — Coder 3-state honesty: verified / not tested /
-// failed, never a silent pass. `not_tested` is the default for a row with no
-// probe_status at all (never probed since boot, or a fresh row) — the same
-// state a real "not_tested" reads as, so a caller doesn't need to special-case
-// "absent" from "explicitly not tested".
-export interface ProbeChip {
-  label: "verified" | "failed" | "not tested";
-  tone: "success" | "danger" | "neutral";
-  /** probe_status.detail, when the server gave one (e.g. why a probe failed). */
-  detail?: string;
-}
-
-export function probeChip(status?: WireIntegrationProbeStatus): ProbeChip {
-  if (status?.state === "passed") return { label: "verified", tone: "success", detail: status.detail };
-  if (status?.state === "failed") return { label: "failed", tone: "danger", detail: status.detail };
-  return { label: "not tested", tone: "neutral", detail: status?.detail };
-}
-
-// The list's base-summary line: "N secret(s) · N host(s) · <delivery>" — the
-// three base slots that exist for every kind, generic or closed, stated
-// verbatim rather than the row's own capability-specific facts (there are
-// none left to state — see the base model's own "generic kinds are BASE-ONLY"
-// framing).
-export function baseSummary(wire: WireIntegration, delivery: ResidencyKind): string {
-  const secrets = wire.secrets?.length ?? 0;
-  const hosts = wire.egress?.length ?? 0;
-  const secretPart = secrets === 0 ? "no secret" : secrets === 1 ? "1 secret" : `${secrets} secrets`;
-  const hostPart = hosts === 0 ? "no egress" : hosts === 1 ? "1 host" : `${hosts} hosts`;
-  return `${secretPart} · ${hostPart} · ${RESIDENCY_META[delivery].label}`;
-}
-
-// genericIntegrations pairs each wire row with its section and catalog entry.
-// By default it selects only the eight generic categories: a wire row under a
-// legacy AI/SCM id is left out, because the workspace wizard's integration
-// picker (the one other caller of this function) renders those from the
-// richer derivation above instead — lanes, posture and capability chips a
-// generic row simply doesn't have. `allKinds: true` (the Integrations list's
-// own reading, B3) drops that exclusion: the base-component list has no
-// second, richer rendering for an AI/SCM row any more, so it needs every kind
-// back, model and scm sections included.
-export function genericIntegrations(rows: WireIntegration[], opts: { allKinds?: boolean } = {}): GenericIntegrationRow[] {
-  const out: GenericIntegrationRow[] = [];
-  for (const wire of rows) {
-    const group = groupForKind(wire.kind);
-    if (!group) continue;
-    if (!opts.allKinds && (group.id === "model" || group.id === "scm") && isLegacyClaimedId(wire.id)) continue;
-    const meta = integrationTypeById(wire.kind);
-    out.push({
-      wire,
-      group,
-      meta,
-      name: wire.name || meta?.label || wire.id,
-      hosts: wire.egress ?? [],
-      delivery: deliveryForRow(wire, meta),
-    });
-  }
-  return out;
-}
-
-// The base-component confirm-dialog copy — shared by the list and the detail
-// screen so "delete this integration" reads the same real consequences
-// wherever it's triggered (same discipline the legacy blastRadius above keeps
-// for its own two categories). isDefaultAgent/isDefaultFeatures come from the
-// row's own default_for — never guessed.
-export function baseBlastRadius(row: GenericIntegrationRow, opts: { isDefaultAgent?: boolean; isDefaultFeatures?: boolean } = {}): string[] {
-  const lines: string[] = [];
-  if (opts.isDefaultAgent) lines.push("Agent runs that resolve the server default lose model access — their first model call fails.");
-  if (opts.isDefaultFeatures) lines.push("Wardyn's Composer loses its backend — 'Describe your task' disappears from New Run.");
-  lines.push(
-    row.hosts.length > 0
-      ? `Runs granted this integration stop reaching ${row.hosts.join(", ")}.`
-      : "This integration opens no egress allowlist entries, so nothing loses reach that way.",
-  );
-  lines.push("Any workspace requirement naming it opens nothing until it is re-added.");
-  const secret = proxyHeaderSecret(row.wire)?.secret_name ?? row.wire.secrets?.[0]?.secret_name;
-  lines.push(
-    secret
-      ? `The stored secret ${secret} is not deleted — remove it under Secrets.`
-      : "No credential is stored, so nothing leaves the secret store.",
-  );
-  return lines;
-}
-
-/** Rows grouped into their sections, in the catalog's own order, empties dropped. */
-export function genericSections(rows: GenericIntegrationRow[]): { group: IntegrationGroup; rows: GenericIntegrationRow[] }[] {
-  return INTEGRATION_GROUPS.filter((g) => g.id !== "model" && g.id !== "scm")
-    .map((group) => ({ group, rows: rows.filter((r) => r.group.id === group.id) }))
-    .filter((s) => s.rows.length > 0);
-}
-
-/** The body PUT /integrations/{id} takes — every operator-settable field of
- *  the base-component shape. REPLACE semantics, not a merge
- *  (putIntegrationRequest's own doc comment): a field omitted here is written
- *  back as its zero value, silently wiping whatever the stored row had.
- *  WIRE-4: a GET's response carries read-only echo fields this body does NOT
- *  accept (id, probe_status, created_at, updated_at, source, capabilities) —
- *  putIntegrationRequest decodes with DisallowUnknownFields, so spreading a
- *  GET straight in 400s. Hand-pick the fields below off the wire row instead,
- *  before changing one — the same discipline actions.ts's setDefaultFor
- *  already uses. */
-export interface IntegrationWrite {
-  name: string;
-  kind: string;
-  disabled?: boolean;
-  /** Required secrets, each with its delivery (WireIntegrationSecret). */
-  secrets?: WireIntegrationSecret[];
-  egress?: string[];
-  /** Kind-validated non-secret knobs (e.g. "lane", "region", "ecosystems"). */
-  config?: Record<string, unknown>;
-  probe?: WireIntegrationProbe;
-  docs?: string;
-  /** Capability ids the operator turned off individually, overriding what the
-   *  live matrix would otherwise report. */
-  disabled_capabilities?: string[];
-  /** What this integration is the operator-chosen default for (e.g.
-   *  "agent_runs"). RADIO semantics server-side: naming a mark here clears it
-   *  from every OTHER stored row in the same write. */
-  default_for?: string[];
-}
-
-export const genericIntegrationsApi = {
-  // GET /api/v1/integrations — the base-component list DIRECTLY off the wire,
-  // with no client-side re-derivation: the server already folds stored ∪
-  // legacy-derived rows into one WireIntegration[] (B1's read-time fold +
-  // B2's re-derivation), so this is the whole read. Wrapped in {integrations}
-  // server-side (handleListIntegrations), unwrapped here.
-  async list(): Promise<WireIntegration[]> {
-    const res = await wfetch("/integrations");
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
-    const body = (await res.json()) as { integrations?: WireIntegration[] };
-    return body.integrations ?? [];
-  },
-  // POST /api/v1/integrations/{id}/test — runs the stored probe through the
-  // same egress+injection path a run uses and returns the fresh verdict
-  // directly (handleTestIntegration's response body IS the new
-  // probe_status — no second round-trip needed to read it back). A 4xx here
-  // is a REFUSAL about the stored row (no probe configured, disabled, probe
-  // host outside egress) — distinct from a 200 carrying state:"failed"
-  // (the probe ran and didn't pass) or state:"no_runner" (honest, non-error:
-  // nothing to launch a probe with in this deployment).
-  async test(id: string): Promise<WireIntegrationProbeStatus> {
-    const res = await wfetch(`/integrations/${encodeURIComponent(id)}/test`, { method: "POST" });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
-    return (await res.json()) as WireIntegrationProbeStatus;
-  },
-  // PUT /api/v1/integrations/{id} — create or REPLACE (no partial merge).
-  // Throws HttpError, not a bare Error (UI-LIB-6) — same status-preserving
-  // contract as every other write below and elsewhere in lib/api/.
-  async put(id: string, body: IntegrationWrite): Promise<void> {
-    const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
-  },
-  // DELETE /api/v1/integrations/{id}. The operator's stored secrets are NOT
-  // deleted — the surface says so where it offers this. Throws HttpError (not a
-  // bare Error) so a caller can tell a 404 ("no stored integration" — a legacy
-  // row that was never adopted has nothing to delete) from a real failure;
-  // actions.ts's deleteIntegration relies on that distinction.
-  async remove(id: string): Promise<void> {
-    const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
-  },
-};
+// The GENERIC-integration half of this module lived below: genericIntegrations,
+// genericSections, baseSummary, baseBlastRadius, probeChip, IntegrationWrite,
+// SECRET_DELIVERY_NOTE and the genericIntegrationsApi REST client, alongside the
+// display helpers findRow/describePosture/blastRadius. All of it rendered the
+// /integrations catalog page and its Add dialog. Both are deleted, generic kinds
+// are no longer a kind Wardyn accepts, and lib/integration-catalog.ts — their
+// only data source — went with them. What remains above is the AI/SCM derivation
+// that lib/readiness.ts and settings/connection-cards.tsx read.
