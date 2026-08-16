@@ -44,13 +44,10 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
+  | "Workspaces"
   | "Policies"
   | "Secrets"
-  | "Integrations"
-  | "Workspaces"
-  | "Audit"
-  | "Recordings"
-  | "Getting started";
+  | "Audit";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
@@ -72,24 +69,14 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
   await sidebarLink(page, label).click();
 }
 
-// Clears Corporate network's connectivity gate for real (no route stub): this
-// backend genuinely runs `-runner none`, so clicking Test connectivity gets back
-// {state:"no_runner"} from the actual server (internal/api/site_config_probe.go
-// short-circuits on s.cfg.Runner == nil before it ever tries to launch a
-// probe) — corpNetworkGate's one honest bypass, which clears the whole ladder
-// at once (no Egress-tab visit needed). Must be called while the Corporate
-// network step is on screen, on its default Host proxy tab. Shared by
-// getting-started.spec.ts and corp-network.spec.ts — the same gate, two specs.
-export async function passCorpNetworkGate(page: Page): Promise<void> {
-  const main = page.getByRole("main");
-  await main.getByRole("button", { name: /^test connectivity$/i }).click();
-  await expect(main.getByText(/can't test here/i)).toBeVisible();
-  // The forward walk passes THROUGH Egress redirection (navigation, not a
-  // gate) — step through it here so the caller's next "Next:" click advances
-  // to Integrations.
-  await page.getByRole("button", { name: /^next: egress redirection$/i }).click();
-  await expect(main.getByText(/nothing redirected on this host/i)).toBeVisible();
+// navToRoute reaches a screen that is NOT in the six-item sidebar. Recordings is
+// the current case — it is route-reachable until it folds into Audit as a tab.
+// Use navTo for anything the sidebar actually lists; reaching a sidebar entry
+// this way would stop proving the link works.
+export async function navToRoute(page: Page, path: string): Promise<void> {
+  await page.goto(path);
 }
+
 
 // Some specs seed state the API can't create (e.g. an approval — `POST
 // /internal/approvals` needs a run-scoped token, not the admin one), so they talk

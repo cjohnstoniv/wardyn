@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // E2E coverage for the redesigned Recordings screen
@@ -34,7 +34,7 @@ const RUNS_ERROR = "Couldn't load the list of runs.";
 
 async function openRecordings(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navTo(page, "Recordings");
+  await navToRoute(page, "/recordings");
   await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 }
 
@@ -78,7 +78,7 @@ test.describe("Recordings library", () => {
       }
       return route.continue();
     });
-    await navTo(page, "Recordings");
+    await navToRoute(page, "/recordings");
 
     await expect(page.getByText(RUNS_ERROR)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();

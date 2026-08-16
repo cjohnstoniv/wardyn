@@ -32,17 +32,17 @@ async function mockMemberRole(page: import("@playwright/test").Page): Promise<vo
 }
 
 test.describe("member console — nav absence (mocked /me role)", () => {
-  test("member nav is Runs · Approvals · Recordings only — no Getting started, no admin-only items", async ({ page }) => {
+  test("member nav is Runs · Approvals only — no admin-only items", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
 
-    for (const label of ["Runs", "Approvals", "Recordings"] as const) {
+    for (const label of ["Runs", "Approvals"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    // NavLabel (fixtures.ts) has no "Workspaces" entry (a pre-existing gap,
-    // unrelated to this lane) — Policies/Secrets/Audit already prove the
-    // Configure/Forensics groups are gone for a member.
-    for (const label of ["Policies", "Secrets", "Audit", "Getting started"] as const) {
+    // Workspaces is asserted absent too: the flat nav made it a first-class
+    // sidebar entry, so a member must not see it. MEMBER_NAV_PATHS
+    // (app-shell.tsx) is the single source of truth — Runs and Approvals only.
+    for (const label of ["Workspaces", "Policies", "Secrets", "Audit"] as const) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -59,9 +59,9 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     await expect(menu.getByText("member", { exact: true })).toBeVisible();
   });
 
-  test("admin (unmocked, today's default): full nav including Getting started", async ({ page }) => {
+  test("admin (unmocked, today's default): the full six-item nav", async ({ page }) => {
     await gotoConsole(page);
-    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Audit", "Recordings", "Getting started"] as const) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Secrets", "Audit"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
   });

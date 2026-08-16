@@ -7,36 +7,31 @@ import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders a grouped sidebar (Operate / Configure /
-// Forensics + a pinned Getting started entry) whose entries are react-router
-// <NavLink>s (role="link") labelled Runs/Approvals/Policies/Secrets/Audit/
-// Recordings/Getting started, a top-bar "Toggle theme" button (aria-label), and
-// a per-screen <h1> page title supplied by PageHeader. The Fleet board was
-// merged into Runs and no longer exists. AppShell wraps the routed
-// screen in an ErrorBoundary keyed by pathname so a render error in one screen
-// degrades to an inline alert card and navigating away clears it. The theme
-// lives on <html> (documentElement.dark + color-scheme) via ThemeProvider —
-// these specs assert that root state, never a tailwind utility class on a leaf
-// node.
+// The shell (app-shell.tsx) renders a FLAT six-item sidebar — Runs, Approvals,
+// Workspaces, Policies, Secrets, Audit — of react-router <NavLink>s
+// (role="link"), with no group headings. Settings, SSH keys and Demos live in
+// the account menu; Recordings is reachable by URL until it folds into Audit.
+// The top bar carries a "Toggle theme" button (aria-label) and a permanent
+// barrier chip. Each screen supplies its own <h1> via PageHeader.
+//
+// There is no first-run gate and no /setup route: every destination below is
+// reachable immediately, which is the property this spec now pins. AppShell
+// wraps the routed screen in an ErrorBoundary keyed by pathname so a render
+// error degrades to an inline alert card and navigating away clears it. The
+// theme lives on <html> (documentElement.dark + color-scheme) via ThemeProvider
+// — these specs assert that root state, never a tailwind utility class on a
+// leaf node.
 
 // Every sidebar destination, its <h1> page title, and a distinctive subtitle the
 // screen renders so we prove the *screen content* mounted, not just the heading.
-// The redesign made Recordings' screen heading plural ("Recordings") to match its
-// sidebar label. Every blurb below is the screen's real PageHeader description
-// (copy in the respective screen component). Getting started is deliberately NOT
-// covered here: on a fresh session (no wardyn-onboarding-seen flag) it renders
-// the onboarding tour, not the SetupScreen "Getting started" heading — that
-// tour/wizard split is pre-existing product behavior (onboarding-screen.tsx),
-// unit-tested separately in onboarding-screen.test.tsx.
+// Every blurb below is the screen's real PageHeader description.
 const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Runs", heading: "Runs", blurb: /each confined behind its own barrier/i },
   { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
-  { label: "Integrations", heading: "Integrations", blurb: /named connections to systems outside wardyn/i },
   { label: "Workspaces", heading: "Workspaces", blurb: /three tiers: directories & repos configured once/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
-  { label: "Recordings", heading: "Recordings", blurb: /Captured terminal sessions, replayed byte-for-byte/i },
 ];
 
 // The set of sidebar links that must remain mounted on every screen — proves
@@ -44,13 +39,10 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
 const SIDEBAR_LABELS: NavLabel[] = [
   "Runs",
   "Approvals",
+  "Workspaces",
   "Policies",
   "Secrets",
-  "Integrations",
-  "Workspaces",
   "Audit",
-  "Recordings",
-  "Getting started",
 ];
 
 async function expectSidebarMounted(page: import("@playwright/test").Page) {
@@ -105,7 +97,6 @@ test.describe("navigation + shell", () => {
       { label: "Audit", heading: "Audit" },
       { label: "Policies", heading: "Policies" },
       { label: "Secrets", heading: "Secrets" },
-      { label: "Recordings", heading: "Recordings" },
       { label: "Approvals", heading: "Approvals" },
     ];
     for (const dest of circuit) {
