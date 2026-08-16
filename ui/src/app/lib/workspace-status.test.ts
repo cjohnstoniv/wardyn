@@ -3,9 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// This suite used to pin a three-word pipeline vocabulary — "Setting up" while
+// a scan was pending or running, "Usable" once scanned, "Scan failed" on error.
+// The 0.5 dialog does one POST and no scan, so nothing ever left "Setting up":
+// a new workspace wore an amber progress chip forever, for work that was never
+// going to happen. What is pinned now is that the console cannot say that again.
 import { describe, it, expect } from "vitest";
-import { statusWord, statusTone, storySentence } from "./workspace-status";
+import { statusWord, statusTone, storySentence, isUsable } from "./workspace-status";
 import type { Workspace, WorkspaceStatus } from "./types";
+
+const ALL: WorkspaceStatus[] = ["pending_scan", "scanning", "scanned", "error"];
 
 const ws = (over: Partial<Workspace> = {}): Workspace => ({
   id: "w",
@@ -19,50 +26,79 @@ const ws = (over: Partial<Workspace> = {}): Workspace => ({
 });
 
 describe("statusWord", () => {
-  it("maps the four wire statuses", () => {
-    expect(statusWord("pending_scan")).toBe("Setting up");
-    expect(statusWord("scanning")).toBe("Setting up");
-    expect(statusWord("scanned")).toBe("Usable");
-    expect(statusWord("error")).toBe("Scan failed");
+  it("a freshly created workspace reads Ready, not a progress state", () => {
+    expect(statusWord("scanned")).toBe("Ready");
   });
 
-  it("defaults an unrecognized status to Setting up, not a crash or 'Usable'", () => {
-    expect(statusWord("something_future" as WorkspaceStatus)).toBe("Setting up");
+  // The regression that produced the permanent amber chip. Rows written before
+  // 0.5 still carry these; migration 0036 heals them, and this is the belt.
+  it("legacy pending_scan/scanning rows read Ready — nothing was going to scan them", () => {
+    expect(statusWord("pending_scan")).toBe("Ready");
+    expect(statusWord("scanning")).toBe("Ready");
+  });
+
+  it("error names the import that failed, not a scan that no longer exists", () => {
+    expect(statusWord("error")).toBe("Import failed");
+  });
+
+  it("an unrecognized status reads Ready — attachment never depended on this field", () => {
+    expect(statusWord("something_future" as WorkspaceStatus)).toBe("Ready");
+  });
+
+  it("never says 'Setting up' for ANY status — the state it described is gone", () => {
+    for (const s of [...ALL, "something_future" as WorkspaceStatus]) {
+      expect(statusWord(s)).not.toBe("Setting up");
+    }
   });
 });
 
 describe("statusTone", () => {
-  it("splits Setting up into a plain warning vs. a pulsing info dot while actively scanning", () => {
-    expect(statusTone("pending_scan")).toEqual({ tone: "warning" });
-    expect(statusTone("scanning")).toEqual({ tone: "info", pulse: true });
-  });
-
-  it("is success for Usable and danger for Scan failed", () => {
+  it("is success for Ready and danger for Import failed", () => {
     expect(statusTone("scanned")).toEqual({ tone: "success" });
     expect(statusTone("error")).toEqual({ tone: "danger" });
   });
 
+  // The amber/pulsing treatments existed only to animate scan progress.
+  it("no status renders as in-progress — nothing pulses and nothing is amber", () => {
+    for (const s of ALL) {
+      const { tone, pulse } = statusTone(s);
+      expect(pulse).toBeUndefined();
+      expect(tone).not.toBe("warning");
+      expect(tone).not.toBe("info");
+    }
+  });
+
   it("never disagrees with statusWord's bucket for any status", () => {
-    const all: WorkspaceStatus[] = ["pending_scan", "scanning", "scanned", "error"];
-    for (const status of all) {
-      const word = statusWord(status);
-      const tone = statusTone(status).tone;
-      if (word === "Usable") expect(tone).toBe("success");
-      if (word === "Scan failed") expect(tone).toBe("danger");
-      if (word === "Setting up") expect(["warning", "info"]).toContain(tone);
+    for (const s of ALL) {
+      expect(statusTone(s).tone).toBe(statusWord(s) === "Import failed" ? "danger" : "success");
     }
   });
 });
 
 describe("storySentence", () => {
-  it("pins the mock's storyFor sentences verbatim, em-dashes included", () => {
-    expect(storySentence(ws({ status: "scanning" }))).toBe("Scanning the source now.");
-    expect(storySentence(ws({ status: "error" }))).toBe(
-      "The last scan failed, so there's no profile — a run gets no detected egress, secrets or services.",
-    );
-    expect(storySentence(ws({ status: "pending_scan" }))).toBe(
-      "Not scanned yet — runs can attach it, nothing is attached automatically.",
-    );
+  it("answers 'can I use this', not 'how far along is a pipeline'", () => {
     expect(storySentence(ws({ status: "scanned" }))).toBe("Runs can attach this now.");
+    expect(storySentence(ws({ status: "pending_scan" }))).toBe("Runs can attach this now.");
+    expect(storySentence(ws({ status: "scanning" }))).toBe("Runs can attach this now.");
+  });
+
+  it("an errored workspace says what failed AND that runs can still attach it", () => {
+    const s = storySentence(ws({ status: "error" }));
+    expect(s).toMatch(/import run failed/i);
+    expect(s).toMatch(/can still attach/i);
+  });
+
+  it("never promises a scan", () => {
+    for (const st of ALL) {
+      expect(storySentence(ws({ status: st }))).not.toMatch(/scan/i);
+    }
+  });
+});
+
+describe("isUsable", () => {
+  // An import failure never blocked attachment; gating on it would hide a
+  // perfectly usable workspace behind a red chip.
+  it("is true for every status, including error", () => {
+    for (const s of ALL) expect(isUsable(s)).toBe(true);
   });
 });

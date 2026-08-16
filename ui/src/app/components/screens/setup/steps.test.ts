@@ -115,15 +115,19 @@ describe("workspaces badge", () => {
     expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(true);
   });
 
-  it("shows an info-tone 'In progress' and done=false with only a pending workspace", () => {
+  // The regression this replaces: "In progress" was shown for anything not yet
+  // scanned, and 0.5 removed the scan — so the rail read "Workspaces · In
+  // progress" forever, beside a workspace a run could attach immediately. A
+  // legacy pending_scan row (migration 0036 heals them) counts as onboarded.
+  it("counts a legacy pending_scan workspace as onboarded — there is no in-progress state", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const workspaces = [ws("w1", "pending_scan")];
     expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
-      text: "In progress",
-      tone: "info",
+      text: "Ready · 1 onboarded",
+      tone: "success",
     });
-    expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(false);
+    expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(true);
   });
 
   it("shows 'Optional' with no workspaces at all", () => {
@@ -135,12 +139,14 @@ describe("workspaces badge", () => {
     });
   });
 
-  it("reads 'Ready · 1 of 2 onboarded' when one of two is still importing", () => {
+  // The "N of M" split existed to report scan progress across a mixed list.
+  // Every onboarded workspace is attachable now, so the count is just the count.
+  it("counts every onboarded workspace, whatever legacy status it carries", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const workspaces = [ws("a", "scanned"), ws("b", "pending_scan")];
     expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
-      text: "Ready · 1 of 2 onboarded",
+      text: "Ready · 2 onboarded",
       tone: "success",
     });
   });

@@ -350,7 +350,13 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Sources:   req.Sources,
 		BaseImage: normalizeRecommended(req.BaseImage),
 		LLMCred:   req.LLMCred,
-		Status:    types.WorkspacePendingScan,
+		// USABLE ON CREATE. A workspace used to be born pending_scan and a scan
+		// run promoted it; the 0.5 dialog does one POST and no scan, so nothing
+		// promotes it any more (see migration 0036). Creating it pending_scan
+		// meant a permanent "Setting up" chip for work that would never happen,
+		// while a run could attach it perfectly well the whole time —
+		// resolveCreateRunImage is fail-open by design.
+		Status:    types.WorkspaceScanned,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

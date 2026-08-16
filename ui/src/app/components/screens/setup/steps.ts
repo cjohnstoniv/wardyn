@@ -308,7 +308,6 @@ export function stepBadges(
   // needs it to know which configured redirects are actually proven.
   corpNetworkRedirects: EgressRedirect[] = [],
 ): Record<SetupStepId, StepBadge> {
-  const readyWorkspaces = workspaces.filter((w) => isUsable(w.status)).length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
   // "Optional"); the orchestrator upgrades a demo to a green "Done · demo run" once
   // it's been launched (a per-browser signal that doesn't belong in this pure fn).
@@ -328,22 +327,15 @@ export function stepBadges(
         ? { text: `Ready · ${integrationsCount} connected`, tone: "success" }
         : { text: "Optional", tone: "neutral" },
     ...demoBadges,
-    // Count only READY workspaces, not merely onboarded ones — a workspace stuck
-    // mid-import isn't attachable to a run yet, so it earns its own honest "In
-    // progress" state instead of a premature green "Ready · N onboarded".
-    workspaces: readyWorkspaces
-      ? {
-          // Honest count: when some onboarded workspaces aren't ready yet, say so
-          // ("2 of 5") instead of an undercounting "2 onboarded".
-          text:
-            readyWorkspaces === workspaces.length
-              ? `Ready · ${readyWorkspaces} onboarded`
-              : `Ready · ${readyWorkspaces} of ${workspaces.length} onboarded`,
-          tone: "success",
-        }
-      : workspaces.length
-        ? { text: "In progress", tone: "info" }
-        : { text: "Optional", tone: "neutral" },
+    // An onboarded workspace IS a ready workspace as of 0.5 — see
+    // lib/workspace-status.ts. This badge used to split them, showing "In
+    // progress" for anything not yet scanned and "N of M onboarded" while a
+    // scan caught up. With the scan gone, "In progress" became a state nothing
+    // could ever leave: the rail read "Workspaces · In progress" forever next to
+    // a workspace a run could attach immediately.
+    workspaces: workspaces.length
+      ? { text: `Ready · ${workspaces.length} onboarded`, tone: "success" }
+      : { text: "Optional", tone: "neutral" },
     // Review rolls up every check. It's "warning" only when a real blocker exists
     // (a failing check), else a neutral/green summary — the readiness verdict, not
     // a per-topic nag (those live on their own steps now). The one hard requirement
