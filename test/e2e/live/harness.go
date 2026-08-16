@@ -4,7 +4,7 @@
 //go:build docker
 
 // Package live is the Wardyn end-to-end task orchestrator: it drives an
-// ALREADY-RUNNING host-mode wardynd (docker runner + real composer) through its
+// ALREADY-RUNNING host-mode wardynd (docker runner) through its
 // public API, launches REAL confined sandboxes against the task corpus in
 // test/e2e/tasks/, and proves — with deterministic graders that inspect final
 // workspace STATE, never a transcript — that each agent actually completed its
@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ import (
 // ── configuration (all overridable via env) ─────────────────────────────────
 
 // harness bundles the SDK client + raw HTTP for the endpoints the SDK lacks
-// (compose, attach) and the resolved config.
+// (attach) and the resolved config.
 type harness struct {
 	t         *testing.T
 	base      string
@@ -83,8 +82,7 @@ func newHarness(t *testing.T) *harness {
 		t:     t,
 		base:  base,
 		token: cliutil.EnvOr("WARDYN_ADMIN_TOKEN", "demo-admin-token"),
-		// 120s is a blanket backstop; every call site binds its own (shorter) ctx
-		// timeout — compose's 90s (a real model turn) is the longest of them.
+		// 120s is a blanket backstop; every call site binds its own (shorter) ctx timeout.
 		http:      &http.Client{Timeout: 120 * time.Second},
 		tasksDir:  cliutil.EnvOr("WARDYN_E2E_TASKS_DIR", filepath.Join(repoRoot, "test", "e2e", "tasks")),
 		credsDir:  cliutil.EnvOr("WARDYN_E2E_CLAUDE_CREDS", filepath.Join(home, ".wardyn", "claude-creds")),
@@ -197,8 +195,8 @@ func (t Task) hasSolution() bool {
 
 // ── per-run workspace seeding ───────────────────────────────────────────────
 
-// The workspace target inside the sandbox. Matches the composer + agent-run
-// contract (agent-run cds into the first existing of /home/agent/work, ...).
+// The workspace target inside the sandbox. Matches the agent-run contract
+// (agent-run cds into the first existing of /home/agent/work, ...).
 const workspaceTarget = "/home/agent/work"
 
 // seedWorkspace copies the task's seed workspace/ into a fresh per-run host dir
@@ -285,7 +283,7 @@ func boolPtr(b bool) *bool { return &b }
 // subscriptionMounts returns the read-only Claude credential mounts for the
 // subscription real-model lane, or nil if the operator hasn't staged creds
 // (scripts/stage-claude-creds.sh). The manual real-model lane needs these; the
-// oracle lane and the composer lane (which injects them server-side) do not.
+// oracle lane does not.
 func (h *harness) subscriptionMounts() []types.WorkspaceMount {
 	credDir := filepath.Join(h.credsDir, ".claude")
 	credJSON := filepath.Join(h.credsDir, ".claude.json")
@@ -349,7 +347,7 @@ func (h *harness) buildManualPolicy(task Task, class, wsDir string, wantModel, i
 	return spec
 }
 
-// ── launch: manual + composer ───────────────────────────────────────────────
+// ── launch ──────────────────────────────────────────────────────────────────
 
 // launchManual creates a run directly via the SDK with an inline policy.
 func (h *harness) launchManual(ctx context.Context, agent, task, class string, spec types.RunPolicySpec, interactive bool) types.AgentRun {
@@ -368,150 +366,13 @@ func (h *harness) launchManual(ctx context.Context, agent, task, class string, s
 	return run.AgentRun
 }
 
-// composeProposal is the subset of POST /runs/compose we consume.
-type composeProposal struct {
-	Kind     string `json:"kind"`
-	Proposed struct {
-		Run struct {
-			Agent            string `json:"agent"`
-			Repo             string `json:"repo"`
-			Task             string `json:"task"`
-			ConfinementClass string `json:"confinement_class"`
-			Interactive      bool   `json:"interactive"`
-		} `json:"run"`
-		InlinePolicy types.RunPolicySpec `json:"inline_policy"`
-	} `json:"proposed"`
-	Warnings []string `json:"warnings"`
-}
-
-// compose calls POST /api/v1/runs/compose (not in the SDK) and returns the
-// proposal. There is no per-run subscription opt-in anymore
-// (resolveRunIntegration, internal/api/llmcred.go): for a subscription-mode
-// proposal, the live box's subscription integration must be marked
-// DefaultFor:agent_runs, or the compose workspace must be pinned to it.
-func (h *harness) compose(ctx context.Context, prompt, wsPath string) (composeProposal, error) {
-	// Composer calls a real model; give it room.
-	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	status, raw, err := h.authedJSON(cctx, http.MethodPost, "/api/v1/runs/compose", map[string]any{
-		"prompt":    prompt,
-		"workspace": map[string]any{"kind": "local", "path": wsPath, "read_write": true},
-		"mode":      "skip",
-	})
-	if err != nil {
-		return composeProposal{}, err
-	}
-	if status != 200 {
-		return composeProposal{}, fmt.Errorf("compose status %d: %s", status, raw)
-	}
-	var p composeProposal
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return composeProposal{}, err
-	}
-	return p, nil
-}
-
 var classRank = map[string]int{"": 0, "CC1": 1, "CC2": 2, "CC3": 3}
 
-// composerModelAccessConfigured reports whether the box has an AI-provider
-// integration marked DefaultFor:agent_runs — the ONLY way a composed run can
-// resolve to the box's staged Claude subscription creds now that there is no
-// per-run "Use my Claude subscription" opt-in (resolveRunIntegration,
-// internal/api/llmcred.go). NOT the whole story: a box that instead stores a
-// plain anthropic-api-key secret still gets model access via the older
-// direct-secret path (ensureLLMGrant) with no integration configured at all —
-// this check is deliberately conservative (it can skip a box that would in
-// fact work) rather than let a subscription-only box silently fail, or a
-// misconfigured one silently pass by accident, with no diagnostic pointing at
-// the real cause. Uses raw HTTP: GET /api/v1/integrations has no SDK method.
-func (h *harness) composerModelAccessConfigured(ctx context.Context) bool {
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	status, raw, err := h.authedJSON(cctx, http.MethodGet, "/api/v1/integrations", nil)
-	if err != nil || status != http.StatusOK {
-		return false
-	}
-	// The wire shape is the base component: one `kind` field (the stored
-	// Category/Type split is gone), so the AI set is the membership test.
-	var list struct {
-		Integrations []struct {
-			Kind       string   `json:"kind"`
-			DefaultFor []string `json:"default_for"`
-		} `json:"integrations"`
-	}
-	if json.Unmarshal(raw, &list) != nil {
-		return false
-	}
-	for _, in := range list.Integrations {
-		if types.AIProviderKind(in.Kind) && slices.Contains(in.DefaultFor, "agent_runs") {
-			return true
-		}
-	}
-	return false
-}
-
-// launchComposer composes a proposal for the task then launches it — the human
-// "review, then approve & launch" flow, minus the human. The one operator
-// decision it makes explicit: if the composer's RISK model proposed a stronger
-// confinement class than this host can enforce (e.g. it wants Wall for a
-// subscription-cred build, on a Fence-only box), floor the run + policy to the
-// host's best class — exactly what a real operator does at the review step on a
-// CC1-only machine — and log it, because Wall/Vault isolation is then UNVERIFIED.
-// Returns a non-empty skipReason (instead of failing) when the composer's own
-// ANALYSIS backend (the host claude CLI) flakes — a composer-robustness issue
-// orthogonal to the sandbox boundary this suite verifies. Skips loudly (rather
-// than attempting a run doomed to a silent no-model-access degrade) when
-// composerModelAccessConfigured finds no agent-runs-default integration.
-func (h *harness) launchComposer(ctx context.Context, task Task, wsPath, bestClass string) (run types.AgentRun, p composeProposal, skipReason string) {
-	h.t.Helper()
-	if !h.composerModelAccessConfigured(ctx) {
-		h.t.Skipf("no AI-provider integration is DefaultFor:agent_runs on this box — the composer lane cannot resolve " +
-			"model access without one now that there is no per-run subscription opt-in (mark the box's Claude " +
-			"subscription/API-key integration as the agent-runs default, or pin the compose workspace to it; see " +
-			"resolveRunIntegration, internal/api/llmcred.go)")
-	}
-	p, err := h.compose(ctx, task.Prompt, wsPath)
-	if err != nil {
-		if isComposerBackendFlake(err) {
-			return run, p, err.Error()
-		}
-		h.t.Fatalf("compose(%s): %v", task.Name, err)
-	}
-	if p.Kind != "proposal" {
-		h.t.Fatalf("compose(%s): expected a proposal, got kind=%q", task.Name, p.Kind)
-	}
-	runClass := p.Proposed.Run.ConfinementClass
-	spec := p.Proposed.InlinePolicy
-	if classRank[runClass] > classRank[bestClass] || classRank[string(spec.MinConfinementClass)] > classRank[bestClass] {
-		h.t.Logf("composer proposed confinement %q (policy floor %q); this host's best is %q — "+
-			"flooring the run to %q for the test. Isolation above %q is UNVERIFIED here.",
-			runClass, spec.MinConfinementClass, bestClass, bestClass, bestClass)
-		runClass = bestClass
-		spec.MinConfinementClass = types.ConfinementClass(bestClass)
-	}
-	created, err := h.sdk.CreateRun(ctx, client.CreateRunRequest{
-		Agent:            p.Proposed.Run.Agent,
-		Repo:             p.Proposed.Run.Repo,
-		Task:             p.Proposed.Run.Task,
-		ConfinementClass: runClass,
-		Interactive:      p.Proposed.Run.Interactive,
-		InlinePolicy:     &spec,
-	})
-	if err != nil {
-		h.t.Fatalf("CreateRun(composed %s): %v", task.Name, err)
-	}
-	run = created.AgentRun
-	return run, p, ""
-}
-
-// isComposerBackendFlake reports whether a compose() error is the host claude-CLI
-// analysis backend flaking (502 + the CLI's own error envelope) rather than a
-// real proposal/policy/validation defect.
-func isComposerBackendFlake(err error) bool {
-	s := err.Error()
-	return strings.Contains(s, "compose status 502") &&
-		(strings.Contains(s, "composer backend") || strings.Contains(s, "max_turns") || strings.Contains(s, "claude exited"))
-}
+// The composer helpers (composeProposal, compose, composerModelAccessConfigured,
+// launchComposer, isComposerBackendFlake) lived here and drove a
+// POST /api/v1/runs/compose sub-test. The AI Run Composer was cut in 0.5 and
+// that route no longer exists, so they went with it rather than 404ing on the
+// next live run.
 
 // bestInstalledClass returns the strongest confinement class the running stack
 // can enforce (from /healthz).
@@ -670,9 +531,8 @@ func (h *harness) expectFailClosed(class string) {
 // authedJSON does one authenticated JSON request against the harness base URL
 // and returns the status code and the full raw response body. It never fails
 // the test itself (a plain error return, not Fatal) — callers that need to tell
-// a backend flake from a real failure (e.g. launchComposer/isComposerBackendFlake)
-// depend on that. ctx carries the per-call timeout (compose needs longer than
-// the others: 90s for a real model turn vs. the usual 15-30s).
+// a backend flake from a real failure depend on that. ctx carries the per-call
+// timeout (15-30s for the calls that remain).
 func (h *harness) authedJSON(ctx context.Context, method, path string, body any) (status int, raw []byte, err error) {
 	var rd io.Reader = bytes.NewReader(nil)
 	if body != nil {

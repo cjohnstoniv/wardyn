@@ -142,15 +142,14 @@ func TestLive_Tasks(t *testing.T) {
 
 // TestLive_RealModel proves a REAL model-backed agent completes real work. Gated
 // (WARDYN_E2E_REAL_MODEL=1) because it calls a real model and costs tokens/time.
-// Runs the model tasks through BOTH the composer (subscription) and, when creds
-// are staged, the manual subscription path.
+// Runs the model tasks through the manual subscription path when creds are
+// staged. (It also ran a composer lane until the composer was cut in 0.5.)
 func TestLive_RealModel(t *testing.T) {
 	h := newHarness(t)
 	if !h.realModel {
 		t.Skip("WARDYN_E2E_REAL_MODEL=1 not set; skipping the real-model lane (costs model tokens)")
 	}
 	ctx := context.Background()
-	best := h.bestInstalledClass(ctx)
 	installedRM := h.installedClasses(ctx)
 	haveCreds := h.subscriptionMounts() != nil
 
@@ -161,7 +160,7 @@ func TestLive_RealModel(t *testing.T) {
 		}
 
 		// MANUAL path (reliable): launch a real claude-code agent directly with a
-		// subscription inline policy — no composer-analysis step. Proves "a real
+		// subscription inline policy. Proves "a real
 		// model-backed agent actually completes the task" under EACH installed
 		// confinement substrate (so a real Opus agent is exercised at CC1 AND CC2,
 		// not just the best tier).
@@ -188,29 +187,11 @@ func TestLive_RealModel(t *testing.T) {
 			})
 		}
 
-		// COMPOSER path (headline): the full "AI Run Composer → real sandbox →
-		// graded" flow. The composer's own ANALYSIS backend (the host claude CLI)
-		// can flake independently of the sandbox (e.g. max_turns); that is a
-		// composer-robustness issue, not a boundary/agent defect, so a backend 502
-		// SKIPS this sub-test rather than failing it.
-		t.Run("composer/"+task.Name, func(t *testing.T) {
-			hh := h.forT(t)
-			ws := hh.seedWorkspace(task, "composer", false)
-			run, prop, skip := hh.launchComposer(ctx, task, ws, best)
-			if skip != "" {
-				t.Skipf("composer analysis backend flaked (not a sandbox failure): %s", skip)
-			}
-			t.Logf("composed+launched %s run %s; warnings: %s", task.Name, run.ID, strings.Join(prop.Warnings, " | "))
-			final := hh.pollTerminal(run.ID, 240*time.Second)
-			if final.State != "COMPLETED" {
-				t.Fatalf("composed run did not COMPLETE: state=%s", final.State)
-			}
-			ok, out := hh.grade(task, ws)
-			if !ok {
-				t.Fatalf("grader FAILED for composed %s:\n%s", task.Name, out)
-			}
-			t.Logf("REAL-MODEL composer grader PASS: %s", strings.TrimSpace(lastLine(out)))
-		})
+		// The COMPOSER path ("AI Run Composer -> real sandbox -> graded") used to
+		// be this suite's headline sub-test. The composer was cut in 0.5 and
+		// POST /api/v1/runs/compose no longer exists, so the sub-test would have
+		// 404'd on its first run. The paths above still cover what mattered
+		// about it: a real model driving a real sandbox to a graded result.
 	}
 }
 
