@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, screen, waitFor } from "@testing-library/react";
+import { render, act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 
 // HIGH fix (terminal reconnect): on an UNEXPECTED WebSocket drop the component
 // must re-attach to the persistent tmux session with a bounded number of
@@ -58,7 +58,7 @@ vi.mock("../lib/api/core", () => ({ getToken: () => null }));
 // Ticket mint (owner-or-admin lane): unused by the operator/cookie-lane tests
 // below (tokenOnlyMode=false, operator=true never takes this path), stubbed
 // for the owner test that does.
-vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn() } }));
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
 
 // --- Fake WebSocket --------------------------------------------------------
 class FakeWebSocket {
@@ -87,6 +87,10 @@ class FakeWebSocket {
   send(data: string) {
     this.sent.push(data);
   }
+  /** Deliver a server frame. A STRING is a text/control frame (attach-mode). */
+  message(data: unknown) {
+    this.onmessage?.({ data });
+  }
   close() {
     this.readyState = FakeWebSocket.CLOSED;
   }
@@ -94,7 +98,42 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { OperatorProvider } from "./wardyn/operator-context";
+import { RUN_COCKPIT } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
+
+// The attach-mode control frame the daemon sends as a TEXT frame on EVERY
+// connect (internal/api/attach_holder.go), read_only=false included.
+function attachModeFrame(readOnly: boolean, principal: string) {
+  return JSON.stringify({
+    type: "attach-mode",
+    read_only: readOnly,
+    holder: {
+      held: true,
+      principal,
+      since: "2026-08-16T12:00:00Z",
+      cols: 132,
+      rows: 50,
+      source: "web",
+    },
+  });
+}
+
+// Shared jsdom shims: the component measures fonts and observes its container.
+function stubTerminalEnv() {
+  FakeWebSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+  if (!("fonts" in document)) {
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+  }
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+}
 
 describe("AttachTerminal reconnect", () => {
   beforeEach(() => {
@@ -322,4 +361,135 @@ describe("AttachTerminal — forced refit clears a stale tmux clamp", () => {
     expect(nudge.rows).toBe(real.rows);
   });
 });
+});
+
+// Attach is a SHARED tmux session. The daemon admits a second client READ-ONLY
+// and says so in an attach-mode TEXT frame on every connect; a take-over closes
+// the displaced client with 1008 + `taken over by <principal>`. The regression
+// that matters most is in here: a displaced client that RECONNECTS lands right
+// back on top of the new holder — the two-clients-fighting state the holder
+// registry exists to end.
+describe("AttachTerminal — attach mode, displacement, take-over", () => {
+  beforeEach(() => {
+    stubTerminalEnv();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("read_only:true puts the terminal in the spectator state and names the holder", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    expect(screen.getByText(RUN_COCKPIT.heldBy("alice@example.com"))).toBeInTheDocument();
+    expect(screen.getByText(RUN_COCKPIT.watchingReadOnly)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeInTheDocument();
+  });
+
+  it("read_only:false leaves today's driving behaviour untouched", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+
+    expect(screen.getByText(RUN_COCKPIT.driving)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.watchingReadOnly)).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
+    // Still the writer's own socket — nothing was torn down by the frame.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // THE regression. Contrast with "reconnects (opens a new socket) after an
+  // UNEXPECTED close" above: same non-1000 code shape, opposite required
+  // behaviour, because this close means someone else is now typing.
+  it("a close with code 1008 does NOT open a new socket", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+    await act(() => vi.advanceTimersByTimeAsync(30000));
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("a close with code 1008 shows the taken-over state", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+
+    expect(screen.getByText(RUN_COCKPIT.heldBy("bob@example.com"))).toBeInTheDocument();
+    // The header must stop claiming we drive a PTY we no longer hold.
+    expect(screen.queryByText(RUN_COCKPIT.driving)).toBeNull();
+    expect(screen.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeInTheDocument();
+  });
+
+  // Only the reason survived (a proxy rewrote the code): still a displacement,
+  // still no reconnect.
+  it("the `taken over by ` reason alone is enough to stop the reconnect", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+
+    act(() => ws.drop(1006, "taken over by bob@example.com"));
+    await act(() => vi.advanceTimersByTimeAsync(30000));
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+// Take-over EVICTS, it does not promote: after the POST returns, this client's
+// socket is STILL the read-only one, so it has to reconnect to claim the writer
+// slot (handleAttachTakeover's own note). Real timers — the confirm dialog is
+// Radix, driven the same way live-approvals.test.tsx drives its deny confirm.
+describe("AttachTerminal — take-over reconnects to claim the writer slot", () => {
+  beforeEach(stubTerminalEnv);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("confirm → takeoverAttach → a NEW socket is opened", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue(undefined);
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    // The confirm names the human whose session this ends.
+    expect(within(dialog).getByText(RUN_COCKPIT.takeOverConfirm("alice@example.com"))).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    // The evict-then-reconnect: a second socket, opened by us, not by backoff.
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  });
+
+  it("a failed take-over surfaces the server's reason and does NOT reconnect", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockRejectedValue(new Error("nobody is attached to this run; nothing to take over"));
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    expect(await screen.findByText(/nothing to take over/)).toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
 });

@@ -12,12 +12,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
   Check,
-  ChevronRight,
-  Fingerprint,
-  Globe,
-  KeyRound,
   LayoutDashboard,
-  Link as LinkIcon,
   Loader2,
   ScrollText,
   ShieldCheck,
@@ -57,21 +52,30 @@ import {
   ApprovalKindChip,
   ApprovalStateBadge,
   Chip,
-  EgressDecisionChip,
-  SectionCard,
 } from "../wardyn/primitives";
-import { JsonBlock, Mono } from "../wardyn/code-block";
-import { CopyButton } from "../wardyn/copy-button";
+import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
-import { LiveApprovals } from "../wardyn/live-approvals";
+import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator } from "../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
-import { cn } from "../ui/utils";
+import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import {
+  OPERATOR_ONLY_REASON,
+  RUN_COCKPIT,
+  RUN_MODE,
+  VIEWER_APPROVAL_BLOCKS_NOTE,
+} from "../wardyn/copy";
 import { ConnectSSHCard } from "./run-detail-ssh";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { RunDetailCommandBar } from "./run-detail-command-bar";
+import {
+  CredentialsWidget,
+  EgressWidget,
+  FilesChangedWidget,
+  IdentityWidget,
+  SandboxWidget,
+} from "./run-detail/widgets";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -173,8 +177,14 @@ export function RunDetailScreen() {
 
   // Lazy recording load on first Recording-tab open (and on each session pick,
   // which resets recState to "idle").
+  //
+  // ALSO for a finished run sitting on Overview: its terminal pane replays the
+  // cast in place (design board 2d's fourth state), so the fetch can no longer
+  // be keyed on the Recording tab alone. Still lazy — a LIVE run on Overview
+  // fetches nothing, which is the common case.
+  const wantsRecording = tab === "recording" || (tab === "overview" && terminal && !!run);
   React.useEffect(() => {
-    if (tab !== "recording" || !id || recState !== "idle") return;
+    if (!wantsRecording || !id || recState !== "idle") return;
     setRecState("loading");
     recordingsApi
       .getRecording(id, recKey || id)
@@ -183,7 +193,7 @@ export function RunDetailScreen() {
         setRecState("ready");
       })
       .catch(() => setRecState("error"));
-  }, [tab, id, recKey, recState]);
+  }, [wantsRecording, id, recKey, recState]);
 
   const copyLink = () => {
     const url = `${window.location.origin}/runs/${encodeURIComponent(id)}`;
@@ -227,27 +237,22 @@ export function RunDetailScreen() {
   };
 
   // ----- top-level states -----
-  const shortId = id.replace(/^run_/, "");
+  const pending = approvals.filter((a) => a.state === "PENDING");
 
+  // THE PAGE DOES NOT SCROLL. `h-full min-h-0 flex flex-col` fills app-shell's
+  // <main> exactly — main is flex-1 inside a h-screen column, so its height is
+  // definite and this resolves against it; overflow-y-auto up there then never
+  // fires. Measured in a browser before this was written (1280x720: main
+  // scrollHeight === clientHeight, terminal body clipping 6000px into 464px).
+  // That is why app-shell.tsx needed no change: every OTHER screen still
+  // scrolls exactly as it did.
+  //
+  // The non-Overview tabs DO scroll, individually — Audit renders up to 1000
+  // rows and has to go somewhere.
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-5">
-      {/* Breadcrumb + copy-link */}
-      <div className="mb-4 flex items-center gap-2 text-sm">
-        <Link to="/runs" className="text-muted-foreground hover:text-foreground hover:underline">
-          Runs
-        </Link>
-        <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
-        <Mono className="text-foreground" title={id}>
-          {shortId}
-        </Mono>
-        <Button variant="outline" size="sm" className="ml-1 h-6 gap-1 px-2 text-[0.7188rem]" onClick={copyLink}>
-          {copied ? <Check className="size-3 text-success" /> : <LinkIcon className="size-3" />}
-          {copied ? "Copied" : "Copy link"}
-        </Button>
-      </div>
-
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       {status === "loading" ? (
-        <div className="space-y-4">
+        <div className="space-y-4 p-6">
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="h-6 w-72 animate-pulse rounded bg-muted" />
             <div className="mt-3 h-4 w-96 animate-pulse rounded bg-muted" />
@@ -257,11 +262,11 @@ export function RunDetailScreen() {
           </div>
         </div>
       ) : status === "error" ? (
-        <div className="rounded-xl border border-border bg-card">
+        <div className="m-6 rounded-xl border border-border bg-card">
           <ErrorState onRetry={() => load(true)} />
         </div>
       ) : !run ? (
-        <div className="rounded-xl border border-border bg-card">
+        <div className="m-6 rounded-xl border border-border bg-card">
           <EmptyState
             icon={ScrollText}
             title="Run not found"
@@ -274,76 +279,91 @@ export function RunDetailScreen() {
           />
         </div>
       ) : (
-        <>
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as Tab)}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <SummaryHeader
             run={run}
             terminal={terminal}
             exitCode={exitCodeFromAudit(audit)}
+            pendingApprovalCount={pending.length}
+            sandboxHeld={pending.some(isHeld)}
+            onCopyLink={copyLink}
+            linkCopied={copied}
             onKill={kill}
           />
 
-          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mt-5">
-            <TabsList className="mb-5">
-              <TabsTrigger value="overview" className="gap-1.5">
-                <LayoutDashboard className="size-3.5" /> Overview
-              </TabsTrigger>
-              <TabsTrigger value="approvals" className="gap-1.5">
-                <ShieldCheck className="size-3.5" /> Approvals
-                {pendingCount(approvals) > 0 && (
-                  <span className="rounded-full bg-warning-subtle px-1.5 text-[0.6563rem] font-semibold text-warning">
-                    {pendingCount(approvals)}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="audit" className="gap-1.5">
-                <ScrollText className="size-3.5" /> Audit
-              </TabsTrigger>
-              <TabsTrigger value="recording" className="gap-1.5">
-                <SquareTerminal className="size-3.5" /> Recording
-              </TabsTrigger>
-            </TabsList>
+          <RunDetailCommandBar
+            tabs={
+              <TabsList className="h-7 bg-transparent p-0">
+                <TabsTrigger value="overview" className="h-7 gap-1.5 text-xs">
+                  <LayoutDashboard className="size-3.5" /> Overview
+                </TabsTrigger>
+                <TabsTrigger value="approvals" className="h-7 gap-1.5 text-xs">
+                  <ShieldCheck className="size-3.5" /> Approvals
+                  {pending.length > 0 && (
+                    <span className="rounded-full bg-warning-subtle px-1.5 text-[0.6563rem] font-semibold text-warning">
+                      {pending.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="audit" className="h-7 gap-1.5 text-xs">
+                  <ScrollText className="size-3.5" /> Audit
+                </TabsTrigger>
+                <TabsTrigger value="recording" className="h-7 gap-1.5 text-xs">
+                  <SquareTerminal className="size-3.5" /> Recording
+                </TabsTrigger>
+              </TabsList>
+            }
+          />
 
-            <TabsContent value="overview" className="mt-0">
-              <OverviewTab
-                run={run}
-                grants={grants}
-                egress={egress}
-                audit={audit}
-                approvals={approvals}
-                onGoApprovals={() => setTab("approvals")}
-                onGoAudit={() => setTab("audit")}
-                onGoRecording={() => setTab("recording")}
-              />
-            </TabsContent>
+          {/* Overview is the cockpit: it fills, and nothing inside it scrolls
+              except the evidence rail. */}
+          <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
+            <Cockpit
+              run={run}
+              terminal={terminal}
+              grants={grants}
+              egress={egress}
+              audit={audit}
+              pending={pending}
+              recording={recording}
+              recState={recState}
+              recordingDisabled={recordingDisabled}
+              onGoAudit={() => setTab("audit")}
+              onGoRecording={() => setTab("recording")}
+            />
+          </TabsContent>
 
-            <TabsContent value="approvals" className="mt-0">
-              <ApprovalsTab
-                approvals={approvals}
-                onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
-              />
-            </TabsContent>
+          <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <ApprovalsTab
+              approvals={approvals}
+              onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
+            />
+          </TabsContent>
 
-            <TabsContent value="audit" className="mt-0">
-              <AuditTab events={audit} />
-            </TabsContent>
+          <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <AuditTab events={audit} />
+          </TabsContent>
 
-            <TabsContent value="recording" className="mt-0">
-              <RecordingTab
-                state={recState}
-                recording={recording}
-                recordingDisabled={recordingDisabled}
-                runId={id}
-                sessions={attachSessions(recordingAudit)}
-                selected={recKey || id}
-                onSelect={(key) => {
-                  setRecKey(key);
-                  setRecState("idle");
-                }}
-                onRetry={() => setRecState("idle")}
-              />
-            </TabsContent>
-          </Tabs>
-        </>
+          <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <RecordingTab
+              state={recState}
+              recording={recording}
+              recordingDisabled={recordingDisabled}
+              runId={id}
+              sessions={attachSessions(recordingAudit)}
+              selected={recKey || id}
+              onSelect={(key) => {
+                setRecKey(key);
+                setRecState("idle");
+              }}
+              onRetry={() => setRecState("idle")}
+            />
+          </TabsContent>
+        </Tabs>
       )}
 
       <ReasonDialog
@@ -355,8 +375,229 @@ export function RunDetailScreen() {
   );
 }
 
-function pendingCount(approvals: ApprovalRequest[]): number {
-  return approvals.filter((a) => a.state === "PENDING").length;
+// ---------------------------------------------------------------------------
+// Cockpit — the Overview tab. THE TERMINAL IS THE PAGE.
+//
+// What this replaced: a two-column document that spent its hero on a Run
+// timeline (audit.slice(-12)) and put the live terminal below it at h-[70vh],
+// so on a 1080p display the prompt line sat ~1,800px down. The timeline is
+// GONE — the Audit tab owns the trail — and the terminal now fills the pane.
+//
+// Layout: a fixed grid, terminal 1fr + a 400px evidence rail (design board
+// 2a). Nothing here scrolls except the rail.
+// ---------------------------------------------------------------------------
+function Cockpit({
+  run,
+  terminal,
+  grants,
+  egress,
+  audit,
+  pending,
+  recording,
+  recState,
+  recordingDisabled,
+  onGoAudit,
+  onGoRecording,
+}: {
+  run: AgentRun;
+  terminal: boolean;
+  grants: CredentialGrant[];
+  egress: EgressDecision[];
+  audit: AuditEvent[];
+  /** This run's PENDING approvals — only used to decide whether the viewer
+   *  note applies; the decision surface itself is LiveApprovals' own poll. */
+  pending: ApprovalRequest[];
+  recording: Recording | null;
+  recState: "idle" | "loading" | "error" | "ready";
+  recordingDisabled: boolean;
+  onGoAudit: () => void;
+  onGoRecording: () => void;
+}) {
+  const operator = useOperator();
+  const viewerBlocked =
+    pending.length > 0 && !operator && !pending.some((p) => canDecideApproval(false, p.kind));
+  return (
+    <div
+      className="grid min-h-0 flex-1 gap-2.5 p-2.5"
+      style={{ gridTemplateColumns: "minmax(0,1fr) 400px" }}
+    >
+      {/* Left column: the session, and directly beneath it the approval that
+          is holding the session. */}
+      <div className="flex min-h-0 flex-col gap-2.5">
+        <TerminalPane
+          run={run}
+          terminal={terminal}
+          recording={recording}
+          recState={recState}
+          recordingDisabled={recordingDisabled}
+          onGoRecording={onGoRecording}
+        />
+        {/* THE POINT OF THE REDESIGN: a held egress request renders in the
+            terminal's own column, directly under the output that caused it —
+            not in a sidebar, not a toast. The person who has to decide it is
+            already looking here. Interactive OR autonomous, as long as the run
+            is live. */}
+        {run.state === "RUNNING" && (
+          <div className="shrink-0 space-y-2">
+            {/* Said once, where a viewer actually feels the consequence. This
+                used to be half of the Overview's pending-approval banner; the
+                banner is gone (the command bar states the count and the strip
+                below is the decision surface), but its VIEWER half carries
+                information nothing else on the page does — that the run is
+                stopped and they personally cannot unstick it. Same
+                canDecideApproval kind-question the banner asked: the page is
+                already owner-scoped, so a member here owns every approval
+                shown; egress_domain is theirs to decide, credential and
+                tool_call stay admin-only regardless. */}
+            {viewerBlocked && (
+              <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-[0.75rem] leading-relaxed text-muted-foreground">
+                {VIEWER_APPROVAL_BLOCKS_NOTE}
+              </p>
+            )}
+            <LiveApprovals runId={run.id} />
+          </div>
+        )}
+      </div>
+
+      {/* Evidence rail. It scrolls, and ONLY it does: the board draws this at
+          1080p where every widget fits, but measured at 560px the content is
+          585px in a 396px column — `overflow-hidden` would silently swallow
+          the last widget. The terminal pane still never scrolls. */}
+      <div className="scroll-thin flex min-h-0 flex-col gap-2.5 overflow-y-auto">
+        <EgressWidget egress={egress} onGoAudit={onGoAudit} />
+        <FilesChangedWidget runId={run.id} live={!terminal} />
+        <SandboxWidget runId={run.id} live={!terminal} />
+        <CredentialsWidget grants={grants} audit={audit} />
+        <ConnectSSHCard run={run} />
+        <IdentityWidget run={run} />
+      </div>
+    </div>
+  );
+}
+
+// The Terminal widget's run situations (design board 2d). States 1 and 2
+// (driving / held by another client) live INSIDE AttachTerminal, which is the
+// only thing that knows the socket's attach mode. This picks between the three
+// situations the PARENT can tell apart, which is a question about the run, not
+// about the socket.
+function TerminalPane({
+  run,
+  terminal,
+  recording,
+  recState,
+  recordingDisabled,
+  onGoRecording,
+}: {
+  run: AgentRun;
+  terminal: boolean;
+  recording: Recording | null;
+  recState: "idle" | "loading" | "error" | "ready";
+  recordingDisabled: boolean;
+  onGoRecording: () => void;
+}) {
+  const operator = useOperator();
+  const principal = usePrincipal();
+  // Same owner-or-admin predicate AttachTerminal gates its own connect on, and
+  // the same one the command bar's "attachable" chip claims — all three must
+  // agree or the page promises a terminal it then refuses to open.
+  const canAttach = operator || (!!run.created_by && run.created_by === principal);
+  const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+
+  if (attachable) {
+    // fill: the pane owns the height. h-[70vh] was a guess that predates this
+    // layout and stays the default for every other mount site.
+    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} />;
+  }
+
+  // Finished run: the pane becomes the replay surface in place rather than a
+  // dead box. The Recording TAB is unchanged and remains the full surface
+  // (session picker, disabled-store explanation, retry).
+  if (terminal) {
+    return (
+      <PaneFrame title="Recording" chip={RUN_COCKPIT.finishedReplay}>
+        {recState === "ready" && recording ? (
+          // The player sizes itself with fit:"width" and takes its height from
+          // the cast's rows, so it cannot flex — give it its own scroll box
+          // rather than letting it push the page.
+          <div className="scroll-thin min-h-0 flex-1 overflow-auto p-2">
+            <TerminalPlayer recording={recording} />
+          </div>
+        ) : (
+          <PaneNotice
+            text={
+              recState === "loading" || recState === "idle"
+                ? "Loading the captured session…"
+                : recordingDisabled
+                  ? "Session recording is disabled on this deployment."
+                  : "This run has no captured terminal session."
+            }
+            action={
+              <button onClick={onGoRecording} className="text-[0.75rem] font-medium text-primary hover:underline">
+                Open the Recording tab →
+              </button>
+            }
+          />
+        )}
+      </PaneFrame>
+    );
+  }
+
+  // Live but not drivable: an autonomous run execs the agent directly, so there
+  // is no PTY to type into. (A live interactive run the caller may NOT attach to
+  // lands here too — the honest thing, since the alternative is a terminal that
+  // opens and immediately refuses.)
+  return (
+    <PaneFrame title="Output" chip={run.interactive ? undefined : RUN_COCKPIT.autonomous}>
+      <PaneNotice
+        text={
+          run.interactive
+            ? OPERATOR_ONLY_REASON
+            : RUN_MODE.autonomous.blurb
+        }
+        action={
+          <button onClick={onGoRecording} className="text-[0.75rem] font-medium text-primary hover:underline">
+            Watch the captured session →
+          </button>
+        }
+      />
+    </PaneFrame>
+  );
+}
+
+// The non-attached pane, styled as the terminal frame it stands in for so the
+// hero keeps its shape across all four run situations.
+function PaneFrame({
+  title,
+  chip,
+  children,
+}: {
+  title: string;
+  chip?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3">
+        <SquareTerminal className="size-3.5 text-muted-foreground" aria-hidden />
+        <span className="label-eyebrow">{title}</span>
+        {chip && (
+          <Chip tone="neutral" className="font-mono text-[0.625rem]">
+            {chip}
+          </Chip>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PaneNotice({ text, action }: { text: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
+      {action}
+    </div>
+  );
 }
 
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
@@ -367,316 +608,6 @@ function pendingCount(approvals: ApprovalRequest[]): number {
 // TARGET is that very key.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
   return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
-}
-
-// ---------------------------------------------------------------------------
-// Overview
-// ---------------------------------------------------------------------------
-function OverviewTab({
-  run,
-  grants,
-  egress,
-  audit,
-  approvals,
-  onGoApprovals,
-  onGoAudit,
-  onGoRecording,
-}: {
-  run: AgentRun;
-  grants: CredentialGrant[];
-  egress: EgressDecision[];
-  audit: AuditEvent[];
-  approvals: ApprovalRequest[];
-  onGoApprovals: () => void;
-  onGoAudit: () => void;
-  onGoRecording: () => void;
-}) {
-  const pending = approvals.filter((a) => a.state === "PENDING");
-  const attachable = !!run.interactive && run.state === "RUNNING";
-  const operator = useOperator();
-  // This page is already owner-scoped (getRunAuthorized — a foreign run
-  // 404s), so a member viewing it owns every approval shown. canDecideSome
-  // asks only the KIND question canDecideApproval answers: at least one
-  // pending row here is an egress_domain approval, decidable by its owner
-  // (decide() in approvals.go) — credential/tool_call stay admin-only
-  // regardless of ownership. Per-row gating on the Approvals tab itself still
-  // applies canDecideApproval exactly; this only picks the banner's headline.
-  const canDecideSome = operator || pending.some((p) => canDecideApproval(false, p.kind));
-
-  return (
-    <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
-      {/* main column */}
-      <div className="flex min-w-0 flex-col gap-4">
-        {pending.length > 0 && (
-          <div className="rounded-xl border border-warning/35 bg-warning-subtle/60 p-4">
-            <div className="flex items-start gap-3">
-              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-foreground">
-                  {canDecideSome ? "Waiting for your confirmation" : "Waiting on an operator"}
-                </div>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  {canDecideSome ? (
-                    <>
-                      This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review
-                      the exact requested scope before you decide — nothing is minted until you approve.
-                    </>
-                  ) : (
-                    // Said once, here — the one place a viewer feels the consequence of
-                    // their own run tripping an approval (see copy.ts).
-                    VIEWER_APPROVAL_BLOCKS_NOTE
-                  )}
-                </p>
-                <Button size="sm" className="mt-3" onClick={onGoApprovals}>
-                  Review approvals <ArrowRight className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <SectionCard
-          title="Run timeline"
-          right={<span className="text-xs text-muted-foreground">{audit.length} events</span>}
-        >
-          {audit.length === 0 ? (
-            <EmptyMini text="No audit events recorded for this run yet." />
-          ) : (
-            <Timeline events={audit.slice(-12)} />
-          )}
-          {audit.length > 12 && (
-            <button
-              onClick={onGoAudit}
-              className="mt-3 text-[0.7813rem] font-medium text-primary hover:underline"
-            >
-              View full trail in Audit →
-            </button>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Live terminal"
-          right={
-            <button onClick={onGoRecording} className="text-[0.7813rem] font-medium text-primary hover:underline">
-              Open full recording →
-            </button>
-          }
-        >
-          {attachable ? (
-            <AttachTerminal runId={run.id} createdBy={run.created_by} />
-          ) : (
-            <EmptyMini
-              text={
-                run.state === "RUNNING"
-                  ? "This run is autonomous — the agent drives it. Watch the captured session under Recording."
-                  : "The run isn't live. Replay the captured terminal session under Recording."
-              }
-            />
-          )}
-          {/* Live egress approvals, co-located with the terminal: a held
-              (wait_for_review) request pauses the sandbox until you decide it
-              right here — no need to leave for the Approvals tab. Interactive OR
-              autonomous, as long as the run is live. */}
-          {run.state === "RUNNING" && (
-            <div className="mt-3">
-              <LiveApprovals runId={run.id} />
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      {/* side column */}
-      <div className="flex min-w-0 flex-col gap-4">
-        <SectionCard title="Identity" Icon={Fingerprint}>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-2 text-[0.7813rem]">
-            <KV label="Run ID">
-              <Mono className="text-foreground">{run.id}</Mono>
-            </KV>
-            <KV label="Identity">
-              <CopyValue value={run.spiffe_id} />
-            </KV>
-            <KV label="Repository">
-              <span className="font-mono text-foreground">{run.repo}</span>
-            </KV>
-            {run.workspace_path && (
-              <KV label="Workspace">
-                <span className="break-all font-mono text-foreground">{run.workspace_path}</span>
-              </KV>
-            )}
-            <KV label="Runner">
-              <span className="font-mono text-foreground">{run.runner_target}</span>
-            </KV>
-            {run.sandbox_ref && (
-              <KV label="Sandbox">
-                <span className="break-all font-mono text-foreground">{run.sandbox_ref}</span>
-              </KV>
-            )}
-            {run.image && (
-              <KV label="Image">
-                <span className="break-all font-mono text-foreground">{run.image}</span>
-              </KV>
-            )}
-            {run.policy_id && (
-              <KV label="Policy">
-                <span className="font-mono text-foreground">{run.policy_id}</span>
-              </KV>
-            )}
-            <KV label="Created by">
-              <span className="text-foreground">{run.created_by}</span>
-            </KV>
-            <KV label="Started">
-              <span className="text-foreground">{absoluteTime(run.created_at)}</span>
-            </KV>
-          </dl>
-        </SectionCard>
-
-        <ConnectSSHCard run={run} />
-
-        <GrantsCard grants={grants} audit={audit} />
-
-        <SectionCard
-          title="Egress"
-          Icon={Globe}
-          right={<span className="text-xs text-muted-foreground">{egress.length}</span>}
-        >
-          {egress.length === 0 ? (
-            <EmptyMini text="No outbound connections recorded yet." />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {egress.slice(-6).map((e) => (
-                <div key={e.id} className="flex items-center gap-2 text-[0.7813rem]">
-                  <EgressDecisionChip decision={e.decision} />
-                  <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.domain}>
-                    {e.domain}
-                  </span>
-                  <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
-                    {relativeTime(e.time)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          <button
-            onClick={onGoAudit}
-            className="mt-3 text-[0.7813rem] font-medium text-primary hover:underline"
-          >
-            Full history in Audit →
-          </button>
-        </SectionCard>
-      </div>
-    </div>
-  );
-}
-
-// Credential grants — HONEST (audit finding #15). Grants are ELIGIBILITY
-// records (what the run MAY request), NOT live/active credentials. Active
-// credentials are driven ONLY from `credential.mint` audit events.
-function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: AuditEvent[] }) {
-  // Only SUCCESSFUL mints are real issued credentials — the broker also audits
-  // DENIED mint attempts under credential.mint (outcome!="success"); showing those
-  // as "brokered" would claim a credential that was never issued (finding #15).
-  const minted = audit.filter((e) => e.action === "credential.mint" && e.outcome === "success");
-  return (
-    <SectionCard title="Credential grants" Icon={KeyRound}>
-      <p className="mb-3 text-[0.75rem] leading-relaxed text-muted-foreground">
-        Eligibility — what this run may request. When you approve, the broker mints a short-lived,
-        scoped token; the agent never sees your real keys.
-      </p>
-
-      {grants.length === 0 ? (
-        <EmptyMini text="No credential grants are configured for this run." />
-      ) : (
-        <div className="flex flex-col gap-2">
-          {grants.map((g) => (
-            <div key={g.id} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
-              <KeyRound className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="break-all font-mono text-[0.7813rem] text-foreground">{g.scope}</div>
-                <div className="mt-1">
-                  <Chip tone="neutral" className="text-[0.6875rem]">
-                    eligible to mint
-                  </Chip>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {minted.length > 0 && (
-        <div className="mt-3">
-          <div className="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
-            Minted this run
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {minted.map((e) => (
-              <div key={e.id} className="flex items-center gap-2 text-[0.75rem]">
-                <Chip tone="info" className="text-[0.6875rem]">brokered</Chip>
-                <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.target}>
-                  {e.target || "credential"}
-                </span>
-                <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
-                  {relativeTime(e.time)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {grants.length > 0 && (
-        <details className="mt-3">
-          <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[0.75rem] text-muted-foreground hover:text-foreground">
-            View raw JSON
-          </summary>
-          <JsonBlock value={grants} className="mt-2" />
-        </details>
-      )}
-    </SectionCard>
-  );
-}
-
-function Timeline({ events }: { events: AuditEvent[] }) {
-  return (
-    <div className="flex flex-col">
-      {events.map((e, i) => {
-        const last = i === events.length - 1;
-        const tint = eventTint(e);
-        return (
-          <div key={e.id} className="flex gap-3">
-            <div className="flex w-4 shrink-0 flex-col items-center">
-              <span className={cn("mt-1 size-2 rounded-full", tint)} />
-              {!last && <span className="my-1 w-px flex-1 bg-border" />}
-            </div>
-            <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-4")}>
-              <div className="flex items-baseline gap-2">
-                <span className="min-w-0 truncate font-mono text-[0.7813rem] text-foreground" title={e.action}>
-                  {e.action}
-                </span>
-                <ActorTypeChip type={e.actor_type} />
-                <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
-                  {clockTime(e.time)}
-                </span>
-              </div>
-              {e.target && (
-                <div className="mt-0.5 break-words text-[0.75rem] leading-relaxed text-muted-foreground">
-                  {e.target}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function eventTint(e: AuditEvent): string {
-  if (e.action === "run.kill" || e.action.startsWith("egress.deny")) return "bg-danger";
-  if (e.action.startsWith("approval.")) return "bg-warning";
-  if (e.outcome === "denied") return "bg-warning";
-  if (e.outcome === "failure") return "bg-danger";
-  return "bg-muted-foreground";
 }
 
 // ---------------------------------------------------------------------------
@@ -881,41 +812,6 @@ function RecordingTab({
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Small shared bits
-// ---------------------------------------------------------------------------
-function KV({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-right">{children}</dd>
-    </>
-  );
-}
-
-function CopyValue({ value }: { value: string }) {
-  return (
-    <span className="flex min-w-0 items-center justify-end gap-1.5">
-      <span className="truncate font-mono text-foreground" title={value}>
-        {value}
-      </span>
-      <CopyButton
-        text={value}
-        iconClassName="size-3"
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-      />
-    </span>
-  );
-}
-
-function EmptyMini({ text }: { text: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-      {text}
     </div>
   );
 }

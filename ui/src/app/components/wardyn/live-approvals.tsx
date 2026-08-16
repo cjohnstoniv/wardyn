@@ -39,7 +39,13 @@ const POLL_MS = 2000;
 
 // A held request is a wait_for_review first-use approval — the proxy carries the
 // mode in the approval's requested_scope so the UI can flag the live hold.
-function isHeld(a: ApprovalRequest): boolean {
+//
+// Exported because the run cockpit's command bar states the same fact ("N
+// waiting · sandbox held") one row above this strip. Two copies of the
+// wait_for_review test would be two truths that can disagree, and the
+// disagreement would read as "nothing is holding the sandbox" while the
+// sandbox is, in fact, held.
+export function isHeld(a: ApprovalRequest): boolean {
   return String((a.requested_scope?.mode as string) ?? "") === "wait_for_review";
 }
 

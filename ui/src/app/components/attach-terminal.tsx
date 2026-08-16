@@ -13,6 +13,13 @@
  *   - binary frames from server  → term.write()   (PTY output)
  *   - binary frames to server    ← xterm's onData  (PTY input)
  *   - text frame to server       ← JSON resize     {"type":"resize","cols":N,"rows":N}
+ *   - text frame from server     → JSON attach-mode {"type":"attach-mode","read_only":…}
+ *
+ * Attach is a SHARED tmux session, so a second client is admitted READ-ONLY and
+ * the server says so in the attach-mode frame on EVERY connect (read_only=false
+ * included) — see internal/api/attach_holder.go. This component never infers
+ * its mode from silence, and a client the server DISPLACES (close 1008) must
+ * not reconnect; both rules are implemented below with the reasoning inline.
  *
  * The server side runs a PERSISTENT tmux session per run, so detaching (tab
  * switch, refresh, drop) and re-attaching restores the same session.
@@ -37,8 +44,22 @@ import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-ext-400.css";
 import { getToken } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
-import { Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
+import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
+import { getErrorMessage } from "../lib/format";
+import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
+import { Button } from "./ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
+import { RUN_COCKPIT } from "./wardyn/copy";
 import { useOperator, usePrincipal } from "./wardyn/operator-context";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +122,15 @@ export interface AttachTerminalProps {
    *  integration login out of its frame. */
   heightClass?: string;
   /**
+   * Fill the parent instead of standing at a fixed height: `h-full min-h-0`,
+   * for a mount inside a flex COLUMN that already owns the height (the run
+   * page's cockpit). Overrides heightClass. Opt-in precisely because the
+   * default must stay `h-[70vh]` for every other mount site — a dialog embed
+   * passes its own shorter heightClass, and `h-full` inside a dialog with no
+   * height of its own collapses the terminal to nothing.
+   */
+  fill?: boolean;
+  /**
    * The run's creator (AgentRun.created_by). Compared against the signed-in
    * principal so a member can attach to a run THEY own — see the operator
    * gate below. Omit for a mount site with no run object (e.g. a fresh
@@ -122,13 +152,25 @@ const MAX_RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
+// THE DISPLACEMENT CONTRACT (internal/api/attach_holder.go). A take-over closes
+// the displaced client's socket with code 1008 (StatusPolicyViolation) and a
+// reason of exactly `taken over by <principal>`. That close MUST NOT take the
+// bounded-reconnect path above: the reconnect would land this browser straight
+// back on the PTY as a competing client — the exact two-clients-fighting state
+// the holder registry exists to end — and it would do it while the new holder
+// is typing. We match on the code AND on the reason prefix (a proxy that
+// rewrites the code still forwards the reason, and vice versa: either signal
+// alone is enough to stop). Every OTHER close keeps today's behavior.
+const TAKEN_OVER_CLOSE_CODE = 1008;
+const TAKEN_OVER_REASON_PREFIX = "taken over by ";
+
 export interface AttachTerminalHandle {
   /** Write text straight to the PTY stdin (e.g. a pasted code + "\r"). */
   sendText: (text: string) => void;
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", createdBy },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -151,6 +193,21 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const [connState, setConnState] = React.useState<ConnState>("connecting");
   const [errorMsg, setErrorMsg] = React.useState<string>("");
   const [fullscreen, setFullscreen] = React.useState(false);
+  // What the server told us this socket is (attach-mode frame). null = it has
+  // not told us yet: the frame arrives on EVERY connect, so silence means "not
+  // yet", never "you are driving" — an assumed-writer UI is how a spectator
+  // ends up typing into someone else's session believing it works.
+  const [mode, setMode] = React.useState<{ readOnly: boolean; holder?: AttachHolder } | null>(null);
+  // Set when THIS client was displaced (close 1008). Carries the principal
+  // parsed out of the close reason; empty string if a proxy dropped the reason
+  // and only the code survived — we still know we were displaced, we just
+  // cannot name who to. The socket is gone and we deliberately do not reopen it.
+  const [takenOverBy, setTakenOverBy] = React.useState<string | null>(null);
+  // Live grid, surfaced in the header (design board 2d's right-aligned meta).
+  // Updated by refit, which is the one place that knows the real geometry.
+  const [geom, setGeom] = React.useState<{ cols: number; rows: number } | null>(null);
+  const [confirmTakeover, setConfirmTakeover] = React.useState(false);
+  const [takeoverErr, setTakeoverErr] = React.useState("");
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -186,6 +243,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(text));
   }, []);
   React.useImperativeHandle(ref, () => ({ sendText: sendToPty }), [sendToPty]);
+
+  // Drop the current socket and attach again, KEEPING the xterm instance and
+  // its scrollback. Assigned by the connect effect (which owns `connect` and
+  // the reconnect budget) and called by the take-over flow — see doTakeover for
+  // why a take-over needs a reconnect at all.
+  const reclaimRef = React.useRef<() => void>(() => {});
 
   // Token-only mode routes the WS handshake through a minted attach ticket
   // (the browser cannot put the bearer on the handshake itself).
@@ -223,6 +286,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       /* container not measurable yet — a later observer/raf will refit */
       return;
     }
+    // Same-value guard: the ResizeObserver fires on layout changes that leave
+    // the CELL grid identical, and a fresh object every time would re-render
+    // the panel for nothing.
+    setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
       if (force && term.cols > 1) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
@@ -385,12 +452,40 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           // Mirror the decoded text to the optional observer (token detection).
           const cb = onOutputRef.current;
           if (cb) cb(outDecoder.decode(bytes, { stream: true }));
+          return;
         }
-        // Ignore unexpected text frames (e.g. keepalive pings).
+        // TEXT frame = control JSON. Today the server sends exactly one, the
+        // attach-mode frame, immediately on open (attach_holder.go). Anything
+        // else — a keepalive, a frame from a newer daemon — is ignored exactly
+        // as it was before this branch existed.
+        if (typeof ev.data !== "string") return;
+        try {
+          const msg = JSON.parse(ev.data) as AttachModeMsg;
+          if (msg?.type === "attach-mode") {
+            setMode({ readOnly: !!msg.read_only, holder: msg.holder });
+          }
+        } catch {
+          /* not JSON — nothing to do, same as before */
+        }
       };
 
       ws.onclose = (ev) => {
         if (disposed) return;
+        // DISPLACED — checked BEFORE the reconnect path, because it is the one
+        // close that looks unexpected and must never be retried. See
+        // TAKEN_OVER_CLOSE_CODE: reconnecting here re-claims the PTY on top of
+        // the human who just took it, which is the whole bug this state exists
+        // to prevent. No retry, no onClose() either — the parent should keep
+        // this panel mounted so the operator can see what happened and take it
+        // back, which is the only remaining action.
+        const reason = ev.reason ?? "";
+        if (ev.code === TAKEN_OVER_CLOSE_CODE || reason.startsWith(TAKEN_OVER_REASON_PREFIX)) {
+          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
+          setMode(null); // we hold nothing now; the header must not still say "driving"
+          setConnState("closed");
+          term.writeln(`\r\n\x1b[2m[${reason || "taken over"} — not reconnecting]\x1b[0m`);
+          return;
+        }
         // Clean, intentional close (1000) => the run finished / we unmounted.
         // Don't reconnect; persistent tmux re-attach is only for UNEXPECTED drops.
         if (ev.code === 1000) {
@@ -434,6 +529,33 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           );
         }
       };
+    };
+
+    // TAKE-OVER EVICTS, IT DOES NOT PROMOTE (handleAttachTakeover). After the
+    // POST returns 200 the OLD holder's socket is closed, but OURS is still the
+    // read-only one the server admitted — the server has no mid-stream "you may
+    // now type" message, and inventing one on both ends buys nothing over the
+    // reconnect this component already does perfectly. So: drop our socket and
+    // attach again; the fresh attach registers as holder. Between the eviction
+    // and that attach the holder endpoint honestly reports held:false.
+    reclaimRef.current = () => {
+      if (disposed) return;
+      const cur = wsRef.current;
+      if (cur) {
+        // Detach the handlers first: this close is OUR teardown, not a drop,
+        // and must not run the reconnect/closed bookkeeping on its way out.
+        cur.onclose = null;
+        cur.onerror = null;
+        cur.onmessage = null;
+        try {
+          cur.close(1000, "reclaiming the writer slot");
+        } catch {
+          /* already closing — connect() below is what matters */
+        }
+      }
+      wsRef.current = null;
+      reconnectAttempts = 0; // a deliberate re-attach starts from a full budget
+      connect();
     };
 
     connect();
@@ -589,6 +711,33 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [fullscreen]);
 
+  // --- Holder / take-over ---------------------------------------------------
+  // Spectator: the server admitted us read-only because someone else holds the
+  // PTY. Our keystrokes and resize frames are dropped SERVER-side (attachPump),
+  // so this is purely about saying so — the UI never had words for a state the
+  // console has always been able to reach.
+  const readOnly = mode?.readOnly === true;
+  const displaced = takenOverBy !== null;
+  // Who we would evict. Empty when the server omitted the holder or a proxy ate
+  // the close reason: we then cannot name them, so we do not offer to end
+  // "their" session — a confirm that cannot say whose session it ends is worse
+  // than no button.
+  const holderPrincipal = (displaced ? takenOverBy : mode?.holder?.principal) ?? "";
+
+  const doTakeover = React.useCallback(async () => {
+    setConfirmTakeover(false);
+    setTakeoverErr("");
+    try {
+      await runs.takeoverAttach(runId);
+    } catch (e) {
+      setTakeoverErr(getErrorMessage(e));
+      return;
+    }
+    setTakenOverBy(null);
+    setMode(null);
+    reclaimRef.current(); // evict-then-reconnect; see reclaimRef's assignment
+  }, [runId]);
+
   // Mounting note: this panel is safe to embed anywhere — a page, a card, a
   // dialog — because fullscreen goes through the native API (see
   // toggleFullscreen) rather than a `fixed inset-0` overlay that any ancestor
@@ -604,7 +753,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         // In native fullscreen the element already fills the screen, so it only
         // needs to drop its rounding and its fixed height. The `fixed inset-0`
         // branch is the no-API fallback described above.
-        fullscreen ? "h-full w-full rounded-none" : `${heightClass} rounded-lg`,
+        fullscreen ? "h-full w-full rounded-none" : `${fill ? "h-full min-h-0" : heightClass} rounded-lg`,
         fullscreen && !document.fullscreenElement && "fixed inset-0 z-[100]",
       )}
     >
@@ -620,7 +769,29 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           {connState === "closed" && `[closed] ${runId}`}
           {connState === "error" && `[error] ${runId}`}
         </span>
+        {/* State chip (design board 2d). Only ever rendered from what the
+            SERVER said: "driving" needs an attach-mode frame with
+            read_only=false, so a daemon that never sends one shows no chip
+            rather than a claim we cannot back. */}
+        {(readOnly || displaced) && holderPrincipal && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-info/25 bg-info-subtle px-1.5 py-0.5 font-mono text-[11px] text-info">
+            <Eye className="size-3" />
+            {RUN_COCKPIT.heldBy(holderPrincipal)}
+          </span>
+        )}
+        {!readOnly && !displaced && mode && connState === "open" && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-success/25 bg-success-subtle px-1.5 py-0.5 font-mono text-[11px] text-success">
+            <span className="size-1.5 rounded-full bg-current" />
+            {RUN_COCKPIT.driving}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
+          {/* Live geometry — the grid this client actually has, post-refit. */}
+          {geom && (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {geom.cols}×{geom.rows}
+            </span>
+          )}
           {(connState === "connecting" || connState === "reconnecting") && (
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           )}
@@ -661,13 +832,74 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
       {/* xterm container — flex-grows to fill the panel / fullscreen viewport.
           A pinned-width grid (ptyCols) renders wider than the pane; scroll it
-          horizontally rather than clipping the right edge. */}
-      <div
-        ref={containerRef}
-        className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
-        // Keep clicks on the terminal from bubbling to the outer shell (focus).
-        onMouseDown={(e) => e.stopPropagation()}
-      />
+          horizontally rather than clipping the right edge. The wrapper exists
+          so the read-only badge can be positioned over the grid without being
+          a CHILD of the element xterm owns. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={containerRef}
+          className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
+          // Keep clicks on the terminal from bubbling to the outer shell (focus).
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        {readOnly && (
+          // pointer-events-none: this is a label, not a shield. The input it
+          // describes is dropped SERVER-side; blocking clicks here would also
+          // block selecting and copying the output, which a spectator can do.
+          <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-2 rounded-lg border border-info/35 bg-info/15 px-2.5 py-1.5">
+            <Eye className="size-3.5 text-info" />
+            <span className="font-mono text-[11px] text-info">{RUN_COCKPIT.watchingReadOnly}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Holder footer — only in the two states that have an action. A driving
+          terminal keeps its existing chrome (every dialog embed depends on the
+          panel not growing a footer it did not budget height for). */}
+      {(readOnly || displaced) && (
+        <div className="flex items-center gap-2 border-t border-border bg-card/60 px-3 py-2">
+          {/* The server's own words on failure (e.g. the 409 for taking over
+              nothing), in place of the hint — there is no second line to lose. */}
+          {/* Two different facts, two different sentences: arriving second
+              ("someone is already driving") is not the same as having been
+              displaced mid-session, and heldHint reads as a mild lie in the
+              second case. displacedHint also says the session survived, which
+              is the thing a just-kicked operator actually needs to know. */}
+          <p className={cn("min-w-0 flex-1 text-xs", takeoverErr ? "text-danger" : "text-muted-foreground")}>
+            {takeoverErr ||
+              (displaced && holderPrincipal
+                ? RUN_COCKPIT.displacedHint(holderPrincipal)
+                : RUN_COCKPIT.heldHint)}
+          </p>
+          {holderPrincipal && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmTakeover(true)}>
+              {RUN_COCKPIT.takeOver}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Take-over ends another human's live session, so it gets the same
+          confirm stop as the irreversible deny in live-approvals.tsx. */}
+      <AlertDialog open={confirmTakeover} onOpenChange={(o) => !o && setConfirmTakeover(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{RUN_COCKPIT.takeOver}</AlertDialogTitle>
+            <AlertDialogDescription>{RUN_COCKPIT.takeOverConfirm(holderPrincipal)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void doTakeover();
+              }}
+            >
+              {RUN_COCKPIT.takeOver}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 });

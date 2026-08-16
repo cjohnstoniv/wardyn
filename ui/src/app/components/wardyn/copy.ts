@@ -151,6 +151,13 @@ export const RUN_COCKPIT = {
   watchingReadOnly: "watching read-only — keystrokes go nowhere",
   heldHint:
     "Someone is already driving this session from a CLI. You can watch it live, or take it from them — they get told, and it lands in the audit trail.",
+  // The DISPLACED case is not the same sentence. heldHint says "someone is
+  // already driving" — true when you arrive second, false and confusing when
+  // you were driving and got taken over. This one describes what actually
+  // happened, and says the session is intact: tmux survives, so reclaiming it
+  // costs nothing but a click.
+  displacedHint: (principal: string) =>
+    `${principal} took over this session. Nothing was lost — the terminal is still running, and you can take it back.`,
   takeOver: "Take over",
   // Deliberately concrete about the consequence: take-over ENDS someone's
   // session. Mirrors the irreversible-deny confirm in live-approvals.tsx.
@@ -174,6 +181,33 @@ export const RUN_COCKPIT = {
   noVcs: "This workspace isn't a git repository — there's no diff to show.",
   // The substrate has no exec channel, so neither evidence read can run.
   execUnsupported: "This runner can't be inspected while it's running.",
+  // Empty/degraded states shared by the two POLLING evidence widgets. They live
+  // here rather than as per-file consts because both widgets need the same two
+  // sentences — a duplicated literal in each file is exactly the drift this
+  // module exists to prevent.
+  noFilesChanged: "No files changed yet.",
+  noSandboxYet: "No sandbox for this run yet.",
+  // A transient poll failure. Deliberately not an error banner: both widgets
+  // keep their last-good data on a background poll blip (the run screen's own
+  // rule — see the load() catch in run-detail.tsx), so this is a quiet note,
+  // not an alarm.
+  loadError: "Couldn't load right now.",
+  filesTruncated: "Showing a partial list — more files changed than are shown here.",
+
+  // --- Command bar ---
+  // The pending-approval chip. Two forms, because they are two different facts:
+  // an approval merely queued vs. one that is HOLDING the sandbox right now
+  // (a wait_for_review first-use gate — the connection is parked until someone
+  // decides). Only the second earns the urgency, and the command bar is the one
+  // place that fact is visible without scrolling or clicking.
+  waiting: (n: number) => `${n} waiting`,
+  waitingHeld: (n: number) => `${n} waiting · sandbox held`,
+  // Phase-2 layout controls. Verbatim from the design board; inert until the
+  // canvas lands, but named here so the live versions can't drift from the
+  // placeholders they replace.
+  layoutPreset: (preset: string) => `layout: ${preset}`,
+  addWidget: "Add widget",
+  editLayout: "Edit layout",
 } as const;
 
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")
