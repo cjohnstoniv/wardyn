@@ -156,7 +156,7 @@ describe("SetupLayout", () => {
 
     it("the gate never renders on the LAST step (there is no Next to gate)", () => {
       renderLayout({
-        current: "launch",
+        current: "review",
         nextGate: { blocked: true, head: "Should never appear here.", reason: "Nor this." },
       });
       expect(screen.queryByText("Should never appear here.")).not.toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("SetupLayout", () => {
   // now (see step-bodies.test.tsx). Deleted here; nothing left to test at
   // this layer once the shell stopped taking onLaunch/canLaunch at all.
   it("renders no launch button of its own on the last step — only 'Finish setup' and 'Back'", () => {
-    renderLayout({ current: "launch" });
+    renderLayout({ current: "review" });
     expect(screen.queryByRole("button", { name: /launch your first run/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /finish setup/i })).toBeInTheDocument();
   });

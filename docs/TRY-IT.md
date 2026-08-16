@@ -11,9 +11,9 @@ tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. The rail runs 10 steps: 3 essentials, 4 hands-on
+straight into your first run. The rail runs 9 steps: 3 essentials, 4 hands-on
 demos, 1 **Your work** step that onboards what you'll actually run against
-(**Workspaces**), and 2 to finish.
+(**Workspaces**), and **Review** to finish.
 Inside a corporate network, the **Corporate network** step — seated right
 before Integrations, because nothing downstream can be verified until the
 network path works — chains the sandbox proxy through your proxy and

@@ -19,7 +19,7 @@
 // below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -27,14 +27,13 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
-import { NewRunDialog } from "../new-run/new-run-dialog";
 import { deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
 import { CorpNetworkStep, isProxyConfigured, proxyDetected, type CorpStepActions } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
-import { LaunchStep, ReviewStep, WorkspacesStep } from "./step-bodies";
+import { ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
@@ -75,7 +74,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // only place a proxy is configured. Read once at mount (an unknown or
   // absent value just starts at the beginning); the URL is not kept in sync
   // afterwards, since the rail is the navigation from then on.
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [stepId, setStepId] = React.useState<SetupStepId>(() => {
     const want = searchParams.get("step");
@@ -140,7 +138,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // from the funnel; they're embedded in the Integrations "Add integration"
   // dialog instead, which owns its own local copy for editing.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
-  const [newRunOpen, setNewRunOpen] = React.useState(false);
   // Default-barrier pick (E3). Null until an explicit click — until then the
   // effective selection is the resolved default (persisted pick if this host runs
   // it, else strongest available). Clicking a ready card both selects and persists.
@@ -502,28 +499,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onJump={selectStep}
           />
         )}
-        {stepId === "launch" && (
-          <LaunchStep
-            status={status}
-            onLaunch={() => setNewRunOpen(true)}
-            onOpenRuns={finish}
-            canLaunch={readiness.ready}
-            llmReady={readiness.llmReady}
-          />
-        )}
       </SetupLayout>
 
-      <NewRunDialog
-        open={newRunOpen}
-        onOpenChange={setNewRunOpen}
-        onCreated={(r) => {
-          // One post-launch rule: every entry point lands on the run it
-          // launched (§7) — supersedes onDone's own plain navigate("/runs")
-          // (App.tsx) with the more specific detail-page destination.
-          dismissSetup();
-          navigate(`/runs/${encodeURIComponent(r.id)}`);
-        }}
-      />
+      {/* The NewRunDialog lived here, opened only by the deleted Launch step.
+          Launching is the top bar's "New run" on every screen, so the funnel no
+          longer carries its own copy — and `finish` (Review's "Finish setup")
+          is what retires the funnel now. */}
     </>
   );
 }

@@ -173,14 +173,16 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all ten funnel steps and Next/Back move within bounds", async () => {
+  it("walks all nine funnel steps and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
     // Back-ish verb. STEP_ORDER: essentials [environment, corp_network,
     // integrations] → demos (four sub-steps) → your work [workspaces] → finish
-    // [review, launch].
+    // [review]. Review is the LAST step: the Launch step was cut, because its
+    // "Example — not live config" card showed a fabricated task against a repo
+    // that may never have been onboarded.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -226,20 +228,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    // launch step — its h2 heading + LaunchStep's own inline CTA. #11: the
-    // footer nav used to render an IDENTICAL second "Launch your first run"
-    // button 20px away — deleted, so exactly one renders now.
-    expect(
-      await screen.findByRole("heading", { name: /launch your first run/i }),
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^launch your first run$/i })).toHaveLength(1);
-    // last step: no more Next
+    // Review is the last step: no more Next, and no launch CTA of its own.
     expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /launch your first run/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /finish setup/i })).toBeInTheDocument();
 
-    // Back from launch lands on Review (the new penultimate step).
+    // Back from Review lands on the workspaces step.
     await user.click(screen.getByRole("button", { name: /^back$/i }));
-    expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
+    expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument();
   });
 
   // The gate itself, wired end to end through the real orchestrator — the unit
@@ -599,34 +595,21 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
     // Corporate network is a mandatory gate even for a rail jump (W2-S1-2) —
     // clear it (same helper every other walkthrough in this suite uses) before
-    // jumping to the final (Launch) step.
+    // jumping to the final step.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     await clearCorpNetworkGate();
 
-    // Jump to the final (Launch) step via the rail and complete via "Finish setup".
-    await user.click(screen.getByRole("button", { name: /^Launch —/ }));
+    // Review is the final step now, and "Finish setup" is its completion.
+    await user.click(screen.getByRole("button", { name: /^Review —/ }));
     await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
     expect(setupDismissed()).toBe(true);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  // W2-S1-1: "Open Runs" is a second exit from the Launch step (alongside
-  // "Finish setup") — it must dismiss setup too, or RequireSetupComplete
-  // bounces the operator right back to step 1 the moment they land on /runs.
-  it("Launch step's 'Open Runs' also dismisses setup (not just 'Finish setup')", async () => {
-    const onDone = vi.fn();
-    renderScreen(<SetupScreen onDone={onDone} />);
-    await screen.findByText("Fence");
-
-    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    await clearCorpNetworkGate();
-
-    await user.click(screen.getByRole("button", { name: /^Launch —/ }));
-    await user.click(screen.getByRole("button", { name: /^open runs$/i }));
-    expect(setupDismissed()).toBe(true);
-    expect(onDone).toHaveBeenCalledTimes(1);
-  });
+  // "Open Runs" was the Launch step's second exit, and it dismissed setup so
+  // the old mandatory gate could not bounce the operator back to step 1. Both
+  // the step and that gate are gone; "Finish setup" on Review is the one
+  // completion, covered above.
 
   // The fast-path banner was REMOVED (it duplicated the Launch step and talked
   // over the step being configured). Launching early still works — from the
@@ -644,36 +627,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
   });
 
-  it("the Launch step's CTA opens the run dialog", async () => {
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({
-        ready: true,
-        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
-      }),
-    );
-    renderScreen(<SetupScreen onDone={() => {}} />);
-    await screen.findByText("Fence");
-
-    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2).
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    await clearCorpNetworkGate();
-
-    await user.click(await screen.findByRole("button", { name: /^Launch —/ }));
-    await user.click(
-      (await screen.findAllByRole("button", { name: /^launch your first run$/i }))[0],
-    );
-    // NewRunDialog is a thin pass-through onto the manual PermissionWizard now
-    // (the AI Run Composer it used to choose between is retired) — it opens
-    // directly on the wizard, no intermediate chooser screen.
-    expect(
-      await screen.findByText(/compose the agent's permission envelope/i),
-    ).toBeInTheDocument();
-  });
+  // The Launch step's CTA was the funnel's own NewRunDialog trigger — the only
+  // one. Both are gone: launching is the top bar's "New run", reachable from
+  // every screen, so the funnel no longer carries a second copy of that dialog.
 
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (step 9 of 10) — checks live there now, not the barrier step
+    // walk to Review (the last step, 9 of 9) — checks live there, not on the
+    // barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
     for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));

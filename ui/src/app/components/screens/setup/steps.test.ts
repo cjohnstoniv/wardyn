@@ -183,7 +183,6 @@ describe("frozen contract — ids, labels, headings, order", () => {
       // sources-library.tsx/image-catalog.tsx.
       ["workspaces", "Workspaces"],
       ["review", "Review"],
-      ["launch", "Launch"],
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
     expect(STEP_HEADING.corp_network).toBe("Corporate network");
@@ -201,9 +200,8 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "lines-that-cant-be-crossed",
       "workspaces",
       "review",
-      "launch",
     ]);
-    expect(STEP_ORDER).toHaveLength(10);
+    expect(STEP_ORDER).toHaveLength(9);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // The four Demos sub-steps ARE the demos phase, in catalog order.
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
@@ -452,24 +450,22 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
   });
 });
 
-describe("review/launch gate — the BARRIER is the only hard requirement; a model is optional", () => {
-  it("barrier-only host (no model): review + launch already claim launch-readiness", () => {
+describe("review gate — the BARRIER is the only hard requirement; a model is optional", () => {
+  it("barrier-only host (no model): review already claims launch-readiness", () => {
     // backend ready=true is barrier-only (setup.go); no model connected — and that
     // is enough: a plain governed run / interactive run needs no model.
     const status = baseStatus({ ready: true });
     const r = deriveReadiness(status);
     const badges = stepBadges(status, r, [], 0);
     expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
-    expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
     expect(stepDone(status, r, [], 0).review).toBe(true);
   });
 
-  it("no barrier: review/launch nudge to set up the barrier first (the one requirement)", () => {
+  it("no barrier: review nudges to set up the barrier first (the one requirement)", () => {
     const status = baseStatus({ ready: false, runner: { driver: "none", confinement_classes: [] } });
     const r = deriveReadiness(status);
     const badges = stepBadges(status, r, [], 0);
     expect(badges.review).toEqual({ text: "Set up the barrier first", tone: "neutral" });
-    expect(badges.launch).toEqual({ text: "Set up the barrier first", tone: "neutral" });
     expect(stepDone(status, r, [], 0).review).toBe(false);
   });
 
@@ -481,7 +477,6 @@ describe("review/launch gate — the BARRIER is the only hard requirement; a mod
     const r = deriveReadiness(status);
     const badges = stepBadges(status, r, [], 1);
     expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
-    expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
     expect(stepDone(status, r, [], 1).review).toBe(true);
   });
 

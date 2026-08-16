@@ -47,7 +47,7 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // wizard) is "Your work" again on its own. Current total: 10 (3 essentials + 4
 // demos + 1 your-work + 2 finish — PHASES below is the count to trust, not
 // this history).
-export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review" | "launch";
+export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
@@ -67,7 +67,6 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
   ...DEMO_TITLES,
   workspaces: "Workspaces",
   review: "Review",
-  launch: "Launch",
 };
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
@@ -79,7 +78,6 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   ...DEMO_TITLES,
   workspaces: "Onboard a workspace",
   review: "Review readiness",
-  launch: "Launch your first run",
 };
 
 // ------------------------------------------------------------
@@ -105,7 +103,7 @@ export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
   { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
   { id: "work", label: "Your work", steps: ["workspaces"] },
-  { id: "finish", label: "Finish", steps: ["review", "launch"] },
+  { id: "finish", label: "Finish", steps: ["review"] },
 ];
 
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
@@ -347,11 +345,6 @@ export function stepBadges(
       : r.ready
         ? { text: "Ready to launch", tone: "success" }
         : { text: "Set up the barrier first", tone: "neutral" },
-    launch: status.has_runs
-      ? { text: "First run launched", tone: "success" }
-      : r.ready
-        ? { text: "Ready to launch", tone: "success" }
-        : { text: "Set up the barrier first", tone: "neutral" },
   };
 }
 
@@ -395,6 +388,5 @@ export function stepDone(
     // Barrier is the only hard requirement; a model is optional (skippable), so
     // Review is done once the barrier is up and no check is failing.
     review: r.ready && !status.checks.some((c) => c.status === "fail"),
-    launch: status.has_runs,
   };
 }

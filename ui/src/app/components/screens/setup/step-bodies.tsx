@@ -4,7 +4,7 @@
  */
 
 // Step bodies surviving today: CheckRow (shared), ReviewStep,
-// useSiteConfigStep, WorkspacesStep, and LaunchStep. HostProxyStep/
+// useSiteConfigStep and WorkspacesStep. HostProxyStep/
 // ArtifactRepoStep used to live here too, kept alive only by the Integrations
 // "Add integration" dialog's mirror/proxy hand-off; that hand-off retired
 // when Corporate network became the single home for both, and the two
@@ -17,12 +17,11 @@
 // saveSiteConfig; WorkspacesStep's own write is the one-shot POST inside
 // AddWorkspaceDialog).
 import * as React from "react";
-import { AlertTriangle, Info, Loader2, Plus, CircleCheck, Rocket, RotateCw } from "lucide-react";
+import { AlertTriangle, Info, Loader2, Plus, CircleCheck, RotateCw } from "lucide-react";
 import type { SetupCheck, SetupCheckStatus, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
-import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
-import { CC_META } from "../../wardyn/cc-meta";
-import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
+import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { BTN, OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
@@ -286,94 +285,10 @@ export function WorkspacesStep({
   );
 }
 
-// ------------------------------------------------------------
-// Launch step — example config marked "Example — not live config" (B12).
-// ------------------------------------------------------------
-export function LaunchStep({
-  status,
-  onLaunch,
-  onOpenRuns,
-  // canLaunch gates on a barrier only (readiness.ready) — an interactive run works
-  // with no model. llmReady drives a NON-blocking amber notice when a barrier is up
-  // but no model is connected: the run still launches, you just drive it by hand.
-  canLaunch,
-  llmReady = false,
-}: {
-  status: SetupStatus;
-  onLaunch: () => void;
-  onOpenRuns: () => void;
-  canLaunch: boolean;
-  llmReady?: boolean;
-}) {
-  const example: [string, React.ReactNode][] = [
-    ["Task", '"Add a health check endpoint and a unit test for it"'],
-    ["Agent", "Claude Code"],
-    [
-      "Barrier",
-      <span className="inline-flex items-center gap-1.5" key="barrier">
-        <ConfinementChip value="CC1" /> ready now — harden to {CC_META.CC2.label} later
-      </span>,
-    ],
-    ["Mode", `${RUN_MODE.interactive.label} — ${RUN_MODE.interactive.blurb}`],
-  ];
-  return (
-    <div className="space-y-4">
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Configure your first run — pick the agent, what it can reach, and how strongly it&apos;s walled
-        off. If an AI composer backend is configured, you can describe the task in plain language instead.
-        Working on a specific repo? Onboard it in the Workspaces step first, or the run can&apos;t reach it.
-      </p>
-
-      {status.has_runs && (
-        <p className="flex items-center gap-1.5 text-sm text-success">
-          <CircleCheck className="size-4" /> You&apos;ve already launched a run on this control plane.
-        </p>
-      )}
-
-      <div className="rounded-xl border border-border bg-card p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Chip tone="info" className="uppercase tracking-wide">
-            Example
-          </Chip>
-          <span className="text-xs text-muted-foreground">
-            Not live config — just to show the shape of a run.
-          </span>
-        </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-2 text-sm">
-          {example.map(([k, v]) => (
-            <React.Fragment key={k}>
-              <dt className="text-muted-foreground">{k}</dt>
-              <dd className="text-foreground">{v}</dd>
-            </React.Fragment>
-          ))}
-        </dl>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Button onClick={onLaunch} disabled={!canLaunch}>
-            <Rocket className="size-4" /> Launch your first run
-          </Button>
-          <Button variant="outline" onClick={onOpenRuns}>
-            Open Runs
-          </Button>
-        </div>
-        {!canLaunch ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            A sandbox barrier is required first.
-          </p>
-        ) : (
-          !llmReady && (
-            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
-              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              No model connected — that's fine. Run a plain governed command (bring your own
-              container), or drive an interactive run yourself over an attached terminal. A model is
-              only needed to run an agent under Wardyn's harness or for the AI Composer.
-            </p>
-          )
-        )}
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        If you finish without launching, Runs greets you with this same shortcut until your first run exists.
-      </p>
-    </div>
-  );
-}
+// LaunchStep lived here: the funnel's 10th step, an "Example — not live config"
+// card showing a made-up task ("Add a health check endpoint and a unit test for
+// it") with Launch/Open Runs buttons. It was cut because the example was a
+// fiction — it named work against a repo the operator may never have onboarded,
+// so it could not say which workspace it applied to — and because its lede still
+// advertised the deleted AI Run Composer. Review is the last step now, and the
+// top bar's New run button is the one real launch point.

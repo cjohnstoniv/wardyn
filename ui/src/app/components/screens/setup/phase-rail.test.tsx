@@ -19,7 +19,6 @@ const BADGES: Record<SetupStepId, StepBadge> = {
   "lines-that-cant-be-crossed": { text: "Optional", tone: "neutral" },
   workspaces: { text: "In progress", tone: "info" },
   review: { text: "Review what's left", tone: "neutral" },
-  launch: { text: "Set up the essentials first", tone: "neutral" },
 };
 
 const DONE: Record<SetupStepId, boolean> = {
@@ -32,7 +31,6 @@ const DONE: Record<SetupStepId, boolean> = {
   "lines-that-cant-be-crossed": false,
   workspaces: false,
   review: false,
-  launch: false,
 };
 
 // The compact icon rail (lg-only) renders every step unconditionally (CSS-hidden,
@@ -104,7 +102,9 @@ describe("PhaseRail", () => {
     // Demos, and "Your work" (now just workspaces). Essentials no longer
     // qualifies: it contains the one hard requirement (environment).
     expect(rail.getAllByText("all optional")).toHaveLength(2);
-    expect(rail.getByText("0/2")).toBeInTheDocument(); // Finish still counts
+    // Finish is one step now (Review) — the Launch step was cut, so its counter
+    // is 0/1, not 0/2.
+    expect(rail.getByText("0/1")).toBeInTheDocument();
   });
 
   it("marks only the active step aria-current=step, and no button anywhere uses aria-pressed", () => {
