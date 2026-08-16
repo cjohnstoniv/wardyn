@@ -76,12 +76,35 @@ describe("ConnectSSHCard — visibility", () => {
     expect(healthMock).not.toHaveBeenCalled();
   });
 
-  it("renders nothing when the deployment has SSH disabled (healthz omits/falses it)", async () => {
+  // This card used to return NULL with SSH off — the compose default — so most
+  // operators saw a live browser terminal and nothing anywhere saying a real
+  // terminal could reach the same session. The CLI lane needs no gateway, so the
+  // card now always renders for a running run you own, and says plainly that SSH
+  // is the part that is off.
+  it("with SSH disabled it still offers the CLI, and says what would turn SSH on", async () => {
     healthMock.mockResolvedValue({});
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    expect(screen.queryByText("Connect via SSH")).toBeNull();
+    expect(screen.getByText("Attach from your terminal")).toBeInTheDocument();
+    // jsdom's origin is not the CLI's default, so the block also carries a
+    // WARDYN_URL= prefix — match on the command within it.
+    expect(
+      screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`)),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Off on this deployment/)).toBeInTheDocument();
+    expect(screen.getByText(/WARDYN_SSH_LISTEN/)).toBeInTheDocument();
+    // The ssh command itself must NOT appear — there is no gateway to reach.
+    expect(screen.queryByText(/^ssh run_1@/)).toBeNull();
+  });
+
+  it("the CLI lane names the same live session the page's terminal is attached to", async () => {
+    healthMock.mockResolvedValue({});
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.getByText(/same session/)).toBeInTheDocument();
+    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
   });
 });
 
@@ -95,7 +118,7 @@ describe("ConnectSSHCard — content", () => {
     ]);
     renderCard();
 
-    await screen.findByText("Connect via SSH");
+    await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`)).toBeInTheDocument();
     expect(screen.getByText(/ED25519 SHA256:abc123/)).toBeInTheDocument();
     expect(screen.getByText("ssh config")).toBeInTheDocument();
@@ -126,7 +149,7 @@ describe("ConnectSSHCard — content", () => {
     listKeysMock.mockRejectedValue(new Error("network blip"));
     renderCard();
 
-    await screen.findByText("Connect via SSH");
+    await screen.findByText("Attach from your terminal");
     expect(screen.queryByText("Add your SSH key first")).toBeNull();
     expect(screen.queryByText(/no key is registered/i)).toBeNull();
   });
@@ -136,7 +159,7 @@ describe("ConnectSSHCard — content", () => {
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
-    await screen.findByText("Connect via SSH");
+    await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example`)).toBeInTheDocument();
   });
 
@@ -145,7 +168,7 @@ describe("ConnectSSHCard — content", () => {
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
-    await screen.findByText("Connect via SSH");
+    await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1 -p 2222`)).toBeInTheDocument();
   });
 
@@ -154,7 +177,7 @@ describe("ConnectSSHCard — content", () => {
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
-    await screen.findByText("Connect via SSH");
+    await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1`)).toBeInTheDocument();
   });
 });

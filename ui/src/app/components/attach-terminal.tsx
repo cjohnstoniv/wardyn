@@ -37,7 +37,7 @@ import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-ext-400.css";
 import { getToken } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
-import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";
+import { Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
 import { useOperator, usePrincipal } from "./wardyn/operator-context";
 
@@ -194,7 +194,20 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // Refit the terminal to its (current) container size and tell the PTY. With
   // ptyCols set, the visual grid is pinned to that width (rows still follow the
   // container) so the PTY and xterm always agree — see the ptyCols doc.
-  const refit = React.useCallback(() => {
+  // refit(force) — measure the container, resize the local grid, tell the PTY.
+  //
+  // `force` sends a ONE-COLUMN-SMALLER size first, then the real one. That looks
+  // pointless and is not: the session is tmux, tmux clamps a shared window to
+  // the SMALLEST attached client, and it re-evaluates on a client size CHANGE.
+  // So when a second client (a `wardyn attach` from another terminal) attaches
+  // small, the browser's grid fills with tmux's `·` filler — and when that
+  // client leaves, the filler STAYS, because the browser's own size never
+  // changed and a same-size resize frame is a no-op tmux ignores.
+  //
+  // Measured: 0 dots before a second client, 1001 while attached, still 1001
+  // after it detached, and 0 again the moment the viewport actually changed
+  // size. The nudge manufactures that change on demand.
+  const refit = React.useCallback((force = false) => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
     const ws = wsRef.current;
@@ -211,6 +224,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       return;
     }
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+      if (force && term.cols > 1) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
+      }
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
   }, []);
@@ -347,8 +363,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         }
         reconnectAttempts = 0; // a successful attach resets the budget
         setConnState("open");
-        // Fit + send the real size once the PTY is attached.
-        requestAnimationFrame(() => refit());
+        // Fit + send the real size once the PTY is attached. Forced, so an
+        // attach that lands while another client has the window clamped starts
+        // from this client's own size rather than inheriting the filler.
+        requestAnimationFrame(() => refit(true));
         // Auto-type the convenience command ONCE, after the shell prompt has had
         // a moment to render. Guarded so a reconnect never re-types it.
         if (!autoRunSent && autoRunRef.current) {
@@ -609,6 +627,18 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           {connState === "open" && (
             <span className="inline-flex size-2 rounded-full bg-success" title="Connected" />
           )}
+          {/* Redraw. The browser cannot observe another client detaching, so it
+              cannot know the tmux window is still clamped to a size that left —
+              see refit's note. One click forces the size change that clears it. */}
+          <button
+            type="button"
+            onClick={() => refit(true)}
+            title="Redraw (fixes a terminal left clamped by another attached client)"
+            aria-label="Redraw terminal"
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <RotateCw className="size-3.5" />
+          </button>
           <button
             type="button"
             onClick={toggleFullscreen}

@@ -3,15 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Connect via SSH (prompt-v3-ssh-pane.md) — split out of run-detail.tsx
-// (B4 file-size gate: the SSH-pane growth pushed it over the 1000-line cap)
-// with zero behavior change. Owner-only, same as the gateway itself
-// (sshgateway.go's sshAuth): a run's creator is the only human this card ever
-// shows itself to, matching the server's own owner-only authorization rather
-// than merely hiding a control the server would refuse anyway. Absent
-// entirely — not disabled, not a placeholder — when the run isn't RUNNING,
-// when the deployment has SSH off (/healthz's `ssh` field absent/disabled),
-// or the run isn't the caller's own.
+// "Attach from your terminal" — the two ways into a running sandbox that are
+// not this browser tab.
+//
+// This card used to be SSH-only and returned NULL whenever the deployment had
+// the gateway off (/healthz's `ssh` absent). That is the DEFAULT for the
+// compose stack, so most operators saw a live terminal in the browser with
+// nothing anywhere saying a real terminal could reach the same session — which
+// is exactly what was reported.
+//
+// `wardyn attach <run-id>` needs no gateway and no operator configuration: it
+// dials the same WebSocket this page's terminal uses, lands in the SAME tmux
+// session, and works on every deployment. Verified against a live run — a file
+// written from one attach was read back by a second, and by the browser
+// terminal. So the CLI lane is always shown, and SSH is the second lane: rich
+// when enabled, one honest line about what turns it on when not.
+//
+// Still owner-only, matching the server rather than merely hiding a control it
+// would refuse (sshgateway.go's sshAuth; attach.go's own owner-or-admin gate),
+// and still absent when the run isn't RUNNING — there is nothing to attach to.
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { KeyRound } from "lucide-react";
@@ -64,9 +74,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     };
   }, [owned, running]);
 
-  if (!owned || !running || !ssh?.enabled) return null;
+  if (!owned || !running) return null;
 
-  const [host, port] = splitHostPort(ssh.advertise_addr ?? "");
+  const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   const portFlag = port ? ` -p ${port}` : "";
   const command = `ssh ${run.id}@${host || "…"}${portFlag}`;
@@ -77,10 +87,47 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     `  User ${run.id}`,
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
+  const sshOn = !!ssh?.enabled;
+
+  // The console already knows the address it is served from, so the env line is
+  // this deployment's real URL rather than a placeholder the operator has to
+  // translate. Omitted when it matches the CLI's own default.
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const cliEnv = origin && origin !== "http://localhost:8080" ? `WARDYN_URL=${origin} ` : "";
+  const cliCommand = `${cliEnv}wardyn attach ${run.id}`;
 
   return (
-    <SectionCard title="Connect via SSH" Icon={KeyRound}>
-      {!hasKeys && (
+    <SectionCard title="Attach from your terminal" Icon={KeyRound}>
+      <p className="mb-2 text-[0.7813rem] leading-relaxed text-muted-foreground">
+        The terminal on this page is one attachment to a persistent session. These land in the{" "}
+        <span className="text-foreground">same session</span> — what you type in one shows up in the other, and
+        detaching never ends the run.
+      </p>
+
+      <p className="text-[0.75rem] font-medium text-foreground">Wardyn CLI</p>
+      <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+        Works on every deployment — no gateway to enable, no key to register. Needs your admin token in{" "}
+        <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>. Ctrl-C or closing the session detaches.
+      </p>
+      <CodeBlock text={cliCommand} />
+      <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+        Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
+        <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
+      </p>
+
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-[0.75rem] font-medium text-foreground">SSH</p>
+        {!sshOn && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
+            Remote-SSH straight into the sandbox, keyed to the SSH keys in Settings. An operator turns it on by
+            setting <Mono className="text-foreground">WARDYN_SSH_LISTEN</Mono> and{" "}
+            <Mono className="text-foreground">WARDYN_SSH_ADVERTISE</Mono> where wardynd starts.
+          </p>
+        )}
+      </div>
+
+      {sshOn && !hasKeys && (
         <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
           <p className="text-[0.75rem] font-medium text-foreground">Add your SSH key first</p>
           <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
@@ -94,7 +141,8 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
         </div>
       )}
 
-      <div className={cn(!hasKeys && "opacity-50")}>
+      {sshOn && (
+      <div className={cn("mt-2", !hasKeys && "opacity-50")}>
         <CodeBlock text={command} />
 
         <details className="mt-2.5">
@@ -128,10 +176,13 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
           </div>
         </details>
       </div>
+      )}
 
-      <Link to="/ssh-keys" className="mt-3 inline-block text-[0.7813rem] font-medium text-primary hover:underline">
-        Manage SSH keys
-      </Link>
+      {sshOn && (
+        <Link to="/ssh-keys" className="mt-3 inline-block text-[0.7813rem] font-medium text-primary hover:underline">
+          Manage SSH keys
+        </Link>
+      )}
     </SectionCard>
   );
 }
