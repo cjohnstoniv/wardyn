@@ -103,6 +103,15 @@ type runResourcesResponse struct {
 	ProcessCount     *int     `json:"process_count,omitempty"`
 }
 
+// runResourcesUnsupportedMsg is the honest 501 reason, shared by BOTH the
+// no-runner-configured guard and the ErrExecStreamUnsupported case: reading
+// cgroup/procfs needs an exec channel into the sandbox, and a runner without
+// one cannot be inspected at all. Deliberately NOT phrased as a confinement-
+// tier limit — ErrExecStreamUnsupported is a property of the RUNNER, and
+// blaming the barrier would send an operator to change a security setting that
+// has nothing to do with it.
+const runResourcesUnsupportedMsg = "sandbox resource usage needs sandbox exec, which this runner does not support"
+
 // handleRunResources serves GET /api/v1/runs/{id}/resources.
 func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
@@ -115,7 +124,13 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	}
 	// A runner must be wired to exec into anything (headless API mode cannot).
 	if s.cfg.Runner == nil {
-		writeError(w, http.StatusServiceUnavailable, "no runner configured; sandbox resource usage unavailable")
+		// 501, matching handleRunFiles' identical guard — NOT 503. The two
+		// widgets sit beside each other in the same rail reading the same
+		// deployment, so a split verdict renders as "this runner can't be
+		// inspected" next to "couldn't load right now": one a permanent
+		// capability fact, the other a transient blip the operator will retry
+		// forever. No runner configured is the former for both.
+		writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg)
 		return
 	}
 
@@ -131,7 +146,11 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources", id.String(), "failure",
 			mustJSON(map[string]any{"error": err.Error()})))
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
-			writeError(w, http.StatusNotImplemented, "sandbox resource usage is not supported on this run's confinement tier: "+err.Error())
+			// The human sentence AND the sentinel: the UI shows the first, an
+			// operator reading a response body needs the second to tell this
+			// apart from the no-runner-configured guard above, which produces
+			// the same status and the same first half.
+			writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg+": "+err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "sandbox resource usage read failed")

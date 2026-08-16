@@ -179,14 +179,33 @@ test.describe("Run detail (/runs/:id)", () => {
     await page.getByText("e2e fixture 2").click();
     await expect(page).toHaveURL(/\/runs\/.+/);
 
-    // The RunDetail summary header carries the task (h1) + the RUNNING badge.
+    // The command bar carries the task (h1) + the RUNNING badge.
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
     await expect(page.getByText("Running", { exact: true })).toBeVisible();
 
-    // The Overview identity card renders the run's real fields.
+    // The run's real identity fields still render — but the cockpit split them:
+    // the repo moved UP into the 52px command bar (it is one of the facts that
+    // must be visible without scrolling), while the run id / SPIFFE id stayed in
+    // the Identity widget on the evidence rail. Same facts, two homes.
     await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
-    await expect(page.getByText("Run ID")).toBeVisible();
-    await expect(page.getByText("Repository")).toBeVisible();
+    await expect(page.getByText("acme/widgets")).toBeVisible();
+    await expect(page.getByText("Run", { exact: true })).toBeVisible();
+
+    // The terminal is the hero and it is ABOVE THE FOLD — the whole point of the
+    // redesign. Assert it geometrically, not just that it rendered: the old
+    // screen also "rendered" a terminal, ~1,120px down the page.
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane).toBeVisible();
+    const box = await pane.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeLessThan(300);
+
+    // And the page itself does not scroll: the cockpit fills the viewport.
+    const scrolls = await page.evaluate(() => {
+      const m = document.querySelector("main");
+      return !!m && m.scrollHeight > m.clientHeight;
+    });
+    expect(scrolls).toBe(false);
 
     // A non-terminal run has an enabled danger-zone Kill button.
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });

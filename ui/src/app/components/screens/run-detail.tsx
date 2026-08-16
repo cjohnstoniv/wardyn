@@ -422,8 +422,10 @@ function Cockpit({
       style={{ gridTemplateColumns: "minmax(0,1fr) 400px" }}
     >
       {/* Left column: the session, and directly beneath it the approval that
-          is holding the session. */}
-      <div className="flex min-h-0 flex-col gap-2.5">
+          is holding the session. The testid is load-bearing for e2e, which
+          asserts this pane's TOP EDGE is above the fold — "the terminal
+          rendered" was true of the old screen too, ~1,120px down. */}
+      <div className="flex min-h-0 flex-col gap-2.5" data-testid="run-terminal-pane">
         <TerminalPane
           run={run}
           terminal={terminal}
