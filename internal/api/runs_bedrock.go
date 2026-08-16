@@ -289,24 +289,6 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 	return string(raw)
 }
 
-// bedrockResolves reports whether a Bedrock selection has an effective region
-// AND model — the one precondition resolveBedrockAuth below can never fold in
-// from anywhere else, and therefore the difference between "this integration
-// IS the run's credential" and "this run reaches no model at all". ws (the
-// integration's own region/model, nil when it carries neither) wins over the
-// global config, exactly like resolveBedrockAuth; the credential lanes are
-// deliberately NOT checked here — resolveBedrockAuth resolves those at launch
-// and this is a compose-time preview, so mirroring bedrockCaps' region+model
-// gate is what keeps the two verdicts from drifting.
-func (s *Server) bedrockResolves(ws *types.WorkspaceBedrockRef) bool {
-	region, model := s.cfg.BedrockRegion, s.cfg.BedrockModel
-	if ws != nil {
-		region = cmp.Or(strings.TrimSpace(ws.Region), region)
-		model = cmp.Or(strings.TrimSpace(ws.Model), model)
-	}
-	return region != "" && model != ""
-}
-
 // resolveBedrockAuth decides whether this run should authenticate to Claude via
 // Amazon Bedrock and, if so, returns the sandbox env additions (the
 // CLAUDE_CODE_USE_BEDROCK on-switch, region, model id, and resident AWS creds)
