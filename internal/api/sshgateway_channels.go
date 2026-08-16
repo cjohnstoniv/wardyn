@@ -384,7 +384,21 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		sendChannelError(channel, msg)
 		return
 	}
+	// Do NOT seed the exec's console size while somebody else holds the PTY.
+	// tmux clamps a shared window to the SMALLEST attached client, and the
+	// driver passes AttachOptions straight into ExecCreateOptions.ConsoleSize —
+	// so an OBSERVER connecting from an 80x24 terminal shrank the holder's
+	// window the moment it attached, exactly once. sshShellPump already drops an
+	// observer's later resize frames for this reason; the initial attach was the
+	// one path that still got through.
+	//
+	// The check is advisory (the holder may leave in the gap), which is why the
+	// geometry is re-applied below once we know we are the writer, rather than
+	// being dropped on the floor.
 	opts := runner.AttachOptions{Cols: cols, Rows: rows}
+	if s.attachHolderFor(runID) != nil {
+		opts = runner.AttachOptions{}
+	}
 	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
@@ -433,6 +447,13 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		},
 	}
 	readOnly, releaseHolder := s.registerAttachHolder(runID, holder)
+	if !readOnly && opts.Cols == 0 && cols > 0 {
+		// We withheld the size above because someone appeared to hold the PTY,
+		// but by the time we actually claimed it they were gone — so apply the
+		// real geometry now. Best-effort: a failure here costs a correct window
+		// size, not the session.
+		_ = sess.Resize(ctx, cols, rows)
+	}
 	// Deferred for the same reason as the web lane's: a panicking pump must
 	// never strand a phantom holder (see registerAttachHolder).
 	defer releaseHolder()

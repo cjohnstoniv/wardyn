@@ -161,8 +161,15 @@ export function SummaryHeader({
         )}
       </div>
 
-      <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
-        <Clock className="size-3" />
+      {/* A bare "4m 22s" beside an unlabelled clock does not say WHAT it
+          measures. The title/aria-label do, without spending command-bar
+          width on the word "elapsed". */}
+      <span
+        className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground"
+        title={terminal ? "Total run time" : "Time since this run started"}
+        aria-label={`${terminal ? "Total run time" : "Running for"} ${elapsed}`}
+      >
+        <Clock className="size-3" aria-hidden="true" />
         {elapsed}
       </span>
 
