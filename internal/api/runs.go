@@ -228,10 +228,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		"confinement_class": enforced, "jti": id.JTI,
 		"inline_policy": req.InlinePolicy != nil,
 	}
-	if req.ComposeSessionID != "" {
-		// UUID-validated at the top of the handler, so it can land in Data as-is.
-		createAuditData["compose_session_id"] = req.ComposeSessionID
-	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit
 		// event is the provenance record that this run ran a plain command.

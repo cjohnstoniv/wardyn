@@ -28,9 +28,10 @@
 //   - identity:    Me
 //   - health:      Healthz
 //
-// NOT covered (drive these with the CLI or raw HTTP): the AI Run Composer
-// (/runs/compose*), attach WebSocket / attach-ticket, harness-login device
-// flow, and the agent-facing /internal/* mint & decision endpoints.
+// NOT covered (drive these with the CLI or raw HTTP): attach WebSocket /
+// attach-ticket, harness-login device flow, and the agent-facing /internal/*
+// mint & decision endpoints. (The AI Run Composer's /runs/compose* used to be
+// listed here; those routes were removed in 0.5, not left unwrapped.)
 // TestClientCoversRouteFamilies pins that every family listed above has a method.
 //
 // # Pagination
@@ -219,12 +220,6 @@ type CreateRunRequest struct {
 	// command in the same governed sandbox (no agent, no LLM credentials — the
 	// BYOA/CI lane; see docs/CI.md). Ignored for an interactive run.
 	TaskMode string `json:"task_mode,omitempty"`
-	// ComposeSessionID correlates a run launched from the AI Run Composer back
-	// to the compose conversation that produced it. It is stamped into the
-	// run.create audit event, so filtering the audit feed on it reconstructs the
-	// whole compose→launch trail. Purely a correlation label: it grants nothing
-	// and is not validated server-side.
-	ComposeSessionID string `json:"compose_session_id,omitempty"`
 	// Workspaces carries PER-WORKSPACE options — which of a workspace's
 	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
 	// this run enables, and a read-only narrowing — for the workspaces this run

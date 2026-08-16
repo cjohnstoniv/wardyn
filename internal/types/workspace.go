@@ -327,13 +327,25 @@ const (
 )
 
 // ClosedIntegrationKinds is the closed kind set — the kinds with bespoke
-// behavior in code. A write naming one is validated against that kind's
-// contract (config keys, DefaultFor eligibility); anything else is a generic
-// open slug.
+// behavior in code, and as of 0.5 the ONLY kinds a write may name. A write
+// naming one is validated against that kind's contract (config keys, DefaultFor
+// eligibility); anything else is refused (validateIntegrationWrite).
 var ClosedIntegrationKinds = map[string]bool{
 	IntegrationKindAnthropicAPIKey: true, IntegrationKindAnthropicSubscription: true,
 	IntegrationKindBedrock: true, IntegrationKindOpenAIAPIKey: true,
 	IntegrationKindGitHubApp: true, IntegrationKindGitHost: true,
+}
+
+// ClosedIntegrationKindList is ClosedIntegrationKinds in a stable order, for the
+// "want one of: …" half of a rejected write's error. Sorted so the message is
+// deterministic across map iterations.
+func ClosedIntegrationKindList() []string {
+	out := make([]string, 0, len(ClosedIntegrationKinds))
+	for k := range ClosedIntegrationKinds {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AIProviderKind reports whether kind is one of the five AI provider flavors —

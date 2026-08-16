@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,9 +38,9 @@ var reservedRunTasks = map[string]bool{
 
 // decodeAndValidateCreateRun decodes the POST /api/v1/runs body and applies the
 // fail-closed request-shape checks: agent required, BYOI/devcontainer
-// exclusivity, a known confinement_class, the task_mode enum, the
-// compose_session_id UUID contract, and (the one check that DOES need the
-// store) integration_id naming a real AI-provider integration. On any
+// exclusivity, a known confinement_class, the task_mode enum, and (the one
+// check that DOES need the store) integration_id naming a real AI-provider
+// integration. On any
 // violation it writes the HTTP error itself and returns ok=false. Extracted
 // verbatim from handleCreateRun.
 //
@@ -121,15 +120,6 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", "", false
 	}
 
-	// Same UUID contract as the compose endpoint's session_id: this field only
-	// exists to correlate audit rows, so reject graffiti before anything is
-	// created rather than capping arbitrary text into run.create's Data.
-	if req.ComposeSessionID != "" {
-		if _, err := uuid.Parse(req.ComposeSessionID); err != nil {
-			writeError(w, http.StatusBadRequest, "compose_session_id must be a UUID")
-			return req, "", "", false
-		}
-	}
 
 	// A run-explicit integration_id must name a real, run-selectable
 	// (AI-provider) integration — checked eagerly, before any run is created,

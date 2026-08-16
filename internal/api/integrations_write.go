@@ -211,8 +211,21 @@ func validateIntegrationWrite(in types.Integration) error {
 		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars, "+
 			"plus up to three colon-joined qualifier segments)", in.ID)
 	}
-	if !types.ClosedIntegrationKinds[in.Kind] && !secretNameRE.MatchString(in.Kind) {
-		return fmt.Errorf("kind: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.Kind)
+	// 0.5: only the CLOSED kinds are writable. Generic kinds (package feeds,
+	// container registries, cloud providers, data stores, MCP servers, work
+	// tracking, observability, "other service") were an operator-extensibility
+	// surface for the /integrations catalog, and that catalog is gone —
+	// connections are the four Settings cards now, over closed kinds only.
+	//
+	// A row stored under an earlier release still DESERIALIZES (the read-time
+	// fold in internal/types is a passthrough, so nothing an operator configured
+	// disappears from site config or stops being injected by
+	// integrations_run.go). It simply can no longer be edited through this
+	// endpoint. This is a deliberate capability removal, recorded under BREAKING
+	// in the changelog — not a validation tightening that fell out of a refactor.
+	if !types.ClosedIntegrationKinds[in.Kind] {
+		return fmt.Errorf("kind: %q is not a supported integration kind (want one of: %s)",
+			in.Kind, strings.Join(types.ClosedIntegrationKindList(), ", "))
 	}
 	seenRole := make(map[string]bool, len(in.Secrets))
 	for i, s := range in.Secrets {
@@ -226,11 +239,11 @@ func validateIntegrationWrite(in types.Integration) error {
 		if s.SecretName == "" || !validSecretRef(s.SecretName) {
 			return fmt.Errorf("secrets[%d].secret_name: invalid or reserved secret name %q", i, s.SecretName)
 		}
+		// A closed kind may omit delivery — its bespoke transport supplies it.
+		// The generic branch here (delivery REQUIRED, because nothing else could
+		// say how the secret reaches the run) is unreachable now that the kind
+		// gate above refuses every non-closed kind.
 		if s.Delivery == nil {
-			if genericIntegrationKind(in.Kind) {
-				return fmt.Errorf("secrets[%d].delivery: required — say how this secret reaches the run "+
-					"(proxy_header, resident_file or resident_env); only a closed kind's bespoke transport may omit it", i)
-			}
 			continue
 		}
 		if err := validateIntegrationDelivery(*s.Delivery); err != nil {
@@ -391,32 +404,8 @@ func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType strin
 	return types.Integration{}, false
 }
 
-// WardynFeaturesBackend returns the STORED AI-provider integration marked
-// DefaultFor: wardyn_features whose wardyn_features capability reads
-// "available" right now (capabilitiesFor above — never a needs_setup/off/
-// impossible one), for cmd/wardynd's composer-registry boot derivation
-// (WARDYN_COMPOSER_CONFIG unset — see cmd/wardynd/composer.go). Exported as a
-// plain function of an already-fetched SiteConfig plus the same live signals
-// liveCapEnv folds from Server config, because cmd/wardynd builds the
-// composer registry BEFORE the api.Server exists (Config.Composer is
-// late-bound INTO it once built) — there is no live Server here to read them
-// from. ok=false (no eligible integration) is the signal to keep today's
-// behavior: no registry, compose 404s honestly.
-func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool, bedrockRegionSet, bedrockModelSet, bedrockCredentialPresent bool, managedBlobPresent func(string) bool) (types.Integration, bool) {
-	env := capEnv{
-		SecretPresent: secretPresent, BedrockRegionSet: bedrockRegionSet,
-		BedrockModelSet: bedrockModelSet, ManagedBlobPresent: managedBlobPresent,
-		BedrockCredentialPresent: bedrockCredentialPresent,
-	}
-	for _, in := range sc.Integrations {
-		if !types.AIProviderKind(in.Kind) || !slices.Contains(in.DefaultFor, "wardyn_features") {
-			continue
-		}
-		for _, c := range capabilitiesFor(in, env) {
-			if c.ID == "wardyn_features" && c.State == CapAvailable {
-				return in, true
-			}
-		}
-	}
-	return types.Integration{}, false
-}
+// WardynFeaturesBackend lived here: it picked the stored AI-provider integration
+// marked DefaultFor: wardyn_features so cmd/wardynd could derive a composer
+// registry at boot when WARDYN_COMPOSER_CONFIG was unset. Its only caller was
+// cmd/wardynd/composer.go, deleted with the AI Run Composer; api.Config no
+// longer has a Composer field for it to feed.

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,91 +221,70 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	}
 }
 
-// TestHandlePutIntegration_GenericKindRoundTrip is the round-H shape: a kind
-// Wardyn has no code for, an open slug, its own egress, and a proxy-header-
-// delivered secret. Everything the runtime needs rides on the row itself —
-// which is what lets a system Wardyn has never heard of be added with no
-// backend change.
-func TestHandlePutIntegration_GenericKindRoundTrip(t *testing.T) {
-	srv, fake, audit := integrationWriteHarness(t, nil)
+// Generic kinds are REFUSED as of 0.5. Two tests used to live here proving the
+// opposite: that a kind Wardyn has no code for (artifactory, postgres) could be
+// written with its own egress + proxy-header delivery, and that the capability
+// matrix reported honest egress_host/credential cells for it. That was the
+// operator-extensibility surface behind the /integrations catalog — "add a
+// system Wardyn has never heard of, with no backend change" — and the catalog
+// is gone. Connections are the four Settings cards now, over closed kinds only.
+//
+// The two properties that still matter are pinned below instead: the refusal
+// itself, and the fact that a row stored under an EARLIER release is not
+// destroyed by it (the read-time fold is a passthrough, so site config keeps it
+// and integrations_run.go keeps injecting it — it just can't be edited here).
+func TestHandlePutIntegration_GenericKindIsRefused(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
 	body := `{"name":"Corp Artifactory","kind":"artifactory",` +
-		`"egress":["artifactory.corp.internal","nexus.corp.internal"],` +
-		`"docs":"https://wiki.corp.internal/artifactory",` +
+		`"egress":["artifactory.corp.internal"],` +
 		`"secrets":[{"role":"token","secret_name":"acme-anthropic-key",` +
 		`"delivery":{"mode":"proxy_header","header":"Authorization","format":"Bearer %s"}}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/corp-artifactory", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	got := fake.cfg.Integrations[0]
-	if len(got.Egress) != 2 || got.Egress[0] != "artifactory.corp.internal" {
-		t.Errorf("egress = %v, want both entries persisted verbatim", got.Egress)
+	if !strings.Contains(w.Body.String(), "not a supported integration kind") {
+		t.Errorf("body = %s, want the refusal to name the rule", w.Body.String())
 	}
-	if secret, header, format, ok := got.HeaderSecret(); !ok || secret != "acme-anthropic-key" || header != "Authorization" || format != "Bearer %s" {
-		t.Errorf("delivery = %q/%q/%q (ok=%v), want acme-anthropic-key/Authorization/Bearer %%s", secret, header, format, ok)
+	// The error names what IS accepted, so the operator isn't left guessing.
+	if !strings.Contains(w.Body.String(), types.IntegrationKindGitHost) {
+		t.Errorf("body = %s, want the closed-kind list in the message", w.Body.String())
 	}
-	if got.Docs != "https://wiki.corp.internal/artifactory" {
-		t.Errorf("docs = %q, want the submitted link", got.Docs)
-	}
-
-	// The capability matrix must report the two honest facts, not the empty
-	// list an unrecognized type used to get.
-	var resp SetupIntegration
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	want := map[string]CapState{"egress_host": CapAvailable, "credential": CapAvailable}
-	if len(resp.Capabilities) != len(want) {
-		t.Fatalf("capabilities = %+v, want %d cells", resp.Capabilities, len(want))
-	}
-	for _, c := range resp.Capabilities {
-		if want[c.ID] != c.State {
-			t.Errorf("capability %s = %q, want %q", c.ID, c.State, want[c.ID])
-		}
-	}
-
-	// The audit event carries the blast radius: what a granted run may reach,
-	// and what header presents the credential there.
-	ev := lastAuditEvent(t, audit.events, "integration.write")
-	var detail struct {
-		Egress []string `json:"egress"`
-		Header string   `json:"header"`
-	}
-	if err := json.Unmarshal(ev.Data, &detail); err != nil {
-		t.Fatalf("decode audit detail: %v", err)
-	}
-	if len(detail.Egress) != 2 || detail.Header != "Authorization" {
-		t.Errorf("audit detail = %+v, want both egress hosts and the header name", detail)
+	if len(fake.cfg.Integrations) != 0 {
+		t.Errorf("stored %+v, want nothing written on a refused kind", fake.cfg.Integrations)
 	}
 }
 
-// A generic row with NO proxy-header secret is the honest "egress only" case
-// the systems that authenticate outside HTTP (cloud providers, data stores)
-// land in: the path opens, and the credential cell states the gap rather than
-// showing an empty field. A wildcard host is fine HERE — nothing is being
-// injected.
-func TestHandlePutIntegration_GenericNoHeaderIsEgressOnly(t *testing.T) {
+// An egress-only generic row (no proxy-header secret) is refused for the same
+// reason — the kind gate runs before any delivery check.
+func TestHandlePutIntegration_GenericEgressOnlyIsRefused(t *testing.T) {
 	srv, _, _ := integrationWriteHarness(t, nil)
 	body := `{"name":"Prod Postgres","kind":"postgres","egress":["*.db.corp.internal:5432"]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/prod-postgres", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A generic row STORED under an earlier release still reads back with its kind,
+// egress and delivery intact — the removal refuses new writes, it does not erase
+// what an operator already configured.
+func TestGenericKindStoredEarlier_StillReadsBack(t *testing.T) {
+	stored := types.Integration{
+		ID: "corp-artifactory", Name: "Corp Artifactory", Kind: "artifactory",
+		Egress: []string{"artifactory.corp.internal"},
+		Secrets: []types.IntegrationSecret{{
+			Role: "token", SecretName: "acme-anthropic-key",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"},
+		}},
+	}
+	srv, _, _ := integrationWriteHarness(t, []types.Integration{stored})
+	w := do(t, srv, http.MethodGet, "/api/v1/integrations", adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	var resp SetupIntegration
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	for _, c := range resp.Capabilities {
-		switch c.ID {
-		case "egress_host":
-			if c.State != CapAvailable {
-				t.Errorf("egress_host = %q, want available — opening the path is the value here", c.State)
-			}
-		case "credential":
-			if c.State != CapImpossible || c.Reason != reasonNoDeliveryLane {
-				t.Errorf("credential = %q/%q, want impossible with the stated gap", c.State, c.Reason)
-			}
-		}
+	if !strings.Contains(w.Body.String(), "artifactory.corp.internal") {
+		t.Errorf("body = %s, want the legacy generic row's egress still present", w.Body.String())
 	}
 }
 

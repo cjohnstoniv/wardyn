@@ -104,6 +104,12 @@ func capabilitiesFor(in types.Integration, env capEnv) []Capability {
 	// A GENERIC-kind row's behavior is fully described by its own egress +
 	// secret delivery (genericCaps), never by code — checked FIRST; the closed
 	// kinds fall through to the bespoke matrices below.
+	//
+	// 0.5 refuses to WRITE a generic kind (validateIntegrationWrite), but a row
+	// stored under an earlier release still deserializes and is still injected
+	// by integrations_run.go, so this branch stays: a legacy row has to keep
+	// reporting its real capabilities on GET rather than falling through to a
+	// matrix that knows nothing about it.
 	if genericIntegrationKind(in.Kind) {
 		caps := genericCaps(in, env)
 		applyDisabled(caps, in)

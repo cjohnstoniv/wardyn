@@ -22,9 +22,10 @@ import (
 // 14:00 and 16:00", "every secret.write this quarter", "every failure") that
 // more rows never answer, because the answer is 40 events inside 200k.
 //
-// compose-session history (Decision 7) is v1 audit-feed-only — the UI
-// filters THIS response on `data.session_id`/`data.compose_session_id`
-// client-side; there is no server-side query param for it. If that ever gets
+// Session history is v1 audit-feed-only — a client filters THIS response on
+// `data.session_id` itself; there is no server-side query param for it. (The
+// `data.compose_session_id` half went with the AI Run Composer in 0.5.) If that
+// ever gets
 // slow, the upgrade path is a store method (e.g. QueryAuditEventsBySession)
 // backed by a `(data->>'session_id')` expression index, not a new table — the
 // session id already lives in Data (JSONB), no migration to add the column.
