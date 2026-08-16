@@ -412,7 +412,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				// unknown control message is ignored (it is never injected into
 				// the PTY, so it cannot smuggle keystrokes).
 				var msg resizeMsg
-				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && holder != nil {
+				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && holder.canWrite() {
 					_ = sess.Resize(ctx, msg.Cols, msg.Rows)
 					// Keep the registry's geometry LIVE: the handshake ?cols=&rows=
 					// is stale the moment the operator drags their window, and
@@ -423,7 +423,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 			case websocket.MessageBinary:
 				// Raw PTY input (keystrokes) — dropped entirely for a read-only
 				// observer (holder == nil).
-				if holder != nil {
+				if holder.canWrite() {
 					if _, werr := sess.Write(data); werr != nil {
 						reasonCh <- "session write failed"
 						cancel()

@@ -34,6 +34,17 @@ import (
 // handler that never returns — this is the console's poll endpoint.
 const runResourcesExecTimeout = 5 * time.Second
 
+// runResourcesMaxOutput caps how many bytes of the sandbox's stdout we will
+// hold. The script's real output is a few hundred bytes of key=value lines, but
+// the exec runs /bin/sh INSIDE the sandbox — whose filesystem the agent
+// controls, as root in the shipped images. A replaced /bin/sh (or awk, grep,
+// cat, ls, wc) could stream unbounded bytes into wardynd's heap, and the 5s
+// deadline is not a memory bound: a pipe moves gigabytes in that time, on an
+// endpoint the console polls every 4s per open run page. The sibling
+// diff-stat endpoint bounds both line length and row count; this one bounded
+// nothing.
+const runResourcesMaxOutput = 64 << 10
+
 // runResourcesScript runs INSIDE the sandbox via ExecStream and prints one
 // `key=value` line per metric it could actually read. Every read is
 // individually `2>/dev/null`-guarded and presence-checked before it is
@@ -51,9 +62,13 @@ const runResourcesExecTimeout = 5 * time.Second
 // (centisecond resolution, and procfs is universal where cgroup files may
 // not be).
 const runResourcesScript = `
+# NOT defaulted to 1. A fabricated denominator silently multiplies the
+# percentage by the real core count, and sandbox.tsx clamps the result to 100 —
+# indistinguishable from genuine saturation. An unreadable /proc/cpuinfo must
+# leave cpu_percent ABSENT (parseRunResourcesKV's stated invariant), which only
+# works if this key can actually go missing.
 n=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
-case "$n" in ''|0) n=1 ;; esac
-echo "nproc=$n"
+[ -n "$n" ] && [ "$n" -gt 0 ] && echo "nproc=$n"
 
 u1=$(awk '$1=="usage_usec"{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
 p1=$(awk '{print $1}' /proc/uptime 2>/dev/null)
@@ -76,11 +91,19 @@ mm=$(cat /sys/fs/cgroup/memory.max 2>/dev/null)
 mt=$(awk '$1=="MemTotal:"{print $2}' /proc/meminfo 2>/dev/null)
 [ -n "$mt" ] && echo "mem_total_kb=$mt"
 
-wb=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^wbytes=/){split($i,a,"="); s+=a[2]}} END{print s+0}' /sys/fs/cgroup/io.stat 2>/dev/null)
+# Counts matches and prints only if there were some, never "print s+0": the
+# +0 idiom is awk's || 0, and it fired for an io.stat that exists but carries
+# no wbytes field — an ordinary cgroup v2 state, not an absence of writes.
+# With n as a real match counter, "no wbytes anywhere" prints nothing and the
+# metric comes back ABSENT.
+wb=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^wbytes=/){split($i,a,"="); s+=a[2]; n++}} END{if(n)print s}' /sys/fs/cgroup/io.stat 2>/dev/null)
 [ -n "$wb" ] && echo "disk_wbytes=$wb"
 
 pc=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l)
-echo "proc_count=$pc"
+# Guarded like every other read, and >0 rather than -n: wc -l on a glob that
+# matched nothing prints "0", and a sandbox reporting zero processes is not a
+# reading — it cannot be true of a container running this very script.
+[ -n "$pc" ] && [ "$pc" -gt 0 ] && echo "proc_count=$pc"
 `
 
 // runResourcesResponse is the Sandbox widget's payload.
@@ -134,6 +157,18 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A run that never dispatched has no sandbox to meter. Without this the ref
+	// went straight to ExecStream, which errored into the audit branch below:
+	// a 500 and a run.resources FAILURE row every 4s per open tab, for a
+	// PENDING/STARTING run that is simply not up yet. It also read as a
+	// different fact from the Files widget beside it, which returns a crisp 409
+	// for exactly this state — the same split verdict the no-runner case was
+	// already fixed for.
+	if run.SandboxRef == "" {
+		writeError(w, http.StatusConflict, "run has no sandbox to inspect (state="+string(run.State)+")")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
 	defer cancel()
 
@@ -184,7 +219,7 @@ func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun)
 	}
 	var out []byte
 	if sess.Stdout != nil {
-		out, err = io.ReadAll(sess.Stdout)
+		out, err = io.ReadAll(io.LimitReader(sess.Stdout, runResourcesMaxOutput))
 	}
 	if sess.Wait != nil {
 		// Exit code unexamined: every read in the script is individually

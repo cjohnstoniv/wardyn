@@ -54,7 +54,14 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
 vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
-vi.mock("../lib/api/core", () => ({ getToken: () => null }));
+// importOriginal, not a bare stub: the component now needs the REAL HttpError
+// class, because a 409 from take-over ("nobody is attached") is a distinct
+// outcome from a failure — it means the holder left, so the observer reclaims
+// rather than showing an error it cannot act on.
+vi.mock("../lib/api/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api/core")>()),
+  getToken: () => null,
+}));
 // Ticket mint (owner-or-admin lane): unused by the operator/cookie-lane tests
 // below (tokenOnlyMode=false, operator=true never takes this path), stubbed
 // for the owner test that does.
@@ -100,6 +107,7 @@ import { AttachTerminal } from "./attach-terminal";
 import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
+import { HttpError } from "../lib/api/core";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -478,7 +486,10 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
   it("a failed take-over surfaces the server's reason and does NOT reconnect", async () => {
     const takeover = vi.mocked(runs.takeoverAttach);
     takeover.mockReset();
-    takeover.mockRejectedValue(new Error("nobody is attached to this run; nothing to take over"));
+    // A GENUINE failure (500), not the 409 "nobody is attached" — that one now
+    // means the holder left while we watched, and reclaiming is the correct
+    // response to it (see the test below).
+    takeover.mockRejectedValue(new HttpError(500, "save failed on the daemon"));
 
     render(<AttachTerminal runId="run_1" />);
     const ws = FakeWebSocket.instances[0];
@@ -489,7 +500,32 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
 
-    expect(await screen.findByText(/nothing to take over/)).toBeInTheDocument();
+    expect(await screen.findByText(/save failed on the daemon/)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // A read-only observer whose holder LEAVES was a dead end: the attach-mode
+  // frame is sent once, at connect, so nothing ever told the observer it could
+  // now drive. Take-over then 409'd ("nobody is attached"), the reason landed
+  // in the footer, and the terminal — the hero of this whole screen — stayed
+  // permanently convinced it was read-only until a full page reload.
+  it("a 409 take-over means the holder left, so it reclaims instead of erroring", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockRejectedValue(new HttpError(409, "nobody is attached to this run; nothing to take over"));
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    // Reconnects to claim the now-free writer slot...
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    // ...and does NOT show the 409 text as an error the operator cannot act on.
+    expect(screen.queryByText(/nothing to take over/)).toBeNull();
   });
 });

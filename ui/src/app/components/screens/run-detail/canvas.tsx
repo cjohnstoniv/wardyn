@@ -24,12 +24,14 @@
 import * as React from "react";
 import GridLayout, { noCompactor, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
-import { Check, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
+import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
+import { useFocusMode } from "../app-shell";
+import { FocusMode } from "./focus-mode";
 import { useRunLayout } from "./use-run-layout";
 import {
   GRID_COLS,
@@ -78,12 +80,14 @@ const FILL_TILE = [
   "[&>section>*:last-child]:overflow-y-auto",
 ].join(" ");
 
-/** Measures the scroll box: width for the grid, height to size a row. */
+/** Measures the scroll box: width for the grid, height to size a row.
+ *  A callback ref rather than useRef, because focus mode unmounts this box and
+ *  brings it back: a `[]` effect would keep observing the DETACHED node and
+ *  every row height after the first exit would be stale. */
 function useCanvasSize() {
-  const ref = React.useRef<HTMLDivElement | null>(null);
+  const [node, setNode] = React.useState<HTMLDivElement | null>(null);
   const [size, setSize] = React.useState({ width: 0, height: 0 });
   React.useEffect(() => {
-    const node = ref.current;
     if (!node) return;
     const measure = () =>
       setSize((prev) =>
@@ -96,8 +100,8 @@ function useCanvasSize() {
     const ro = new ResizeObserver(measure);
     ro.observe(node);
     return () => ro.disconnect();
-  }, []);
-  return { ref, width: size.width, height: size.height };
+  }, [node]);
+  return { ref: setNode, width: size.width, height: size.height };
 }
 
 export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
@@ -116,6 +120,16 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
 
   const { layout, persistable, apply, save, reset } = useRunLayout(preset);
   const { ref, width, height } = useCanvasSize();
+
+  // FOCUS MODE (design board 2c). The shell learns about it through
+  // app-shell's FocusContext, which is also why this is safe outside the
+  // console: a canvas mounted with no <AppShell> above it gets the default
+  // no-op setter and simply never enters focus.
+  const { focus, setFocus } = useFocusMode();
+  const exitFocus = React.useCallback(() => setFocus(false), [setFocus]);
+  // Never leave the console headless: whatever unmounts this canvas — a route
+  // change, an ErrorBoundary catch — puts the shell's chrome back.
+  React.useEffect(() => () => setFocus(false), [setFocus]);
 
   // A row is one twelfth of the visible pane, so a preset that adds up to
   // GRID_ROWS fills the cockpit exactly and nothing scrolls. Floors keep the
@@ -169,6 +183,12 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
       ok ? toast.success(RUN_COCKPIT.layoutSaved) : toast.message(RUN_COCKPIT.layoutNotPersisted),
     );
   };
+
+  // The terminal moves OUT of the grid and into the overlay, so it remounts and
+  // the attach socket reconnects — the tmux session survives that (it survives
+  // a full page refresh), which is exactly why the terminal can be moved at
+  // all. Rendering it in both places at once would open two sockets.
+  if (focus) return <FocusMode ctx={ctx} onExit={exitFocus} />;
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -273,17 +293,27 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
           )}
         </div>
       ) : (
-        // The board puts this control in the tabs row; that row belongs to
+        // The board puts these controls in the tabs row; that row belongs to
         // run-detail-command-bar.tsx, which this lane does not own — so the
-        // canvas carries its own entry point (see the hand-back).
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="absolute bottom-4 right-4 z-30 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-lg hover:text-foreground"
-        >
-          <Pencil className="size-3.5" />
-          {RUN_COCKPIT.editLayout}
-        </button>
+        // canvas carries its own entry points (see the hand-back).
+        <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setFocus(true)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-lg hover:text-foreground"
+          >
+            <Expand className="size-3.5" />
+            {RUN_COCKPIT.enterFocus}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-lg hover:text-foreground"
+          >
+            <Pencil className="size-3.5" />
+            {RUN_COCKPIT.editLayout}
+          </button>
+        </div>
       )}
     </div>
   );

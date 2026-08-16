@@ -517,7 +517,7 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 			if n > 0 {
 				// Any client traffic counts as activity: keep the session alive.
 				_ = s.cfg.Store.TouchRun(ctx, runID)
-				if holder != nil {
+				if holder.canWrite() {
 					if _, werr := sess.Write(buf[:n]); werr != nil {
 						reasonCh <- "session write failed"
 						cancel()

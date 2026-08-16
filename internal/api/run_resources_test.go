@@ -54,6 +54,39 @@ func kvExecSession(stdout string) *runner.ExecSession {
 	}
 }
 
+// A run with no sandbox is a 409, and writes NO audit row.
+//
+// It used to hand an empty ref straight to ExecStream, which errored into the
+// failure branch: a 500 plus a run.resources failure row EVERY 4 SECONDS per
+// open tab, for a PENDING/STARTING run that simply is not up yet — against a
+// handler whose own comment says failures are "the rare, interesting case".
+// It also disagreed with the Files widget beside it in the same rail, which
+// returns a crisp 409 for the identical fact.
+func TestRunResources_NoSandboxIs409AndNeverAudits(t *testing.T) {
+	called := false
+	srv, ast, h := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		called = true
+		return kvExecSession(""), nil
+	})
+	id := uuid.New()
+	ast.mu.Lock()
+	// STARTING, and crucially no SandboxRef — the pre-dispatch window.
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "alice", State: types.RunStarting}
+	ast.mu.Unlock()
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if called {
+		t.Error("ExecStream was reached for a run with no sandbox ref")
+	}
+	if n := len(h.audit.events); n != 0 {
+		t.Errorf("wrote %d audit events for a not-yet-dispatched run; the console "+
+			"polls this every 4s, so any row here floods the trail", n)
+	}
+}
+
 // TestRunResources_FullKeySet pins the "a full key set parses into the right
 // numbers" case: every metric present, computed against hand-checked values.
 func TestRunResources_FullKeySet(t *testing.T) {

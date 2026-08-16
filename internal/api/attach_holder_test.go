@@ -361,6 +361,58 @@ func TestAttachHolderRegistry_RoundTrip(t *testing.T) {
 
 // TestAttachHolderRegistry_ReleaseNeverEvictsSuccessor: after a take-over
 // evicts a holder and a fresh client claims the run, the DISPLACED handler's
+// A displaced holder must lose WRITE AUTHORITY at eviction, not whenever its
+// socket finishes dying.
+//
+// This is the regression test for the one real hole a review found in this
+// file. The pumps gate writes on the *attachHolder they captured at attach
+// time; evictAttachHolder only removed the map entry, and displace() closes the
+// socket rather than cancelling the pump (deliberately — a cancelled context
+// sends no close frame). coder/websocket's Close does a full handshake whose
+// second half blocks on the read mutex the displaced pump holds, so between
+// "take-over returned 200" and "the old socket actually died" the OLD client
+// could still write into the same tmux session as the new one. Two writers is
+// precisely the state this file exists to prevent.
+//
+// Asserting on canWrite() rather than on the close status is the point: the
+// existing take-over test already checks the close, and it passed throughout.
+func TestAttachHolder_EvictionRevokesWriteAuthorityImmediately(t *testing.T) {
+	srv := New(Config{Audit: &recRecorder{}, AdminToken: adminToken})
+	runID := uuid.New()
+
+	holder := &attachHolder{principal: holderOwner, source: attachSourceWeb}
+	readOnly, release := srv.registerAttachHolder(runID, holder)
+	if readOnly {
+		t.Fatal("first client should be the writer")
+	}
+	if !holder.canWrite() {
+		t.Fatal("the registered holder must be able to write before any take-over")
+	}
+
+	// The take-over path, with NO socket teardown at all — modelling the worst
+	// case the review described: a peer that never echoes the close, leaving
+	// displace() blocked for its full multi-second budget.
+	if got := srv.evictAttachHolder(runID); got != holder {
+		t.Fatalf("evict returned %v, want the registered holder", got)
+	}
+
+	if holder.canWrite() {
+		t.Error("displaced holder can still write after eviction — two clients " +
+			"would be driving the same tmux session while the old socket closes")
+	}
+	// A read-only observer (nil holder) must also be refused, and the same
+	// helper has to answer both questions or the pumps grow two gates.
+	var observer *attachHolder
+	if observer.canWrite() {
+		t.Error("a nil holder (read-only observer) must never write")
+	}
+	// Releasing a holder that was already displaced must not disturb the map.
+	release()
+	if h := srv.attachHolderFor(runID); h != nil {
+		t.Errorf("after eviction the run should have no holder, got %+v", h)
+	}
+}
+
 // deferred release finally runs. It must not delete its successor — that would
 // silently hand the run back to "nobody attached" while a human is typing.
 func TestAttachHolderRegistry_ReleaseNeverEvictsSuccessor(t *testing.T) {

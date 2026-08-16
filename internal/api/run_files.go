@@ -60,6 +60,16 @@ const (
 
 	runFilesVCSGit  = "git"
 	runFilesVCSNone = "none"
+	// The script could not determine anything: git ran and failed for a reason
+	// that is NOT "this is not a work tree" — missing from the image, a repo it
+	// refuses to read. Distinct from "none" so the console can stop blaming the
+	// workspace for a runner-image problem.
+	runFilesVCSUnknown = "unknown"
+
+	// runFilesExitNoWorkTree is the script's own exit code for "there is no git
+	// work tree here", kept distinct from every other nonzero exit precisely so
+	// the two can be told apart above.
+	runFilesExitNoWorkTree = 3
 
 	// runFilesUnsupportedMsg is the honest 501 reason for a runner with no
 	// ExecStream primitive at all: there is no other way to read the sandbox's
@@ -254,16 +264,27 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "read workspace files: "+werr.Error())
 			return
 		}
-		if code != 0 {
-			// Not a git work tree. A FACT about the workspace, not a failure:
-			// 200 with an honest empty list, no audit row.
-			// NAME the directory we looked in. A bare "not a git repository"
-			// is indistinguishable from "we looked in the wrong place", and
-			// the mount target is configurable per workspace source — so the
-			// path is the one piece of evidence that makes a wrong answer
-			// legible instead of silent.
+		// exit 3 is the script's OWN "there is no git work tree here" signal.
+		// Any OTHER nonzero exit means git ran and failed — most often it is
+		// missing from the image entirely. Those are different facts and used
+		// to collapse into the same one: the widget asserted "No git repository
+		// at <path>", so an operator re-mounted their workspace to fix an image
+		// problem. vcs:"unknown" says only what we know, which is that we could
+		// not tell.
+		if code == runFilesExitNoWorkTree {
+			// A FACT about the workspace, not a failure: 200, an honest empty
+			// list, no audit row. NAME the directory we looked in — a bare
+			// "not a git repository" is indistinguishable from "we looked in
+			// the wrong place", and the mount target is configurable per
+			// workspace source.
 			writeJSON(w, http.StatusOK, runFilesResponse{
 				VCS: runFilesVCSNone, Files: []runFileStat{}, Path: inspectedPath,
+			})
+			return
+		}
+		if code != 0 {
+			writeJSON(w, http.StatusOK, runFilesResponse{
+				VCS: runFilesVCSUnknown, Files: []runFileStat{}, Path: inspectedPath,
 			})
 			return
 		}

@@ -142,6 +142,28 @@ function navItemsForRole(role: Role): NavItem[] {
   return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
 }
 
+// FOCUS MODE (design board 2c) — one screen, the run cockpit, can ask the shell
+// to get out of the way so the terminal owns the pixels. Opt-in and scoped: the
+// shell renders exactly as it always did until something below it sets this,
+// and the canvas clears it on unmount, so no other screen can inherit a
+// chrome-less shell.
+//
+// A context rather than global state or a DOM query, for the same reason
+// OperatorProvider/RoleProvider are: the value flows down the tree the shell
+// already owns, a component with no provider above it gets the honest default
+// (focus off), and a test can drive it without touching a module singleton.
+interface FocusMode {
+  focus: boolean;
+  setFocus: (on: boolean) => void;
+}
+const FocusContext = React.createContext<FocusMode>({ focus: false, setFocus: () => {} });
+
+/** The shell's focus state. Default: off, and setting it is a no-op — a screen
+ *  rendered outside <AppShell> (every existing test) can call this safely. */
+export function useFocusMode(): FocusMode {
+  return React.useContext(FocusContext);
+}
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -284,6 +306,11 @@ export function AppShell({
   React.useEffect(checkBarrier, [checkBarrier]);
   usePoll(checkBarrier, BARRIER_POLL_MS, false);
 
+  // See FocusContext above. Nothing here decides WHEN focus is on — the run
+  // cockpit's canvas does, and it clears this on unmount.
+  const [focus, setFocus] = React.useState(false);
+  const focusValue = React.useMemo<FocusMode>(() => ({ focus, setFocus }), [focus]);
+
   // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
   // dialog mounted below) — not just the Outlet — so every screen AND every
   // dialog reachable from here (including the wizard's inline Add secret /
@@ -292,6 +319,7 @@ export function AppShell({
   return (
     <OperatorProvider operator={meta.operator} principal={meta.principal}>
     <RoleProvider role={meta.role}>
+    <FocusContext.Provider value={focusValue}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -301,31 +329,43 @@ export function AppShell({
       >
         Skip to main content
       </a>
-      <TopBar
-        onSignOut={onSignOut}
-        meta={meta}
-        pendingApprovals={pendingApprovals}
-        attentionCount={attentionCount}
-        confinementClasses={confinementClasses}
-        onNewRun={() => navigate("/runs/new")}
-      />
+      {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
+          painted over the shell anyway, but leaving the header mounted would
+          keep a dozen focusable controls ahead of the terminal in tab order
+          (WCAG 2.4.3) and in the accessibility tree. */}
+      {!focus && (
+        <TopBar
+          onSignOut={onSignOut}
+          meta={meta}
+          pendingApprovals={pendingApprovals}
+          attentionCount={attentionCount}
+          confinementClasses={confinementClasses}
+          onNewRun={() => navigate("/runs/new")}
+        />
+      )}
+      {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
+          cannot paint over it: this banner is the only thing that separates a
+          quiet fleet from a dead daemon, and a full-bleed terminal is exactly
+          where you would otherwise never notice. */}
       {unreachable && (
         <div
           role="status"
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+          className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
         >
           <AlertTriangle className="size-4 shrink-0" />
           <span>Control plane unreachable — showing the last data received. {lastCheckedLabel(lastOkAt ?? null)}</span>
         </div>
       )}
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
-          <SidebarNav
-            pendingApprovals={pendingApprovals}
-            attentionCount={attentionCount}
-            meta={meta}
-          />
-        </aside>
+        {!focus && (
+          <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+            <SidebarNav
+              pendingApprovals={pendingApprovals}
+              attentionCount={attentionCount}
+              meta={meta}
+            />
+          </aside>
+        )}
 
         <main id="main-content" tabIndex={-1} className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none">
           {/* Keyed by pathname so navigating away from a screen that threw
@@ -341,6 +381,7 @@ export function AppShell({
           screen you reached last, after making them all blind. The one-page
           screen shows the live policy rail beside the form the whole time. */}
     </div>
+    </FocusContext.Provider>
     </RoleProvider>
     </OperatorProvider>
   );

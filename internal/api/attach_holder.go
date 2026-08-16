@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -88,7 +89,37 @@ type attachHolder struct {
 	mu   sync.Mutex
 	cols uint16
 	rows uint16
+
+	// evicted flips the instant a take-over removes this holder from the
+	// registry, and it is what actually REVOKES write authority.
+	//
+	// THE BUG THIS FIXES: the pumps gate writes on the *attachHolder pointer
+	// they captured at attach time. Removing the entry from the registry map
+	// does not touch that pointer, and displace() deliberately closes the
+	// socket rather than cancelling the pump context (a cancelled ctx sends no
+	// close frame, so the client would see a bare drop and reconnect into the
+	// fight). But coder/websocket's Close does a full handshake — writeClose
+	// then waitCloseHandshake, each with its own multi-second budget, the
+	// second of which blocks on the read mutex the displaced pump is holding.
+	// So between "take-over returned 200" and "the displaced socket finally
+	// dies" there was a window, bounded only by those timeouts against an
+	// unresponsive peer, in which the OLD client still wrote into the same tmux
+	// session as the new one. Two writers is the exact state this file exists
+	// to end, and the gate was asking the client's socket to cooperate.
+	//
+	// The SSH lane never had the window: its displace() calls cancel() and the
+	// pump returns immediately. That asymmetry was the tell.
+	//
+	// atomic, not mu: the pumps read it on every frame and must never contend
+	// with a resize write.
+	evicted atomic.Bool
 }
+
+// canWrite reports whether this holder may still drive the PTY. A nil holder is
+// a read-only observer (never registered); an evicted one was displaced by a
+// take-over and must stop writing AT EVICTION, not whenever its socket happens
+// to finish dying.
+func (h *attachHolder) canWrite() bool { return h != nil && !h.evicted.Load() }
 
 func (h *attachHolder) setSize(cols, rows uint16) {
 	h.mu.Lock()
@@ -246,6 +277,13 @@ func (s *Server) evictAttachHolder(runID uuid.UUID) *attachHolder {
 	defer reg.mu.Unlock()
 	h := reg.holders[runID]
 	delete(reg.holders, runID)
+	if h != nil {
+		// Revoke write authority HERE, under the same lock that removes the
+		// entry, so it takes effect the moment the take-over is decided rather
+		// than whenever the displaced socket finishes closing. See the field's
+		// doc for the window this closes.
+		h.evicted.Store(true)
+	}
 	return h
 }
 

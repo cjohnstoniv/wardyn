@@ -42,7 +42,7 @@ import "@xterm/xterm/css/xterm.css";
 // NONE of the fontsource subsets; those already come from the OS fallback).
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-ext-400.css";
-import { getToken } from "../lib/api/core";
+import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 import { getErrorMessage } from "../lib/format";
@@ -498,6 +498,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         }
         // Unexpected drop: re-attach to the persistent tmux session with backoff.
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          // Drop the stale attach mode, exactly as the taken-over branch does.
+          // Whether we come back as writer or observer is the SERVER's call,
+          // announced by the next attach-mode frame — carrying the old answer
+          // across the gap asserts "you are driving" for a whole round trip on
+          // a socket that currently holds nothing. That is inferring mode from
+          // silence, which this protocol exists to avoid.
+          setMode(null);
           reconnectAttempts += 1;
           const delay = Math.min(
             RECONNECT_MAX_DELAY_MS,
@@ -730,6 +737,19 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     try {
       await runs.takeoverAttach(runId);
     } catch (e) {
+      // A 409 means the server says NOBODY holds it — the holder left while we
+      // sat here as an observer, and nothing told us: the attach-mode frame is
+      // sent once, at connect. Without this branch the panel was a dead end,
+      // because the whole page's hero is a terminal permanently convinced it is
+      // read-only, and the only way out was a full reload. There IS nothing to
+      // take over, so reclaiming is the correct response to that answer, not an
+      // error to display.
+      if (e instanceof HttpError && e.status === 409) {
+        setTakenOverBy(null);
+        setMode(null);
+        reclaimRef.current();
+        return;
+      }
       setTakeoverErr(getErrorMessage(e));
       return;
     }
@@ -867,8 +887,14 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
               is the thing a just-kicked operator actually needs to know. */}
           <p className={cn("min-w-0 flex-1 text-xs", takeoverErr ? "text-danger" : "text-muted-foreground")}>
             {takeoverErr ||
-              (displaced && holderPrincipal
-                ? RUN_COCKPIT.displacedHint(holderPrincipal)
+              (displaced
+                ? holderPrincipal
+                  ? RUN_COCKPIT.displacedHint(holderPrincipal)
+                  : // Displaced, but a proxy ate the close reason so there is no
+                    // principal to name. heldHint would offer to "watch it live"
+                    // and "take it from them" — the socket is closed and there is
+                    // no them, so both halves would be false.
+                    RUN_COCKPIT.displacedUnknownHint
                 : RUN_COCKPIT.heldHint)}
           </p>
           {holderPrincipal && (

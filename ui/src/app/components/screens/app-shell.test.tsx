@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { AppShell, MobileNav } from "./app-shell";
+import { AppShell, MobileNav, useFocusMode } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
@@ -248,6 +249,51 @@ describe("AppShell — account-menu trigger uses the shared Button (ui-shellAuth
     const headerButtons = within(header).getAllByRole("button");
     const accountTrigger = headerButtons[headerButtons.length - 1];
     expect(accountTrigger).toHaveClass("focus-visible:ring-ring/50");
+  });
+});
+
+// Focus mode (design board 2c): the run cockpit can ask the shell to get out of
+// the way. The shell's half of that contract — and, just as load-bearing, that
+// it is OPT-IN: every other screen renders the header and sidebar exactly as
+// before. Driven through the real context rather than a prop, because that is
+// how the canvas reaches it.
+describe("AppShell — focus mode hides the shell's own chrome", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function renderShellWithRoute(child: React.ReactNode) {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    render(
+      <MemoryRouter initialEntries={["/x"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+              <Route path="/x" element={child} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function FocusingScreen() {
+    const { setFocus } = useFocusMode();
+    React.useEffect(() => setFocus(true), [setFocus]);
+    return <p>the cockpit</p>;
+  }
+
+  it("renders header and sidebar normally for a screen that never asks", async () => {
+    renderShellWithRoute(<p>an ordinary screen</p>);
+    expect(await screen.findByText("an ordinary screen")).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.getByRole("complementary")).toBeInTheDocument();
+  });
+
+  it("drops both once a screen sets focus", async () => {
+    renderShellWithRoute(<FocusingScreen />);
+    await waitFor(() => expect(screen.queryByRole("banner")).toBeNull());
+    expect(screen.queryByRole("complementary")).toBeNull();
+    // The screen itself is untouched — only the shell's chrome went away.
+    expect(screen.getByText("the cockpit")).toBeInTheDocument();
   });
 });
 

@@ -142,15 +142,26 @@ export const RUN_COCKPIT = {
   // --- Terminal widget, four states (design board 2d) ---
   // 1. You hold the PTY.
   driving: "you are driving",
-  drivingHint:
-    "Input goes to the PTY. Paste, Shift+Enter for a newline, and ⇧⌘F for real fullscreen — the tmux session survives a refresh, so detaching costs nothing.",
+  // NOTE: there is deliberately no "drivingHint" here. One existed, unreferenced,
+  // advertising "⇧⌘F for real fullscreen" — nothing binds that chord; fullscreen
+  // is the header button only. A hint for a shortcut that does not exist is
+  // worse than no hint, and an unrendered string is a trap waiting for someone
+  // to render it. Add it back the day the chord is actually wired.
   // 2. Someone else holds it. Attach is a SHARED tmux session, so this is a
   // real state the console used to have no words for — it just competed for
   // the same PTY silently.
   heldBy: (principal: string) => `held by ${principal}`,
   watchingReadOnly: "watching read-only — keystrokes go nowhere",
+  // Does NOT assert a transport. The holder's source is on the wire
+  // (AttachHolder.source, "web" | "ssh"), and "from a CLI" was wrong for the
+  // very common case of a second browser tab or another operator's console —
+  // it sent people hunting for a terminal window that did not exist.
   heldHint:
-    "Someone is already driving this session from a CLI. You can watch it live, or take it from them — they get told, and it lands in the audit trail.",
+    "Someone else is driving this session. You can watch it live, or take it from them — they get told, and it lands in the audit trail.",
+  // Where the transport IS known, say it — it is the one detail that tells an
+  // operator where to go look.
+  heldBySource: (source: string) =>
+    source === "ssh" ? "attached over SSH" : source === "web" ? "attached from a browser" : "",
   // The DISPLACED case is not the same sentence. heldHint says "someone is
   // already driving" — true when you arrive second, false and confusing when
   // you were driving and got taken over. This one describes what actually
@@ -158,6 +169,12 @@ export const RUN_COCKPIT = {
   // costs nothing but a click.
   displacedHint: (principal: string) =>
     `${principal} took over this session. Nothing was lost — the terminal is still running, and you can take it back.`,
+  // Same event, but a proxy ate the close reason so we cannot name who did it.
+  // It must NOT fall through to heldHint, which offers to "watch it live" and
+  // "take it from them" — the socket is closed and there is no named principal
+  // to take it from, so both halves of that sentence would be false.
+  displacedUnknownHint:
+    "Your session was taken over. Nothing was lost — the terminal is still running; reconnect to take it back.",
   takeOver: "Take over",
   // Deliberately concrete about the consequence: take-over ENDS someone's
   // session. Mirrors the irreversible-deny confirm in live-approvals.tsx.
@@ -182,6 +199,13 @@ export const RUN_COCKPIT = {
   // is configurable per workspace source, so a bare "not a git repository"
   // cannot be told apart from "we looked in the wrong place" — and that
   // mistake is otherwise completely silent.
+  // git ran and failed for a reason that is not "no work tree" — most often it
+  // is not installed in the sandbox image. Names the path but does NOT assert
+  // anything about the workspace, because we genuinely do not know.
+  vcsUnknown: (path?: string) =>
+    path
+      ? `Couldn't read a diff at ${path} — git didn't run there. Check the sandbox image.`
+      : "Couldn't read a diff — git didn't run in this sandbox. Check the sandbox image.",
   noVcs: (path?: string) =>
     path
       ? `No git repository at ${path} — there's no diff to show.`
@@ -224,6 +248,34 @@ export const RUN_COCKPIT = {
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,
+
+  // --- Focus mode (design board 2c) ---
+  enterFocus: "Focus",
+  exitFocus: "Exit focus",
+  // The dock's rail is a widget switcher, so its accessible name says which
+  // widget each button shows — see DOCK_BUTTON below.
+  dock: "Widget dock",
+  closeDock: "Close the widget dock",
+  showWidget: (label: string) => `Show ${label}`,
+  // Bottom strip. The three counts are the SAME facts the Egress and
+  // Credentials widgets state, said as text you can read without opening
+  // anything — which is the whole point of the strip on this board.
+  egress: "egress",
+  allow: (n: number) => `${n} allow`,
+  held: (n: number) => `${n} held`,
+  deny: (n: number) => `${n} deny`,
+  credentials: "credentials",
+  // Grants are ELIGIBILITY (what the run MAY request), never live credentials —
+  // the same distinction credentials.tsx makes. Only a credential.mint audit
+  // event with outcome "success" is a real issued credential.
+  eligible: (n: number) => `${n} eligible`,
+  brokered: (n: number) => `${n} brokered`,
+  // Only the shortcuts this file actually binds. ⌘K (no command palette
+  // exists), ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) and ⇧⌘F
+  // (AttachTerminal ships a fullscreen BUTTON, not a key binding) are on the
+  // board's strip and deliberately absent here: a hint that lies is worse than
+  // no hint.
+  shortcuts: "⌘\\ dock · Esc exit focus",
 } as const;
 
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")

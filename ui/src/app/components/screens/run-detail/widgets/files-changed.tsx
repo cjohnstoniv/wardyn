@@ -26,6 +26,7 @@ const POLL_MS = 4000;
 type FilesState =
   | { kind: "loading" }
   | { kind: "no-vcs"; path?: string }
+  | { kind: "vcs-unknown"; path?: string }
   | { kind: "no-sandbox" }
   | { kind: "unsupported" }
   | { kind: "error" }
@@ -39,7 +40,13 @@ export function FilesChangedWidget({ runId, live }: { runId: string; live: boole
       runsApi
         .getFiles(runId)
         .then((data) => {
-          setState(data.vcs === "none" ? { kind: "no-vcs", path: data.path } : { kind: "ready", data });
+          setState(
+            data.vcs === "none"
+              ? { kind: "no-vcs", path: data.path }
+              : data.vcs === "unknown"
+                ? { kind: "vcs-unknown", path: data.path }
+                : { kind: "ready", data },
+          );
         })
         .catch((err) => {
           if (err instanceof HttpError && err.status === 501) setState({ kind: "unsupported" });
@@ -101,6 +108,8 @@ function renderBody(state: FilesState): React.ReactNode {
       );
     case "no-vcs":
       return <Quiet text={RUN_COCKPIT.noVcs(state.path)} />;
+    case "vcs-unknown":
+      return <Quiet text={RUN_COCKPIT.vcsUnknown(state.path)} />;
     case "no-sandbox":
       return <Quiet text={RUN_COCKPIT.noSandboxYet} />;
     case "unsupported":
@@ -135,7 +144,7 @@ function FileRow({ f }: { f: RunFileStat }) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5">
       <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground" title={f.status}>
-        {f.status ?? "?"}
+        {f.status ?? "—"}
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] text-foreground" title={f.path}>
         {f.path}

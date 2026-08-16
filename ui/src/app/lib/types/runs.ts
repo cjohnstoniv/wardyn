@@ -95,9 +95,11 @@ export interface RunFileStat {
 }
 
 export interface RunFilesResult {
-  // "git" when we read a work tree; "none" when the workspace simply isn't one
-  // (a fact about the workspace, served as 200 — not a failure).
-  vcs: "git" | "none" | (string & {});
+  // "git" when we read a work tree; "none" when the workspace genuinely isn't
+  // one; "unknown" when git ran and failed for some OTHER reason (most often it
+  // is missing from the sandbox image). The last two are deliberately distinct:
+  // collapsing them made the console blame the workspace for an image problem.
+  vcs: "git" | "none" | "unknown" | (string & {});
   files: RunFileStat[];
   /** The in-sandbox directory actually inspected. On vcs:"none" this is what
    *  separates "no repo here" from "we looked in the wrong place" — the mount
