@@ -36,6 +36,9 @@ const SETUP_POLL_MS = 5000;
 // terminal deps out of the entry chunk: xterm rides on run-detail/demos/
 // workspaces/setup, asciinema-player on run-detail/recordings. Rollup hoists
 // what several lazy routes share into its own chunk automatically.
+const NewRunScreen = React.lazy(() =>
+  import("./components/screens/new-run/new-run-screen").then((m) => ({ default: m.NewRunScreen })),
+);
 const RunDetailScreen = React.lazy(() =>
   import("./components/screens/run-detail").then((m) => ({ default: m.RunDetailScreen })),
 );
@@ -274,6 +277,15 @@ export default function App() {
           />
           <Route path="/" element={<FirstRunLanding status={setupStatus} />} />
           <Route path="/runs" element={<RunsScreen />} />
+          {/* Ahead of /runs/:id so "new" is never read as a run id. */}
+          <Route
+            path="/runs/new"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <NewRunScreen />
+              </React.Suspense>
+            }
+          />
           <Route
             path="/runs/:id"
             element={

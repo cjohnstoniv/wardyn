@@ -1,0 +1,594 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// New run — ONE page, two columns, with a live rail that answers "what can this
+// run actually do?" while you build it.
+//
+// Ported from the Figma Make canon (src/screens/NewRunScreen.tsx in the "Wardyn
+// Simplified" file). It replaces a five-step modal wizard whose Review screen
+// was the first place the consequences of your choices appeared — by which
+// point you had made all of them blind.
+//
+// It is a RE-LAYOUT, not a re-model. WizardState already carries every field
+// this screen edits, and buildSpec()/impliedEgressHosts() are reused verbatim,
+// so the launch payload and the policy it produces are exactly what the wizard
+// produced. That is deliberate: the governance contract is the tested part, and
+// this change is about when the operator SEES it, not what it is.
+import * as React from "react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
+import type { AgentRun, ConfinementClass, Workspace } from "../../../lib/types";
+import type { WizardAgent } from "./wizard-types";
+import { runs as runsApi } from "../../../lib/api/runs";
+import { policies as policiesApi } from "../../../lib/api/policies";
+import { health as healthApi } from "../../../lib/api/health";
+import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import { getErrorMessage } from "../../../lib/format";
+import { Button } from "../../ui/button";
+import { Textarea } from "../../ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { Field } from "../../wardyn/form-primitives";
+import { Mono } from "../../wardyn/code-block";
+import { Chip } from "../../wardyn/primitives";
+import { CC_META } from "../../wardyn/cc-meta";
+import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
+import { cn } from "../../ui/utils";
+import { AddWorkspaceDialog } from "../add-workspace-dialog";
+import { NetworkDialog, UNLISTED_RULES, type NetworkSelection } from "./network-dialog";
+import { buildSpec, impliedEgressHosts } from "./wizard-spec";
+import { initialWizardState, PRESET_DOMAINS, primaryWorkspaceId, type WizardState } from "./wizard-types";
+import { surfaceRunWarnings } from "./run-warnings";
+
+// The three Network presets. "Registries" is the whole PRESET_DOMAINS list —
+// the same set the dialog groups — so the card and the dialog can never
+// disagree about what "common package registries" means.
+type NetworkPreset = "none" | "registries" | "everything" | "custom";
+
+const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
+
+// A run is EITHER recorded (allow everything, log everything, synthesise the
+// policy afterwards) or confined. Record is Wardyn's moat, so it leads.
+type ConfinementChoice = "record" | "confined" | "saved";
+
+function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-xl border border-border bg-surface-1">
+      <div className="border-b border-border px-4 py-2.5">
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+      </div>
+      <div className="p-4">{children}</div>
+    </section>
+  );
+}
+
+function Seg({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { id: string; label: string; disabled?: boolean }[];
+  value: string;
+  onChange: (id: string) => void;
+  label: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          disabled={o.disabled}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            "rounded-lg border px-3 py-1.5 text-[0.8125rem] font-medium transition-colors",
+            value === o.id
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-border text-foreground hover:border-border-strong",
+            o.disabled && "cursor-not-allowed opacity-40 hover:border-border",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RadioCard({
+  on,
+  onSelect,
+  title,
+  body,
+  children,
+}: {
+  on: boolean;
+  onSelect: () => void;
+  title: string;
+  body: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className={cn("rounded-lg border transition-colors", on ? "border-primary bg-primary/5" : "border-border")}>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={on}
+        onClick={onSelect}
+        className="flex w-full items-start gap-2.5 p-3 text-left"
+      >
+        <span
+          aria-hidden="true"
+          className={cn(
+            "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+            on ? "border-primary" : "border-border-strong",
+          )}
+        >
+          {on && <span className="size-2 rounded-full bg-primary" />}
+        </span>
+        <span>
+          <span className="block text-sm font-medium text-foreground">{title}</span>
+          <span className="mt-0.5 block text-[0.6875rem] leading-snug text-muted-foreground">{body}</span>
+        </span>
+      </button>
+      {on && children && <div className="border-t border-border px-3 py-3">{children}</div>}
+    </div>
+  );
+}
+
+function RailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="border-b border-border pb-3 last:border-0">
+      <p className="mb-1.5 text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase">{title}</p>
+      {children}
+    </div>
+  );
+}
+
+export function NewRunScreen() {
+  const navigate = useNavigate();
+  const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
+  const [state, setState] = React.useState<WizardState>(() =>
+    initialWizardState(resolveDefaultCc(getDefaultCc(), ["CC1"])),
+  );
+  const [confinement, setConfinement] = React.useState<ConfinementChoice>("confined");
+  const [netOpen, setNetOpen] = React.useState(false);
+  const [addWsOpen, setAddWsOpen] = React.useState(false);
+  const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
+  const [launching, setLaunching] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string }[]>([]);
+
+  React.useEffect(() => {
+    policiesApi
+      .listPolicies()
+      .then((ps) => setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name }))))
+      .catch(() => {
+        /* the Saved-policy lane simply offers nothing — never blocks a launch */
+      });
+  }, []);
+
+  const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
+
+  // Which barriers this host can actually build. Empty means UNKNOWN, not
+  // confirmed-absent (healthApi.health swallows a failure into {}), so an empty
+  // result retries once before settling — the wizard learned this the hard way.
+  React.useEffect(() => {
+    let alive = true;
+    let retried = false;
+    const probe = () =>
+      healthApi.health().then((h) => {
+        if (!alive) return;
+        const classes = ((h.confinement_classes ?? []) as ConfinementClass[]).filter(Boolean);
+        if (classes.length === 0 && !retried) {
+          retried = true;
+          probe();
+          return;
+        }
+        setAvailableClasses(classes.length ? classes : ["CC1"]);
+      });
+    probe();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const isAgent = state.runType === "agent";
+  const isRecord = confinement === "record";
+
+  // Which preset the current host list corresponds to — derived, never stored,
+  // so an edit in the dialog is reflected here instead of silently disagreeing.
+  const preset: NetworkPreset = state.allowAllEgress
+    ? "everything"
+    : state.allowedDomains.length === 0
+      ? "none"
+      : state.allowedDomains.length === PRESET_DOMAINS.length &&
+          PRESET_DOMAINS.every((d) => state.allowedDomains.includes(d))
+        ? "registries"
+        : "custom";
+
+  const setPreset = (p: NetworkPreset) => {
+    if (p === "none") patch({ allowAllEgress: false, allowedDomains: [] });
+    else if (p === "registries") patch({ allowAllEgress: false, allowedDomains: [...PRESET_DOMAINS] });
+    else if (p === "everything") patch({ allowAllEgress: true });
+  };
+
+  const implied = React.useMemo(
+    () =>
+      impliedEgressHosts(state, workspaces).filter((h) => !state.allowedDomains.includes(h.host)),
+    [state, workspaces],
+  );
+  const ruleTitle = UNLISTED_RULES.find((r) => r.id === state.firstUseApproval)?.title ?? "";
+  const cc = state.confinementClass;
+  const hostCount = state.allowedDomains.length + implied.length;
+
+  const netValue: NetworkSelection = {
+    allowAllEgress: state.allowAllEgress,
+    allowedDomains: state.allowedDomains,
+    deniedDomains: state.deniedDomains,
+    firstUseApproval: state.firstUseApproval,
+  };
+
+  const launch = async () => {
+    setError(null);
+    setLaunching(true);
+    try {
+      const { run, inline_policy } = buildSpec(state, workspaces);
+      const created: AgentRun = await runsApi.createRun(
+        state.selectedPolicyId
+          ? { ...run, policy_id: state.selectedPolicyId, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) }
+          : { ...run, inline_policy },
+      );
+      if (state.saveAsProfile && state.profileName.trim()) {
+        // AFTER the launch, best-effort: the run carries inline_policy and is
+        // self-contained, so a name collision here must not undo a live run.
+        try {
+          await policiesApi.createPolicy(state.profileName.trim(), inline_policy);
+        } catch {
+          /* best-effort — the run already launched */
+        }
+      }
+      surfaceRunWarnings(created);
+      navigate(`/runs/${encodeURIComponent(created.id)}`);
+    } catch (e) {
+      setError(getErrorMessage(e) || "Failed to launch run.");
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-[1200px] px-6 py-6">
+      <div className="mb-6 flex items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={() => navigate("/runs")}>
+          <ArrowLeft className="size-4" /> Runs
+        </Button>
+        <h1 className="text-xl font-semibold text-foreground">New run</h1>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        {/* ── Left: the form ─────────────────────────────────────── */}
+        <div className="min-w-0 space-y-4">
+          <SectionCard title="What to run">
+            <div className="space-y-4">
+              {/* The choice that proves a run needn't involve AI at all. */}
+              <Seg
+                label="Run type"
+                value={state.runType}
+                onChange={(id) => patch({ runType: id as WizardState["runType"] })}
+                options={[
+                  { id: "agent", label: "Agent task" },
+                  { id: "command", label: "Shell command" },
+                ]}
+              />
+
+              {isAgent && (
+                <Field label="Agent" htmlFor="nr-agent">
+                  <Select value={state.agent} onValueChange={(v) => patch({ agent: v as WizardAgent })}>
+                    <SelectTrigger id="nr-agent">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="claude-code">Claude Code</SelectItem>
+                      <SelectItem value="codex-cli">Codex CLI</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
+
+              <Field
+                label={isAgent ? "Task" : "Command"}
+                htmlFor="nr-task"
+                hint={
+                  isAgent
+                    ? "Described in plain English. The agent decides how to do it."
+                    : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
+                }
+              >
+                <Textarea
+                  id="nr-task"
+                  rows={4}
+                  className={isAgent ? undefined : "font-mono"}
+                  placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
+                  value={state.task}
+                  onChange={(e) => patch({ task: e.target.value })}
+                />
+              </Field>
+
+              <Seg
+                label="Run mode"
+                value={state.mode}
+                onChange={(id) => patch({ mode: id as WizardState["mode"] })}
+                options={[
+                  { id: "autonomous", label: "Batch — run it unattended" },
+                  { id: "interactive", label: "Interactive — I drive the terminal" },
+                ]}
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Workspace">
+            <Select
+              value={state.workspaces[0]?.workspaceId ?? "__none__"}
+              onValueChange={(v) =>
+                patch({ workspaces: v === "__none__" ? [] : [{ workspaceId: v, enabledOptional: [] }] })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Ephemeral scratch — no repo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Ephemeral scratch — no repo</SelectItem>
+                {workspaces.map((w: Workspace) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="ghost" size="sm" className="mt-2 px-1" onClick={() => setAddWsOpen(true)}>
+              <Plus className="size-4" /> Add workspace
+            </Button>
+          </SectionCard>
+
+          <SectionCard title="Confinement">
+            <div className="space-y-2">
+              <RadioCard
+                on={confinement === "record"}
+                onSelect={() => {
+                  setConfinement("record");
+                  // Recording means allow-everything by definition; anything else
+                  // would record a policy narrower than what the run really did.
+                  patch({ allowAllEgress: true });
+                }}
+                title="Record"
+                body="Allow everything. Log everything. Write the policy from what actually happened."
+              />
+              <RadioCard
+                on={confinement === "confined"}
+                onSelect={() => {
+                  setConfinement("confined");
+                  patch({ allowAllEgress: false });
+                }}
+                title="Confined"
+                body="Default-deny. New hosts are held at the door for your approval."
+              />
+              <RadioCard
+                on={confinement === "saved"}
+                onSelect={() => setConfinement("saved")}
+                title="Saved policy"
+                body="Reuse a policy you already have."
+              >
+                <Select
+                  value={state.selectedPolicyId ?? ""}
+                  onValueChange={(v) => patch({ selectedPolicyId: v })}
+                >
+                  <SelectTrigger aria-label="Saved policy">
+                    <SelectValue placeholder="Pick a policy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedPolicies.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </RadioCard>
+
+              <div className="border-t border-border pt-3">
+                <p className="mb-2 text-[0.8125rem] font-medium text-foreground">Barrier</p>
+                <Seg
+                  label="Barrier"
+                  value={cc}
+                  onChange={(id) => patch({ confinementClass: id as ConfinementClass })}
+                  options={ORDERED_CLASSES.map((c) => ({
+                    id: c,
+                    label: CC_META[c].label,
+                    disabled: !!availableClasses && !availableClasses.includes(c),
+                  }))}
+                />
+                {availableClasses &&
+                  ORDERED_CLASSES.filter((c) => !availableClasses.includes(c)).map((c) => (
+                    <p key={c} className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                      {CC_META[c].label} isn&apos;t installed on this host.
+                    </p>
+                  ))}
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Network">
+            {isRecord ? (
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground italic">
+                Everything is allowed. That is what recording means.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <RadioCard
+                  on={preset === "none"}
+                  onSelect={() => setPreset("none")}
+                  title="None"
+                  body="No hosts. Everything becomes an approval request."
+                />
+                <RadioCard
+                  on={preset === "registries"}
+                  onSelect={() => setPreset("registries")}
+                  title="Common package registries"
+                  body={`${PRESET_DOMAINS.length} hosts — npm, PyPI, crates.io, Go proxy, Maven Central and the rest.`}
+                />
+                <RadioCard
+                  on={preset === "everything"}
+                  onSelect={() => setPreset("everything")}
+                  title="Everything"
+                  body="Open egress. Nothing is blocked."
+                />
+
+                {/* Host detail lives in ONE surface, not a stack of disclosures. */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                  <p className="text-[0.75rem] text-muted-foreground">
+                    {preset === "custom"
+                      ? "Edited — this run uses your host list."
+                      : "Pick individual hosts, set what happens for anything unlisted, and block hosts outright."}
+                  </p>
+                  <Button variant="secondary" size="sm" onClick={() => setNetOpen(true)}>
+                    Edit hosts…
+                  </Button>
+                </div>
+
+                {!state.allowAllEgress && (
+                  <p className="text-[0.75rem] text-muted-foreground">
+                    Unlisted hosts: <span className="text-foreground">{ruleTitle}</span>
+                  </p>
+                )}
+              </div>
+            )}
+          </SectionCard>
+        </div>
+
+        {/* ── Right: the live rail ───────────────────────────────── */}
+        <aside className="h-fit rounded-xl border border-border bg-surface-1 p-4 lg:sticky lg:top-6">
+          <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
+
+          <div className="space-y-3">
+            <RailSection title="Barrier">
+              <div className="mb-1 flex items-center gap-2">
+                <Chip tone="neutral">{CC_META[cc].label}</Chip>
+                <span className="text-[0.75rem] text-muted-foreground">· {CC_META[cc].tagline}</span>
+              </div>
+              <p className="text-[0.75rem] text-muted-foreground">{CC_META[cc].doesntProtect}</p>
+            </RailSection>
+
+            <RailSection title="Network">
+              {isRecord ? (
+                <div className="space-y-2">
+                  <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
+                    Unrestricted — every host this run reaches is logged and becomes the policy. Nothing is blocked.
+                  </p>
+                  {cc === "CC1" && (
+                    <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
+                      On {CC_META.CC1.label}, an unrestricted run can move your data out. Use{" "}
+                      {CC_META.CC2.label} or {CC_META.CC3.label} to record.
+                    </p>
+                  )}
+                </div>
+              ) : state.allowAllEgress ? (
+                <p className="text-[0.75rem] text-muted-foreground">Open egress. Nothing is blocked.</p>
+              ) : state.allowedDomains.length === 0 ? (
+                <>
+                  <p className="text-[0.8125rem] font-medium text-foreground">0 hosts allowed</p>
+                  <p className="mt-0.5 text-[0.75rem] text-muted-foreground">{ruleTitle} for anything else.</p>
+                </>
+              ) : (
+                <>
+                  <p className="mb-1.5 text-[0.8125rem] font-medium text-foreground">
+                    {hostCount} host{hostCount === 1 ? "" : "s"} allowed
+                  </p>
+                  <div className="space-y-1">
+                    {state.allowedDomains.slice(0, 3).map((h) => (
+                      <Mono key={h} className="block text-[0.75rem] text-foreground">
+                        {h}
+                      </Mono>
+                    ))}
+                    {state.allowedDomains.length > 3 && (
+                      <p className="font-mono text-[0.75rem] text-muted-foreground">
+                        …{state.allowedDomains.length - 3} more
+                      </p>
+                    )}
+                    {/* Hosts the RUN implies but nobody typed — named with why,
+                        so an unexplained host never appears in the allowlist. */}
+                    {implied.map((h) => (
+                      <div key={h.host} className="flex flex-wrap items-center gap-1.5">
+                        <Mono className="text-[0.75rem] text-foreground">{h.host}</Mono>
+                        <Chip tone="neutral">added by your {h.why}</Chip>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[0.75rem] text-muted-foreground">{ruleTitle} for anything else.</p>
+                </>
+              )}
+              {state.deniedDomains.length > 0 && (
+                <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
+                  {state.deniedDomains.length} blocked outright.
+                </p>
+              )}
+            </RailSection>
+
+            <RailSection title="Credentials">
+              <p className="text-[0.75rem] leading-relaxed text-muted-foreground">
+                Minted at launch, injected by the proxy. Never written into the sandbox.
+              </p>
+            </RailSection>
+
+            <RailSection title="Recording">
+              <p className="text-[0.75rem] text-muted-foreground">
+                Every keystroke and every outbound connection.
+              </p>
+            </RailSection>
+          </div>
+
+          {error && (
+            <p className="mt-3 flex items-start gap-1.5 text-[0.75rem] text-danger">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              {error}
+            </p>
+          )}
+
+          <Button className="mt-4 w-full" disabled={launching} onClick={launch}>
+            {launching && <Loader2 className="size-4 animate-spin" />}
+            Launch run
+          </Button>
+        </aside>
+      </div>
+
+      <NetworkDialog
+        open={netOpen}
+        onOpenChange={setNetOpen}
+        value={netValue}
+        onSave={(next) => {
+          patch(next);
+          setNetOpen(false);
+          // An explicit host edit means this is no longer a recording run —
+          // recording is allow-everything by definition.
+          if (confinement === "record" && !next.allowAllEgress) setConfinement("confined");
+        }}
+      />
+
+      {addWsOpen && (
+        <AddWorkspaceDialog
+          existingNames={workspaces.map((w: Workspace) => w.name)}
+          onClose={() => setAddWsOpen(false)}
+          onCreated={() => {
+            setAddWsOpen(false);
+            reloadWorkspaces();
+            toast.success("Workspace added");
+          }}
+        />
+      )}
+    </div>
+  );
+}

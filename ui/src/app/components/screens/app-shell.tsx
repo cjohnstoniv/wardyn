@@ -50,7 +50,6 @@ import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
-const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m) => ({ default: m.NewRunDialog })));
 
 // useMeta fetches the real trust boundary (/healthz) + signed-in principal
 // (/api/v1/me) so the shell never shows placeholder identity/tenant values.
@@ -259,10 +258,6 @@ export function AppShell({
 }) {
   const meta = useMeta();
   const location = useLocation();
-  const [newRunOpen, setNewRunOpen] = React.useState(false);
-  // Latches true on the first "New run" click and never resets — see the mount
-  // note at the dialog below.
-  const [newRunMounted, setNewRunMounted] = React.useState(false);
   const navigate = useNavigate();
 
   // The top bar's permanent barrier chip — the strongest confinement tier this
@@ -312,10 +307,7 @@ export function AppShell({
         pendingApprovals={pendingApprovals}
         attentionCount={attentionCount}
         confinementClasses={confinementClasses}
-        onNewRun={() => {
-          setNewRunMounted(true);
-          setNewRunOpen(true);
-        }}
+        onNewRun={() => navigate("/runs/new")}
       />
       {unreachable && (
         <div
@@ -344,22 +336,10 @@ export function AppShell({
         </main>
       </div>
 
-      {/* Mounted from the first open onward — not gated on `newRunOpen` — so the
-          dialog keeps its own close animation and internal state instead of
-          being torn down on every dismiss. */}
-      {newRunMounted && (
-        <React.Suspense fallback={null}>
-          <NewRunDialog
-            open={newRunOpen}
-            onOpenChange={setNewRunOpen}
-            // One post-launch rule: every entry point lands on the run it
-            // launched (§7), not just the list — matches runs.tsx's own
-            // openRun and saves the extra click every interactive launch used
-            // to cost (the terminal auto-embeds on the run's own detail page).
-            onCreated={(r) => navigate(`/runs/${encodeURIComponent(r.id)}`)}
-          />
-        </React.Suspense>
-      )}
+      {/* The NewRunDialog mounted here. New run is a PAGE now (/runs/new): a
+          five-step modal put the consequences of every choice on a Review
+          screen you reached last, after making them all blind. The one-page
+          screen shows the live policy rail beside the form the whole time. */}
     </div>
     </RoleProvider>
     </OperatorProvider>
