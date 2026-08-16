@@ -165,6 +165,7 @@ function SecretLane({
   stored,
   onChanged,
   extra,
+  summary,
   disabled,
 }: {
   label: string;
@@ -173,18 +174,26 @@ function SecretLane({
   secretName: string;
   stored: boolean;
   onChanged: () => void;
-  /** Rendered above the value field (e.g. the Git host's Host input). */
+  /** Rendered above the value field while editing (e.g. the Host input). */
   extra?: React.ReactNode;
+  /** Rendered INSTEAD of the form once stored — the facts worth keeping on
+   *  screen (which host, which secret name) without an input to mistake for
+   *  unsaved work. */
+  summary?: React.ReactNode;
   disabled?: boolean;
 }) {
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  // Only ever true after an explicit Replace: a stored secret is write-only, so
+  // the field starts hidden rather than empty-and-ambiguous.
+  const [editing, setEditing] = React.useState(false);
 
   const save = async () => {
     setBusy(true);
     try {
       await secretsApi.setSecret(secretName, value.trim());
       setValue("");
+      setEditing(false);
       toast.success(`Saved ${secretName}`);
       onChanged();
     } catch (e) {
@@ -207,6 +216,30 @@ function SecretLane({
     }
   };
 
+  // A STORED secret shows a summary, not an empty box. The box was read as
+  // "your key didn't save" — the value is write-only, so there is nothing to
+  // prefill it with, and an always-visible empty field next to a "Connected"
+  // badge is a straight contradiction. Replace reveals it deliberately.
+  if (stored && !editing) {
+    return (
+      <div className="space-y-2">
+        {summary}
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" disabled={disabled} onClick={() => setEditing(true)}>
+            Replace
+          </Button>
+          <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={disconnect}>
+            {busy && <Loader2 className="size-3.5 animate-spin" />}
+            Disconnect
+          </Button>
+          <span className="text-[0.6875rem] text-muted-foreground">
+            Stored as <Mono>{secretName}</Mono>
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {extra}
@@ -224,18 +257,44 @@ function SecretLane({
       <div className="flex items-center gap-2">
         <Button size="sm" disabled={disabled || busy || !value.trim()} onClick={save}>
           {busy && <Loader2 className="size-3.5 animate-spin" />}
-          {stored ? "Replace" : "Save"}
+          {stored ? "Save replacement" : "Save"}
         </Button>
         {stored && (
-          <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={disconnect}>
-            Disconnect
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setValue("");
+              setEditing(false);
+            }}
+          >
+            Cancel
           </Button>
         )}
         <span className="text-[0.6875rem] text-muted-foreground">
-          Stored as <Mono>{secretName}</Mono>
+          {stored ? (
+            <>
+              Replaces <Mono>{secretName}</Mono>
+            </>
+          ) : (
+            <>
+              Stored as <Mono>{secretName}</Mono>
+            </>
+          )}
         </span>
       </div>
     </div>
+  );
+}
+
+// The one fact a stored git credential still needs on screen: which host it
+// clones. (The secret name rides on the Replace/Disconnect row below it.)
+function HostSummary({ host }: { host: string }) {
+  return (
+    <p className="text-[0.8125rem] text-muted-foreground">
+      Clones <Mono>{host}</Mono> over an injected credential — the value itself is write-only and never read back.
+    </p>
   );
 }
 
@@ -406,18 +465,60 @@ export function ModelProviderCard({
         </div>
       </Card>
 
+      {/* This dialog hosts a live PTY, which makes it unlike every other dialog
+          in the console, in three ways worth spelling out:
+
+          1. NO TRANSFORM. DialogContent centres itself with
+             translate(-50%,-50%), and a transformed ancestor becomes the
+             containing block for `position: fixed` DESCENDANTS. AttachTerminal's
+             fullscreen is `fixed inset-0`, so inside the default dialog it
+             rendered at the dialog's size instead of the viewport's — the
+             fullscreen button silently did almost nothing. Measured: a host
+             with `transform: translate(0,0)` gives a `fixed inset-0` child
+             512px; `transform: none` gives it the full 2548px viewport. Note
+             `transform-none`, NOT `translate-x-0` — a zeroed translate is still
+             a transform and still traps `fixed`. Centring is inset-0 + m-auto
+             + h-fit, which needs no transform at all.
+          2. WIDER via an inline `style`, not a class. The base carries
+             `w-full` and `sm:max-w-lg`; a competing `max-w-*` class is the same
+             specificity, so which one wins is decided by utility order in the
+             compiled stylesheet — measured, `sm:max-w-lg` won both `max-w-3xl`
+             and `sm:max-w-[72rem]`. An inline style beats every class, so the
+             width is a fact rather than a race.
+          3. `min-w-0` on the pane. DialogContent is a GRID, and a grid item
+             defaults to `min-width: auto`, so it refuses to shrink below its
+             content's min-content width. The login terminal is pinned to 512
+             columns (LOGIN_PTY_COLS — a wrapped OAuth URL breaks the login), so
+             without this the terminal shoved the dialog past the viewport edge
+             and painted over the page. */}
       <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && setLoginOpen(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent
+          className="inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
+          // `translate` and `transform` are SEPARATE CSS properties in Tailwind
+          // v4: translate-x-[-50%] emits `translate: -50% -50%`, which
+          // `transform: none` does not reset. Left applied it shifted this
+          // dialog half its own size up and to the left of where margin:auto
+          // had centred it — measured left 122px against a computed
+          // margin-left of 698px. Cleared here, where nothing can outrank it.
+          style={{
+            width: "min(96vw, 72rem)",
+            maxWidth: "min(96vw, 72rem)",
+            translate: "none",
+            transform: "none",
+          }}
+        >
           <DialogTitle>{loginOpen === "aws" ? "Sign in with AWS SSO" : "Sign in to Claude"}</DialogTitle>
           {loginOpen && (
-            <HarnessLoginPane
-              provider={loginOpen}
-              onDone={() => {
-                setLoginOpen(null);
-                onChanged();
-              }}
-              onCancel={() => setLoginOpen(null)}
-            />
+            <div className="min-w-0">
+              <HarnessLoginPane
+                provider={loginOpen}
+                onDone={() => {
+                  setLoginOpen(null);
+                  onChanged();
+                }}
+                onCancel={() => setLoginOpen(null)}
+              />
+            </div>
           )}
         </DialogContent>
       </Dialog>
@@ -502,6 +603,7 @@ export function GitHostCard({
             disabled={!operator || !!hostErr}
             onChanged={onChanged}
             extra={hostField}
+            summary={<HostSummary host={host} />}
             hint={S.STORE_NOTE}
           />
         </Lane>
@@ -523,6 +625,7 @@ export function GitHostCard({
             disabled={!operator || !!hostErr}
             onChanged={onChanged}
             extra={hostField}
+            summary={<HostSummary host={host} />}
           />
         </Lane>
 

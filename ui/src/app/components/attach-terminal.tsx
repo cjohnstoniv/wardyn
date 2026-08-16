@@ -142,6 +142,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const principal = usePrincipal();
   const owned = !!createdBy && createdBy === principal;
   const containerRef = React.useRef<HTMLDivElement>(null);
+  // The whole panel (title bar + grid) — the element handed to the native
+  // Fullscreen API below.
+  const panelRef = React.useRef<HTMLDivElement>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const fitAddonRef = React.useRef<FitAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
@@ -507,11 +510,56 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     };
   }, [fullscreen, refit]);
 
-  // Escape exits fullscreen (WCAG 2.1.2 no-keyboard-trap). Capture phase so
-  // this runs before xterm's textarea handler swallows the key and sends it
-  // to the PTY as literal input.
+  // Fullscreen uses the NATIVE Fullscreen API, not a `fixed inset-0` overlay.
+  //
+  // The CSS approach cannot be made reliable: `position: fixed` is resolved
+  // against the nearest ancestor that establishes a containing block, and the
+  // list of things that do is long and growing — transform, filter,
+  // backdrop-filter, perspective, contain, will-change, and (Tailwind v4's
+  // default for translate-x-*) the INDIVIDUAL `translate` property, which
+  // `transform: none` does not reset. Measured on the login dialog: computed
+  // `transform: none` yet `translate: -50% -50%`, and a `fixed inset-0` child
+  // still sized to the dialog rather than the viewport.
+  //
+  // requestFullscreen promotes the element to the browser's TOP LAYER, which
+  // sits outside the whole containing-block question, so this works identically
+  // inside a dialog, a card, or a page. It also gives real fullscreen — over the
+  // browser chrome, not just the page — and the browser handles Escape itself
+  // (WCAG 2.1.2), so there is no key handler to fight xterm's textarea for.
+  const toggleFullscreen = React.useCallback(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    if (document.fullscreenElement === el) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+    const req = el.requestFullscreen?.bind(el);
+    if (!req) {
+      // No API (very old browser, or a sandboxed iframe without
+      // allow-fullscreen): fall back to the in-page overlay. It is still
+      // subject to the containing-block rules above, so it may only fill an
+      // ancestor — degraded, never broken.
+      setFullscreen((f) => !f);
+      return;
+    }
+    void req().catch(() => setFullscreen((f) => !f));
+  }, []);
+
+  // The browser owns the truth: Escape, F11 and the OS window chrome can all
+  // leave fullscreen without going through our button.
   React.useEffect(() => {
-    if (!fullscreen) return;
+    const sync = () => setFullscreen(document.fullscreenElement === panelRef.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  // Escape exits the FALLBACK overlay (WCAG 2.1.2, no keyboard trap). Native
+  // fullscreen needs no help — the browser exits on Escape before the page sees
+  // the key — so this only binds when we are overlaying rather than promoted.
+  // Capture phase, so it runs before xterm's textarea swallows the key and
+  // sends it to the PTY as literal input.
+  React.useEffect(() => {
+    if (!fullscreen || document.fullscreenElement) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
         e.preventDefault();
@@ -523,11 +571,23 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [fullscreen]);
 
+  // Mounting note: this panel is safe to embed anywhere — a page, a card, a
+  // dialog — because fullscreen goes through the native API (see
+  // toggleFullscreen) rather than a `fixed inset-0` overlay that any ancestor
+  // could capture. Portaling on toggle would NOT have been safe: the xterm setup
+  // effect is keyed on [runId, tokenOnlyMode, refit, operator, owned] and not on
+  // fullscreen, so React would rebuild this container under the new parent
+  // without re-running term.open() and leave a permanently blank terminal.
   return (
     <div
+      ref={panelRef}
       className={cn(
         "flex flex-col overflow-hidden border border-border bg-[#0d1117]",
-        fullscreen ? "fixed inset-0 z-[100] rounded-none" : `${heightClass} rounded-lg`,
+        // In native fullscreen the element already fills the screen, so it only
+        // needs to drop its rounding and its fixed height. The `fixed inset-0`
+        // branch is the no-API fallback described above.
+        fullscreen ? "h-full w-full rounded-none" : `${heightClass} rounded-lg`,
+        fullscreen && !document.fullscreenElement && "fixed inset-0 z-[100]",
       )}
     >
       {/* title bar */}
@@ -551,7 +611,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           )}
           <button
             type="button"
-            onClick={() => setFullscreen((f) => !f)}
+            onClick={toggleFullscreen}
             title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
