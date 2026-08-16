@@ -519,10 +519,10 @@ function TerminalPane({
           <PaneNotice
             text={
               recState === "loading" || recState === "idle"
-                ? "Loading the captured session…"
+                ? RUN_COCKPIT.recordingLoading
                 : recordingDisabled
-                  ? "Session recording is disabled on this deployment."
-                  : "This run has no captured terminal session."
+                  ? RUN_COCKPIT.recordingDisabled
+                  : RUN_COCKPIT.recordingMissing
             }
             action={
               <button onClick={onGoRecording} className="text-[0.75rem] font-medium text-primary hover:underline">

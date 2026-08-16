@@ -31,6 +31,10 @@ export function EgressWidget({
    *  same way), but the parent SHOULD pass it — see the footer below. */
   onGoAudit?: () => void;
 }) {
+  // Counted over the WHOLE list, and the header says so — the rows below are
+  // the 8 newest, so a hold that scrolled off would otherwise make the chip
+  // read "3 held" with none of those three on screen. The chip is the alarm;
+  // it must count every held request, not the ones that happen to fit.
   const heldCount = egress.filter((e) => e.decision === "pending").length;
   const visible = React.useMemo(
     () => [...egress].sort((a, b) => b.time.localeCompare(a.time)).slice(0, MAX_ROWS),
@@ -41,7 +45,13 @@ export function EgressWidget({
     <WidgetCard
       title="Egress"
       Icon={Globe}
-      right={heldCount > 0 && <Chip tone="warning">{heldCount} held</Chip>}
+      right={
+        heldCount > 0 && (
+          <Chip tone="warning" title={`${heldCount} held across all ${egress.length} decisions`}>
+            {heldCount} held
+          </Chip>
+        )
+      }
       bodyClassName="p-0"
     >
       {visible.length === 0 ? (

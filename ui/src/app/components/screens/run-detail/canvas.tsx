@@ -179,9 +179,15 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   };
 
   const saveDefault = () => {
-    void save().then((ok) =>
-      ok ? toast.success(RUN_COCKPIT.layoutSaved) : toast.message(RUN_COCKPIT.layoutNotPersisted),
-    );
+    // Three outcomes, three sentences. "unsupported" is a permanent property of
+    // the deployment and matches the toolbar's inline note; "failed" is THIS
+    // attempt and is worth retrying. Collapsing the last two told the operator
+    // their server cannot store layouts because one save hit a 500.
+    void save().then((result) => {
+      if (result === "ok") toast.success(RUN_COCKPIT.layoutSaved);
+      else if (result === "unsupported") toast.message(RUN_COCKPIT.layoutNotPersisted);
+      else toast.error(RUN_COCKPIT.layoutSaveFailed);
+    });
   };
 
   // The terminal moves OUT of the grid and into the overlay, so it remounts and

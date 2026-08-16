@@ -33,6 +33,12 @@ import { normalizeLayout, presetLayout } from "./widget-registry";
 // the unmount flush below covers the rest).
 const SAVE_DEBOUNCE_MS = 800;
 
+// The three genuinely different outcomes of a layout write. "unsupported" is a
+// permanent property of the DEPLOYMENT (the endpoint 501s and never will not);
+// "failed" is this ATTEMPT, and the next gesture may well succeed. They need
+// opposite sentences, so they cannot share a boolean.
+export type SaveResult = "ok" | "unsupported" | "failed";
+
 export type RunLayoutState = {
   layout: RunLayoutWidget[];
   /** The GET has settled. The layout is usable before this (the preset
@@ -43,7 +49,7 @@ export type RunLayoutState = {
   /** Optimistic local update + a debounced PUT. */
   apply: (next: RunLayoutWidget[]) => void;
   /** Flush now. Resolves true when the server stored it. */
-  save: () => Promise<boolean>;
+  save: () => Promise<SaveResult>;
   /** Back to the preset default, and clear the saved row (PUT []). */
   reset: () => void;
 };
@@ -76,18 +82,25 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
   // uses that binding to finish a pending write against the preset it was made
   // under when the caller switches presets mid-edit.
   const put = React.useCallback(
-    async (body: RunLayoutWidget[]): Promise<boolean> => {
-      if (!persistRef.current) return false;
+    async (body: RunLayoutWidget[]): Promise<SaveResult> => {
+      if (!persistRef.current) return "unsupported";
       try {
         await runLayoutApi.putLayout(preset, body);
-        return true;
+        return "ok";
       } catch (err) {
         if (err instanceof HttpError && err.status === 501) {
           persistRef.current = false;
           setPersistable(false);
+          return "unsupported";
         }
         // Any other failure stays retryable: the next gesture writes again.
-        return false;
+        //
+        // Reported DISTINCTLY from "unsupported" because the two need opposite
+        // sentences. Collapsing them meant a 400 (an unknown widget id) or a
+        // network blip toasted "this deployment can't store layouts" — a
+        // permanent fact about the server — while `persistable` stayed true and
+        // the toolbar's own inline note said the opposite, one click apart.
+        return "failed";
       }
     },
     [preset],
@@ -106,7 +119,7 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
     [preset, put],
   );
 
-  const save = React.useCallback(async (): Promise<boolean> => {
+  const save = React.useCallback(async (): Promise<SaveResult> => {
     cancelPending();
     return put(layoutRef.current);
   }, [put]);

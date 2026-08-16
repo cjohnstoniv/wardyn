@@ -7,6 +7,13 @@
 // height). A small dl of the run's addressable identity. Repo + workspace
 // path moved to the command bar in this redesign, so they are DELIBERATELY
 // not repeated here.
+//
+// Policy / Runner / Sandbox are NOT decoration and are not optional to keep:
+// they were on the card this widget replaced, and a review caught that the
+// port silently dropped all three. On a governance console the run's governing
+// POLICY disappearing from the run's own identity surface is the serious one —
+// it is the answer to "what was this agent actually allowed to do", and the
+// rest of the page never states it.
 import { Fingerprint } from "lucide-react";
 import type { AgentRun } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
@@ -40,6 +47,27 @@ export function IdentityWidget({ run }: { run: AgentRun }) {
             <dt className="text-muted-foreground">Image</dt>
             <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.image}>
               {run.image}
+            </dd>
+          </>
+        )}
+
+        {run.policy_id && (
+          <>
+            <dt className="text-muted-foreground">Policy</dt>
+            <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.policy_id}>
+              {run.policy_id}
+            </dd>
+          </>
+        )}
+
+        <dt className="text-muted-foreground">Runner</dt>
+        <dd className="min-w-0 truncate text-right font-mono text-foreground">{run.runner_target}</dd>
+
+        {run.sandbox_ref && (
+          <>
+            <dt className="text-muted-foreground">Sandbox</dt>
+            <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.sandbox_ref}>
+              {run.sandbox_ref}
             </dd>
           </>
         )}

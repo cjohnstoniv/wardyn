@@ -184,6 +184,15 @@ export const RUN_COCKPIT = {
   autonomous: "autonomous — the agent drives",
   // 4. Terminal state: the pane becomes the replay surface in place.
   finishedReplay: "run finished · replay",
+  // The in-place replay pane's two empty states. They exist HERE because the
+  // same two facts are already stated by the Recording tab (states.tsx /
+  // recording.tsx), and the inline copies had ALREADY drifted from those —
+  // a trailing period on one, and a short form that dropped the explanation of
+  // when a recording is produced at all.
+  recordingLoading: "Loading the captured session…",
+  recordingDisabled: "Session recording is disabled on this deployment",
+  recordingMissing:
+    "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
 
   // --- Evidence widgets ---
   // Same eligibility framing as the full Credential grants card, tightened for
@@ -245,6 +254,9 @@ export const RUN_COCKPIT = {
   // Honest, not an error: the deployment's store cannot persist layouts (the
   // endpoint 501s), so the arrangement is real but session-scoped. Said ONCE,
   // inline in the toolbar — never a toast per drag.
+  // THIS attempt failed and the next may not — distinct from layoutNotPersisted,
+  // which is a permanent fact about the deployment.
+  layoutSaveFailed: "Couldn't save that layout — try again.",
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,
