@@ -40,7 +40,6 @@ import { cn } from "../ui/utils";
 // whole new-run graph (workspaces + secrets screens and their dialogs) in the
 // entry chunk for every operator who never clicks "New run". Fetched on the
 // click instead; rollup shares the chunk with the other mount sites.
-const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m) => ({ default: m.NewRunDialog })));
 
 // Live-board refresh cadence — a live board shouldn't need a manual reload to
 // feel alive.
@@ -83,10 +82,6 @@ export function RunsScreen() {
   const [repoFacet, setRepoFacet] = React.useState<string>("all");
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
   const [tableCap, setTableCap] = React.useState(TABLE_STEP);
-  const [newOpen, setNewOpen] = React.useState(false);
-  // Latches on the first open and never resets, so the lazy dialog below keeps
-  // its close animation and internal wizard state across dismissals.
-  const [newMounted, setNewMounted] = React.useState(false);
 
   // Backs both the first-run checklist (barrier tiers / model provider) and the
   // one hard blocker in the product: no sandbox barrier at all. Polled so the
@@ -131,10 +126,11 @@ export function RunsScreen() {
   React.useEffect(() => {
     const s = location.state as { openNewRun?: boolean } | null;
     if (!s?.openNewRun) return;
-    setNewMounted(true);
-    setNewOpen(true);
-    navigate(location.pathname, { replace: true });
-  }, [location.pathname, location.state, navigate]);
+    // Was: open the dialog here. New run is its own page now, so the same
+    // intent is a redirect — and `replace` keeps Back going where the operator
+    // came from rather than bouncing through this screen again.
+    navigate("/runs/new", { replace: true });
+  }, [location.state, navigate]);
 
   // Background refresh: update in place, silent on failure (a blip shouldn't
   // blow the board away — keep last-good data and recover next tick).
@@ -143,7 +139,9 @@ export function RunsScreen() {
       /* keep last-good data */
     });
   }, [fetchRuns]);
-  usePoll(refresh, POLL_MS, newOpen);
+  // Nothing pauses the board any more — the New run dialog that used to was
+  // replaced by its own page, which unmounts this screen entirely.
+  usePoll(refresh, POLL_MS, false);
 
   const kill = async (id: string) => {
     try {
@@ -342,10 +340,7 @@ export function RunsScreen() {
         <RunsFirstRun
           readiness={readiness}
           confinementClasses={confinementClasses}
-          onNewRun={() => {
-            setNewMounted(true);
-            setNewOpen(true);
-          }}
+          onNewRun={() => navigate("/runs/new")}
         />
       ) : noMatches ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -411,11 +406,6 @@ export function RunsScreen() {
         />
       )}
 
-      {newMounted && (
-        <React.Suspense fallback={null}>
-          <NewRunDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => openRun(r.id)} />
-        </React.Suspense>
-      )}
     </div>
   );
 }

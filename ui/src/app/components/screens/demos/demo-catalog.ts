@@ -61,7 +61,7 @@ export interface Demo {
   caution?: string;
   policy: RunPolicySpec;
   steps: DemoStep[];
-  /** How you'd set up a sandbox like this yourself (New Run wizard steps). */
+  /** How you'd set up a sandbox like this yourself, on the New run page. */
   setupUi: string[];
   /** True only for the harness demo — needs a connected model; demo-screen.tsx
    *  hides the card entirely (and gates Start) until llmReady. Like every demo it
@@ -100,8 +100,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick the Fence (CC1) barrier.",
-      "On the Egress step, leave the allowed-domains list empty.",
-      "Set First-use approval to 'Always deny'.",
+      "In Network, pick None — no hosts at all.",
+      "Edit hosts… → 'Deny silently' for anything unlisted.",
       "Launch interactive and attach the terminal.",
     ],
   },
@@ -128,8 +128,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier (Fence is fine for a demo).",
-      "On the Egress step, leave the allow-list empty.",
-      "Set First-use approval to 'Deny + review'.",
+      "In Network, pick None — no hosts at all.",
+      "Edit hosts… → 'Deny, but ask' for anything unlisted.",
       "Launch interactive; denied requests surface in the Approvals panel below the terminal.",
     ],
   },
@@ -159,8 +159,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier.",
-      "On the Egress step, leave the allow-list empty.",
-      "Set First-use approval to 'Wait for review'.",
+      "In Network, pick None — no hosts at all.",
+      "Edit hosts… → 'Hold it for approval' for anything unlisted.",
       "Launch interactive and keep the Approvals panel visible — you have ~30s to decide each held request.",
     ],
   },
@@ -194,7 +194,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick a barrier (Fence here; nothing is mounted, so the blast radius is a bare sandbox).",
-      "On the Egress step, toggle 'Allow all egress' ON.",
+      "In Network, pick Everything — open egress.",
       "The cloud-metadata + private-range blocks are not user-configurable — they always apply.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
     ],
@@ -225,7 +225,7 @@ export const DEMOS: Demo[] = [
     setupUi: [
       "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",
       "New Run → pick the Fence (CC1) barrier.",
-      "On the Egress step, allow only api.anthropic.com and *.anthropic.com.",
+      "Edit hosts… → clear the presets and allow only api.anthropic.com and *.anthropic.com.",
       "Launch interactive, attach the terminal, and run `claude` yourself.",
     ],
   },
@@ -263,7 +263,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick the Fence (CC1) barrier.",
-      "On the Egress step, toggle 'Allow all egress' ON — this is what makes the recording honest.",
+      "Pick Record — allow everything, which is what makes the recording honest.",
       "Launch interactive, attach the terminal, and run whatever the task actually needs.",
       "From the run's own page, synthesize a policy from what it did — same action this demo's “Turn this into a policy” takes.",
     ],

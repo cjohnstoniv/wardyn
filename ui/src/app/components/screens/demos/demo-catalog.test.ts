@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { UNLISTED_RULES } from "../new-run/network-dialog";
 import { DEMOS } from "./demo-catalog";
 
 // Keyless, workspace-free, LLM-free sandboxes an operator drives by hand.
@@ -99,9 +100,29 @@ describe("demo catalog", () => {
 
   // Regression: setupUi quoted "Deny with review", but the real dropdown
   // option text (step-egress.tsx) is "Deny + review".
-  it("setupUi quotes the real first-use-approval option label verbatim", () => {
-    const withReview = DEMOS.find((d) => d.policy.first_use_approval === "deny_with_review")!;
-    expect(withReview.setupUi.some((line) => line.includes("'Deny + review'"))).toBe(true);
-    expect(withReview.setupUi.some((line) => line.includes("Deny with review"))).toBe(false);
+  // setupUi tells an operator which control to click, so it must quote the
+  // words the UI actually shows. This used to hardcode the wizard's Select
+  // label ("Deny + review"); the New run page names each rule by its
+  // CONSEQUENCE instead, so the assertion now reads UNLISTED_RULES — the one
+  // place those titles live — and a future rewording updates both at once.
+  it("setupUi quotes the real unlisted-host rule titles verbatim", () => {
+    for (const mode of ["deny_with_review", "wait_for_review"] as const) {
+      const demo = DEMOS.find((d) => d.policy.first_use_approval === mode);
+      if (!demo) continue;
+      const title = UNLISTED_RULES.find((r) => r.id === mode)!.title;
+      expect(
+        demo.setupUi.some((line) => line.includes(`'${title}'`)),
+        `${demo.id} should quote "${title}"`,
+      ).toBe(true);
+    }
+  });
+
+  // The steps must not send anyone to a screen that no longer exists.
+  it("no setupUi line names the retired wizard's steps", () => {
+    for (const d of DEMOS) {
+      for (const line of d.setupUi) {
+        expect(line).not.toMatch(/Egress step|Basics step|Confinement step|Review step|wizard/i);
+      }
+    }
   });
 });

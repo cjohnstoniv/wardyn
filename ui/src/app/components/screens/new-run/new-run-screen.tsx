@@ -25,6 +25,8 @@ import type { WizardAgent } from "./wizard-types";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { health as healthApi } from "../../../lib/api/health";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
@@ -163,6 +165,19 @@ export function NewRunScreen() {
   const [launching, setLaunching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string }[]>([]);
+  // null = not answered yet. An agent run with no model path launches and then
+  // fails its first model call, so the rail must say so BEFORE launch rather
+  // than promising credentials that cannot be minted.
+  const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    setupApi
+      .getSetupStatus()
+      .then((st) => setLlmReady(hasLlmPath(st)))
+      .catch(() => {
+        /* unknown stays unknown — never claim a missing model path on a blip */
+      });
+  }, []);
 
   React.useEffect(() => {
     policiesApi
@@ -539,6 +554,11 @@ export function NewRunScreen() {
             </RailSection>
 
             <RailSection title="Credentials">
+              {isAgent && llmReady === false && (
+                <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
+                  No model provider is connected. This run launches; its first model call fails.
+                </p>
+              )}
               <p className="text-[0.75rem] leading-relaxed text-muted-foreground">
                 Minted at launch, injected by the proxy. Never written into the sandbox.
               </p>

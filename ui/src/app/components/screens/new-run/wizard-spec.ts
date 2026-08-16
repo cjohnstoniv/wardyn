@@ -38,7 +38,7 @@ import type {
 } from "./wizard-types";
 
 // Why buildSpec unions a host into allowed_domains without the operator ever
-// toggling it on the Egress step (D6/claim3).
+// toggling it in the Network card (D6/claim3).
 export type ImpliedEgressWhy = "GitHub access" | "model key" | "Git PAT" | "repo workspace";
 
 export interface ImpliedEgressHost {

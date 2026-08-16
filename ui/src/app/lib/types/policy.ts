@@ -69,7 +69,7 @@ export function firstUseRaisesApproval(v: unknown): boolean {
 // is a real, restrictive choice ("Always deny") wherever the operator could
 // have picked a review mode instead — labelling it "Off" there reads as LESS
 // restrictive than it is (N4). Only under allow-all egress is the setting
-// genuinely inert (buildSpec forces always_deny and the Egress step hides the
+// genuinely inert (buildSpec forces always_deny and the Network card hides the
 // control entirely) — callers that know the run is allow-all pass `allowAll`
 // and get the honest "Off (allow-all)" instead.
 export function firstUseLabel(v: unknown, allowAll = false): string {

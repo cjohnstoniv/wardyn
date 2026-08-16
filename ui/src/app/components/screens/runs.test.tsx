@@ -187,38 +187,35 @@ describe("RunsScreen board — Kill run confirms before killing", () => {
 });
 
 // #10/D14: workspace-detail's "Start a run" CTA navigates here with route
-// state instead of a stale pre-seed promise — this dialog already opens on
-// the workspace-first picker, so opening it on arrival is the whole fix.
-describe("RunsScreen — opens the New Run dialog from route state (workspace-detail's Start-a-run CTA)", () => {
-  it("mounts and opens the dialog when arriving with location.state.openNewRun", async () => {
-    render(
-      <MemoryRouter initialEntries={[{ pathname: "/runs", state: { openNewRun: true } }]}>
-        <RunsScreen />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByRole("dialog", { name: "new run dialog stub" })).toBeInTheDocument();
-  });
+// state. That used to OPEN a dialog on this screen; New run is its own page
+// now, so the same intent is a redirect to it — and the redirect replaces the
+// history entry, so Back goes where the operator came from instead of bouncing
+// through this screen and redirecting again.
+describe("RunsScreen — Start-a-run route state redirects to the New run page", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return <span data-testid="path">{location.pathname}</span>;
+  }
 
-  it("does not open the dialog on an ordinary arrival with no route state", async () => {
-    renderScreen();
-    await screen.findByRole("button", { name: /run actions/i }); // the board settled
-    expect(screen.queryByRole("dialog", { name: "new run dialog stub" })).not.toBeInTheDocument();
-  });
-
-  it("clears the route state after opening, so a back-navigation or refresh can't reopen it", async () => {
-    function LocationProbe() {
-      const location = useLocation();
-      const s = location.state as { openNewRun?: boolean } | null;
-      return <span data-testid="probe">{s?.openNewRun ? "OPEN" : "CLOSED"}</span>;
-    }
+  it("redirects to /runs/new when arriving with location.state.openNewRun", async () => {
     render(
       <MemoryRouter initialEntries={[{ pathname: "/runs", state: { openNewRun: true } }]}>
         <RunsScreen />
         <LocationProbe />
       </MemoryRouter>,
     );
-    await screen.findByRole("dialog", { name: "new run dialog stub" });
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("CLOSED"));
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/runs/new"));
+  });
+
+  it("stays put on an ordinary arrival with no route state", async () => {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunsScreen />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /run actions/i }); // the board settled
+    expect(screen.getByTestId("path")).toHaveTextContent("/runs");
   });
 });
 
