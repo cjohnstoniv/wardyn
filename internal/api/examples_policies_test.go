@@ -27,6 +27,11 @@ func TestExamplePoliciesValidate(t *testing.T) {
 	for _, f := range files {
 		switch filepath.Ext(f) {
 		case ".json":
+			// The subscription TEMPLATE carries a __comment key and
+			// placeholder mount paths — it is generated, never loaded.
+			if filepath.Base(f) == "claude-subscription.template.json" {
+				continue
+			}
 			if _, err := LoadPolicySpec(f); err != nil {
 				t.Errorf("%s: %v", f, err)
 			}

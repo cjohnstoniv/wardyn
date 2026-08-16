@@ -59,18 +59,18 @@ export WARDYN_LOCAL_MODE="${WARDYN_LOCAL_MODE:-true}"
 export WARDYN_RUNNER="${WARDYN_RUNNER:-docker}"
 export WARDYN_UI_DIR="${WARDYN_UI_DIR:-$ROOT/ui/dist}"
 export WARDYN_PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
-# composer-dev.json is the composer-capable ceiling: it lists an api_key grant
+# claude-llm.json is the model-capable ceiling: it lists an api_key grant
 # (so a composed LLM run's brokered model credential survives the clamp) and the
 # LLM egress domains. demo.json (github_token only) would clamp the model grant
 # away, leaving composed runs with no model access. When the operator has staged
 # subscription creds (scripts/stage-claude-creds.sh), prefer the generated
 # subscription ceiling — it additionally blesses the ~/.claude cred mounts that
 # a composed run receives on the per-run "Use my Claude subscription" opt-in.
-SUB_POLICY="${HOME}/.wardyn/composer-dev-subscription.json"
+SUB_POLICY="${HOME}/.wardyn/claude-subscription.json"
 if [ -z "${WARDYN_DEFAULT_POLICY:-}" ] && [ -f "${SUB_POLICY}" ]; then
   WARDYN_DEFAULT_POLICY="${SUB_POLICY}"
 fi
-export WARDYN_DEFAULT_POLICY="${WARDYN_DEFAULT_POLICY:-$ROOT/examples/policies/composer-dev.json}"
+export WARDYN_DEFAULT_POLICY="${WARDYN_DEFAULT_POLICY:-$ROOT/examples/policies/claude-llm.json}"
 # Map agent names to the LOCALLY-built demo images (else the runner pulls the ghcr
 # convention image, which doesn't exist → run.create fails "registry: denied").
 # The "oracle" agent (wardyn/agent-oracle:local, deploy/images/oracle) runs a
@@ -82,9 +82,6 @@ export WARDYN_AGENT_IMAGES="${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/age
 export WARDYN_AGENT_ANTHROPIC_MODEL="${WARDYN_AGENT_ANTHROPIC_MODEL:-opus}"
 
 # Host mode uses the Claude CLI composer backend (Opus via your subscription). This
-# OVERRIDES any WARDYN_COMPOSER_CONFIG from .env — the compose container can't exec the
-# CLI backend, so it belongs to host mode only.
-export WARDYN_COMPOSER_CONFIG="${WARDYN_COMPOSER_CONFIG_OVERRIDE:-$ROOT/examples/composer-configs/claude-cli-opus.json}"
 
 # Ensure the control-plane-facing network the proxy sidecar joins exists. The
 # compose stack defines it (deploy/compose/docker-compose.yaml: name

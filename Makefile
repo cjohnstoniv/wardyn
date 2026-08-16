@@ -638,7 +638,7 @@ setup: ## One-command Wardyn: containerized (default) or host; builds, ups, open
 	./scripts/setup.sh
 
 # HOST MODE ONLY — it pins WARDYN_SETUP_MODE=local, and the ceiling it writes
-# (~/.wardyn/composer-dev-subscription.json) is read by scripts/run-host.sh, never
+# (~/.wardyn/claude-subscription.json) is read by scripts/run-host.sh, never
 # by the containerized wardynd. Re-runs setup with staging forced; a running HOST
 # wardynd is restarted so it loads the just-generated ceiling. Idempotent — safe to
 # re-run anytime (e.g. after a headless `make setup` skipped the staging prompt).

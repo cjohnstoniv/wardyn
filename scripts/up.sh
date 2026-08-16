@@ -58,15 +58,15 @@ compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
 # "runsc" key means gVisor (CC2) is available, so the stricter default.json
 # (min_confinement_class CC2) can be used instead of the CC1 demo.json.
 # WANTS_LLM="1" (the operator has opted into a real model path — see
-# composer_wants_llm) upgrades to composer-dev.json, the only shipped ceiling that
-# admits the api_key grant + LLM egress a COMPOSED run needs. Without it BOTH
-# demo.json and default.json carry only a github_token grant, so clampGrants strips
-# the composer's auto-minted model grant and a first composed run boots, "completes",
-# and 404s on its first model call. Kept off by default so a pure-Fence trial keeps
-# the tight github-token-only ceiling.
+# wants_llm) upgrades to claude-llm.json, the shipped ceiling that admits the
+# api_key grant + LLM egress an AGENT run needs. Without it BOTH demo.json and
+# default.json carry only a github_token grant, so clampGrants strips the run's
+# model grant and a first agent run boots, "completes", and 404s on its first
+# model call. Kept off by default so a pure-Fence trial keeps the tight
+# github-token-only ceiling.
 pick_policy() {
   if [ "${2:-}" = "1" ]; then
-    echo "/examples/policies/composer-dev.json"
+    echo "/examples/policies/claude-llm.json"
     return
   fi
   case "$1" in
@@ -569,7 +569,7 @@ cmd_up() {
   if [ "${_policy}" != "${_prev_policy}" ]; then
     log "Auto-picked default policy: ${_policy}"
     case "${_policy}" in
-      */composer-dev.json)
+      */claude-llm.json)
         log "  (composer-capable ceiling — a real model path is configured; a composed run can reach its LLM)" ;;
     esac
   fi

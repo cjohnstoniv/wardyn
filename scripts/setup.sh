@@ -315,7 +315,7 @@ if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN && $CLAUDE_CRED_FILE; then
     say "      placeholder, MCP servers + tokens stripped (nothing usable is left resident;"
     say "      the live token is injected at the proxy per-request)"
   fi
-  say "    · GENERATES ~/.wardyn/composer-dev-subscription.json (the subscription ceiling)"
+  say "    · GENERATES ~/.wardyn/claude-subscription.json (the subscription ceiling)"
   say "  A run only receives these mounts when you tick \"Use my Claude subscription\" per run."
   stage_do=false
   if [ "${WARDYN_STAGE_CLAUDE:-}" = 1 ]; then stage_do=true
@@ -612,7 +612,7 @@ if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" 
   if [ -n "$(docker compose -f deploy/compose/docker-compose.yaml ps -q wardynd 2>/dev/null)" ]; then
     warn "${URL} is served by the CONTAINERIZED (compose) stack, not host mode — leaving it as-is."
     if [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
-      warn "Host-mode staging does NOT apply to it: the compose wardynd never reads ~/.wardyn/composer-dev-subscription.json."
+      warn "Host-mode staging does NOT apply to it: the compose wardynd never reads ~/.wardyn/claude-subscription.json."
     fi
     warn "Set up model access there with:  claude setup-token | wardyn subscription connect"
     warn "  (or, for the resident-copy mount:  WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh)"

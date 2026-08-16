@@ -54,7 +54,7 @@ real branch push + PR needs a WRITE-scoped grant, so even with a GitHub App
 configured the mint from demo.json yields a read-only token and the push/PR
 still fail. To exercise the full push+PR outcome, run with a policy whose
 github_token grant requests `contents: write` + `pull_requests: write` —
-`examples/policies/composer-dev.json` ships exactly that shape.
+`examples/policies/claude-llm.json` ships exactly that shape.
 
 Configure the App as described in docs/TRY-IT.md (wardyn secret set github-app-id,
 wardyn secret set github-app-key), restart wardynd, run with the write-scoped
@@ -74,7 +74,7 @@ Stock demo (no GitHub App configured):
 5. No GitHub token appears in docker exec env output (verify: docker exec <sandbox> env | grep -i token is empty).
 
 With GitHub App configured AND a write-scoped policy (contents:write +
-pull_requests:write, e.g. examples/policies/composer-dev.json — NOT read-only
+pull_requests:write, e.g. examples/policies/claude-llm.json — NOT read-only
 demo.json):
 1-2. Same as above.
 3. Audit contains credential.mint success with a short-lived JTI.

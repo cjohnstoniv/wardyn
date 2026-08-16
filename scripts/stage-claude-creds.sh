@@ -12,7 +12,7 @@
 #      purpose — a gitignored in-tree dir is one `git add -f` away from leaking
 #      a long-lived OAuth token into history.
 #   2. GENERATES the composer-capable subscription ceiling policy
-#      (~/.wardyn/composer-dev-subscription.json) from the committed template,
+#      (~/.wardyn/claude-subscription.json) from the committed template,
 #      substituting this machine's staging dir. Mount sources are machine-
 #      specific, so no committed example carries a real path.
 #
@@ -40,9 +40,9 @@
 #        (re-run to refresh copies)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE="${ROOT}/examples/policies/composer-dev-subscription.template.json"
+TEMPLATE="${ROOT}/examples/policies/claude-subscription.template.json"
 DEST="${1:-${HOME}/.wardyn/claude-creds}"
-POLICY="$(dirname "${DEST}")/composer-dev-subscription.json"
+POLICY="$(dirname "${DEST}")/claude-subscription.json"
 
 [[ -d "${HOME}/.claude" ]]      || { echo "error: ~/.claude not found (is the claude CLI logged in?)" >&2; exit 1; }
 [[ -f "${HOME}/.claude.json" ]] || { echo "error: ~/.claude.json not found (the CLI needs BOTH)" >&2; exit 1; }

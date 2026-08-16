@@ -151,7 +151,7 @@ cmd_reset_all() {
     for _ra_e in "${_ra_rundir}"/* "${_ra_rundir}"/.[!.]*; do
       [ -e "${_ra_e}" ] || continue
       case "$(basename "${_ra_e}")" in
-        host-wardynd.pid|host-wardynd.log|claude-creds|composer-dev-subscription.json)
+        host-wardynd.pid|host-wardynd.log|claude-creds|claude-subscription.json)
           _ra_install="${_ra_install}$(basename "${_ra_e}") " ;;
         *)
           _ra_preserved="${_ra_preserved}$(basename "${_ra_e}") " ;;
@@ -264,7 +264,7 @@ cmd_reset_all() {
   # Allowlist only — never `rm -rf ~/.wardyn` (see comment above).
   rm -f  "${_ra_rundir}/host-wardynd.pid" "${_ra_rundir}/host-wardynd.log"
   rm -rf "${_ra_rundir}/claude-creds"
-  rm -f  "${_ra_rundir}/composer-dev-subscription.json"
+  rm -f  "${_ra_rundir}/claude-subscription.json"
 
   [ "${_ra_purge_env}" = 1 ] && rm -f "${ENV_FILE}"
 

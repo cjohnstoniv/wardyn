@@ -50,11 +50,11 @@ got="$(resolve_default_policy "${env_file}" "" '{}' "")"
 
 # 3) THE regression: a model path shows up later (managed subscription
 # connected, or an API key exported) — with NO explicit WARDYN_DEFAULT_POLICY
-# override, .env's auto-picked value must upgrade to composer-dev.json. Before
+# override, .env's auto-picked value must upgrade to claude-llm.json. Before
 # this fix, "only decide when .env has nothing" left this wedged on demo.json.
 got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
-[ "$got" = "/examples/policies/composer-dev.json" ] || fail "re-pick after a model signal got '$got', want composer-dev.json"
-[ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY)" = "/examples/policies/composer-dev.json" ] || fail "composer-dev.json pick did not persist to .env"
+[ "$got" = "/examples/policies/claude-llm.json" ] || fail "re-pick after a model signal got '$got', want claude-llm.json"
+[ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY)" = "/examples/policies/claude-llm.json" ] || fail "claude-llm.json pick did not persist to .env"
 
 # 3b) W1-S1-3 regression: llm_ready_from_status is the signal cmd_up uses when
 # composer_wants_llm sees NOTHING in this process's env — a subscription
@@ -75,7 +75,7 @@ got="$(llm_ready_from_status '')"
 # actually upgrades the ceiling on a plain re-run with no token in this
 # process's env at all.
 got="$(resolve_default_policy "${env_file}2" "" '{}' "$(llm_ready_from_status '{"llm_ready":true}')")"
-[ "$got" = "/examples/policies/composer-dev.json" ] || fail "resolve_default_policy fed by llm_ready_from_status got '$got', want composer-dev.json"
+[ "$got" = "/examples/policies/claude-llm.json" ] || fail "resolve_default_policy fed by llm_ready_from_status got '$got', want claude-llm.json"
 
 # 3c) THE regression this closes: cmd_up's post-boot probe used to hand
 # llm_ready_from_status the curl body alone, with no status-code check at
