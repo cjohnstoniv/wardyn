@@ -45,7 +45,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
@@ -299,12 +298,6 @@ type harnessOpts struct {
 	// recordingStore, when non-nil, wires the session-recording upload/serve
 	// surfaces. nil => those routes are not mounted.
 	recordingStore recording.Store
-	// composer, when non-nil, wires the AI Run Composer registry so the
-	// POST /runs/compose + GET /composer/backends endpoints are enabled. nil =>
-	// the composer is disabled (those endpoints 404), preserving the existing
-	// tests' behaviour. The hook is intentionally minimal and backward-compatible:
-	// existing harnessOpts{...} construct the zero value, leaving cfg.Composer nil.
-	composer *composer.Registry
 }
 
 // newHarness boots the real control plane end-to-end. Guarded by WARDYN_TEST_PG;
@@ -374,9 +367,6 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	}
 	if opts.recordingStore != nil {
 		cfg.RecordingStore = opts.recordingStore
-	}
-	if opts.composer != nil {
-		cfg.Composer = opts.composer
 	}
 
 	apiSrv := api.New(cfg)
@@ -468,6 +458,13 @@ func doRaw(t *testing.T, method, url, bearer string, body []byte) (int, string) 
 		t.Fatalf("read body: %v", err)
 	}
 	return resp.StatusCode, string(raw)
+}
+
+// doAdmin is doRaw with the admin token.
+func doAdmin(t *testing.T, method, url string, body []byte) (int, []byte) {
+	t.Helper()
+	status, raw := doRaw(t, method, url, adminToken, body)
+	return status, []byte(raw)
 }
 
 // waitFor polls fn until it returns true or the deadline elapses. Used to wait
