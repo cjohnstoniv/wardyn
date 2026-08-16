@@ -9,6 +9,7 @@ import {
   Activity,
   AlertTriangle,
   ChevronsUpDown,
+  Compass,
   FlaskConical,
   Fingerprint,
   FolderOpen,
@@ -446,6 +447,15 @@ function TopBar({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {/* The guided Getting Started funnel — an operator-chosen route
+                (setup-gate.ts has no hard gate any more), not the six-item
+                sidebar: this menu entry and the Runs empty state's "guided
+                tour" link (runs-first-run.tsx) are the two ways in. */}
+            <DropdownMenuItem asChild>
+              <Link to="/setup">
+                <Compass className="size-4" /> Getting started
+              </Link>
+            </DropdownMenuItem>
             {/* Settings has no dedicated route yet (stage-1) — every barrier/
                 model-provider/git-host config it will own today lives on
                 Integrations, so it's the interim landing spot. */}

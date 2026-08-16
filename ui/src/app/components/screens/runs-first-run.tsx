@@ -144,6 +144,13 @@ export function RunsFirstRun({
             <Link to="/demos">Try it without a repo</Link>
           </Button>
         </div>
+
+        {/* Secondary on purpose (plain text link, not a button) — the guided
+            funnel is an alternative path for someone who wants the walkthrough,
+            never competing with "New run" for primary attention. */}
+        <Link to="/setup" className="inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
+          Or take the guided tour →
+        </Link>
       </div>
 
       <div className="w-full max-w-[900px] space-y-4">

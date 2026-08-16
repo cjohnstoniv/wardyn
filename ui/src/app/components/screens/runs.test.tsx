@@ -93,6 +93,8 @@ describe("RunsScreen — first-run empty state", () => {
     expect(await screen.findByText("Fence, Wall available on this host.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /new run/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /try it without a repo/i })).toHaveAttribute("href", "/demos");
+    // The guided funnel is one unobtrusive link, not a competing button.
+    expect(screen.getByRole("link", { name: /guided tour/i })).toHaveAttribute("href", "/setup");
     for (const d of DEMOS) {
       const card = within(screen.getByTestId(`runs-empty-demo-${d.id}`));
       expect(card.getByText(d.title)).toBeInTheDocument();

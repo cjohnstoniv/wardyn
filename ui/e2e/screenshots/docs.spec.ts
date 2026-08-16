@@ -150,15 +150,12 @@ test.describe("Docs screenshots", () => {
             confinement_classes: ["CC1"],
             confinement_substrates: { CC1: "runc" },
           },
-          composer: { enabled: false, backends: [] },
           providers: [],
           secrets: { present: [], github_app: false },
           age_key: { durable: true },
-          // has_runs:true only to clear the hard first-run gate (setup-gate.ts
-          // setupGateActive), which hides every nav group — with it false the
-          // README hero photographs as a console with an empty black left rail.
-          // The funnel itself is unchanged; the "First run launched" line it
-          // enables sits on the Launch step, far below this shot's fold.
+          // has_runs:true so the Launch step's "First run launched" line is
+          // exercised (far below this shot's fold — /setup carries no gate any
+          // more, so this isn't clearing one; see setup-gate.ts).
           has_runs: true,
           platform: { os: "linux", wsl: false, kvm: true },
         },

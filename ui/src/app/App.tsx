@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
@@ -68,6 +68,12 @@ const SSHKeysScreen = React.lazy(() =>
 const DemoScreen = React.lazy(() =>
   import("./components/screens/demos/demo-screen").then((m) => ({ default: m.DemoScreen })),
 );
+// The guided Getting Started funnel — an operator-chosen route, not a gate:
+// no redirect anywhere sends anyone here (see setup-gate.ts). Handles its own
+// first-boot Welcome hero vs. the step funnel (onboarding-screen.tsx).
+const GettingStarted = React.lazy(() =>
+  import("./components/screens/onboarding/onboarding-screen").then((m) => ({ default: m.GettingStarted })),
+);
 
 // Shown while a lazy route's chunk is in flight. Deliberately the same mark +
 // spinner as the auth probe above, so a slow chunk reads as the console still
@@ -96,6 +102,7 @@ export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
+  const navigate = useNavigate();
 
   const refreshPending = React.useCallback(() => {
     approvalsApi
@@ -229,6 +236,18 @@ export default function App() {
             element={
               <React.Suspense fallback={<RouteFallback />}>
                 <DemoScreen />
+              </React.Suspense>
+            }
+          />
+          {/* No gate: an operator navigates here on their own (the account menu's
+              "Getting started" entry, or the Runs empty state's guided-tour link) —
+              nothing redirects to it. onDone lands back on Runs, same as every
+              other finished flow. */}
+          <Route
+            path="/setup"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <GettingStarted onDone={() => navigate("/runs")} />
               </React.Suspense>
             }
           />
