@@ -380,3 +380,68 @@ export function SectionCard({
     </section>
   );
 }
+
+/* ---------- widget card shell (run cockpit) ---------- */
+// The run-detail cockpit's widget shell. Deliberately a SIBLING of SectionCard
+// rather than more props on it: SectionCard is a padded, self-sizing document
+// card (run-detail-ssh.tsx's ConnectSSHCard uses it, and so does every screen
+// that just wants a titled box). A widget is a different thing — it lives in a
+// height-constrained pane, so its body must be `min-h-0` and own its own
+// overflow, its header carries a drag handle and an overflow menu, and its
+// padding belongs to the body, not the frame. Folding both into one component
+// meant a boolean that changed the layout model, which is the shape of prop
+// that always grows a second one.
+//
+// `grow` opts the card into filling the leftover column height (the last widget
+// in a rail) instead of sizing to its content.
+export function WidgetCard({
+  title,
+  Icon,
+  right,
+  menu,
+  dragHandleProps,
+  grow,
+  bodyClassName,
+  className,
+  children,
+}: {
+  title: string;
+  Icon?: React.ElementType;
+  right?: React.ReactNode;
+  /** Overflow-menu trigger (remove widget, …). Rendered after `right`. */
+  menu?: React.ReactNode;
+  /** Spread onto the header by the layout engine in phase 2; absent = not draggable. */
+  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
+  grow?: boolean;
+  bodyClassName?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        "flex flex-col overflow-hidden rounded-lg border border-border bg-card",
+        grow ? "min-h-0 flex-1" : "shrink-0",
+        className,
+      )}
+    >
+      <div
+        {...dragHandleProps}
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2",
+          dragHandleProps && "cursor-grab active:cursor-grabbing",
+        )}
+      >
+        {Icon && <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+        {/* h2, not a div: the cockpit's widgets are the page's section headings
+            once the old SectionCard h2s are gone, and a rail of unlabelled
+            regions is unnavigable by heading. label-eyebrow is the board's own
+            class (theme.css). */}
+        <h2 className="label-eyebrow">{title}</h2>
+        {right && <div className="ml-auto flex items-center gap-1.5">{right}</div>}
+        {menu && <div className={cn(!right && "ml-auto")}>{menu}</div>}
+      </div>
+      <div className={cn("min-h-0", grow && "flex-1", bodyClassName ?? "px-2.5 py-2")}>{children}</div>
+    </section>
+  );
+}

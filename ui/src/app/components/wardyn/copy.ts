@@ -135,6 +135,47 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   egress: "Network egress",
 };
 
+// Run cockpit (/runs/:id) — the terminal-first live-run screen. Every string
+// the redesign introduces lands HERE first, so the four Terminal states and the
+// evidence widgets can't drift into inventing their own vocabulary.
+export const RUN_COCKPIT = {
+  // --- Terminal widget, four states (design board 2d) ---
+  // 1. You hold the PTY.
+  driving: "you are driving",
+  drivingHint:
+    "Input goes to the PTY. Paste, Shift+Enter for a newline, and ⇧⌘F for real fullscreen — the tmux session survives a refresh, so detaching costs nothing.",
+  // 2. Someone else holds it. Attach is a SHARED tmux session, so this is a
+  // real state the console used to have no words for — it just competed for
+  // the same PTY silently.
+  heldBy: (principal: string) => `held by ${principal}`,
+  watchingReadOnly: "watching read-only — keystrokes go nowhere",
+  heldHint:
+    "Someone is already driving this session from a CLI. You can watch it live, or take it from them — they get told, and it lands in the audit trail.",
+  takeOver: "Take over",
+  // Deliberately concrete about the consequence: take-over ENDS someone's
+  // session. Mirrors the irreversible-deny confirm in live-approvals.tsx.
+  takeOverConfirm: (principal: string) =>
+    `${principal} is driving this session now. Taking over disconnects them and records you as the holder in the audit trail.`,
+  // 3. No PTY to type into — the agent drives.
+  autonomous: "autonomous — the agent drives",
+  // 4. Terminal state: the pane becomes the replay surface in place.
+  finishedReplay: "run finished · replay",
+
+  // --- Evidence widgets ---
+  // Same eligibility framing as the full Credential grants card, tightened for
+  // a 400px rail. Grants are what the run MAY request — never live credentials.
+  credentialsEligibility:
+    "Eligibility — what this run may request. The broker mints a short-lived, scoped token; the agent never sees your real keys.",
+  // A metric the sandbox did not report. gVisor (Vault) presents a synthetic
+  // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
+  // honest answer; rendering 0 would claim the sandbox is using no memory.
+  metricUnavailable: "not available on this barrier",
+  // The workspace has no git work tree, so there is no diff to state.
+  noVcs: "This workspace isn't a git repository — there's no diff to show.",
+  // The substrate has no exec channel, so neither evidence read can run.
+  execUnsupported: "This runner can't be inspected while it's running.",
+} as const;
+
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")
 // -> this file's copy-vocabulary kind (ApprovalKind above). Hoisted from
 // approvals.tsx (its own kindLabel() reads it via APPROVAL_KIND_LABEL) so

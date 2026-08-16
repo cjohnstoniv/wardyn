@@ -98,6 +98,20 @@ func (s *Server) routes() chi.Router {
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
 
+			// Live-run evidence reads for the run-detail cockpit. All three are
+			// OWNER-OR-ADMIN via getRunAuthorized (a foreign run 404s — no
+			// existence oracle), same gate as GET /runs/{id} above, and all three
+			// are READ-ONLY observations of a sandbox that is already running:
+			// they mint nothing, open no new network path (invariant 3), and
+			// change no run state.
+			r.Get("/runs/{id}/files", s.handleRunFiles)
+			r.Get("/runs/{id}/resources", s.handleRunResources)
+			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
+			// The one WRITE in that set: displacing whoever currently holds the
+			// run's tmux PTY. Audited (session.takeover, actor + previous holder)
+			// because it takes a live session away from another human.
+			r.Post("/runs/{id}/attach/takeover", s.handleAttachTakeover)
+
 			// Single-use WS attach tickets: browsers cannot put the admin
 			// bearer on a WebSocket handshake, so the UI first POSTs here
 			// (through THIS authenticated group) and presents the returned
@@ -133,6 +147,12 @@ func (s *Server) routes() chi.Router {
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
+			// Run-detail widget layout: per-user, per-preset, server-synced so a
+			// layout survives a new machine (localStorage would not). Scoped to
+			// the caller's OWN principal at the store, exactly like the ssh-keys
+			// block above — never a principal taken from the body.
+			r.Get("/me/run-layout", s.handleGetRunLayout)
+			r.Put("/me/run-layout", s.handlePutRunLayout)
 			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
 			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
 			// no route (404), the HttpOnly session cookie survived, and the next
