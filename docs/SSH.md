@@ -66,8 +66,8 @@ key belongs to, not just running the query.
 
 ## 2. Connect
 
-The run detail page's "Connect via SSH" card shows the exact command for a
-run you own while it is RUNNING:
+The run detail page's "Attach from your terminal" card shows the exact
+command for a run you own while it is RUNNING:
 
 ```sh
 ssh <run-id>@<advertise-host> -p <port>

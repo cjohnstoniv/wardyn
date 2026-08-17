@@ -15,8 +15,8 @@ straight into your first run. The rail runs 10 steps: 3 essentials, 5 hands-on
 demos, 1 **Your work** step that onboards what you'll actually run against
 (**Workspaces**), and **Review** to finish.
 Inside a corporate network, the **Corporate network** step — seated right
-before Integrations, because nothing downstream can be verified until the
-network path works — chains the sandbox proxy through your proxy and
+before **Model & git host**, because nothing downstream can be verified
+until the network path works — chains the sandbox proxy through your proxy and
 redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
@@ -301,7 +301,7 @@ session actually uses.
 The session idles for `wardyn attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
 profile (or promote the observed egress from the workspace page's
-recorded-session pane — **Promote to approved egress**).
+recorded-session pane — **Approve N observed hosts**).
 
 ## Stop / Reset
 

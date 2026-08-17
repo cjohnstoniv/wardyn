@@ -699,11 +699,12 @@ scanner's ignore-list.
   unsafe by design, with **no fix available** (`Fixed in: N/A`). The
   `golang.org/x/crypto` *module* reaches our build via two dependency paths —
   `filippo.io/age` (used for our secret-encryption primitives) imports
-  `chacha20poly1305`, `hkdf`, `curve25519`, and `scrypt`, and our OpenAI
-  composer backend pulls it in through Azure identity
-  (`internal/composer/backends/openai` → `github.com/Azure/azure-sdk-for-go/sdk/azidentity`
-  → `golang.org/x/crypto/pkcs12`) — all sibling packages of `openpgp` in the same
-  module, which pulls in the *module* as a build dependency. No Wardyn code
+  `chacha20poly1305`, `hkdf`, `curve25519`, and `scrypt`, and Wardyn itself
+  imports `golang.org/x/crypto/ssh` directly for the SSH gateway
+  (`internal/api/sshgateway.go`, `sshgateway_channels.go`, `sshkeys.go`;
+  `golang.org/x/crypto` is a direct `require` in `go.mod`) — a sibling package
+  of `openpgp` in the same module, which pulls in the *module* as a build
+  dependency. No Wardyn code
   path, and no dependency Wardyn actually calls, imports the `openpgp`
   subpackage itself (`go mod why golang.org/x/crypto/openpgp` confirms: "main
   module does not need package golang.org/x/crypto/openpgp"). `govulncheck`'s

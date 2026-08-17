@@ -772,8 +772,8 @@ that point.
 
 ### Integrations are not part of this round-trip
 
-`integrations` — the Integrations page's rows: model providers, git hosts,
-package feeds, everything under **Other service** — lives on the SAME
+`integrations` — the rows behind **Settings**' Model provider and Git host
+cards, plus generic rows stored under an earlier release — lives on the SAME
 `SiteConfig` document `GET`/`PUT /site-config` reads and writes, but it does
 not travel through this door. `PUT /site-config` 400s outright on a body
 carrying a non-empty `integrations` ("integrations are managed through their
@@ -900,8 +900,8 @@ longer does: a workspace run gets exactly the groups its attached sources'
 scans detected — the Go group only when a scan found Go, the JVM group only
 when it found Maven/Gradle, the union across every attached source
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch.go`). A run with no
-workspace attached at all — ad-hoc, a bare `--image` override, scan, login,
-or composer runs — keeps the full set: nothing was scanned and nothing
+workspace attached at all — ad-hoc, a bare `--image` override, scan, or
+login runs — keeps the full set: nothing was scanned and nothing
 declared, so "unknown" must not silently break those lanes. A workspace
 whose OWN base image is registry/custom/BYO is not this lane: the workspace
 stays attached (`req.Image` is set from it without leaving `wsRefs`,
