@@ -2,7 +2,7 @@ module github.com/cjohnstoniv/wardyn
 
 go 1.26.0
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	filippo.io/age v1.2.1
