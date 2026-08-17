@@ -30,3 +30,8 @@ a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
 # Synthetic RSA private keys in W12-B-1 reserved-secret regression fixtures (obviously fake material)
 22250717e7b04e25954a17a3c312ce8c88da501b:internal/broker/gitpat_test.go:private-key:105
 22250717e7b04e25954a17a3c312ce8c88da501b:internal/broker/sshkey_test.go:private-key:102
+
+# Settings → Git host → SSH lane: the input's PLACEHOLDER text is the literal
+# "-----BEGIN OPENSSH PRIVATE KEY-----" armor line — a hint string, no key
+# material (same class as the test-fixture entries above).
+8f553056d6f614c06aa568975fbdb86622a7e462:ui/src/app/components/screens/settings/connection-cards.tsx:private-key:509
