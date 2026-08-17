@@ -116,7 +116,7 @@ test("act 2 — barrier, network, model", async () => {
   await beat(page, PACE.read + 900);
   await advance("Taking the tier this machine reports as ready.");
 
-  await expect(page.getByRole("heading", { name: "Corporate network", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "Nothing downstream can be trusted until a sandbox can actually reach the network — so this step proves it.");
   await beat(page, PACE.read);
   const testConn = page.getByRole("button", { name: /Test connectivity/i });
@@ -126,7 +126,7 @@ test("act 2 — barrier, network, model", async () => {
   }
   await advance();
 
-  await expect(page.getByRole("heading", { name: "Connect your model", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "The model was connected from the terminal a moment ago — the token is encrypted at rest and injected by the proxy.");
   await beat(page, PACE.read + 900);
   await caption(page, "It never enters the sandbox. The agent will reach Anthropic without ever holding the credential.");

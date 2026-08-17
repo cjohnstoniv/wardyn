@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// "Connect your model" — the funnel's one connection step.
+// "Secrets" — the funnel's one credentials step.
 //
 // This used to be a thin embed of the ENTIRE /integrations page: a catalog of
 // seven closed integration kinds plus a generic escape hatch, an Add dialog, a
@@ -24,7 +24,7 @@ import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { GitHostCard, ModelProviderCard } from "../settings/connection-cards";
 
 export const STEP_LEDE =
-  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. Connect a model when you want an agent to do the work, and a git host when it needs your private code.";
+  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. The two secrets most runs want are a model credential (for an agent to do the work) and a git credential (for your private code) — any other secret a run needs is added the same way, on the Secrets page, and handed to runs by name.";
 
 export function IntegrationsStep({
   status,

@@ -27,7 +27,7 @@ export const T = {
   // No "…or add it here" alternative any more — there is exactly one place a
   // proxy is configured, and the banner names it.
   PROXY_BANNER:
-    "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, where the connectivity probe proves it.",
+    "A corporate proxy was detected and isn't configured — set it up under Network in Getting started, where the connectivity probe proves it.",
   CORP_LEDE:
     "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
   // The pair of pointers at the SAME consolidation, one per surface: the
@@ -37,9 +37,9 @@ export const T = {
   // all ten). State what's actually true instead of a category count that
   // can go stale the next time a category is added.
   EMBED_SCOPE_NOTE:
-    "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+    "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Network.",
   CORP_POINTER:
-    "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
+    "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Network under Getting started, on the same screen as the probe that proves them.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
   EVIDENCE_EXPLAIN:
     "Read from this machine's environment and git config. Wardyn does not use these automatically: a sandbox gets only what you configure below.",

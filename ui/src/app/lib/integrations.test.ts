@@ -41,13 +41,13 @@ describe("integrations — T canon sentinel pins", () => {
       "Named connections to systems outside Wardyn — model providers, git hosts, package feeds, container registries, cloud providers, data stores, MCP servers, work tracking, observability, or anything else as an Other service. Wardyn runs without any of them.",
     );
     expect(T.PROXY_BANNER).toBe(
-      "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, where the connectivity probe proves it.",
+      "A corporate proxy was detected and isn't configured — set it up under Network in Getting started, where the connectivity probe proves it.",
     );
     expect(T.FOOTNOTE).toBe(
       "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the one exception is the GitHub App's ref-confinement row, which really asks GitHub.",
     );
     expect(T.CORP_POINTER).toBe(
-      "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
+      "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Network under Getting started, on the same screen as the probe that proves them.",
     );
     // Round E: the step must never CLAIM to be required — the proof is the
     // only required thing, and most hosts pass it in one click.
@@ -56,7 +56,7 @@ describe("integrations — T canon sentinel pins", () => {
     );
     expect(T.CORP_LEDE).not.toContain("Required");
     expect(T.EMBED_SCOPE_NOTE).toBe(
-      "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+      "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Network.",
     );
     // The Tools tab no longer exists anywhere — the embed note must not
     // resurrect it.

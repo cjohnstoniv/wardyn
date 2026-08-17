@@ -194,14 +194,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Corporate network directly follows Environment (the order itself is the
     // fix for "blocked network reads as bad credential" — see steps.ts).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
     await clearCorpNetworkGate();
 
     // Integrations follows Corporate network — it folds in the model/SCM-host
     // picker (host proxy / egress redirection moved to the step just visited).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /connect your model/i }),
+      await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
 
     // The five Demos sub-steps — each renders one demo (heading = its title). The
@@ -249,7 +249,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // configured (see integrations-screen.tsx's "Open Corporate network").
   it("opens the step named by ?step=, and ignores a bogus one rather than blowing up", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=corp_network");
-    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
 
     cleanup();
     renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=not-a-step");
@@ -262,7 +262,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // over-reaching initial step gets pulled back to corp_network.
   it("a ?step= deep link past the unproven corp_network gate is corrected back to it", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=integrations");
-    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
   });
 
   // UI-SETUP-1: recheck() used to refresh status+site-config only — secret
@@ -286,11 +286,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await screen.findByRole("heading", { name: /^network$/i });
 
       // Blocked gate with an action: there IS no Next button — the fix-it
       // action stands in its place, under the state's own headline.
-      expect(screen.queryByRole("button", { name: /^next: model \& git host$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: secrets$/i })).not.toBeInTheDocument();
       expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
       // …and exactly ONE launch point on the whole screen: the footer's (the
       // panel's own button is suppressed while the gate row carries it).
@@ -311,7 +311,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // One more click, not a demand: the quiet empty line, then the exit.
       await user.click(toEgress);
       await screen.findByText(/nothing redirected on this host/i);
-      const next = screen.getByRole("button", { name: /^next: model \& git host$/i });
+      const next = screen.getByRole("button", { name: /^next: secrets$/i });
       expect(next).toBeEnabled();
       // Back from here returns to Host proxy — the mirror — without leaving
       // the step; then forward again.
@@ -319,18 +319,18 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(await screen.findByText("What Wardyn found on this host")).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /^next: egress redirection$/i }));
 
-      await user.click(screen.getByRole("button", { name: /^next: model \& git host$/i }));
-      expect(await screen.findByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^next: secrets$/i }));
+      expect(await screen.findByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
     });
 
     it("no_runner unlocks Next immediately with its standing note — nothing was proven, and the note keeps saying so", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await screen.findByRole("heading", { name: /^network$/i });
 
       await clearCorpNetworkGate();
-      expect(screen.getByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: secrets$/i })).toBeEnabled();
       expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
       expect(screen.getByText(/nothing was proven here/i)).toBeInTheDocument();
     });
@@ -342,7 +342,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await screen.findByRole("heading", { name: /^network$/i });
 
       testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms", via: "proxy" });
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
@@ -350,7 +350,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Reached, but the configured redirect is untested — the gate holds
       // with its own head/sentence, and the footer's action is the fix.
-      expect(screen.queryByRole("button", { name: /^next: model \& git host$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: secrets$/i })).not.toBeInTheDocument();
       expect(screen.getByText("Redirects aren't proven yet")).toBeInTheDocument();
       expect(screen.getByText(/every configured redirect has to prove reached/i)).toBeInTheDocument();
 
@@ -359,7 +359,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
       await user.click(screen.getByRole("button", { name: /^test the redirect$/i }));
       await screen.findByText("Reached");
-      expect(await screen.findByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
+      expect(await screen.findByRole("button", { name: /^next: secrets$/i })).toBeEnabled();
     });
 
     it("the gate survives leaving and re-entering the step — no re-test needed", async () => {
@@ -368,15 +368,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
 
       // Back to Corporate network: the step body remounted, but the gate AND
       // the sub-tab — held by the orchestrator, not the step — still remember
       // the no_runner pass and that we left from Egress redirection.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await screen.findByRole("heading", { name: /^network$/i });
       expect(screen.getByText(/nothing redirected on this host/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /^next: model \& git host$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: secrets$/i })).toBeEnabled();
       // The mirror again: Back inside the step returns to Host proxy, where
       // the remembered no_runner verdict is still on screen.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
@@ -391,7 +391,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await screen.findByRole("heading", { name: /^network$/i });
       // Both PhaseRail landmarks share the "Setup steps" accessible name
       // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
       // renders both — the full rail is the SECOND in DOM order.
@@ -399,8 +399,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       const nav = navs[navs.length - 1];
 
       // Untested (blocked): clicking Integrations in the rail is a no-op.
-      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
-      expect(screen.getByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+      await user.click(within(nav).getByRole("button", { name: /^secrets/i }));
+      expect(screen.getByRole("heading", { name: /^network$/i })).toBeInTheDocument();
 
       // Backward is never gated — only forward click-PAST is what the rule guards.
       await user.click(within(nav).getByRole("button", { name: /environment/i }));
@@ -410,16 +410,16 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // while sitting on corp_network itself. A rail click straight from
       // Environment to Integrations (skipping over corp_network entirely,
       // never having visited it this render) must be a no-op just the same.
-      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
+      await user.click(within(nav).getByRole("button", { name: /^secrets/i }));
       expect(screen.getByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
 
-      await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
-      await screen.findByRole("heading", { name: /^corporate network$/i });
+      await user.click(within(nav).getByRole("button", { name: /network/i }));
+      await screen.findByRole("heading", { name: /^network$/i });
 
       // Proven: the identical rail click now works.
       await clearCorpNetworkGate();
-      await user.click(within(nav).getByRole("button", { name: /model \& git host/i }));
-      expect(await screen.findByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
+      await user.click(within(nav).getByRole("button", { name: /^secrets/i }));
+      expect(await screen.findByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
     });
   });
 
@@ -439,7 +439,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await clearCorpNetworkGate();
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
     expect(
-      await screen.findByRole("heading", { name: /connect your model/i }),
+      await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
     // The two SHARED Settings cards, not the deleted /integrations catalog.
     // (connection-cards.test.tsx owns their own behaviour; this asserts the
@@ -454,7 +454,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // renders both — the full rail is the SECOND in DOM order.
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
-    const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+    const btn = within(nav).getByRole("button", { name: /^secrets/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
 
@@ -478,7 +478,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // renders both — the full rail is the SECOND in DOM order.
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
-    const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+    const btn = within(nav).getByRole("button", { name: /^secrets/i });
     expect(await within(btn).findByText("Optional")).toBeInTheDocument();
     expect(within(btn).queryByText(/connected/)).not.toBeInTheDocument();
   });
@@ -495,7 +495,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
       // Both PhaseRail landmarks share the "Setup steps" accessible name
@@ -503,7 +503,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+      const btn = within(nav).getByRole("button", { name: /^secrets/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       expect(within(btn).queryByText("Optional")).not.toBeInTheDocument();
     });
@@ -519,7 +519,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
 
       // Both PhaseRail landmarks share the "Setup steps" accessible name
@@ -527,7 +527,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+      const btn = within(nav).getByRole("button", { name: /^secrets/i });
       expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
       expect(within(btn).queryByText("Skipped")).not.toBeInTheDocument();
     });
@@ -539,7 +539,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
       // The two dead affordances stay dead: Next is the one forward control.
       expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
@@ -551,7 +551,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+      const btn = within(nav).getByRole("button", { name: /^secrets/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
       // …and the checkmark: forward-past is the same per-browser decision the
       // old explicit control recorded (persisted via markIntegrationsSkipped).
@@ -559,7 +559,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Backing INTO the step decides nothing extra and the state holds.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
 
@@ -569,7 +569,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
-      await screen.findByRole("heading", { name: /connect your model/i });
+      await screen.findByRole("heading", { name: /^secrets$/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
       unmount();
 
@@ -582,7 +582,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // renders both — the full rail is the SECOND in DOM order.
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
-      const btn = within(nav).getByRole("button", { name: /model \& git host/i });
+      const btn = within(nav).getByRole("button", { name: /^secrets/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
   });

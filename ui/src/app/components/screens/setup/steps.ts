@@ -63,8 +63,14 @@ const DEMO_TITLES = Object.fromEntries(
 // here instead of each rebuilding the same map (F5).
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
-  corp_network: "Corporate network",
-  integrations: "Model & git host",
+  corp_network: "Network",
+  // "Secrets", not "Model & git host": every lane this step offers — API keys,
+  // PATs, SSH keys, App credentials, even the login flows, which capture a
+  // token — lands in the same secret store the Secrets page manages. The old
+  // label named the two example objects and hid what the step actually is;
+  // naming the category also stops it reading as irrelevant to someone whose
+  // model or forge is not the one named.
+  integrations: "Secrets",
   ...DEMO_TITLES,
   workspaces: "Workspaces",
   review: "Review",
@@ -72,10 +78,14 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
-  // Same string as the rail label — the mock's own gsScaffold title for this
-  // step, not a distinct noun-phrase like the other steps get.
-  corp_network: "Corporate network",
-  integrations: "Connect your model",
+  // Same string as the rail label. Renamed from "Corporate network": that
+  // name described the WORST case rather than the step, and read as skippable
+  // to everyone not behind a corporate proxy — when what the step actually
+  // settles is whether a sandbox can reach the outside world at all, which
+  // every install has to answer. The proxy and redirect tabs inside it are the
+  // special cases, not the subject.
+  corp_network: "Network",
+  integrations: "Secrets",
   ...DEMO_TITLES,
   workspaces: "Onboard a workspace",
   review: "Review readiness",

@@ -152,7 +152,7 @@ func llmProviderCheck(llmDetail string) SetupCheck {
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
 		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
-		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Model & git host\" setup step), or bind creds to a workspace/container.",
+		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Secrets\" setup step), or bind creds to a workspace/container.",
 	}
 }
 
@@ -222,7 +222,7 @@ func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 		return SetupCheck{
 			ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
 			Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
-			Fix:    "Set one via PUT /api/v1/site-config (or the Corporate network step — the Host proxy / Artifact redirect tabs).",
+			Fix:    "Set one via PUT /api/v1/site-config (or the Network step — the Host proxy / Artifact redirect tabs).",
 		}
 	}
 	if dangling := danglingSiteConfigSecretRefs(sc, present); len(dangling) > 0 {

@@ -171,8 +171,8 @@ describe("frozen contract — ids, labels, headings, order", () => {
   it("pins the frozen step ids and labels (e2e clicks `Next: {label}`)", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
-      ["corp_network", "Corporate network"],
-      ["integrations", "Model & git host"],
+      ["corp_network", "Network"],
+      ["integrations", "Secrets"],
       // The five Demos sub-steps — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
       ["fail-then-approve", "Fail, then approve"],
@@ -186,8 +186,8 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["review", "Review"],
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
-    expect(STEP_HEADING.corp_network).toBe("Corporate network");
-    expect(STEP_HEADING.integrations).toBe("Connect your model");
+    expect(STEP_HEADING.corp_network).toBe("Network");
+    expect(STEP_HEADING.integrations).toBe("Secrets");
   });
 
   it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {

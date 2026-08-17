@@ -427,8 +427,8 @@ A fresh install lands here on its own: no runs and no dismissed tour means
 | Step | Heading | Notes |
 |---|---|---|
 | 1 | **Pick your barrier** | Fence / Wall / Vault, gated on what the host really has |
-| 2 | **Corporate network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
-| 3 | **Connect your model** | Shows the subscription connected in Act 0 |
+| 2 | **Network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
+| 3 | **Secrets** | Shows the subscription connected in Act 0 |
 
 Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
@@ -509,7 +509,7 @@ Tabs (role `tab`): **Audit**, then **Recording**. Closes on the caption
 Found by actually running it. Each of these silently breaks a driver that
 assumes the obvious thing:
 
-- **One step can need more than one Next.** The Corporate network gate answers
+- **One step can need more than one Next.** The Network gate answers
   the first Next by swapping its **Host proxy** tab for **Egress redirection**
   and *staying on step 2*. So `advance()` presses Next until the "Step N of M"
   counter changes, rather than pressing once — which also covers the

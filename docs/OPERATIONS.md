@@ -553,7 +553,7 @@ and a Git host card, each a radio group over concrete lanes. The standalone
 what already exists (stored secret names, site config, setup status), so an
 operator who never opens Settings keeps identical run behavior. Host proxy and
 Egress redirection are deliberately NOT here: that is network topology, its
-configuration lives under **Corporate network** (below) on the same
+configuration lives under **Network** (below) on the same
 `SiteConfig` document, and this surface neither derives nor displays it.
 
 ### Wardyn does not dial the provider
@@ -650,7 +650,7 @@ no integration gets no model access via this lane. See
 [TRY-IT.md](TRY-IT.md) → "Model auth: three ways" for the full transport
 precedence (subscription → Bedrock → api-key) once a run reaches dispatch.
 
-## Corporate network: upstream proxy and egress redirects
+## Network: upstream proxy and egress redirects
 
 One more piece of operator-wide config lives in Postgres alongside everything
 in **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`,

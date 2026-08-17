@@ -62,7 +62,7 @@ describe("PhaseRail", () => {
 
   it("a full-rail step button carries both the frozen label and its badge text", () => {
     const rail = renderRail("environment");
-    const btn = rail.getByRole("button", { name: /model & git host/i });
+    const btn = rail.getByRole("button", { name: /^secrets/i });
     expect(within(btn).getByText("Ready · 2 connected")).toBeInTheDocument();
   });
 
@@ -78,7 +78,7 @@ describe("PhaseRail", () => {
   // step, right after Environment in Essentials — no expander, never collapsed.
   it("shows the connection step inline in Essentials, right after Environment, with no expander to open", () => {
     const rail = renderRail("environment");
-    expect(rail.getByRole("button", { name: /model & git host/i })).toBeInTheDocument();
+    expect(rail.getByRole("button", { name: /^secrets/i })).toBeInTheDocument();
     expect(rail.queryByRole("button", { name: /^essentials$/i })).not.toBeInTheDocument();
   });
 
@@ -86,7 +86,7 @@ describe("PhaseRail", () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     const rail = renderRail("environment", onSelect);
-    await user.click(rail.getByRole("button", { name: /model & git host/i }));
+    await user.click(rail.getByRole("button", { name: /^secrets/i }));
     expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
@@ -111,7 +111,7 @@ describe("PhaseRail", () => {
 
   it("marks only the active step aria-current=step, and no button anywhere uses aria-pressed", () => {
     const rail = renderRail("integrations");
-    expect(rail.getByRole("button", { name: /model & git host/i })).toHaveAttribute("aria-current", "step");
+    expect(rail.getByRole("button", { name: /^secrets/i })).toHaveAttribute("aria-current", "step");
     expect(rail.getByRole("button", { name: /^environment/i })).not.toHaveAttribute("aria-current");
 
     for (const btn of screen.getAllByRole("button")) {

@@ -30,7 +30,7 @@ describe("SetupLayout", () => {
 
   it("renders the step heading from STEP_HEADING and an Optional chip on an optional step", () => {
     renderLayout({ current: "integrations" });
-    expect(screen.getByRole("heading", { name: /connect your model/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
     expect(screen.getByText("Optional")).toBeInTheDocument();
   });
 
@@ -44,10 +44,10 @@ describe("SetupLayout", () => {
   // own step, right before Integrations — see steps.ts's PHASES comment for
   // why the ORDER is the actual fix for "blocked network reads as bad
   // credential").
-  it("footer renders 'Next: Corporate network' on the environment step and calls onSelect(\"corp_network\")", async () => {
+  it("footer renders 'Next: Network' on the environment step and calls onSelect(\"corp_network\")", async () => {
     const onSelect = vi.fn();
     renderLayout({ current: "environment", onSelect });
-    const nextBtn = screen.getByRole("button", { name: /^next: corporate network$/i });
+    const nextBtn = screen.getByRole("button", { name: /^next: network$/i });
     await user.click(nextBtn);
     expect(onSelect).toHaveBeenCalledWith("corp_network");
   });
@@ -58,7 +58,7 @@ describe("SetupLayout", () => {
   // deleted the last of them).
   it("offers no phase-level skip control now that no phase is collapsible", () => {
     renderLayout({ current: "integrations" });
-    expect(screen.queryByRole("button", { name: /skip corporate network/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /skip network/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^skip .* network$/i })).not.toBeInTheDocument();
   });
 
@@ -67,7 +67,7 @@ describe("SetupLayout", () => {
   describe("nextGate — the footer's generic Next gate (head/reason/action)", () => {
     it("Next is enabled and nothing extra renders when nextGate is absent", () => {
       renderLayout({ current: "environment" });
-      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeEnabled();
     });
 
     it("blocked without an action: Next is disabled, the head and reason render", () => {
@@ -75,7 +75,7 @@ describe("SetupLayout", () => {
         current: "environment",
         nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },
       });
-      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeDisabled();
       expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
       expect(screen.getByText("One probe, and this step is done.")).toBeInTheDocument();
     });
@@ -93,7 +93,7 @@ describe("SetupLayout", () => {
           action: { label: "Test connectivity", onClick: onAction },
         },
       });
-      expect(screen.queryByRole("button", { name: /^next: corporate network$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: network$/i })).not.toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       expect(onAction).toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe("SetupLayout", () => {
         onSelect,
         nextGate: { blocked: false, head: "Nothing to test with", reason: "Nothing was proven here.", tone: "neutral" },
       });
-      const next = screen.getByRole("button", { name: /^next: corporate network$/i });
+      const next = screen.getByRole("button", { name: /^next: network$/i });
       expect(next).toBeEnabled();
       expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
       expect(screen.getByText("Nothing was proven here.")).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("SetupLayout", () => {
         current: "environment",
         nextGate: { blocked: false, action: { label: "Should not render", onClick: vi.fn() } },
       });
-      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeEnabled();
       expect(screen.queryByRole("button", { name: /should not render/i })).not.toBeInTheDocument();
     });
 
