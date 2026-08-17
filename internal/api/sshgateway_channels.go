@@ -417,13 +417,12 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// observer's later resize frames for this reason; the initial attach was the
 	// one path that still got through.
 	//
-	// The check is advisory (the holder may leave in the gap), which is why the
-	// geometry is re-applied below once we know we are the writer, rather than
-	// being dropped on the floor.
-	opts := runner.AttachOptions{Cols: cols, Rows: rows}
-	if s.attachHolderFor(runID) != nil {
-		opts = runner.AttachOptions{}
-	}
+	// Geometry is decided AFTER registration, never at exec-create: the old
+	// advisory pre-check ("is someone holding?") raced in the arrive direction —
+	// two clients could both read nil and the loser's ExecCreate still clamped
+	// the winner's tmux window. Open with no size; the writer applies its real
+	// geometry via Resize once the registry has actually made it the writer.
+	opts := runner.AttachOptions{}
 	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
@@ -441,7 +440,10 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// — reused as-is; the "ssh-" prefix is the only thing distinguishing this
 	// call from the web terminal's.
 	sessionID := "ssh-" + uuid.New().String()
-	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
+	// The recorder gets the CLIENT's real geometry for its cast header even
+	// though the exec opened size-less — the header describes the viewer's
+	// terminal, not the exec-create parameters.
+	castTee, finishRecording := s.newSessionRecorder(run, sessionID, runner.AttachOptions{Cols: cols, Rows: rows})
 
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -472,11 +474,9 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		},
 	}
 	readOnly, releaseHolder := s.registerAttachHolder(runID, holder)
-	if !readOnly && opts.Cols == 0 && cols > 0 {
-		// We withheld the size above because someone appeared to hold the PTY,
-		// but by the time we actually claimed it they were gone — so apply the
-		// real geometry now. Best-effort: a failure here costs a correct window
-		// size, not the session.
+	if !readOnly && cols > 0 {
+		// We are the registered writer — apply the real geometry now.
+		// Best-effort: a failure costs a correct window size, not the session.
 		_ = sess.Resize(ctx, cols, rows)
 	}
 	// Deferred for the same reason as the web lane's: a panicking pump must

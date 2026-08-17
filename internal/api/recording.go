@@ -103,27 +103,38 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	body, cleanup := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
 	defer cleanup()
 
-	if err := s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body); err != nil {
-		// An over-cap upload surfaces as *http.MaxBytesError through the pipe.
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "save recording: "+err.Error())
-		return
-	}
+	saveErr := s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
 
+	// Audit BOTH outcomes, like every sibling recording lane: a full store or
+	// an over-cap upload is exactly how a long session's provenance gets lost,
+	// and a success-only trail renders that loss invisible.
 	runIDUUID := claims.RunID
+	outcome := "success"
+	var data []byte
+	if saveErr != nil {
+		outcome = "failure"
+		data = mustJSON(map[string]any{"error": saveErr.Error()})
+	}
 	s.recordAudit(r.Context(), s.auditEvent(
 		&runIDUUID,
 		types.ActorAgent,
 		claims.SPIFFEID,
 		"recording.upload",
 		claims.RunID.String(),
-		"success",
-		nil,
+		outcome,
+		data,
 	))
+
+	if saveErr != nil {
+		// An over-cap upload surfaces as *http.MaxBytesError through the pipe.
+		var maxErr *http.MaxBytesError
+		if errors.As(saveErr, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "save recording: "+saveErr.Error())
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

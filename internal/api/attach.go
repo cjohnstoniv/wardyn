@@ -181,7 +181,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// Open the interactive shell inside the sandbox. On failure, close the socket
 	// cleanly with a policy-violation status and audit the failed attach.
-	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
+	// Size-less attach, same rule as the SSH lane: geometry is applied via
+	// Resize AFTER holder registration decides who the writer is. Passing
+	// ?cols=&rows= into ExecCreate here was the web half of the observer-
+	// clamps-holder bug — no shipped client sends them, but the endpoint is
+	// public and the guard belongs at the chokepoint.
+	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, runner.AttachOptions{})
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&id, principalType, principal, "session.attach",
 			id.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
@@ -229,6 +234,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// pump would otherwise strand a phantom holder that every later attach reads
 	// as "held" forever, curable only by a restart.
 	defer releaseHolder()
+	if !readOnly && opts.Cols > 0 {
+		// We are the registered writer — apply the client's requested geometry.
+		_ = sess.Resize(ctx, opts.Cols, opts.Rows)
+	}
 	if readOnly {
 		// Somebody else holds the PTY. nil holder is what marks this client an
 		// observer for attachPump (input AND resize dropped — see its doc).
