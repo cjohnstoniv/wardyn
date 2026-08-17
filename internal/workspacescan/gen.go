@@ -75,7 +75,7 @@ const genDockerfilePath = ".devcontainer/Dockerfile"
 
 // EnvAsCodeDockerfilePath exports genDockerfilePath for callers outside this
 // package that need to single the generated Dockerfile out from
-// EmitEnvAsCode's output — namely internal/api/workspaces.go's
+// EmitEnvAsCode's output — namely internal/api/workspace_envcode.go's
 // writeEnvAsCode, which refuses to overwrite a PRE-EXISTING file at this path.
 // Unlike every other emitted key (devcontainer.json/AGENTS.md/the artifact
 // redirect stubs, all Wardyn's own narrow, regenerate-on-demand output), a

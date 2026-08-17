@@ -496,7 +496,7 @@ host, write access to a directory, a named integration — is a row with ONE
 axis: **Required** rides along with every run that attaches the workspace,
 **Optional** is a per-run opt-in. `PUT /api/v1/workspaces/{id}/requirements`
 writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`,
-`internal/api/workspaces.go`). The 7-step workspace wizard that used to write
+`internal/api/workspace_requirements.go`). The 7-step workspace wizard that used to write
 them from its Requirements and Integrations steps was retired in 0.5 — adding a
 workspace is one dialog now — so the workspace detail page is the surface that
 writes them. Launch and preflight both read

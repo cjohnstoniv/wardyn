@@ -139,7 +139,7 @@ describe("workspace client methods", () => {
   });
 
   // setRequirements() — PUT /workspaces/{id}/requirements, wrapping the
-  // desired map under a "requirements" key (internal/api/workspaces.go's
+  // desired map under a "requirements" key (internal/api/workspace_requirements.go's
   // handleSetWorkspaceRequirements decodes `{"requirements": {...}}`, not a
   // bare map) and returning the server's updated workspace.
   it("setRequirements() PUTs the map nested under a `requirements` key and returns the updated workspace", async () => {

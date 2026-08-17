@@ -135,8 +135,8 @@ func entryCoversAny(entry string, drop map[string]bool) bool {
 // SiteConfig's EgressRedirects, skipping every NETWORK-ONLY row (Ecosystem ==
 // ""), or nil when nothing is configured. This is the sole ecosystem-scoped
 // filter both EmitArtifactConfig callers (planArtifactRedirect below,
-// workspaces.go's envAsCodeFor) go through, so a network-only redirect can
-// never accidentally grow a package-manager config file.
+// workspace_envcode.go's envAsCodeFor) go through, so a network-only redirect
+// can never accidentally grow a package-manager config file.
 func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 	if len(sc.EgressRedirects) == 0 {
 		return nil

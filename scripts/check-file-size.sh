@@ -40,7 +40,9 @@ declare -A ALLOWLIST=(
   # (the k8s runner substrate + envbuild wiring, and the new-run wizard's k8s
   # runner flavor + its tests). Caps frozen at +~8% so they stop growing; split
   # by seam when next substantially touched.
-  ["./internal/api/workspaces.go"]=1150 # 1069 at v0.5 merge
+  # workspaces.go was the first of them to hit its cap and got split by seam
+  # (workspace_requirements.go / workspace_envcode.go) rather than re-justified —
+  # at 800 lines it came OFF this list and is gated at the plain threshold now.
   ["./internal/envbuild/builder.go"]=1100 # 1020 at v0.5 merge
   ["./ui/src/app/components/screens/new-run/wizard-types.ts"]=1180 # 1092 at v0.5 merge
 )

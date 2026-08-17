@@ -185,8 +185,8 @@ var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_fea
 // validateIntegrationWrite enforces an operator-authored Integration's
 // structural + security invariants before it is persisted (PUT
 // /integrations/{id}, and defensively on adopt): id shape (integrationRefRE,
-// workspaces.go — secretNameRE's charset plus the colon-qualified shape
-// Wardyn's own legacy adoption mints and stores verbatim, e.g.
+// workspace_requirements.go — secretNameRE's charset plus the colon-qualified
+// shape Wardyn's own legacy adoption mints and stores verbatim, e.g.
 // "anthropic_subscription:managed", so an ADOPTED row stays editable through
 // this same endpoint instead of being write-once); kind either in the closed
 // set or a shape-valid generic slug; every secret row a real non-reserved
