@@ -164,116 +164,50 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // Step 2 must stay ahead of step 3. Run rule 4 (a scope on a non-egress_domain
 // kind -> 400) before the ownership check and a member can distinguish "a
 // credential approval exists on someone else's run" (400) from "no such
-// approval" (404) — exactly the existence oracle the gate's own comment below
-// goes out of its way to close, and that docs/OPERATIONS.md states as policy.
+// approval" (404) — exactly the existence oracle authorizeMemberDecision's own
+// comment goes out of its way to close, and that docs/OPERATIONS.md states as
+// policy.
 // Everything the scope rules add is therefore behind a 404 for a caller who has
 // not already proven the approval exists, is egress_domain, and is theirs.
+//
+// Steps 1 and 2 are named helpers below, as are the two halves of step 3 that
+// stand alone (rules 1–3, rules 5–7); decide itself keeps only the ORDER, rule
+// 4 with the scope-gated load it depends on, and step 4, because the order is
+// the part a reviewer has to be able to read without scrolling. Each helper
+// writes its own 4xx and reports false: the reply strings are asserted verbatim
+// by the API tests and belong next to the rule that refuses.
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
 		return
 	}
-	var body decisionRequest
-	if r.Body != nil {
-		// Decoded BY HAND on purpose — do NOT "unify" this with decodeStrict
-		// (helpers.go), even though its own comment calls itself the package's
-		// single JSON-body decode primitive. decodeStrict 400s EVERY decode
-		// error including io.EOF, and three shipped shell clients POST approve
-		// with no body at all and assert 200|202 (scripts/test-drive.sh:465
-		// and :579, test/e2e/e2e.sh:420) — all three would break. It also sets
-		// DisallowUnknownFields, which would reject an older or newer client
-		// sending a field this build does not know.
-		//
-		// What DID tighten: a malformed or truncated body is now a 400 instead
-		// of being swallowed. Swallowing was right while the only field was an
-		// optional reason; it is wrong now the body carries the decision's
-		// blast radius, because a truncated body leaves Scope == "", which
-		// Normalize() reads as `run` — a client that meant `once` would get a
-		// run-wide grant and a 200. io.ErrUnexpectedEOF still catches the
-		// truncation; only the genuinely empty body (io.EOF) stays tolerated.
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-			writeError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
+	body, ok := decodeDecisionRequest(w, r)
+	if !ok {
+		return
 	}
 
-	// Loaded AT MOST ONCE each. The member gate below needs both for its own
-	// checks and the scope rules reuse whatever it loaded; an OPERATOR's decide
-	// read nothing from the store before this change, and the scope-gated loads
+	// Loaded AT MOST ONCE each. The member gate needs both for its own checks
+	// and the scope rules reuse whatever it loaded; an OPERATOR's decide read
+	// nothing from the store before this change, and the scope-gated loads
 	// further down keep it that way for the default `run` scope and for every
 	// bodyless caller — the console's busiest action pays no new round trip.
-	var (
-		ap      types.ApprovalRequest
-		run     types.AgentRun
-		haveAP  bool
-		haveRun bool
-	)
-	if !s.isOperator(r.Context()) {
-		// Member: may decide only an egress_domain approval raised by a run THEY
-		// own (item 3, narrowed by the HIGH-1 review fix). credential and
-		// tool_call approvals stay admin-only REGARDLESS of ownership: the
-		// shipped default policy requires approval on github_token, so letting a
-		// member self-approve their OWN run's credential request would self-mint
-		// a real token, and self-approving a tool_call re-opens exactly the
-		// allowance the clamp (item 5 / HIGH-2) is supposed to bound — both under
-		// the SAME authority the operator's ceiling exists to constrain. Checked
-		// before ownership so a foreign non-egress approval and an OWNED
-		// non-egress approval read identically (both 404, no existence oracle
-		// either way) — not audited: this is a foreign-shaped 404, not a distinct
-		// reachable-surface denial (see THREAT-MODEL.md).
-		var err error
-		ap, err = s.cfg.Approvals.Get(r.Context(), id)
-		if err != nil || ap.Kind != types.ApprovalEgressDomain {
-			writeError(w, http.StatusNotFound, "approval not found")
-			return
-		}
-		haveAP = true
-		var rerr error
-		run, rerr = s.cfg.Store.GetRun(r.Context(), ap.RunID)
-		if rerr != nil || !s.ownsRunOrAdmin(r, run) {
-			writeError(w, http.StatusNotFound, "approval not found")
-			if rerr == nil {
-				// M1: audited only once the approval is confirmed to genuinely
-				// exist and be decidable in kind — a run lookup failure here would
-				// be a data-integrity oddity, not a clean "not owned".
-				s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-					"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
-			}
-			return
-		}
-		haveRun = true
+	//
+	// The gate loads BOTH rows or NEITHER, so its one flag seeds both here; they
+	// diverge below, where rule 4 may load the approval alone and leave the run
+	// unread for `always` to fetch.
+	ap, run, loaded, ok := s.authorizeMemberDecision(w, r, id)
+	if !ok {
+		return
 	}
+	haveAP, haveRun := loaded, loaded
 
 	// --- Scope rules. ALL of them run before Decide(), because PENDING ->
 	// decided is one-way: a rule that answered 4xx afterwards would be
 	// rejecting a decision the operator can no longer take back.
 	scope := body.Scope
 
-	// Rule 1 — garbage at the write boundary, the same place FirstUseMode.Valid
-	// is enforced. Runtime reads still fail closed via Normalize().
-	if !scope.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid decision_scope (once|run|until|always)")
-		return
-	}
-	// Rules 2 and 3 — `until` and decision_expires_at imply each other, BOTH
-	// directions. An expiry on a non-until scope is never silently ignored: a
-	// client that sent one believes the grant is time-boxed, and it would not be.
-	switch {
-	case scope == types.ScopeUntil:
-		now := time.Now()
-		switch {
-		case body.ExpiresAt == nil:
-			writeError(w, http.StatusBadRequest, "decision_scope until requires decision_expires_at")
-			return
-		case !body.ExpiresAt.After(now):
-			writeError(w, http.StatusBadRequest, "decision_expires_at is in the past")
-			return
-		case body.ExpiresAt.After(now.Add(maxDecisionUntil)):
-			writeError(w, http.StatusBadRequest, "decision_expires_at is more than 30d out — use always for a permanent decision")
-			return
-		}
-	case body.ExpiresAt != nil:
-		writeError(w, http.StatusBadRequest, "decision_expires_at is only valid with decision_scope until")
+	// Rules 1–3, which need no row at all (see validateDecisionScope).
+	if !validateDecisionScope(w, scope, body.ExpiresAt) {
 		return
 	}
 
@@ -307,110 +241,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by
-	// rule 5, consumed by rule 7 and by the write-back after Decide().
+	// rules 5–7 (resolveAlwaysTarget), consumed by the write-back after Decide().
 	var target uuid.UUID
 	if scope == types.ScopeAlways {
-		// Rule 6 FIRST — `always` is operator-only. The approve/deny routes live
-		// on the MEMBER group, so without this a member self-grants a permanent
-		// workspace allowlist entry through the approval queue: a back door around
-		// PUT /workspaces/{id}/approved-egress, which is operator-gated on this
-		// exact predicate.
-		//
-		// AUTHORIZATION BEFORE VALIDATION, deliberately. Rule 5 below answers 400
-		// with "this run references no onboarded workspace" — a fact about the
-		// run's configuration. Running it first would hand that answer to a caller
-		// who is not permitted to use this scope at all, and would make the reply
-		// depend on run state rather than on the caller's role. Both orders are
-		// defensible for THIS field (the member already owns the run, so nothing
-		// here is secret), but ordering by "can you do this at all?" before "is
-		// your request well-formed?" is the rule that keeps working when a later
-		// validation step touches something the caller genuinely cannot see.
-		//
-		// 403, NOT the byte-identical 404 the member checks above use. Those 404s
-		// exist to deny an existence oracle; by HERE the caller has already proven
-		// the approval exists, is egress_domain, and is on a run they own, so a
-		// 403 discloses nothing they do not already know — while a 404 would read
-		// as "your own approval vanished". Do not "fix" this back.
-		if !s.isOperator(r.Context()) {
-			writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
-			return
-		}
-
-		// Rule 5 — `always` writes to a WORKSPACE, so the run must resolve to
-		// one. s.cfg.Store is nilable throughout this package (learnVerifyEgress
-		// guards it for the same reason), and a backend that cannot resolve the
-		// linkage cannot serve this scope at all.
-		if s.cfg.Store == nil {
-			writeError(w, http.StatusInternalServerError, "decision_scope always is unavailable on this backend")
-			return
-		}
-		if !haveRun {
-			var err error
-			if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-				// REJECT, never fall through: falling through would persist
-				// `always` on the approval row with no workspace resolved and no
-				// durable write — a permanent grant that exists only in the UI.
-				writeError(w, http.StatusInternalServerError, "resolve run for always: "+err.Error())
-				return
-			}
-			haveRun = true
-		}
-		// The tie-break is spelled out because WorkspaceIDs[0] is undefined on
-		// exactly the path that matters most: a record/verify run launches with
-		// first_use_approval=wait_for_review and therefore raises egress
-		// approvals BY CONSTRUCTION, yet newWorkspaceStepRun leaves WorkspaceIDs
-		// empty and sets only the TRUSTED WorkspaceID. WorkspaceIDs[0] is the
-		// documented PRIMARY (referencedWorkspaces builds the slice in a stable
-		// order — mounts, then repos, deduped) and the same entry that drives
-		// image selection, so "first" is deterministic and explainable in copy.
-		// No workspace_id body field and no picker: a documented default beats a
-		// new wire field plus a new control for a case that is rare and
-		// reversible via the denied-egress/approved-egress PUTs.
-		switch {
-		case len(run.WorkspaceIDs) > 0:
-			target = run.WorkspaceIDs[0]
-		case run.WorkspaceID != nil:
-			target = *run.WorkspaceID
-		default:
-			// "no recorded workspace link", not "references no workspace": a run
-			// created before migration 0041 has a NULL workspace_ids even when
-			// it referenced one — the server only knows what was recorded.
-			writeError(w, http.StatusBadRequest, "always needs a workspace: this run has no recorded workspace link")
-			return
-		}
-
-		// Rule 7 — host shape, then the reject set for THIS DIRECTION. Both are
-		// checked here, before Decide(), because this is the last moment a 4xx
-		// is still meaningful.
-		host := approvalHost(ap)
-		if !hostrules.ValidApprovedHost(host) {
-			writeError(w, http.StatusBadRequest,
-				"invalid domain (plain lowercase host, no scheme/port/wildcard): "+host)
-			return
-		}
-		ws, err := s.cfg.Store.GetWorkspace(r.Context(), target)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				writeError(w, http.StatusBadRequest, "always needs a workspace: this run's workspace no longer exists")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "resolve workspace for always: "+err.Error())
-			return
-		}
-		if approve {
-			if _, dead := s.approveAlwaysRejects(r.Context(), ws)[host]; dead {
-				// The reason list is deliberately hedged rather than enumerated.
-				// promoteSkipHosts carries the model-provider and clone hosts
-				// VERBATIM from the ceiling, so on the wildcard ceiling the product
-				// itself recommends ("*.anthropic.com") a CONCRETE model-provider
-				// host is not in this set at all — naming it unconditionally would
-				// tell the operator something that is often false.
-				writeError(w, http.StatusBadRequest, "host "+host+" is already routed or wired in by construction "+
-					"(git broker, control plane, or this workspace's own contract) — a permanent approved-egress entry for it is never consulted")
-				return
-			}
-		} else if msg := s.denyAlwaysReject(r.Context(), ws, host); msg != "" {
-			writeError(w, http.StatusBadRequest, msg)
+		if target, ok = s.resolveAlwaysTarget(w, r, ap, run, haveRun, approve); !ok {
 			return
 		}
 	}
@@ -465,6 +299,243 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		s.persistWorkspaceEgressDecision(r.Context(), result, target, approve, decidedByType, decidedBy)
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// decodeDecisionRequest is decide's step 1: the body, and NOTHING that depends
+// on a row. It is its own function because its tolerances are the delicate part
+// — three shipped clients depend on them — and they must not be re-litigated by
+// somebody skimming decide for the authorization order.
+//
+// Decoded BY HAND on purpose — do NOT "unify" this with decodeStrict
+// (helpers.go), even though its own comment calls itself the package's single
+// JSON-body decode primitive. decodeStrict 400s EVERY decode error including
+// io.EOF, and three shipped shell clients POST approve with no body at all and
+// assert 200|202 (scripts/test-drive.sh:465 and :579, test/e2e/e2e.sh:420) —
+// all three would break. It also sets DisallowUnknownFields, which would reject
+// an older or newer client sending a field this build does not know.
+//
+// What DID tighten: a malformed or truncated body is a 400 instead of being
+// swallowed. Swallowing was right while the only field was an optional reason;
+// it is wrong now the body carries the decision's blast radius, because a
+// truncated body leaves Scope == "", which Normalize() reads as `run` — a
+// client that meant `once` would get a run-wide grant and a 200.
+// io.ErrUnexpectedEOF still catches the truncation; only the genuinely empty
+// body (io.EOF) stays tolerated.
+func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequest, bool) {
+	var body decisionRequest
+	if r.Body == nil {
+		return body, true
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return body, false
+	}
+	return body, true
+}
+
+// authorizeMemberDecision is decide's step 2, the MEMBER GATE — the whole of
+// it, so that "everything after this point has proven ownership" is a single
+// call a reviewer can check rather than a block they must read to the end of.
+// An OPERATOR passes through having read nothing from the store, which is why
+// the returned rows come with a `loaded` flag instead of being assumed present:
+// it reports whether BOTH ap and run were read (member path) or NEITHER
+// (operator path), and the scope-gated loads downstream pay for what they need.
+//
+// Member: may decide only an egress_domain approval raised by a run THEY own
+// (item 3, narrowed by the HIGH-1 review fix). credential and tool_call
+// approvals stay admin-only REGARDLESS of ownership: the shipped default policy
+// requires approval on github_token, so letting a member self-approve their OWN
+// run's credential request would self-mint a real token, and self-approving a
+// tool_call re-opens exactly the allowance the clamp (item 5 / HIGH-2) is
+// supposed to bound — both under the SAME authority the operator's ceiling
+// exists to constrain. Kind is checked before ownership so a foreign non-egress
+// approval and an OWNED non-egress approval read identically (both 404, no
+// existence oracle either way) — not audited: this is a foreign-shaped 404, not
+// a distinct reachable-surface denial (see THREAT-MODEL.md).
+func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
+	var (
+		ap  types.ApprovalRequest
+		run types.AgentRun
+	)
+	if s.isOperator(r.Context()) {
+		return ap, run, false, true
+	}
+	var err error
+	ap, err = s.cfg.Approvals.Get(r.Context(), id)
+	if err != nil || ap.Kind != types.ApprovalEgressDomain {
+		writeError(w, http.StatusNotFound, "approval not found")
+		return ap, run, false, false
+	}
+	var rerr error
+	run, rerr = s.cfg.Store.GetRun(r.Context(), ap.RunID)
+	if rerr != nil || !s.ownsRunOrAdmin(r, run) {
+		writeError(w, http.StatusNotFound, "approval not found")
+		if rerr == nil {
+			// M1: audited only once the approval is confirmed to genuinely exist
+			// and be decidable in kind — a run lookup failure here would be a
+			// data-integrity oddity, not a clean "not owned".
+			s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+				"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+		}
+		return ap, run, false, false
+	}
+	return ap, run, true, true
+}
+
+// validateDecisionScope is scope rules 1–3 — the ones that read ONLY the body.
+// Kept together and kept row-free on purpose: a 400 from here discriminates
+// nothing, so these three are the only scope rules whose position is not itself
+// a security argument. They still run AFTER the member gate, and rules 4–7 —
+// which read the approval / run / workspace — must (see decide's own comment).
+//
+// Rule 1 — garbage at the write boundary, the same place FirstUseMode.Valid is
+// enforced. Runtime reads still fail closed via Normalize().
+//
+// Rules 2 and 3 — `until` and decision_expires_at imply each other, BOTH
+// directions. An expiry on a non-until scope is never silently ignored: a
+// client that sent one believes the grant is time-boxed, and it would not be.
+func validateDecisionScope(w http.ResponseWriter, scope types.ApprovalScope, expiresAt *time.Time) bool {
+	if !scope.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid decision_scope (once|run|until|always)")
+		return false
+	}
+	switch {
+	case scope == types.ScopeUntil:
+		now := time.Now()
+		switch {
+		case expiresAt == nil:
+			writeError(w, http.StatusBadRequest, "decision_scope until requires decision_expires_at")
+			return false
+		case !expiresAt.After(now):
+			writeError(w, http.StatusBadRequest, "decision_expires_at is in the past")
+			return false
+		case expiresAt.After(now.Add(maxDecisionUntil)):
+			writeError(w, http.StatusBadRequest, "decision_expires_at is more than 30d out — use always for a permanent decision")
+			return false
+		}
+	case expiresAt != nil:
+		writeError(w, http.StatusBadRequest, "decision_expires_at is only valid with decision_scope until")
+		return false
+	}
+	return true
+}
+
+// resolveAlwaysTarget is scope rules 5–7: everything `always` — and ONLY
+// `always` — has to establish before Decide() makes the decision permanent. It
+// returns the workspace the write-back will persist to, or false having already
+// answered the request. It owns the whole `always` pre-flight so the two facts
+// that make it correct stay adjacent: the caller's role is checked before any
+// run state is read, and EVERY refusal in here is still a 4xx/5xx that leaves
+// the approval PENDING and re-decidable.
+//
+// run/haveRun carry whatever the member gate already loaded — an operator
+// arrives with haveRun false and pays for the GetRun here, on the one scope
+// that genuinely needs it.
+func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun, approve bool) (uuid.UUID, bool) {
+	// Rule 6 FIRST — `always` is operator-only. The approve/deny routes live on
+	// the MEMBER group, so without this a member self-grants a permanent
+	// workspace allowlist entry through the approval queue: a back door around
+	// PUT /workspaces/{id}/approved-egress, which is operator-gated on this
+	// exact predicate.
+	//
+	// AUTHORIZATION BEFORE VALIDATION, deliberately. Rule 5 below answers 400
+	// with "this run references no onboarded workspace" — a fact about the run's
+	// configuration. Running it first would hand that answer to a caller who is
+	// not permitted to use this scope at all, and would make the reply depend on
+	// run state rather than on the caller's role. Both orders are defensible for
+	// THIS field (the member already owns the run, so nothing here is secret),
+	// but ordering by "can you do this at all?" before "is your request
+	// well-formed?" is the rule that keeps working when a later validation step
+	// touches something the caller genuinely cannot see.
+	//
+	// 403, NOT the byte-identical 404 the member gate uses. Those 404s exist to
+	// deny an existence oracle; by HERE the caller has already proven the
+	// approval exists, is egress_domain, and is on a run they own, so a 403
+	// discloses nothing they do not already know — while a 404 would read as
+	// "your own approval vanished". Do not "fix" this back.
+	if !s.isOperator(r.Context()) {
+		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
+		return uuid.Nil, false
+	}
+
+	// Rule 5 — `always` writes to a WORKSPACE, so the run must resolve to one.
+	// s.cfg.Store is nilable throughout this package (learnVerifyEgress guards
+	// it for the same reason), and a backend that cannot resolve the linkage
+	// cannot serve this scope at all.
+	if s.cfg.Store == nil {
+		writeError(w, http.StatusInternalServerError, "decision_scope always is unavailable on this backend")
+		return uuid.Nil, false
+	}
+	if !haveRun {
+		var err error
+		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
+			// REJECT, never fall through: falling through would persist `always`
+			// on the approval row with no workspace resolved and no durable
+			// write — a permanent grant that exists only in the UI.
+			writeError(w, http.StatusInternalServerError, "resolve run for always: "+err.Error())
+			return uuid.Nil, false
+		}
+	}
+	// The tie-break is spelled out because WorkspaceIDs[0] is undefined on
+	// exactly the path that matters most: a record/verify run launches with
+	// first_use_approval=wait_for_review and therefore raises egress approvals BY
+	// CONSTRUCTION, yet newWorkspaceStepRun leaves WorkspaceIDs empty and sets
+	// only the TRUSTED WorkspaceID. WorkspaceIDs[0] is the documented PRIMARY
+	// (referencedWorkspaces builds the slice in a stable order — mounts, then
+	// repos, deduped) and the same entry that drives image selection, so "first"
+	// is deterministic and explainable in copy. No workspace_id body field and
+	// no picker: a documented default beats a new wire field plus a new control
+	// for a case that is rare and reversible via the
+	// denied-egress/approved-egress PUTs.
+	var target uuid.UUID
+	switch {
+	case len(run.WorkspaceIDs) > 0:
+		target = run.WorkspaceIDs[0]
+	case run.WorkspaceID != nil:
+		target = *run.WorkspaceID
+	default:
+		// "no recorded workspace link", not "references no workspace": a run
+		// created before migration 0041 has a NULL workspace_ids even when it
+		// referenced one — the server only knows what was recorded.
+		writeError(w, http.StatusBadRequest, "always needs a workspace: this run has no recorded workspace link")
+		return uuid.Nil, false
+	}
+
+	// Rule 7 — host shape, then the reject set for THIS DIRECTION. Both are
+	// checked here, before Decide(), because this is the last moment a 4xx is
+	// still meaningful.
+	host := approvalHost(ap)
+	if !hostrules.ValidApprovedHost(host) {
+		writeError(w, http.StatusBadRequest,
+			"invalid domain (plain lowercase host, no scheme/port/wildcard): "+host)
+		return uuid.Nil, false
+	}
+	ws, err := s.cfg.Store.GetWorkspace(r.Context(), target)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusBadRequest, "always needs a workspace: this run's workspace no longer exists")
+			return uuid.Nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "resolve workspace for always: "+err.Error())
+		return uuid.Nil, false
+	}
+	if approve {
+		if _, dead := s.approveAlwaysRejects(r.Context(), ws)[host]; dead {
+			// The reason list is deliberately hedged rather than enumerated.
+			// promoteSkipHosts carries the model-provider and clone hosts VERBATIM
+			// from the ceiling, so on the wildcard ceiling the product itself
+			// recommends ("*.anthropic.com") a CONCRETE model-provider host is not
+			// in this set at all — naming it unconditionally would tell the
+			// operator something that is often false.
+			writeError(w, http.StatusBadRequest, "host "+host+" is already routed or wired in by construction "+
+				"(git broker, control plane, or this workspace's own contract) — a permanent approved-egress entry for it is never consulted")
+			return uuid.Nil, false
+		}
+	} else if msg := s.denyAlwaysReject(r.Context(), ws, host); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return uuid.Nil, false
+	}
+	return target, true
 }
 
 // approvalHost extracts an egress_domain approval's lowercased host from its
