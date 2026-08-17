@@ -33,7 +33,14 @@ let page: Page;
 // Where the browser's own recording lands. Resolved from this file so it does
 // not depend on the process cwd; scripts/record-demo.sh joins console.webm onto
 // the terminal segment to make the final video.
-const VIDEO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../test-results/demo-video");
+// WARDYN_DEMO_WORK_DIR lets record-demo.sh give each --video its OWN scratch
+// directory. Without it every take writes console.webm and narration.json to
+// one shared path, so two takes running at once silently overwrite each other's
+// picture and narration — and the loser still exits 0. The default is the
+// original shared path, so a bare `playwright test --project=demo` is unchanged.
+const VIDEO_DIR =
+  process.env.WARDYN_DEMO_WORK_DIR ||
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../test-results/demo-video");
 const VIDEO_OUT = path.join(VIDEO_DIR, "console.webm");
 
 /**

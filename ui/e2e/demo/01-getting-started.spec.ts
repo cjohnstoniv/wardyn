@@ -8,11 +8,12 @@
  *
  * WHAT THIS FILMS. One command has already brought a control plane up on this
  * machine; nothing has been configured and nothing has run. The take opens on
- * the first-boot hero, walks the whole Getting Started funnel — the barrier, the
- * mandatory connectivity gate, the model step, the five hands-on guardrail
- * demos, one real workspace — and STOPS on the click of "Finish setup". No run
- * is launched here. Launching a run is video 02, and this driver ending one
- * click early is the seam between them.
+ * the first-boot hero, walks the funnel's three setup steps — the barrier, the
+ * mandatory Network gate, Secrets — then the five hands-on guardrail demos,
+ * and ENDS THERE, on a spoken conclusion. No workspace is onboarded and no run
+ * is launched: adding a workspace is video 02 and running one is video 03
+ * (owner restructure, 2026-08-17), so this video closes on its own subject —
+ * a governed host whose guardrails you just watched hold.
  *
  * WHERE THE CODE CAME FROM. This is an extraction of walkthrough.spec.ts acts
  * 1-4, and the choreography is MOVED, not rewritten: the funnel waits, the
@@ -46,7 +47,9 @@
  *      take, so this is satisfied as long as DEMO_CDP is NOT pointed at a
  *      browser that has already seen it.
  *   5. LOCAL MODE, no auth (SV1) — never seed WARDYN_DEMO_TOKEN for this take.
- *      The cold open's "no account, no cloud sign-in" has to film true.
+ *      A login wall in front of the hero is not what video one opens on.
+ *      (The narration deliberately does NOT sell "local, not cloud": that is a
+ *      deployment detail, and the opening's job is to say what Wardyn IS.)
  *
  * Selectors are getByRole + accessible names, matching ui/e2e/fixtures.ts and
  * the rest of the suite: a copy change breaks this loudly and in one place,
@@ -54,13 +57,13 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
-import { FUNNEL_DEMOS, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
+import { FUNNEL_DEMOS } from "./task";
 import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each act
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
+import { advance, APPROVAL_APPEARS, decide } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -98,6 +101,8 @@ type V01Demo = {
   caption: string;
   approve: boolean;
   scope: "run" | "once";
+  intro: string;
+  policyLine: string;
   property: string;
 };
 
@@ -107,6 +112,27 @@ const DEMO_PROPERTY: Record<string, string> = {
   "held-at-the-door": "The decision can happen while the request is still open.",
   "lines-that-cant-be-crossed": "Some limits are not policy at all. No setting can open them.",
   "once-or-for-good": "An approval has a scope, and the narrowest is one connection.",
+};
+
+// What each demo IS, spoken over its heading before anything runs — and the
+// policy it launches under, spoken over the step's own "The policy Wardyn
+// runs" block. The intro says what to watch for; the policy line reads the
+// config the viewer can see, in plain words. Owner direction (2026-08-17):
+// every demo gets a real introduction including its initial policy, not just
+// the property line.
+const DEMO_INTRO: Record<string, string> = {
+  "sealed-box": "First, the sealed box — a sandbox whose policy allows nothing at all.",
+  "fail-then-approve": "Next, the same refusal — but this policy asks a person instead of just saying no.",
+  "held-at-the-door": "Now the live version: the request is held open while Wardyn waits for your answer.",
+  "lines-that-cant-be-crossed": "Then the opposite extreme — a policy that opens the whole public internet.",
+  "once-or-for-good": "Last, scopes: when you do say yes, how far should that yes reach?",
+};
+const DEMO_POLICY_LINE: Record<string, string> = {
+  "sealed-box": "Here is its whole policy: an empty allow list, and unlisted traffic denied outright.",
+  "fail-then-approve": "One field changed — an unlisted host now raises an approval instead of a flat no.",
+  "held-at-the-door": "Same shape, but held: off-policy traffic parks at the proxy until you decide it.",
+  "lines-that-cant-be-crossed": "Allow-all egress — the loosest policy Wardyn will write.",
+  "once-or-for-good": "The ask-first policy again. What changes this time is how we answer it.",
 };
 
 /** Same two beats as the card's first two steps, minus the LAN probe. */
@@ -119,6 +145,8 @@ const V01_DEMOS: V01Demo[] = FUNNEL_DEMOS.map((d) => ({
   ...d,
   cmds: d.id === "lines-that-cant-be-crossed" ? LINES_CMDS : d.cmds,
   property: DEMO_PROPERTY[d.id],
+  intro: DEMO_INTRO[d.id],
+  policyLine: DEMO_POLICY_LINE[d.id],
 }));
 
 /**
@@ -178,12 +206,23 @@ test("V01 act 1 — cold open, first light", async () => {
   }
   await expect(hero).toBeVisible({ timeout: 60_000 });
 
-  await chapter(page, "Wardyn", "One command to a governed host");
-  await caption(page, "Wardyn runs coding agents, and any workload, inside a sandbox you govern.");
+  // The opening card and the three lines under it are the only chance this
+  // series gets to say WHAT WARDYN IS. The first cut said "One command to a
+  // governed host", which is a slogan: it describes no mechanism, names no
+  // problem, and the hero already on screen behind it makes the same promise
+  // better. Both halves now state the actual shape of the product — sandbox,
+  // proxy, no resident credential — because a viewer who does not know what
+  // this is by second twenty has no reason to watch the other nine videos.
+  await chapter(page, "Wardyn", "An agent gets its own sandbox, a policy it cannot exceed, and no credentials to steal");
+  await caption(page, "Wardyn runs coding agents in a sandbox with no route out except a proxy you control.");
+  await beat(page, PACE.read);
+  await caption(page, "It never hands them a key — the proxy attaches credentials on the way out.");
+  await beat(page, PACE.read);
+  await caption(page, "So a compromised agent has nothing to steal, and every attempt is on the record.");
   await beat(page, PACE.read);
   await caption(page, "This series is for whoever has to sign off on that.");
   await beat(page, PACE.read);
-  await caption(page, "Video one: one command, and this host is governed and ready to run.");
+  await caption(page, "Video one: from nothing to a governed host, with the guardrails proved on camera.");
   await beat(page, PACE.read);
 
   // B1 — the hero, then the LIVE host chips under it. The chips are the honest
@@ -192,7 +231,7 @@ test("V01 act 1 — cold open, first light", async () => {
   await spotlight(page, hero);
   await beat(page, PACE.read);
   await spotlight(page, page.getByText("This host right now:").locator(".."));
-  await caption(page, "No account, no cloud sign-in — this control plane is local, and already up.");
+  await caption(page, "These are read off this machine — the barriers it can actually enforce, not a brochure.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -213,21 +252,44 @@ test("V01 act 2 — barrier, network, model", async () => {
   const page = stage();
 
   // --- B2 — Pick your barrier ---------------------------------------------
+  // This beat is the one place the series teaches SANDBOXING ITSELF. The
+  // audience assumption for video one is someone who can run a coding agent and
+  // has never had a reason to care what a kernel boundary is — so the three
+  // tiers get named mechanisms (container, gVisor, Kata microVM) and, more
+  // importantly, an honest sentence each about what they do NOT stop. The first
+  // cut spent three compressed lines here and read as jargon to exactly the
+  // person this video exists for.
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "A barrier is the wall between the agent and your machine — Wardyn builds three.");
-  await beat(page, PACE.read + 600);
+  await caption(page, "An agent that can run commands can do anything your own shell can do.");
+  await beat(page, PACE.read);
+  await caption(page, "A barrier is what stands between it and the rest of your machine.");
+  await beat(page, PACE.read);
 
   const tiers = page.getByRole("radiogroup", { name: "Barrier tier" });
   await spotlight(page, tiers);
-  await caption(page, "Fence shares your kernel; Wall replaces it in software; Vault is its own machine.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "Wardyn builds three of them, and they trade speed for strength.");
+  await beat(page, PACE.read);
+  await caption(page, "Fence is a container — ordinary Linux isolation, sharing your machine's kernel.");
+  await beat(page, PACE.read);
+  await caption(page, "Fast to start, and the weakest: a kernel bug is a way out of it.");
+  await beat(page, PACE.read);
+  await caption(page, "Wall runs gVisor, which hands the agent a kernel written in software.");
+  await beat(page, PACE.read);
+  await caption(page, "Its system calls hit that copy, so an exploit has nothing real to land on.");
+  await beat(page, PACE.read);
+  await caption(page, "Vault is a micro virtual machine, through Kata — its own kernel, its own hardware.");
+  await beat(page, PACE.read);
+  await caption(page, "Strongest, slowest to boot, and it needs virtualization the host may not have.");
+  await beat(page, PACE.read + 600);
 
   // The permanent "Doesn't stop:" row (copy.ts's RESIDUAL_PREFIX) is the whole
   // honesty claim the next line makes — a tier matrix that also prints what each
   // barrier does NOT protect against.
   await spotlight(page, page.getByText("Doesn't stop:", { exact: true }));
-  await caption(page, "It probes this host and tells you honestly which of the three it can enforce.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "Every tier also prints what it does not stop. No barrier is a promise of safety.");
+  await beat(page, PACE.read);
+  await caption(page, "And Wardyn probes this host, so it only offers the ones it can actually enforce.");
+  await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
   // Click the READY column. On the demo host (WSL2 + Docker Desktop) that is
@@ -242,10 +304,21 @@ test("V01 act 2 — barrier, network, model", async () => {
 
   await advance();
 
-  // --- B3 — Corporate network, the one gate --------------------------------
-  await expect(page.getByRole("heading", { name: "Corporate network", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "This is the only step that can refuse to continue. It wants proof.");
-  await beat(page, PACE.read + 600);
+  // --- B3 — Network, the one gate ------------------------------------------
+  //
+  // Renamed from "Corporate network" (steps.ts STEP_LABEL/STEP_HEADING). The
+  // old name described the worst case rather than the step: it read as
+  // skippable to everyone not behind a corporate proxy, when what this settles
+  // — can a sandbox reach the outside world at all — is a question every
+  // install has to answer. The narration leads with that, and treats proxies
+  // and mirrors as the special cases they are.
+  await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await caption(page, "Network. A sandbox is sealed off by default, so it needs a way out to the internet.");
+  await beat(page, PACE.read);
+  await caption(page, "This step settles that, and it is the only one that can refuse to continue.");
+  await beat(page, PACE.read);
+  await caption(page, "On most machines it is one click and about ten seconds.");
+  await beat(page, PACE.read);
 
   // The gate headline the footer renders above its own reason
   // (T.GATE_HEAD_UNTESTED). It is the thing that makes this step a gate, so it
@@ -262,7 +335,7 @@ test("V01 act 2 — barrier, network, model", async () => {
   await act(
     page,
     page.getByRole("button", { name: "Test connectivity" }),
-    "It launches a throwaway sandbox down the same path a real run takes.",
+    "It proves it the only honest way — a real sandbox, reaching out down the path a run takes.",
   );
 
   // A REAL sandbox goes out and comes back. .first(): the verdict chip renders
@@ -270,34 +343,71 @@ test("V01 act 2 — barrier, network, model", async () => {
   const reached = page.getByText(/^Reached · direct/).first();
   await expect(reached).toBeVisible({ timeout: SANDBOX_UP });
   await spotlight(page, reached);
-  await caption(page, "Reached, direct. A corporate proxy or an internal mirror would be configured right here.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "Reached, direct — nothing sits between this machine and the internet.");
+  await beat(page, PACE.read);
+  await caption(page, "On a corporate network there usually is, and you would configure that proxy here.");
+  await beat(page, PACE.read);
+  await caption(page, "The probe then runs through it, so what you see proven is what a run will get.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
+
+  // The second tab is the whole reason this step has tabs, and the first cut
+  // never mentioned it — a locked-down network is precisely the audience that
+  // needs to know Wardyn has an answer for it.
+  await caption(page, "Tighter networks go further and block the public registries outright.");
+  await beat(page, PACE.read);
+  await caption(page, "The other tab redirects those — npm, PyPI, container images — at your internal mirrors.");
+  await beat(page, PACE.read);
 
   // Next ×2: the first press answers by revealing the step's other tab rather
   // than moving on, which is exactly what advance() is built to absorb.
   await advance();
 
-  // --- B4 — Connect your model --------------------------------------------
-  await expect(page.getByRole("heading", { name: "Connect your model", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "This model was connected at the command line before recording. The step is optional.");
-  await beat(page, PACE.read + 600);
+  // --- B4 — Secrets ---------------------------------------------------------
+  //
+  // Renamed from "Model & git host" (owner, 2026-08-17): every lane on this
+  // step — API keys, PATs, SSH keys, App credentials, and even the login
+  // flows, which capture a token — lands in the same secret store the Secrets
+  // page manages. The narration teaches the CATEGORY, and it carries the
+  // containment split honestly: model keys and App tokens stay outside the
+  // sandbox; a PAT or SSH key enters it for the clone. That split is the card
+  // footers' own text now (connection-cards.tsx), so the video and the UI
+  // make the same claim.
+  await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await caption(page, "Secrets. Anything a run must borrow but should never own — keys, tokens, credentials.");
+  await beat(page, PACE.read);
+  await caption(page, "The two most runs want are a model credential and a git credential.");
+  await beat(page, PACE.read);
 
-  // PRECONDITION, ASSERTED. The line above says the model is already connected.
+  // PRECONDITION, ASSERTED. The next line says the model is already connected.
   // If the off-camera token-stdin connect did not land, the lane reads
   // unconnected and the narration is a claim the screen refuses — the exact
   // green-take-over-a-failed-screen failure this series has shipped before.
   const subLane = page.getByRole("radio", { name: /Claude subscription/ });
   await expect(subLane).toContainText("Connected", { timeout: 30_000 });
   await spotlight(page, subLane);
+  await caption(page, "The model was connected before recording — a subscription sign-in, captured once.");
   await beat(page, PACE.read);
 
-  // The card footer. Its real text is longer than the script's shorthand — it
-  // carries the Bedrock-SSO exception — so point at the sentence that exists.
+  // The honesty split, told over the two cards' own footers. Model card first.
   await spotlight(page, page.getByText(/keys never enter the sandbox/i).first());
-  await caption(page, "The token never enters the sandbox — the proxy injects it on the wire instead.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "Model keys never enter the sandbox — the proxy attaches them on the way out.");
+  await beat(page, PACE.read + 600);
+
+  // Git card: the footer that says which lanes DO enter the sandbox. The
+  // narration must not soften this — it is the one caveat in the credential
+  // story, and hiding it would be the overclaim this campaign just fixed.
+  await spotlight(page, page.getByText(/Only the GitHub App lane keeps its token/i).first());
+  await caption(page, "Git is honest about its one exception.");
+  await beat(page, PACE.read);
+  await caption(page, "A GitHub App token is brokered at the proxy and never comes inside.");
+  await beat(page, PACE.read);
+  await caption(page, "A personal access token or SSH key does enter the sandbox for the clone, then is wiped.");
+  await beat(page, PACE.read + 600);
   await spotlight(page, null);
+
+  await caption(page, "Any other secret a run needs is stored the same way, and handed to runs by name.");
+  await beat(page, PACE.read);
 
   await advance();
 });
@@ -314,9 +424,20 @@ test("V01 act 2 — barrier, network, model", async () => {
 test("V01 act 3 — the five guardrail demos", async () => {
   test.setTimeout(1_500_000);
   const page = stage();
-  // B5 is a card, and it is spoken: "The guardrails. Five sandboxes, five ways
-  // the boundary holds."
+
+  // The BRIDGE (owner note: "this is a presentation"). The first three steps
+  // just ended; before any demo starts, say where we are and what the next
+  // stretch of the video is for — the viewer should never have to infer the
+  // itinerary from what the mouse does.
+  await caption(page, "Barrier picked, network proven, secrets stored — this host can now run sandboxes.");
+  await beat(page, PACE.read);
+  await caption(page, "So before your own work goes in one, let's watch a few.");
+  await beat(page, PACE.read);
   await chapter(page, "The guardrails", "Five sandboxes, five ways the boundary holds");
+  await caption(page, "Five small demos, each a real sandbox under a policy you can read on screen.");
+  await beat(page, PACE.read);
+  await caption(page, "Together they show how a sandbox's access is configured, tuned, and enforced.");
+  await beat(page, PACE.read);
 
   // See the audit-panel block at the bottom of the loop: the trail line is a
   // fact about Wardyn, said once, not a per-demo refrain.
@@ -324,16 +445,25 @@ test("V01 act 3 — the five guardrail demos", async () => {
 
   for (const demo of V01_DEMOS) {
     await expect(page.getByRole("heading", { name: demo.label, level: 2 })).toBeVisible({ timeout: 60_000 });
-    // Deliberately NOT spoken: the demo's title and blurb are already on screen,
-    // in a heading the camera is looking straight at, and the script budgets
-    // "one line spoken over each demo" — that line is demo.property below, the
-    // one thing the screen does NOT say. Reading the heading aloud cost ~89
-    // words across the five demos and pushed a 6:30 video to 7:15.
-    await beat(page, PACE.read + 700);
 
-    // No caption on the click either. "Starting a throwaway sandbox under
-    // exactly that policy" is pure step-narration — it describes the button
-    // being pressed, five times, while the sandbox visibly starts.
+    // Owner note (2026-08-17): each demo gets a real introduction — what it is
+    // and what to watch for — not just the property line. The intro is spoken
+    // over the step's own heading and overview text, which the camera is
+    // already looking at.
+    await caption(page, demo.intro);
+    await beat(page, PACE.read);
+
+    // ...and the POLICY the sandbox is about to launch under. The step body
+    // renders it in full ("The policy Wardyn runs", demos-step.tsx) — this
+    // series claims policies are readable, so read one, on camera, every time.
+    const policyBlock = page.getByTestId(`demo-policy-${demo.id}`);
+    await policyBlock.scrollIntoViewIfNeeded().catch(() => {});
+    await spotlight(page, policyBlock);
+    await caption(page, demo.policyLine);
+    await beat(page, PACE.read + 600);
+    await spotlight(page, null);
+
+    // No caption on the click — "starting the sandbox" narrates itself.
     await act(page, page.getByTestId(`demo-start-${demo.id}`));
     await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
     await beat(page, PACE.read);
@@ -479,119 +609,32 @@ test("V01 act 3 — the five guardrail demos", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// B11-B12 — a workspace, review, and the last click of the video
+// Conclusion — the video ends here, ON the demos, by owner direction
+// (2026-08-17). The workspace onboarding and Review/Finish beats that used to
+// be act 4 are not filmed in this video at all any more: video 02 is "add a
+// workspace" and video 03 is "run one", so getting-started closes the moment
+// its own subject — a governed host whose guardrails you just watched hold —
+// is proven. What replaces the old act is a spoken summary: this is a
+// presentation, and a presentation ends by telling you what you saw.
 // ---------------------------------------------------------------------------
 
-test("V01 act 4 — onboard a workspace, finish setup", async () => {
-  test.setTimeout(300_000);
+test("V01 act 4 — conclusion", async () => {
+  test.setTimeout(120_000);
   const page = stage();
 
-  await expect(page.getByRole("heading", { name: "Onboard a workspace", level: 2 })).toBeVisible({ timeout: 60_000 });
-
-  // Onboarding the SAME name twice is rejected and silently leaves the dialog
-  // open, so a second run of the driver against a stack that already has this
-  // workspace would fail here. Clear it first, off camera, so the act always
-  // films an actual creation. (A full `make record-demo` resets the stack and
-  // never needs this; iterating with --no-reset does.)
-  await clearWorkspace();
-  await caption(page, "A workspace is a directory a run may attach — nothing else gets mounted.");
+  await chapter(page, "What you just saw", "A governed host, and five boundaries that held");
+  await caption(page, "That is Wardyn: your agents and workloads run in sandboxes, under policies you write.");
+  await beat(page, PACE.read);
+  await caption(page, "In one sitting this host got a barrier, a proven network path, and its secrets.");
+  await beat(page, PACE.read);
+  await caption(page, "Then five sandboxes showed the boundary working: denied, asked, held, and scoped.");
+  await beat(page, PACE.read);
+  await caption(page, "Credentials stayed out of the sandbox, and every decision landed in the audit trail.");
   await beat(page, PACE.read + 600);
-
-  // The step's trigger is state-dependent (step-bodies.tsx): an empty install
-  // says "Onboard your first workspace", and only once one exists does it
-  // become "Add workspace". The recording always runs against an empty one, but
-  // matching both keeps an --no-reset iteration working.
-  await act(page, page.getByRole("button", { name: /Onboard your first workspace|Add workspace/ }).first());
-  const dlg = page.getByRole("dialog");
-  // By ROLE, not text: "Add workspace" is both the dialog title and its submit
-  // button, so a bare getByText is a strict-mode violation.
-  await expect(dlg.getByRole("heading", { name: "Add workspace" })).toBeVisible();
-
-  // Source/image cards are OptionCards — aria-pressed buttons, not radios
-  // (form-primitives.tsx). Their accessible name carries the hint text too, so
-  // match on a prefix rather than exactly.
-  await act(page, dlg.getByRole("button", { name: /Local directory/ }));
-  await spotlight(page, dlg.getByLabel("Path on this host"));
-  await dlg.getByLabel("Path on this host").fill(WORKSPACE_PATH);
-  await dlg.getByLabel("Name", { exact: true }).fill(WORKSPACE_NAME);
-  await spotlight(page, null);
+  await caption(page, "Next: give a run something real to work on — a workspace.");
   await beat(page, PACE.read);
-
-  const advanced = dlg.getByText("Advanced", { exact: true });
-  if (await advanced.isVisible().catch(() => false)) {
-    await act(page, advanced, "Under Advanced: where it lands inside the box, and writes, which are off by default.");
-    await spotlight(page, dlg.getByLabel("Mount path"));
-    await beat(page, PACE.read + 600);
-    await spotlight(page, null);
-  }
-
-  // LOAD-BEARING FOR VIDEO 02, NOT FOR THIS ONE: `writable` defaults to FALSE
-  // (add-workspace-dialog.tsx), so without this tick the directory mounts
-  // READ-ONLY and V02's agent edits never reach the host — that video runs,
-  // reports success, and its "Files changed" finale shows an empty diff. V01
-  // ends before any run, so nothing here would catch it. Granting write access
-  // on camera is the honest beat anyway: a run that edits your code should have
-  // to be given permission to.
-  const writable = dlg.getByRole("checkbox", { name: /Allow writes/ });
-  await expect(writable).toBeVisible();
-  await act(page, writable);
-  await expect(writable).toBeChecked();
-  await beat(page, PACE.read);
-
-  await act(page, dlg.getByRole("button", { name: "Add workspace" }));
-  await expect(dlg).toBeHidden({ timeout: 60_000 });
-  await beat(page, PACE.read);
-
-  await advance();
-
-  // --- B12 — Review readiness ---------------------------------------------
-  await expect(page.getByRole("heading", { name: "Review readiness", level: 2 })).toBeVisible({ timeout: 60_000 });
-  await caption(page, "Review checks this host, not a checklist: blocking, worth a look, ready.");
-  await beat(page, PACE.read + 900);
-
-  // "Nothing blocking" is a claim about what is on screen, so prove it. The
-  // Blocking section renders only when a check actually FAILED
-  // (step-bodies.tsx's `group`), so its absence is the assertion — and a real
-  // blocker on shoot day would otherwise be narrated straight over.
-  await expect(page.getByText("Blocking", { exact: true })).toHaveCount(0);
-  await caption(page, "Nothing blocking. Finish setup — a governed host, ready for real work.");
-  await beat(page, PACE.read + 600);
-
-  await act(page, page.getByRole("button", { name: "Finish setup" }));
-
-  // The funnel is genuinely behind us — the step counter is the honest witness
-  // (the Runs nav link is in the shell on every screen, including the funnel).
-  await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible({ timeout: 60_000 });
-  // Generous: "Finish setup" writes before it navigates, and the default 5 s
-  // expect budget would fail the LAST click of a seven-minute take over a slow
-  // POST rather than over anything being wrong.
-  await expect(page.getByText(/^Step \d+ of \d+$/)).toHaveCount(0, { timeout: 30_000 });
-  await beat(page, PACE.read);
-
-  // RULED 2026-08-17, and the reviewer was right to escalate rather than reword
-  // a verbatim SAY line on its own authority. The script's B12 direction said
-  // "Finish setup → empty Runs board". THE BOARD IS NOT EMPTY: act 3's five
-  // demos each create a real agent_run (demo-screen.tsx's api.createRun) and
-  // B3's connectivity probe creates a sixth (site_config_probe.go's
-  // newStepRun). None is titled and none carries a hidden flag, so runs.tsx
-  // renders all six as a loose card grid. The original lines — "nothing has
-  // run", "nothing has run yet" — would have played over them and been simply
-  // false on camera, in the one video most viewers watch first.
-  //
-  // Hiding them was the other option and it was rejected: a governance product
-  // that quietly drops its own runs off the board is lying in the exact place
-  // it asks to be trusted. So the line NAMES what is on screen instead. It
-  // costs one word, it is true, and it lands a better point than the empty
-  // board would have — setup's own probes are governed and audited like
-  // anything else, which is the whole promise this video is selling.
-  //
-  // The last line is a deliberate diegetic bookend, not the series motif
-  // (SV6): this video filmed that exact string as the hero in its cold open.
-  await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible();
-  await caption(page, "Those cards are setup's own sandboxes — your first run is video two.");
-  await beat(page, PACE.read + 900);
   await caption(page, "Run anything. Keep your keys.");
   await beat(page, PACE.chapter);
   await caption(page, "");
-  await silentCard(page, "Next — 02: Your first run");
+  await silentCard(page, "Next — 02: Add a workspace");
 });

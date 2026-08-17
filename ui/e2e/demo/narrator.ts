@@ -42,7 +42,8 @@ const VENV_PY = path.join(process.env.HOME ?? "", ".cache/wardyn-narrate/venv/bi
 const SERVER = path.join(REPO, "scripts/narrate-server.py");
 
 /** Where the mux step looks for the timeline; beside console.webm. */
-export const NARRATION_DIR = path.join(REPO, "ui/test-results/demo-video");
+export const NARRATION_DIR =
+  process.env.WARDYN_DEMO_WORK_DIR || path.join(REPO, "ui/test-results/demo-video");
 const TIMELINE = path.join(NARRATION_DIR, "narration.json");
 
 export interface Cue {

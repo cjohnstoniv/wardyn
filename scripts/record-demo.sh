@@ -211,6 +211,22 @@ fi
 # legacy walkthrough, which every consumer already treats as the default.
 export WARDYN_DEMO_VIDEO="${VIDEO}"
 
+# Per-video SCRATCH directory — console.webm, the two narration timelines, and
+# Playwright's own test-results all land here. Distinct from WARDYN_DEMO_OUT_DIR
+# below, which is where the finished mp4 goes.
+#
+# It is per-video because these paths used to be one shared directory, which was
+# correct while only one take could ever be in flight. Recording two videos at
+# once then has both contexts writing console.webm and narration.json over each
+# other: the second take's picture replaces the first's, the mux staples one
+# video's narration onto the other's frames, and BOTH invocations still exit 0.
+# Silent, and only visible to whoever eventually watches six minutes of the
+# wrong thing. Suffixed by video number so concurrent takes cannot collide, and
+# left at the legacy path for the no---video walkthrough so nothing else moves.
+DEMO_OUT_DIR="${REPO_ROOT}/ui/test-results/demo-video${VIDEO:+-${VIDEO}}"
+mkdir -p "${DEMO_OUT_DIR}"
+export WARDYN_DEMO_WORK_DIR="${DEMO_OUT_DIR}"
+
 if [[ -z "${DEMO_CDP:-}" && -z "${DISPLAY:-}" ]]; then
   die "no DISPLAY — the driver needs a headed browser. Under WSL that means WSLg; or set DEMO_CDP to attach to a Chrome with remote debugging."
 fi
@@ -379,15 +395,33 @@ if [[ "${DO_RESET}" == 1 ]]; then
   # dead air, and they are not what the video is about.
 fi
 
-step "Act 0 · make setup"
-log "mode: containerized (WARDYN_SETUP_MODE=container)"
-log "workspaces root: ${WORKSPACES_ROOT}"
-# WARDYN_UP_NO_BROWSER: up.sh otherwise fires wslview and an uncontrolled window
-# lands in frame. The driver opens the browser itself, at the moment it wants it.
-WARDYN_SETUP_MODE=container \
-WARDYN_WORKSPACES_ROOT="${WORKSPACES_ROOT}" \
-WARDYN_UP_NO_BROWSER=1 \
-  make setup || die "make setup failed"
+# Skip setup entirely when we did not reset and the stack is already answering.
+#
+# `make setup` rebuilds the image and re-ups the compose project. That is
+# exactly right after a reset, and pure waste otherwise — but the reason this is
+# a guard and not an optimisation is RECORDING TWO VIDEOS AT ONCE. Every take
+# but 01 opens on a stack an earlier video left up; run three of them together
+# and three `docker compose up`s hit ONE project name, so one take's
+# container recreation lands in the middle of another take's beat. The browser
+# is filming a console whose backend just restarted underneath it.
+#
+# So: reset asked for, or nothing listening -> set the stack up. Otherwise use
+# what is already there, which is what a second take actually wants.
+if [[ "${DO_RESET}" == 1 ]] || ! curl -fsS --max-time 5 "http://localhost:${WARDYN_UP_PORT:-8080}/healthz" >/dev/null 2>&1; then
+  step "Act 0 · make setup"
+  log "mode: containerized (WARDYN_SETUP_MODE=container)"
+  log "workspaces root: ${WORKSPACES_ROOT}"
+  # WARDYN_UP_NO_BROWSER: up.sh otherwise fires wslview and an uncontrolled window
+  # lands in frame. The driver opens the browser itself, at the moment it wants it.
+  WARDYN_SETUP_MODE=container \
+  WARDYN_WORKSPACES_ROOT="${WORKSPACES_ROOT}" \
+  WARDYN_UP_NO_BROWSER=1 \
+    make setup || die "make setup failed"
+else
+  step "Act 0 · stack already up"
+  log "healthz answered on :${WARDYN_UP_PORT:-8080} and no reset was asked for — reusing it"
+  log "(pass --reset to rebuild, which is what video 01 does)"
+fi
 
 step "Act 0 · Model access"
 log "connecting the Claude subscription (token piped from a file — never printed, never an argument)"
@@ -407,7 +441,7 @@ fi
 # pauses and voice from scripts/demo-typist.sh; everything this end has to do is
 # roll the camera and run it.
 TERM_RC=0
-TERM_TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration-terminal.json"
+TERM_TIMELINE="${DEMO_OUT_DIR}/narration-terminal.json"
 if [[ -n "${TERMINAL_SCRIPT}" ]]; then
   # Deleted BEFORE the beats for narrator.ts's reason, one lane over: the typist
   # only writes this file once a line has actually rendered, so a stale timeline
@@ -444,7 +478,7 @@ if [[ "${DO_VOICE}" == 1 ]]; then
   # first SUCCESSFUL cue, and it degrades silently when the renderer is missing —
   # so a stale timeline from an earlier take would survive a fully silent run and
   # get muxed onto tonight's picture at yesterday's offsets. Worse than silent.
-  rm -f "${REPO_ROOT}/ui/test-results/demo-video/narration.json"
+  rm -f "${DEMO_OUT_DIR}/narration.json"
   # Preflight the renderer for the same reason: narration is on by default, and a
   # broken venv otherwise yields a silent take nobody notices until the morning.
   if ! "${PY_NARRATE:-${HOME}/.cache/wardyn-narrate/venv/bin/python}" \
@@ -475,7 +509,8 @@ fi
   WARDYN_DEMO_WORKSPACE="${WORKSPACE_PATH}" \
   WARDYN_DEMO_CAPTURE="${CAPTURE}" \
   WARDYN_DEMO_VOICE="${DO_VOICE}" \
-    pnpm exec playwright test --project=demo --workers=1 --reporter=line "${PW_FILTER[@]}"
+    pnpm exec playwright test --project=demo --workers=1 --reporter=line \
+      --output="${DEMO_OUT_DIR}/pw" "${PW_FILTER[@]}"
 )
 DRIVER_RC=$?
 fi
@@ -500,9 +535,9 @@ if [[ "${RUN_DRIVER}" == 1 ]]; then
   # Only probed when the driver actually ran. Otherwise the `ls -t` fallback
   # would happily adopt a webm from LAST NIGHT'S take and staple it onto a
   # terminal video that has no console segment at all.
-  BROWSER_VID="${REPO_ROOT}/ui/test-results/demo-video/console.webm"
+  BROWSER_VID="${DEMO_OUT_DIR}/console.webm"
   if [[ ! -s "${BROWSER_VID}" ]]; then
-    BROWSER_VID="$(ls -t "${REPO_ROOT}"/ui/test-results/demo-video/*.webm 2>/dev/null | head -1)"
+    BROWSER_VID="$(ls -t "${DEMO_OUT_DIR}"/*.webm 2>/dev/null | head -1)"
   fi
 fi
 FINAL=""
@@ -540,7 +575,7 @@ fi
 # Runs LAST and on the finished mp4, for two reasons: the raw console recording
 # is VP8, which cannot be stream-copied into an mp4 container; and muxing here
 # means the picture is encoded exactly once, so narration cannot soften the text.
-TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration.json"
+TIMELINE="${DEMO_OUT_DIR}/narration.json"
 [[ "${RUN_DRIVER}" == 1 && -s "${TIMELINE}" ]] || TIMELINE=""
 if [[ "${DO_VOICE}" == 1 && -n "${FINAL}" && -s "${FINAL}" ]] \
    && [[ -n "${TIMELINE}" || -s "${TERM_TIMELINE}" ]]; then
@@ -569,7 +604,7 @@ else: print(0)
   if [[ -s "${TERM_TIMELINE}" ]]; then
     MUX_TIMELINE="${TERM_TIMELINE}"
     if [[ -n "${TIMELINE}" ]]; then
-      MUX_TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration-joined.json"
+      MUX_TIMELINE="${DEMO_OUT_DIR}/narration-joined.json"
       jq -s --argjson off "${OFFSET}" \
         '{zero: .[0].zero, cues: (.[0].cues + [.[1].cues[] | .tMs += $off])}' \
         "${TERM_TIMELINE}" "${TIMELINE}" >"${MUX_TIMELINE}" \
