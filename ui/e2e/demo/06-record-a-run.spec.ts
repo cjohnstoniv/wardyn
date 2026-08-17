@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 07 of the 0.5 series — RECORD MODE.
+ * Video 06 of the 0.5 series — RECORD MODE.
  *
  * The moat feature, filmed end to end: record one open session, let Wardyn
  * synthesize a least-privilege policy from what the kernel and the proxy
@@ -32,8 +32,8 @@
  * host the whole series agrees means "not on any list" — only as the UNSEEN
  * host in the confined replay.
  *
- * Driven by `scripts/record-demo.sh --video 07`, which globs this exact
- * filename and names the take wardyn-07-record-mode-<stamp>.mp4 (docs/README.md
+ * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
+ * filename and names the take wardyn-06-record-a-run-<stamp>.mp4 (docs/README.md
  * already links that asset). Do not rename the file. It self-skips without
  * WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a headed browser at a
  * developer's live stack and start recording sessions in it.
@@ -579,7 +579,7 @@ test("B6 — the unseen host", async () => {
 
   await caption(page, "Watch it once. Enforce it forever.");
   await beat(page, PACE.read + 600);
-  await caption(page, "Next: model access — how a run uses a model without holding a key.");
+  await caption(page, "Next: approvals — every scope a yes can carry, from one connection to for good.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

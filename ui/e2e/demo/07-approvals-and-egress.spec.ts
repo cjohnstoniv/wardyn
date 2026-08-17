@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 5 of the 0.5 series — Approvals & egress scopes.
+ * Video 7 of the 0.5 series — Approvals & egress scopes.
  *
  * WHAT THIS FILMS. One question, answered four ways: an agent reaches for a
  * host nobody allow-listed — who decides, and for how long? The take opens on
@@ -117,7 +117,7 @@ const RESPONDED = /HTTP\/[\d.]+ [23]\d\d/;
 //      cards' Start button is disabled without one, and this spec fails loudly
 //      on that rather than clicking a dead button for 45s.
 //   2. The stack has NOT been reset since the earlier videos (record-demo.sh
-//      --video 05 already defaults DO_RESET=0; never pass --reset here).
+//      --video 07 already defaults DO_RESET=0; never pass --reset here).
 //   3. Both hosts are reachable from this machine's egress path — crates.io
 //      must answer a HEAD with a 2xx/3xx, or beat 2's payoff assertion fails.
 //   4. No model needed. This video is keyless end to end.

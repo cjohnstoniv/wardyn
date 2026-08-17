@@ -4,7 +4,7 @@
  */
 
 /*
- * V06 — Policies & confinement tiers.
+ * V08 — Policies & confinement tiers.
  *
  * Films the honesty of the barrier picker (Settings' Host card names exactly
  * which of Fence/Wall/Vault THIS host can build, never a barrier it cannot
@@ -324,7 +324,7 @@ test("B4 — launch, effective policy", async () => {
 
   await caption(page, "One policy. Every run after it, already governed.");
   await beat(page, PACE.read);
-  await caption(page, "Next: Record Mode — policies written by watching.");
+  await caption(page, "Next: the same guarantees with nobody watching — Wardyn inside a CI pipeline.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

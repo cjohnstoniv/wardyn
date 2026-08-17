@@ -38,33 +38,33 @@ The one directory a run may touch, and secrets nobody can read back. ~4:00 ·
 
 #### V03 — Your first run
 
-A real agent does real work inside the boundary. 2:30–3:00 ·
+A governed command, run in the background, receipts read after. ~2:30 ·
 [watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-03-your-first-run.mp4)
 
-#### V04 — The run cockpit
+#### V04 — Interactive runs
 
-The terminal is the run. 2:00–2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-04-run-cockpit.mp4)
+Drive an agent by hand — and see the key it never holds. ~3:00 ·
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-04-interactive-runs.mp4)
 
-#### V05 — Approvals & egress
+#### V05 — Autonomous agent
 
-Once, this run, until, always. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-05-approvals-and-egress.mp4)
+A real agent does real work inside the boundary. 2:30–3:00 ·
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-05-autonomous-agent.mp4)
 
-#### V06 — Policies & confinement
-
-Fence, Wall, Vault, one reusable policy. 1:30–2:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-06-policies-and-confinement.mp4)
-
-#### V07 — Record Mode
+#### V06 — Record a run
 
 Watch it once, enforce it forever. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-07-record-mode.mp4)
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-06-record-a-run.mp4)
 
-#### V08 — Model access
+#### V07 — Approvals & egress
 
-The key never enters the box. 1:30–2:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-08-model-access.mp4)
+Once, this run, until, always. 2:30–3:00 ·
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-07-approvals-and-egress.mp4)
+
+#### V08 — Policies & confinement
+
+Fence, Wall, Vault, one reusable policy. 1:30–2:00 ·
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-08-policies-and-confinement.mp4)
 
 #### V09 — CI & headless
 

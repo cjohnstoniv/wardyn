@@ -614,7 +614,7 @@ integration that delivers no credential header (a data store reachable on
 
 ### Model access resolves — it does not default to none
 
-[Watch — Model access (1:30–2:00)](README.md#v08--model-access)
+[Watch — Interactive runs (~3:00)](README.md#v04--interactive-runs)
 
 A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):

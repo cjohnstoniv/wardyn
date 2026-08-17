@@ -225,7 +225,16 @@ test("V02 beat 2 — onboard the project", async () => {
   await beat(page, PACE.read);
 
   await spotlight(page, dlg.getByRole("radiogroup", { name: "Container image" }));
-  await caption(page, "Which container image the sandbox boots — the default suits most projects.");
+  await caption(page, "Which container image the sandbox boots — the standard image suits most projects.");
+  await beat(page, PACE.read);
+  // The devcontainer option is the top card in this radiogroup, so the claim
+  // is made while the card is in the ring. "Built exactly as written" is the
+  // card's own hint (add-workspace-dialog.tsx) — the narration matches it
+  // rather than promising more: BuildDevcontainer consumes the repo's own
+  // .devcontainer/devcontainer.json unmodified (docs/ENVBUILD.md).
+  await caption(page, "A repo that ships a standard devcontainer file just works — built exactly as written.");
+  await beat(page, PACE.read);
+  await caption(page, "Or pin an exact image ref, and Wardyn pulls it as given.");
   await beat(page, PACE.read);
   await spotlight(page, dlg.getByLabel("Mount path"));
   await caption(page, "And where this directory lands inside the box.");

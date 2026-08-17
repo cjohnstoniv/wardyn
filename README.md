@@ -69,12 +69,12 @@ That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
 
 | Capability | What it does | Status | Detail | Watch |
 |---|---|---|---|---|
-| Governed runs | Per-run identity in a gatewayless sandbox, driven from a terminal-first cockpit | shipped | [ARCHITECTURE.md](ARCHITECTURE.md) | [V03](docs/README.md#v03--your-first-run) · [V04](docs/README.md#v04--the-run-cockpit) |
-| Egress + approvals | Only path out is the proxy; an unlisted host holds mid-flight — once, run, until, always | shipped | [POLICIES.md](docs/POLICIES.md) | [V05](docs/README.md#v05--approvals--egress) |
-| Record Mode | Run once open, get the minimal policy, replay confined — 26 of 30 scored competitors have no policy-derivation loop at all | shipped | [TRY-IT.md](docs/TRY-IT.md) | [V07](docs/README.md#v07--record-mode) |
+| Governed runs | Per-run identity in a gatewayless sandbox, driven from a terminal-first cockpit | shipped | [ARCHITECTURE.md](ARCHITECTURE.md) | [V03](docs/README.md#v03--your-first-run) · [V04](docs/README.md#v04--interactive-runs) · [V05](docs/README.md#v05--autonomous-agent) |
+| Egress + approvals | Only path out is the proxy; an unlisted host holds mid-flight — once, run, until, always | shipped | [POLICIES.md](docs/POLICIES.md) | [V07](docs/README.md#v07--approvals--egress) |
+| Record Mode | Run once open, get the minimal policy, replay confined — 26 of 30 scored competitors have no policy-derivation loop at all | shipped | [TRY-IT.md](docs/TRY-IT.md) | [V06](docs/README.md#v06--record-a-run) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | shipped | [OPERATIONS.md](docs/OPERATIONS.md) | [V02](docs/README.md#v02--add-a-workspace) |
-| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses | shipped | [POLICIES.md](docs/POLICIES.md) | [V06](docs/README.md#v06--policies--confinement) |
-| Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | shipped | [TRY-IT.md](docs/TRY-IT.md) | [V08](docs/README.md#v08--model-access) |
+| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses | shipped | [POLICIES.md](docs/POLICIES.md) | [V08](docs/README.md#v08--policies--confinement) |
+| Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | shipped | [TRY-IT.md](docs/TRY-IT.md) | [V04](docs/README.md#v04--interactive-runs) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | shipped | [CI.md](docs/CI.md) | [V09](docs/README.md#v09--ci--headless) |
 | Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | shipped | [SSH.md](docs/SSH.md) | [V10](docs/README.md#v10--audit--attach) |
 
