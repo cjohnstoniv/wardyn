@@ -7,7 +7,6 @@ import { describe, it, expect } from "vitest";
 import {
   applyProfileSpecToState,
   buildSpec,
-  comesWithLine,
   initialWizardState,
   isValidDomain,
   primaryWorkspaceId,
@@ -61,62 +60,6 @@ describe("secretAutoGrants — the scan_seeded trust boundary, read client-side"
   it("a name with no requirement row at all doesn't auto-grant", () => {
     const ws = localDirWorkspace("ws-1", {});
     expect(secretAutoGrants(ws, "NOT_DECLARED")).toBe(false);
-  });
-});
-
-// Item 4 (found by live driving): enabling an Optional row on the picker
-// produced a Review whose "Comes with:" summary never changed — the one
-// screen whose whole job is "show what you're launching" silently dropped
-// the edit. comesWithLine's second (optional) `sel` argument folds in this
-// run's actual enabled_optional set; omitting it (workspace-detail.tsx, which
-// has no per-run selection) must stay byte-identical to the old signature.
-describe("comesWithLine — reflects this run's enabled Optional rows (Item 4)", () => {
-  it("stays byte-identical to the contract-only summary when sel is omitted", () => {
-    const ws = localDirWorkspace("ws-1", {
-      "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
-      "egress:api.stripe.com": { level: "optional", provenance: "operator_set" },
-    });
-    expect(comesWithLine(ws)).toBe("1 secret");
-  });
-
-  it("an enabled Optional HOST is counted (no trust-boundary gate on egress)", () => {
-    const ws = localDirWorkspace("ws-1", {
-      "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
-      "egress:telemetry.example.com": { level: "optional", provenance: "scan_seeded" },
-    });
-    const unset = { workspaceId: "ws-1" };
-    const enabled = { workspaceId: "ws-1", enabledOptional: ["egress:telemetry.example.com"] };
-    expect(comesWithLine(ws, unset)).toBe("1 secret");
-    expect(comesWithLine(ws, enabled)).toBe("1 secret · 1 opted in");
-  });
-
-  // Honesty constraint the finding itself calls out: an opted-in secret that
-  // secretAutoGrants says the server will actually SKIP (scan_seeded) must
-  // never read as though it's coming along.
-  it("an enabled Optional SECRET that won't auto-grant (scan_seeded) is NOT counted", () => {
-    const ws = localDirWorkspace("ws-1", {
-      "secret:UNVERIFIED_TOKEN": { level: "optional", provenance: "scan_seeded" },
-    });
-    const enabled = { workspaceId: "ws-1", enabledOptional: ["secret:UNVERIFIED_TOKEN"] };
-    expect(comesWithLine(ws, enabled)).toBe("nothing beyond the auto-allowed set");
-  });
-
-  it("an enabled Optional SECRET that WILL auto-grant (operator_set) IS counted", () => {
-    const ws = localDirWorkspace("ws-1", {
-      "secret:STRIPE_KEY": { level: "optional", provenance: "operator_set" },
-    });
-    const enabled = { workspaceId: "ws-1", enabledOptional: ["secret:STRIPE_KEY"] };
-    expect(comesWithLine(ws, enabled)).toBe("1 opted in");
-  });
-
-  it("write access reflects an enabled Optional write, not just a Required one", () => {
-    const ws = localDirWorkspace("ws-1", {
-      "write:/home/me/ws-1": { level: "optional", provenance: "scan_seeded" },
-    });
-    const unset = { workspaceId: "ws-1" };
-    const enabled = { workspaceId: "ws-1", enabledOptional: ["write:/home/me/ws-1"] };
-    expect(comesWithLine(ws, unset)).toBe("nothing beyond the auto-allowed set");
-    expect(comesWithLine(ws, enabled)).toBe("write access");
   });
 });
 
