@@ -105,6 +105,8 @@ wardyn run --agent claude-code --workspace <workspace-id>
 
 ### The audit log can't quietly rot
 
+[Watch — Audit & attach (2:00–2:30)](README.md#v10--audit--attach)
+
 "Append-only" here is enforced by the database, not by convention. A row-level
 Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
 statement-level guard (migration `0004`) rejects `TRUNCATE` — all three are
@@ -418,6 +420,8 @@ at a corporate IdP that isn't hand-curated the same way.
 
 ## Workspaces: three tiers
 
+[Watch — Workspaces & secrets (2:00–2:30)](README.md#v04--workspaces--secrets)
+
 A workspace is not one unit of configuration. Wardyn splits it into three:
 
 1. **Source** (tier 1) — a repo or local directory configured ONCE, in a
@@ -609,6 +613,8 @@ integration that delivers no credential header (a data store reachable on
 `db.corp.internal:5432`, egress only, is exactly the shape this is for).
 
 ### Model access resolves — it does not default to none
+
+[Watch — Model access (1:30–2:00)](README.md#v08--model-access)
 
 A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):

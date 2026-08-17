@@ -323,6 +323,13 @@ other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 claim above is checked against: `docs/OPERATIONS.md`'s "Kubernetes: known
 gaps (v0.5)" section.
 
+What *is* proven, and what the gaps above are measured against: Wardyn ships
+exactly two deployment paths — `deploy/compose` and this chart — and both run
+sandboxes. CI proves the chart renders (`helm-lint`), boots to a healthy
+control plane on a real cluster, AND (the k8s runner substrate,
+`internal/runner/k8s`) actually creates a confined sandbox there,
+conformance-tested on a NetworkPolicy-enforcing cluster (kind + Calico).
+
 ## Split SSH exposure
 
 `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second

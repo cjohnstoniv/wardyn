@@ -1,43 +1,22 @@
 # Try Wardyn in 10 minutes
 
+[Watch — Your first run (2:30–3:00)](README.md#v02--your-first-run)
+
 The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 `wardyn setup status` says what model access is still missing. Easiest first: a
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
 key), and **record, then replay confined** to onboard your own work.
 
-The Getting-started page detects this host's real capabilities — which confinement
-tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
-Kata microVM; whichever are missing show a copy-paste
-`wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
-setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. The rail runs 10 steps: 3 essentials, 5 hands-on
-demos, 1 **Your work** step that onboards what you'll actually run against
-(**Workspaces**), and **Review** to finish.
-Inside a corporate network, the **Corporate network** step — seated right
-before **Model & git host**, because nothing downstream can be verified
-until the network path works — chains the sandbox proxy through your proxy and
-redirects package registries
-(or any other host: a container registry, an internal appliance) at an
-internal mirror, each with a live probe that actually tests the path (see
-[OPERATIONS.md](OPERATIONS.md)) — and only a passing probe unlocks
-**Next**. The one exception is honest rather than silent: with no runner
-wired there is nothing to probe from, so the step says so and lets you
-past. Nothing on the step has to be configured; on an open network,
-Test connectivity then Next is the whole visit. Whatever IS configured,
-though, has to prove itself before you can move past it — whenever
-there is a runner to prove it with.
-**Model & git host** — the same two cards as **Settings** — is where you then
-name the systems outside Wardyn a run has to reach: a model provider for agent
-runs, and a git credential for private repos on GitHub Enterprise / Azure DevOps
-(see [`docs/adoption/`](adoption/)). Each one
-bundles where the system lives, what credential it takes, and how that credential
-reaches the request; adding it is what puts its hosts within a run's reach.
-Nothing is ambient — a run gets an integration when the workspace
-it runs in requires it by name, never because it is configured. The one
-exception is model access: an `ai_provider` integration marked the site-wide
-default for agent runs folds into every run regardless of workspace (see
-[OPERATIONS.md](OPERATIONS.md) → "Model access resolves").
+[Watch — Getting started (6:00–6:30)](README.md#v01--getting-started)
+
+The Getting-started rail detects this host's real capabilities — which
+confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
+CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
+walks 10 steps to your first run. Whatever you configure has to pass a live
+probe before that step unlocks; nothing is ambient, so a run reaches an
+integration only when its workspace requires it by name (see
+[OPERATIONS.md](OPERATIONS.md) → "Model access resolves" for the one exception).
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
@@ -76,24 +55,13 @@ real run for that.
 poke at.
 
 The UI is at http://localhost:8080. The demo stack configures no OIDC, so the
-"Sign in with SSO" button is disabled and the admin token below is the way in;
-set `WARDYN_OIDC_*` and the button lights up (the local Dex recipe is in
-[`deploy/compose/README.md`](../deploy/compose/README.md)). Once OIDC is on there
-is **one** role split (admin/member): `WARDYN_OIDC_OPERATOR_EMAILS` names the
-**admins**, and any other signed-in human is a **member** — owner-scoped: they
-read their OWN runs/approvals/audit and launch/kill runs, but 403 on configuring
-the deployment (policies, workspaces, site-config, the managed harness
-credential), writing or deleting secrets, and admin-only credential/tool_call
-approvals (a member still decides `egress_domain` approvals on, and attaches to,
-their own runs). Leaving that list empty with OIDC configured makes wardynd
-**refuse to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` says you meant
-everyone-is-admin. The admin token is always an admin (one shared credential
-carries no human to demote), and per-user RBAC beyond the two tiers is unscheduled
-([ROADMAP.md](../ROADMAP.md)). All of it — the split, the approval
-broker, the append-only audit log — ships in the Apache-2.0 build with no paid
-tier, unlike the field that puts audit logging and RBAC behind a license. To give
-a second person on this host their own member login instead of the shared admin
-token, see [OPERATIONS.md](OPERATIONS.md#second-user-same-host).
+SSO button is disabled and the admin token below is the way in; set
+`WARDYN_OIDC_*` and one role split appears — `WARDYN_OIDC_OPERATOR_EMAILS` names
+the **admins**, every other signed-in human is an owner-scoped **member**. The
+split, the approval broker and the append-only audit log all ship in the
+Apache-2.0 build with no paid tier; for the exact 403 boundary, the local Dex
+recipe and how to give a second person their own login, see
+[OPERATIONS.md](OPERATIONS.md#second-user-same-host).
 
 By hand against the same stack:
 
@@ -150,6 +118,8 @@ point at any RUNNING sandbox.
 
 ## Level 2 — real Claude Code run (bring an Anthropic API key)
 
+[Watch — The run cockpit (2:00–2:30)](README.md#v03--the-run-cockpit)
+
 ```sh
 # 1. Store the key (write-only; no API path ever returns it):
 echo "$ANTHROPIC_API_KEY" | wardyn secret set anthropic-api-key
@@ -203,6 +173,8 @@ opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 
 ### Model auth: three ways to give Claude Code its LLM access
 
+[Watch — Model access (1:30–2:00)](README.md#v08--model-access)
+
 Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
 subscription mount (host mode's resident `~/.claude`) > managed subscription >
 Bedrock > api-key — **except** that an `api_key` grant the run's policy
@@ -243,6 +215,8 @@ the real credential out of the sandbox *except* the Bedrock access-key path
   Configured Claude runs then use Bedrock automatically.
 
 ## Level 2.5 — record a session, rerun it as a governed profile
+
+[Watch — Record Mode (2:30–3:00)](README.md#v07--record-mode)
 
 The primary way to onboard your own work: in a workspace, **record** a named
 interactive session (with model access), then rerun it governed — the New Run

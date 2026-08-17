@@ -1,5 +1,7 @@
 # Wardyn Sample Workspaces
 
+[Watch — Workspaces & secrets (2:00–2:30)](../../docs/README.md#v04--workspaces--secrets)
+
 This directory is a catalog of small, self-contained workspaces that let an
 operator exercise every major Wardyn governance control without writing code.
 Each subdirectory is a minimal but runnable project paired with a `TASK.md`
