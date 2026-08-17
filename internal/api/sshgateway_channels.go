@@ -195,6 +195,19 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, chan
 	defer channel.Close()
 	drainExecStderr(channel, sess)
 
+	// The io.Copy off sess.Stdout below reads a docker exec pipe that no ctx
+	// can reach — a disconnected client (or a closed channel) would otherwise
+	// park this goroutine until the in-sandbox command exits, holding one of
+	// the run's four channel slots AND keeping the keepalive below touching
+	// the run so the idle reaper never fires. Close the session when ctx dies;
+	// Close is idempotent on both drivers.
+	stopOnCtx := context.AfterFunc(ctx, func() {
+		if sess.Close != nil {
+			_ = sess.Close()
+		}
+	})
+	defer stopOnCtx()
+
 	keepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	_ = s.cfg.Store.TouchRun(keepCtx, runID)
@@ -238,6 +251,12 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	if err != nil {
 		return
 	}
+	// Channel-scoped ctx for the bridges: cancelled when THIS channel's request
+	// stream ends (client closed the channel) as well as when the parent
+	// connection ctx dies — the bridge's AfterFunc closes its exec session on
+	// either, so a parked io.Copy can never outlive its channel.
+	chCtx, chCancel := context.WithCancel(ctx)
+	defer chCancel()
 	// Backstop only: the client-disconnects-first path (reqs closes with no
 	// shell/exec/subsystem ever dispatched, or a still-running bridge is
 	// interrupted). The COMPLETION path closes channel itself, from inside the
@@ -310,7 +329,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
 				defer close(bridgeDone)
-				s.bridgeSSHShell(ctx, runID, principal, channel, cols, rows, resizeCh)
+				s.bridgeSSHShell(chCtx, runID, principal, channel, cols, rows, resizeCh)
 			})
 
 		case "exec":
@@ -329,7 +348,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			command := m.Command
 			sshGo(func() {
 				defer close(bridgeDone)
-				s.bridgeSSHExec(ctx, runID, principal, channel, command, env)
+				s.bridgeSSHExec(chCtx, runID, principal, channel, command, env)
 			})
 
 		case "subsystem":
@@ -347,7 +366,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
 				defer close(bridgeDone)
-				s.bridgeSSHSFTP(ctx, runID, principal, channel)
+				s.bridgeSSHSFTP(chCtx, runID, principal, channel)
 			})
 
 		default:
@@ -362,6 +381,12 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 		}
 	}
+	// The request loop is done — the CLIENT closed this channel (or the
+	// connection died). A bridge parked on a quiet exec would wait for the
+	// in-sandbox command forever; cancel the channel-scoped ctx so its
+	// AfterFunc closes the session and the bridge returns. A normally-finished
+	// bridge already closed the channel itself, making this a no-op.
+	chCancel()
 	if bridgeDone != nil {
 		<-bridgeDone
 	}

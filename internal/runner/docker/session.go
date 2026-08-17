@@ -259,6 +259,18 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 		Wait: func() (int, error) { return d.pollExecExit(ctx, execID) },
 		Close: func() error {
 			resp.Close()
+			// Also close the pipe READ ends (non-TTY branch): resp.Close alone
+			// leaves the demux goroutine parked on a pipe write and any reader
+			// parked on a pipe read — closing the read side fails both with
+			// io.ErrClosedPipe so every blocked caller (evidence endpoints, the
+			// SSH exec/sftp/forward bridges) actually unblocks. TTY branch
+			// readers aren't Closers; the type assertions no-op there.
+			if c, ok := stdout.(io.Closer); ok {
+				_ = c.Close()
+			}
+			if c, ok := stderr.(io.Closer); ok {
+				_ = c.Close()
+			}
 			return nil
 		},
 	}, nil

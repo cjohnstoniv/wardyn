@@ -47,6 +47,12 @@ const (
 	// them; past the cap the response says so with truncated=true rather than
 	// quietly returning a short list that reads like the whole truth.
 	runFilesMaxFiles = 500
+	// runFilesMaxOutput bounds the TOTAL bytes read off the exec stream (parse
+	// AND the drain-to-EOF inside parseRunFiles). The 5s ctx above cannot reach
+	// a hijacked docker stream (the client uses ctx for the dial only), so
+	// without a byte bound a chatty sandbox parks this handler forever — the
+	// exact hang the sibling endpoint's runResourcesMaxOutput already closes.
+	runFilesMaxOutput = 512 << 10
 	// runFilesMaxLine bounds ONE line of git output. A path is bounded by the
 	// filesystem, but the sandbox's stdout is not something wardynd controls,
 	// so the scanner gets an explicit ceiling instead of the 64KiB default —
@@ -261,7 +267,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
 
-	inspectedPath, files, truncated := parseRunFiles(sess.Stdout)
+	inspectedPath, files, truncated := parseRunFiles(io.LimitReader(sess.Stdout, runFilesMaxOutput))
 
 	if sess.Wait != nil {
 		code, werr := sess.Wait()

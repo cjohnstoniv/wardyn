@@ -359,8 +359,15 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	// races the very teardown it describes — and the one event that says a human
 	// took another human's terminal is exactly the one that must not be lost. An
 	// audit written for a displacement that then somehow fails is the safe
-	// failure of the two.
-	s.recordAudit(r.Context(), s.auditEvent(&id, actorType, principal, "session.takeover",
+	// failure of the two. Daemon-lifetime ctx, NOT r.Context(): the eviction
+	// below is irreversible the moment it runs, and a client that aborts the
+	// POST mid-flight must not cancel the one write that records who took the
+	// terminal — the same fix the four detach/exec/sftp/forward audits carry.
+	auditCtx := s.cfg.BaseCtx
+	if auditCtx == nil {
+		auditCtx = context.Background()
+	}
+	s.recordAudit(auditCtx, s.auditEvent(&id, actorType, principal, "session.takeover",
 		id.String(), "success", mustJSON(map[string]any{
 			"previous_holder": prev.principal,
 			"previous_source": prev.source,
