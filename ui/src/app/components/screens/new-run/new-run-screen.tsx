@@ -38,6 +38,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
+import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { cn } from "../../ui/utils";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
@@ -309,7 +310,7 @@ export function NewRunScreen() {
     ? "Give this run a title."
     : needsTask && !state.task.trim()
       ? isAgent
-        ? "A batch run needs a task to perform."
+        ? "An autonomous run needs a task to perform."
         : "Enter a command to run."
       : null;
 
@@ -466,7 +467,7 @@ export function NewRunScreen() {
               )}
 
               {/* The mode comes BEFORE the field it selects: an interactive run
-                  is configured by a startup choice, a batch run by a prompt, and
+                  is configured by a startup choice, an autonomous run by a prompt, and
                   a shell command by the command — never all three at once.
                   Hidden for Shell command, which is unattended by definition. */}
               {isAgent && (
@@ -475,7 +476,13 @@ export function NewRunScreen() {
                   value={state.mode}
                   onChange={(id) => patch({ mode: id as WizardState["mode"] })}
                   options={[
-                    { id: "batch", label: "Batch — run it unattended" },
+                    // Label from copy.ts's RUN_MODE canon, not spelled here: the
+                    // internal id stays "batch" (it is wire-adjacent and renaming
+                    // it reaches the spec builder and its tests), but the word a
+                    // human reads is "Autonomous" everywhere else in the product.
+                    // The two had drifted, and this radio was the last place the
+                    // console still said "Batch" out loud.
+                    { id: "batch", label: `${RUN_MODE.autonomous.label} — run it unattended` },
                     { id: "interactive", label: "Interactive — I drive the terminal" },
                   ]}
                 />

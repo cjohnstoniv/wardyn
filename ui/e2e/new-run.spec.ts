@@ -41,7 +41,7 @@ test.describe("New run — one page", () => {
     await expect(page.getByRole("radiogroup", { name: "Start with" })).toBeVisible();
     await expect(page.getByLabel("Task")).toHaveCount(0);
 
-    await page.getByRole("radio", { name: /^Batch/ }).click();
+    await page.getByRole("radio", { name: /^Autonomous/ }).click();
     await expect(page.getByLabel("Task")).toBeVisible();
     await expect(page.getByRole("radiogroup", { name: "Start with" })).toHaveCount(0);
   });

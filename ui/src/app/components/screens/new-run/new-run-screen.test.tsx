@@ -128,9 +128,9 @@ describe("NewRunScreen — the form matches the run mode", () => {
     expect(screen.queryByLabelText("Task")).not.toBeInTheDocument();
   });
 
-  it("asks a batch run for a task, and drops the startup choice", async () => {
+  it("asks an autonomous run for a task, and drops the startup choice", async () => {
     renderScreen();
-    await user.click(await screen.findByRole("radio", { name: /^Batch/ }));
+    await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     expect(screen.getByLabelText("Task")).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Start with" })).not.toBeInTheDocument();
   });
@@ -159,10 +159,10 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     expect(launch).toBeEnabled();
   });
 
-  it("still waits for the task on a batch run", async () => {
+  it("still waits for the task on an autonomous run", async () => {
     renderScreen();
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    await user.click(screen.getByRole("radio", { name: /^Batch/ }));
+    await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
     const launch = screen.getByRole("button", { name: /Launch run/ });
     expect(launch).toBeDisabled();
     expect(screen.getByText(/needs a task to perform/)).toBeInTheDocument();
