@@ -54,16 +54,12 @@ export function ProfileReview({
   runId,
   suggestedName,
   onClose,
-  onSavedPolicy,
 }: {
   runId: string | null;
   // Pre-filled "save as is" policy name (e.g. workspace-recording). When set, a
   // one-click "Save as is" button persists the policy under it without the dialog.
   suggestedName?: string;
   onClose: () => void;
-  // Called after a policy is successfully saved from the synthesized profile, so
-  // a parent (e.g. a policies list) can refresh. Optional.
-  onSavedPolicy?: () => void;
 }) {
   const [proposal, setProposal] = React.useState<ProfileProposal | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -79,14 +75,13 @@ export function ProfileReview({
     try {
       await api.createPolicy(suggestedName, proposal.proposed.inline_policy);
       toast.success(`Saved policy “${suggestedName}”`);
-      onSavedPolicy?.();
       onClose();
     } catch (e) {
       toast.error("Failed to save policy", { description: getErrorMessage(e) });
     } finally {
       setSavingAsIs(false);
     }
-  }, [proposal, suggestedName, onSavedPolicy, onClose]);
+  }, [proposal, suggestedName, onClose]);
 
   const load = React.useCallback(() => {
     if (!runId) return;
@@ -154,8 +149,15 @@ export function ProfileReview({
           spec={proposal.proposed.inline_policy}
           defaultName={suggestedName}
           onSaved={() => {
+            // Both save paths end the same way: the policy now EXISTS, so the sheet
+            // must stop claiming "nothing is created until you save it". Closing the
+            // dialog alone left the drawer standing behind it still saying that, while
+            // the "Save as is" button next to it closed everything — two buttons, two
+            // stories about the same completed write. Dismiss the dialog first (its
+            // open-state is ours, not the parent's, so onClose can't clear it) and then
+            // hand the drawer back to the parent.
             setSaveOpen(false);
-            onSavedPolicy?.();
+            onClose();
           }}
         />
       )}

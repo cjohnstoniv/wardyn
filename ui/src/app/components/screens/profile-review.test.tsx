@@ -115,7 +115,8 @@ describe("ProfileReview", () => {
   });
 
   it("Save as policy prompts for a name and POSTs the proposed inline_policy", async () => {
-    render(<ProfileReview runId="run-1" onClose={() => {}} />);
+    const onClose = vi.fn();
+    render(<ProfileReview runId="run-1" onClose={onClose} />);
     await screen.findByText("Overall risk");
 
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -135,6 +136,12 @@ describe("ProfileReview", () => {
       allowed_domains: ["api.anthropic.com", "github.com"],
     });
     expect(toastSuccess).toHaveBeenCalled();
+
+    // The named-save path must end like "Save as is": the drawer closes, so it stops
+    // telling the operator "nothing is created until you save it" about a policy that
+    // now exists. The dialog goes with it.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByLabelText(/policy name/i)).not.toBeInTheDocument();
   });
 
   it("Save as is persists directly under the workspace+recording name (no dialog)", async () => {
