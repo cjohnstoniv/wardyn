@@ -63,7 +63,13 @@ export const S = {
     "The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it.",
   GIT_TITLE: "Git host",
   GIT_LEDE: "How Wardyn clones your private repos.",
-  GIT_FOOTER: "Public repos clone with no credential at all.",
+  // The three lanes differ in WHERE the credential goes, and the footer owns
+  // that split so no lane has to overclaim: only the App lane keeps the token
+  // outside the sandbox (proxy broker); a PAT or SSH key enters it for the
+  // clone — helper stdout and a shredded 0400 file respectively
+  // (ARCHITECTURE.md invariant 1 and the git-egress table are the source).
+  GIT_FOOTER:
+    "Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all.",
   // Bedrock's region/model are OPERATOR BOOT-TIME config (runs_bedrock.go:116),
   // not writable over the API — so the card states where they come from instead
   // of offering an input the server would ignore. The mock implied they were
@@ -599,7 +605,14 @@ export function GitHostCard({
         <Lane
           id="lane-pat"
           title="Personal access token"
-          hint="The simplest lane — stored once, injected on the wire per run."
+          // Was "injected on the wire per run" — FALSE. Wire injection is the
+          // GitHub App broker's mechanism; git-over-HTTPS to a PAT host is an
+          // opaque CONNECT tunnel with no header to swap (ARCHITECTURE.md "Git
+          // egress: two mechanisms"). A PAT is minted to wardyn-git-helper
+          // INSIDE the sandbox, which hands it to git on stdout — so the value
+          // does transit the sandbox during git operations, and the lane must
+          // say so rather than borrowing the App lane's stronger promise.
+          hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
           connected={present.includes(patName)}
           connectedDetail={`${host} · stored as ${patName}`}
           selected={lane === "pat"}
@@ -621,7 +634,7 @@ export function GitHostCard({
         <Lane
           id="lane-ssh"
           title="SSH key"
-          hint="Minted per run, wiped after clone."
+          hint="A per-run copy is written inside the sandbox for the clone, then shredded."
           connected={present.includes(sshName)}
           connectedDetail={`${host} · stored as ${sshName}`}
           selected={lane === "ssh"}
@@ -642,7 +655,7 @@ export function GitHostCard({
         <Lane
           id="lane-app"
           title="GitHub App"
-          hint="Repo-scoped tokens brokered per run — the narrowest blast radius."
+          hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
           connected={appStored}
           connectedDetail="Installation credentials stored"
           selected={lane === "app"}
