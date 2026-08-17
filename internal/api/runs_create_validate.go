@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -141,12 +142,15 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// Title/description are free text bound for a TEXT column and every run row
 	// in the console — cap them at the door rather than discovering a 40KB
 	// "title" in the list view. Generous enough that no real name is refused.
-	if len(req.Title) > maxRunTitleLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("title is too long (%d chars, max %d)", len(req.Title), maxRunTitleLen))
+	// Runes, not bytes: the message says "chars", and a CJK/emoji title well
+	// under the limit was refused with a byte count the operator couldn't
+	// reconcile with what they typed.
+	if utf8.RuneCountInString(req.Title) > maxRunTitleLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("title is too long (%d chars, max %d)", utf8.RuneCountInString(req.Title), maxRunTitleLen))
 		return req, "", "", false
 	}
-	if len(req.Description) > maxRunDescriptionLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("description is too long (%d chars, max %d)", len(req.Description), maxRunDescriptionLen))
+	if utf8.RuneCountInString(req.Description) > maxRunDescriptionLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("description is too long (%d chars, max %d)", utf8.RuneCountInString(req.Description), maxRunDescriptionLen))
 		return req, "", "", false
 	}
 

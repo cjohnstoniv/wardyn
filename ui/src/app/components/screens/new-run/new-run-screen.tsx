@@ -20,7 +20,7 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentRun, ConfinementClass, Workspace } from "../../../lib/types";
+import type { AgentRun, ConfinementClass, RunPolicySpec, Workspace } from "../../../lib/types";
 import type { WizardAgent } from "./wizard-types";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
@@ -29,6 +29,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getErrorMessage } from "../../../lib/format";
+import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
@@ -42,13 +43,13 @@ import { cn } from "../../ui/utils";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { NetworkDialog, UNLISTED_RULES, type NetworkSelection } from "./network-dialog";
 import { buildSpec, impliedEgressHosts } from "./wizard-spec";
-import { initialWizardState, PRESET_DOMAINS, primaryWorkspaceId, type WizardState } from "./wizard-types";
+import { agentLabel, initialWizardState, PRESET_DOMAINS, primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { surfaceRunWarnings } from "./run-warnings";
 
 // The three Network presets. "Registries" is the whole PRESET_DOMAINS list —
 // the same set the dialog groups — so the card and the dialog can never
 // disagree about what "common package registries" means.
-type NetworkPreset = "none" | "registries" | "everything" | "custom";
+type NetworkPreset = "none" | "model" | "registries" | "everything" | "custom";
 
 const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
@@ -156,8 +157,12 @@ function RailSection({ title, children }: { title: string; children: React.React
 export function NewRunScreen() {
   const navigate = useNavigate();
   const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
+  // Seed with the PERSISTED default (Settings' promise); the health probe
+  // below re-resolves it against what this host actually enforces. The old
+  // resolveDefaultCc(…, ["CC1"]) hardcoded the availability list, so a saved
+  // Wall/Vault default could never win — Settings' promise was untrue here.
   const [state, setState] = React.useState<WizardState>(() =>
-    initialWizardState(resolveDefaultCc(getDefaultCc(), ["CC1"])),
+    initialWizardState(getDefaultCc() ?? "CC1"),
   );
   const [confinement, setConfinement] = React.useState<ConfinementChoice>("confined");
   const [netOpen, setNetOpen] = React.useState(false);
@@ -165,7 +170,12 @@ export function NewRunScreen() {
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string }[]>([]);
+  const [savedPolicies, setSavedPolicies] = React.useState<
+    { id: string; name: string; spec: RunPolicySpec }[]
+  >([]);
+  // Whether the barrier probe has SETTLED (null availableClasses after settle
+  // means the check failed — unknown, never "confirmed absent").
+  const [probeSettled, setProbeSettled] = React.useState(false);
   // null = not answered yet. An agent run with no model path launches and then
   // fails its first model call, so the rail must say so BEFORE launch rather
   // than promising credentials that cannot be minted.
@@ -201,7 +211,7 @@ export function NewRunScreen() {
   React.useEffect(() => {
     policiesApi
       .listPolicies()
-      .then((ps) => setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name }))))
+      .then((ps) => setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name, spec: p.spec }))))
       .catch(() => {
         /* the Saved-policy lane simply offers nothing — never blocks a launch */
       });
@@ -219,7 +229,27 @@ export function NewRunScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
+  const patch = React.useCallback(
+    (p: Partial<WizardState>) =>
+      setState((s) => {
+        // D11/claim6 funnel, restored from the retired wizard: ANY edit to the
+        // inline envelope detaches a picked saved policy. Without this the
+        // stale id survives every visible signal of detachment, and launch
+        // ships the STORED spec — its workspace mounts included — instead of
+        // the inline one on screen.
+        const envelope: (keyof WizardState)[] = [
+          "allowAllEgress",
+          "allowedDomains",
+          "deniedDomains",
+          "firstUseApproval",
+          "confinementClass",
+        ];
+        const detach =
+          s.selectedPolicyId && !("selectedPolicyId" in p) && envelope.some((k) => k in p);
+        return { ...s, ...p, ...(detach ? { selectedPolicyId: undefined } : {}) };
+      }),
+    [],
+  );
 
   // Which barriers this host can actually build. Empty means UNKNOWN, not
   // confirmed-absent (healthApi.health swallows a failure into {}), so an empty
@@ -236,7 +266,19 @@ export function NewRunScreen() {
           probe();
           return;
         }
-        setAvailableClasses(classes.length ? classes : ["CC1"]);
+        // Empty after the retry stays null: unknown, never "confirmed absent".
+        // "CC1-only" was a positive claim manufactured from an absence, and it
+        // disabled Wall/Vault with copy asserting they aren't installed.
+        setAvailableClasses(classes.length ? classes : null);
+        setProbeSettled(true);
+        if (classes.length) {
+          // Re-resolve the persisted default against real availability —
+          // this, not the seed above, is where Settings' promise comes true.
+          setState((s) => ({
+            ...s,
+            confinementClass: resolveDefaultCc(getDefaultCc(), classes),
+          }));
+        }
       });
     probe();
     return () => {
@@ -250,7 +292,13 @@ export function NewRunScreen() {
   // one, so the Run mode segment is hidden rather than offering a combination
   // that would silently drop the command.
   const isInteractive = isAgent && state.mode === "interactive";
-  const agentLabel = state.agent === "codex-cli" ? "Codex CLI" : "Claude Code";
+  // Shared display name (wizard-types.agentLabel) — a local re-hardcode here
+  // is exactly the drift that helper's doc says it exists to prevent.
+  const agentName = agentLabel(state.agent);
+  const selectedPolicy =
+    confinement === "saved" && state.selectedPolicyId
+      ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
+      : undefined;
 
   // The screen's ONE validation rule. Deliberately a local derivation rather
   // than a shared validator: it answers "can this button be pressed", which is
@@ -271,13 +319,16 @@ export function NewRunScreen() {
     ? "everything"
     : state.allowedDomains.length === 0
       ? "none"
-      : state.allowedDomains.length === PRESET_DOMAINS.length &&
+      : state.allowedDomains.length === 1 && state.allowedDomains[0] === "api.anthropic.com"
+        ? "model"
+        : state.allowedDomains.length === PRESET_DOMAINS.length &&
           PRESET_DOMAINS.every((d) => state.allowedDomains.includes(d))
         ? "registries"
         : "custom";
 
   const setPreset = (p: NetworkPreset) => {
     if (p === "none") patch({ allowAllEgress: false, allowedDomains: [] });
+    else if (p === "model") patch({ allowAllEgress: false, allowedDomains: ["api.anthropic.com"] });
     else if (p === "registries") patch({ allowAllEgress: false, allowedDomains: [...PRESET_DOMAINS] });
     else if (p === "everything") patch({ allowAllEgress: true });
   };
@@ -303,9 +354,19 @@ export function NewRunScreen() {
     setLaunching(true);
     try {
       const { run, inline_policy } = buildSpec(state, workspaces);
+      // The RADIO is the discriminator, belt to the patch-funnel's braces: a
+      // policy id that somehow survives a switch back to Confined still must
+      // not launch by reference. And the workspace_id override must never
+      // OVERWRITE buildSpec's deliberate ephemeral-workspace fallback with
+      // undefined — that silently launched a workspace-less run.
+      const usePolicy = confinement === "saved" && state.selectedPolicyId;
       const created: AgentRun = await runsApi.createRun(
-        state.selectedPolicyId
-          ? { ...run, policy_id: state.selectedPolicyId, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) }
+        usePolicy
+          ? {
+              ...run,
+              policy_id: state.selectedPolicyId,
+              workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
+            }
           : { ...run, inline_policy },
       );
       // (A best-effort "save this as a policy" write used to live here, gated on
@@ -344,6 +405,7 @@ export function NewRunScreen() {
                 <Input
                   id="nr-title"
                   required
+                  maxLength={200}
                   // Native datalist: existing titles are offered as you type, so
                   // joining a family is a pick rather than an exact retype. No
                   // combobox library, and typing something new still just works.
@@ -367,6 +429,7 @@ export function NewRunScreen() {
                 <Textarea
                   id="nr-description"
                   rows={2}
+                  maxLength={2000}
                   placeholder="Ticket 4412 — the refund path double-charges on retry."
                   value={state.description}
                   onChange={(e) => patch({ description: e.target.value })}
@@ -432,7 +495,7 @@ export function NewRunScreen() {
                     value={state.interactiveStart}
                     onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
                     options={[
-                      { id: "agent", label: `${agentLabel} — launch it in the workspace` },
+                      { id: "agent", label: `${agentName} — launch it in the workspace` },
                       { id: "shell", label: "Terminal — a shell in the workspace dir" },
                     ]}
                   />
@@ -477,6 +540,9 @@ export function NewRunScreen() {
                 {workspaces.map((w: Workspace) => (
                   <SelectItem key={w.id} value={w.id}>
                     {w.name}
+                    {statusWord(w.status) === "Import failed" && (
+                      <span className="text-danger"> — import failed</span>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -516,7 +582,21 @@ export function NewRunScreen() {
               >
                 <Select
                   value={state.selectedPolicyId ?? ""}
-                  onValueChange={(v) => patch({ selectedPolicyId: v })}
+                  onValueChange={(v) => {
+                    // Raise the barrier to the policy's floor at PICK time —
+                    // the stored spec refuses to launch below it, and the old
+                    // flow only learned that from a 422 after clicking Launch.
+                    const floor = savedPolicies.find((p) => p.id === v)?.spec
+                      ?.min_confinement_class;
+                    patch({
+                      selectedPolicyId: v,
+                      ...(floor &&
+                      ORDERED_CLASSES.indexOf(floor) >
+                        ORDERED_CLASSES.indexOf(state.confinementClass)
+                        ? { confinementClass: floor }
+                        : {}),
+                    });
+                  }}
                 >
                   <SelectTrigger aria-label="Saved policy">
                     <SelectValue placeholder="Pick a policy" />
@@ -549,6 +629,11 @@ export function NewRunScreen() {
                       {CC_META[c].label} isn&apos;t installed on this host.
                     </p>
                   ))}
+                {probeSettled && !availableClasses && (
+                  <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                    Couldn&apos;t check which barriers this host has — all three stay selectable.
+                  </p>
+                )}
               </div>
             </div>
           </SectionCard>
@@ -565,6 +650,12 @@ export function NewRunScreen() {
                   onSelect={() => setPreset("none")}
                   title="None"
                   body="No hosts. Everything becomes an approval request."
+                />
+                <RadioCard
+                  on={preset === "model"}
+                  onSelect={() => setPreset("model")}
+                  title="Just the model provider"
+                  body="api.anthropic.com only — the agent reaches its model and nothing else."
                 />
                 <RadioCard
                   on={preset === "registries"}
@@ -606,6 +697,19 @@ export function NewRunScreen() {
           <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
 
           <div className="space-y-3">
+            {selectedPolicy && (
+              <RailSection title="Policy">
+                <p className="text-[0.8125rem] font-medium text-foreground">{selectedPolicy.name}</p>
+                <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
+                  The stored spec governs this run — barrier floor{" "}
+                  {CC_META[selectedPolicy.spec.min_confinement_class].label},{" "}
+                  {selectedPolicy.spec.allow_all_egress
+                    ? "open egress"
+                    : `${(selectedPolicy.spec.allowed_domains ?? []).length} host${(selectedPolicy.spec.allowed_domains ?? []).length === 1 ? "" : "s"} allowed`}
+                  . The network edits on this page do not apply to it.
+                </p>
+              </RailSection>
+            )}
             <RailSection title="Barrier">
               <div className="mb-1 flex items-center gap-2">
                 <Chip tone="neutral">{CC_META[cc].label}</Chip>
@@ -614,11 +718,15 @@ export function NewRunScreen() {
               <p className="text-[0.75rem] text-muted-foreground">{CC_META[cc].doesntProtect}</p>
             </RailSection>
 
+            {!selectedPolicy && (
             <RailSection title="Network">
               {isRecord ? (
                 <div className="space-y-2">
                   <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
-                    Unrestricted — every host this run reaches is logged and becomes the policy. Nothing is blocked.
+                    Unrestricted — every host this run reaches is logged and becomes the policy.{" "}
+                    {state.deniedDomains.length > 0
+                      ? `${state.deniedDomains.length} denied host${state.deniedDomains.length === 1 ? "" : "s"} stay blocked — denies always win, recording included.`
+                      : "Nothing is blocked."}
                   </p>
                   {cc === "CC1" && (
                     <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
@@ -629,7 +737,7 @@ export function NewRunScreen() {
                 </div>
               ) : state.allowAllEgress ? (
                 <p className="text-[0.75rem] text-muted-foreground">Open egress. Nothing is blocked.</p>
-              ) : state.allowedDomains.length === 0 ? (
+              ) : hostCount === 0 ? (
                 <>
                   <p className="text-[0.8125rem] font-medium text-foreground">0 hosts allowed</p>
                   <p className="mt-0.5 text-[0.75rem] text-muted-foreground">{ruleTitle} for anything else.</p>
@@ -668,6 +776,7 @@ export function NewRunScreen() {
                 </p>
               )}
             </RailSection>
+            )}
 
             <RailSection title="Credentials">
               {isAgent && llmReady === false && (
@@ -687,10 +796,10 @@ export function NewRunScreen() {
               <p className="text-[0.75rem] text-muted-foreground">
                 {isInteractive
                   ? state.interactiveStart === "agent"
-                    ? `Comes up idle with the workspace ready. Attaching starts ${agentLabel} in it.`
+                    ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
                     : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
                   : isAgent
-                    ? `${agentLabel} runs the task unattended, then the run stops.`
+                    ? `${agentName} runs the task unattended, then the run stops.`
                     : "The command runs unattended in the sandbox, then the run stops."}
               </p>
             </RailSection>
