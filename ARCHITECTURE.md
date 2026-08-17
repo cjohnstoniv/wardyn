@@ -254,6 +254,17 @@ the approved scope and a grant can never mint twice. `api_key` grants are then
 injected proxy-side (the agent never sees them); git tokens reach `git` via
 `wardyn-git-helper` stdout only.
 
+**This sequence is credential-mint specific — it does not describe an
+`egress_domain` decision.** An egress approval funnels through the same
+`decide()` chokepoint (`internal/api/approvals.go`) and the same append-only
+audit discipline, but it never mints anything: no broker call, no
+transaction, no `minted_jti`. What it carries instead is a **scope** —
+`once` / `run` / `until` / `always` — bounding how far the decision reaches,
+from a single connection up through a permanent entry on the target
+workspace's `approved_egress`/`denied_egress`. See
+[docs/POLICIES.md](docs/POLICIES.md) "Approval decision scopes" for the full
+semantics.
+
 ### Git egress: two mechanisms, disjoint host sets
 
 Git has TWO credential lanes and they are not duplicates — which serves a clone
@@ -300,7 +311,7 @@ wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny **[shipped on k8s; planned on docker]** | **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the logged, opt-in downgrade — see [ROADMAP.md](ROADMAP.md)). **docker [planned]**: nftables — not built (`internal/runner/docker/hardening.go`'s own comment: "be honest, do not claim it"); Cilium `toFQDNs` also planned, either target | Non-HTTP tunnels; metadata-server theft; DNS rebinding — on k8s today, both targets once nftables lands |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve — the field fail-then-retries, and the nearest analog in Vault/Teleport is Enterprise-only); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve — the field fail-then-retries, and the nearest analog in Vault/Teleport is Enterprise-only) — each decision itself carries a scope, `once` / `run` / `until` / `always` ([docs/POLICIES.md](docs/POLICIES.md)), bounding how far it reaches from one connection up to a permanent workspace-wide allow/deny; proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 ## Deployment surface (anti-sprawl constraint)

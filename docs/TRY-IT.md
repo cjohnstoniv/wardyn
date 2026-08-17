@@ -11,7 +11,7 @@ tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. The rail runs 9 steps: 3 essentials, 4 hands-on
+straight into your first run. The rail runs 10 steps: 3 essentials, 5 hands-on
 demos, 1 **Your work** step that onboards what you'll actually run against
 (**Workspaces**), and **Review** to finish.
 Inside a corporate network, the **Corporate network** step — seated right
@@ -113,16 +113,20 @@ wardyn attach <id>
 
 Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>)
 launches throwaway sandboxes with an embedded terminal and live approvals — no
-repo, no workspace. Four need no model at all, only the sandbox barrier itself:
+repo, no workspace. Six need no model at all, only the sandbox barrier itself:
 **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
 then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
 door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then
-the same in-flight command completes), and **lines that can't be crossed**
+the same in-flight command completes), **lines that can't be crossed**
 (allow-all policy, yet `169.254.169.254` and private-IP probes stay denied — no
-policy can grant them). A fifth card, **the agent in the box**, appears once you
-connect a model (Level 2 below): it runs a real Claude Code agent under the same
-policy primitives, its model injected proxy-side, with `api.anthropic.com` the
-only host it can reach.
+policy can grant them), **once, or for good** (`deny_with_review` — approve with
+**Once** and the retry succeeds, but the *next* attempt after that raises a
+brand-new approval: the grant covers one connection, not the run), and **record
+a policy** (allow-all policy, then synthesize what it actually touched into a
+least-privilege allowlist you can save and re-run confined). A seventh card,
+**the agent in the box**, appears once you connect a model (Level 2 below): it
+runs a real Claude Code agent under the same policy primitives, its model
+injected proxy-side, with `api.anthropic.com` the only host it can reach.
 
 ![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
 

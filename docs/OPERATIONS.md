@@ -182,7 +182,7 @@ default role set, is denied at login instead ("no Wardyn role assigned").
 **What admin-only still means** — the writes with the widest blast radius stay
 gated on the role being exactly `admin` (`requireOperator`): the managed
 harness credential, policy create/update/delete, every mutating `/workspaces`
-route (including `approved-egress`/`llm-cred`/`requirements`), `PUT
+route (including `approved-egress`/`denied-egress`/`llm-cred`/`requirements`), `PUT
 /site-config` and its connectivity probes, secret write/delete, `GET
 /metrics`, and bringing a custom sandbox image or devcontainer repo to a run
 (`image`/`devcontainer_repo` — `denyMemberCustomImage`, `internal/api/runs_create.go`:
@@ -212,6 +212,40 @@ self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
 bound, both under the same authority the operator ceiling is meant to
 constrain.
 
+**An `egress_domain` decision's *scope* adds a second, narrower gate on top
+of the kind check above — and one of the four scopes is gated on ROLE, not
+ownership.** A member who owns the run may still choose `once`, `run`, or
+`until` for their own decision; each stays inside that run's own proxy
+cache. `always` is **operator-only regardless of run ownership** (`decide()`
+rule 6, same file): it writes a durable entry onto the run's workspace
+(`approved_egress` on approve, `denied_egress` on deny) — the SAME two
+columns the `approved-egress`/`denied-egress` routes write, both already
+`operatorOnly` above, alongside every other mutating `/workspaces` route.
+Without this gate a member could reach those same two columns through the
+approval queue instead, a back door around that gate. The refusal is a `403`, not the
+byte-identical `404` the ownership checks above use: by the time this rule
+runs, the caller has already proven the approval exists, is `egress_domain`,
+and is theirs, so a `403` discloses nothing new. It is also checked before
+the run is confirmed to reference a workspace at all — authorization before
+validation, deliberately, so a member's rejection depends only on role,
+never on what the run happens to reference (see
+[POLICIES.md](POLICIES.md) "Approval decision scopes" for the
+workspace-resolution check this precedes).
+
+**`PUT /workspaces/{id}/denied-egress` is the only way to undo a `deny ·
+always` decision.** Full-replace, same shape as `approved-egress` (omit a
+host to un-deny it — there is no per-host delete). This is not just a
+convenience route: deny beats allow everywhere the proxy evaluates policy, so
+a `deny · always` on the wrong host — a model-provider host, or a host a
+required integration injects a credential into — can permanently break that
+workspace's own proxy-side credential injection for every future run
+launched against it. `denied-egress`'s validator is deliberately narrower
+than `approved-egress`'s own (plain host shape only, no model-provider reject
+set) specifically so it keeps working as the escape hatch even when the
+workspace is already bricked — see `handleSetDeniedEgress`'s comment
+(`internal/api/workspaces.go`) for why copying the other validator here would
+close the one door back out.
+
 **A member's own policy is clamped, not trusted.** `POST /runs`'
 `inline_policy` (and its preflight dry-run) is clamped to the operator's
 `DefaultPolicy` ceiling before resolution (`composer.Clamp`,
@@ -227,7 +261,10 @@ less. An admin's own `inline_policy` is not clamped.
 Every member denial above that isn't a plain foreign-resource 404 is audited
 under `authz.denied` (reasons include `admin_surface`, `byoi_member`,
 `not_owner`) — a 404 on a resource that genuinely doesn't exist stays silent
-by design, matching the no-existence-oracle rule.
+by design, matching the no-existence-oracle rule. One exception: the
+`always`-scope 403 above returns before `decide()` reaches any audit call, so
+it is a bare 403 with no audit trail at all, unlike every other denial on
+this list.
 
 **What's still not built.** No custom roles beyond admin/member, no
 per-resource fine-grained permission model (owner-or-admin only — no

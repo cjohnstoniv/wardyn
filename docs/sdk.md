@@ -18,6 +18,7 @@ import (
     "context"
     "fmt"
     "log"
+    "time"
 
     "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -47,7 +48,8 @@ func main() {
     // 3. Poll or fetch later.
     run, _ := c.GetRun(ctx, created.ID)
 
-    // 4. Approve a pending credential or egress request.
+    // 4. Approve a pending credential or egress request. Omitting DecisionOpts
+    //    keeps today's default scope: the grant holds for the rest of the run.
     pending, _ := c.ListApprovals(ctx, client.ApprovalPending)
     for _, ap := range pending {
         approved, err := c.Approve(ctx, ap.ID, "reviewed and safe")
@@ -56,6 +58,19 @@ func main() {
             continue
         }
         fmt.Println("approved:", approved.ID)
+    }
+
+    // 4b. An egress_domain approval can instead be scoped narrower or wider:
+    //     ScopeOnce releases a single connection, ScopeUntil holds until a
+    //     deadline, and ScopeAlways (operator-only) persists the host onto
+    //     the run's workspace so future runs never raise it. Deny takes the
+    //     same DecisionOpts.
+    if len(pending) > 0 {
+        until := time.Now().Add(2 * time.Hour)
+        _, _ = c.Approve(ctx, pending[0].ID, "temporary access", client.DecisionOpts{
+            Scope: client.ScopeUntil,
+            Until: &until,
+        })
     }
 
     // 5. Fetch the append-only audit trail for the run.
@@ -89,6 +104,7 @@ var (
 // Enums and their values are re-exported too:
 _ = client.ApprovalPending // also Approved / Denied / Expired (ApprovalState)
 _ = client.RunRunning      // also Pending / Completed / Failed / Killed ... (RunState)
+_ = client.ScopeOnce       // also Run / Until / Always (ApprovalScope; DecisionOpts.Scope)
 
 // Build a policy spec without touching internal/types:
 spec := client.RunPolicySpec{
@@ -138,12 +154,15 @@ session cookie); the Compose default is `WARDYN_ADMIN_TOKEN=demo-admin-token`,
 sent on **every** call (omitting it returns `401`):
 
 ```sh
-# Create a run. Optional fields: "image" (bring-your-own container, wrapped +
-# governed), "task_mode":"exec" (plain shell command, no agent), "inline_policy".
+# Create a run. Optional fields: "title" (a name — runs sharing one are grouped
+# in the console) and "description"; "image" (bring-your-own container, wrapped +
+# governed); "task_mode":"exec" (plain shell command, no agent);
+# "interactive_start":"agent" (an interactive run's attach shell opens in the
+# image's agent CLI instead of a bare shell); "inline_policy".
 curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Authorization: Bearer demo-admin-token' \
   -H 'Content-Type: application/json' \
-  -d '{"agent":"claude-code","repo":"org/repo","task":"fix the flaky test"}'
+  -d '{"agent":"claude-code","repo":"org/repo","title":"Refund flow","task":"fix the flaky test"}'
 
 # The outcome contract: poll until .state is terminal, then read the task's real
 # exit code off the run.complete audit event. `wardyn run --wait` wraps this.

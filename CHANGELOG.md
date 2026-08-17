@@ -8,6 +8,61 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Egress approvals carry a decision scope: `once`, `run`, `until`, or
+  `always`.** `POST /approvals/{id}/approve` and `/deny` accept
+  `decision_scope` (plus `decision_expires_at` for `until`) on an
+  `egress_domain` approval; `wardyn approve`/`wardyn deny` gain `--scope`/
+  `--until`, the SDK gains `DecisionOpts` (`pkg/client`), and the console's
+  approval queue gains a scope picker (Once / This run / Until… / Always)
+  beside Approve/Deny. Omit the field and nothing changes — the default
+  stays `run`, today's original behavior, held in the proxy's per-host cache
+  for the rest of the run. `once` releases a single connection (one CONNECT
+  tunnel on HTTPS; one request on plain HTTP) and is spent on first use;
+  `until` is the same, bounded by a `decision_expires_at` up to 30 days out
+  and enforced by the run's own proxy sidecar; `always` is
+  **operator-only** and persists the host onto the target workspace's
+  `approved_egress`/`denied_egress` (migrations
+  `0039_approval_decision_scope.sql`, `0040_workspace_denied_egress.sql`,
+  `0041_run_workspace_ids.sql`) so every future run against that workspace
+  inherits the decision instead of re-raising it — deny beats allow, as
+  everywhere else in the proxy. New `PUT /workspaces/{id}/denied-egress`
+  (full-replace, mirrors `approved-egress`) is the only way to undo a
+  permanent deny, including one that broke a workspace's own credential
+  injection.
+- **Runs have a name.** `POST /api/v1/runs` accepts `title` and `description`,
+  both persisted on the run (migration `0038_run_title.sql`) and returned by
+  every read. Runs that share a title are **grouped** on the Runs board — which
+  now groups by title rather than by state; the triage the state sections
+  provided survives as the state facet, attention-first group ordering, and
+  per-state counts in each group header. `wardyn run` gains `--title` /
+  `--description`. Both fields are **optional on the wire and required in the
+  console**: the site-config probe, harness login and workspace record/verify all
+  create runs with no human to name them, so a server-side requirement would
+  break them. Untitled runs — including every run created before this — display
+  by their task exactly as before.
+- **An interactive run can open straight into the agent.**
+  `interactive_start:"agent"` makes the attach shell launch the image's agent CLI
+  in the prepared workspace, once, on first attach; `"shell"` (the default) keeps
+  today's bare terminal. Request-scoped like `task_mode` — carried to the sandbox
+  as `WARDYN_INTERACTIVE_START` and consumed by the image's attach `~/.bashrc`,
+  so it covers the console terminal and the SSH gateway alike (both go through
+  the same `Runner.Attach`). **Needs an image rebuild** — `make agent-images-core`
+  — to take effect; until then an older image ignores the variable and degrades
+  to a shell, which is the previous behavior.
+
+### Changed
+
+- **New run asks for what the run mode actually needs.** An interactive agent run
+  no longer shows a Task box: the server ignores `task` for one, so the prompt
+  the operator typed there was never read by anything. It asks what to start with
+  instead. A batch run asks for the task; a shell command asks for the command
+  and no longer offers "Interactive" at all — that combination silently dropped
+  the command, because the server ignores `task_mode` for an interactive run.
+  Launch is now disabled until the form is complete, and says what it is waiting
+  for; previously the screen had no client-side validation at all.
+
 ### Removed
 
 - **BREAKING — generic integration kinds.** `PUT /api/v1/integrations/{id}` now

@@ -358,6 +358,92 @@ write path this migration left untouched. Whatever `approved_egress`
 already holds, from that button or from before this migration, is still
 unioned into a confined replay's allowlist.
 
+## Approval decision scopes
+
+An approve/deny decision on an `egress_domain` approval carries a **scope** —
+how far that one decision reaches. It travels as `decision_scope` (plus
+`decision_expires_at` for `until`) in the body of `POST
+/approvals/{id}/approve` and `/deny`, and it is **orthogonal to
+`first_use_approval` above**: `first_use_approval` decides *whether* an
+unknown host gets escalated to a human at all; scope decides *how far the
+human's answer reaches* once given. Omit the field and you get `run` —
+today's original behavior, unchanged. Only an `egress_domain` approval may
+carry a non-default scope: a `credential` approval mints exactly once by
+construction and a `tool_call` is bounded by the composer clamp, so a scope
+on either is refused at write time (`decide()`, `internal/api/approvals.go`).
+
+| Scope | Reaches | Where it lives |
+|---|---|---|
+| `once` | One connection. The very next attempt re-raises. | The proxy's per-host cache, consumed on first use. |
+| `run` | The rest of this run — **the default**, and the only scope that existed before this table did. | Same cache, held for the run's lifetime. |
+| `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
+| `always` | Every future run of the target workspace, not just this one. | `workspaces.approved_egress` (allow) / `denied_egress` (deny). |
+
+An unrecognised `decision_scope` is rejected at write time, same as
+`first_use_approval` above — `Valid()` only accepts empty or one of the four
+values in the table. The one place an unrecognised value can still appear is
+a proxy reading a decision made by a *newer* control plane; there it floors
+to `once` rather than widening to `run`, which is fail-closed for an
+**allow** — but not uniformly: on a **deny**, `once` is actually the *wider*
+of the two (`run` stays denied; `once` re-raises), so a version-skewed peer
+costs a re-raise on a cached deny, never a silent widening.
+
+**"One connection" is the honest word, and it means different things on
+HTTPS and plain HTTP.** On HTTPS, `once` releases one CONNECT tunnel — and a
+single tunnel can carry many requests before the agent closes it, so one
+grant can cover far more traffic than "once" suggests. On plain HTTP the
+proxy re-evaluates on every request, so a keep-alive connection burns one
+`once` grant per request there. The copy is literally accurate for HTTPS;
+for HTTP it undersells rather than oversells — it never claims a grant
+covers more than it does, only occasionally less. Either way the grant is
+spent on the approved verdict itself — ahead of the method check, IP
+vetting, and the dial — so a DNS-rebind refusal or a failed dial burns it
+exactly like a successful request would; there is no refund.
+
+**`until` is bounded by the run, and honored against two clocks.** The write
+boundary refuses a `decision_expires_at` more than 30 days out — a decision
+that outlives every plausible run is an `always` in disguise, so use
+`always` for one that is genuinely permanent. Once accepted, the expiry is
+enforced twice: the control plane checks it against its own clock at decide
+time, and the run's own proxy sidecar independently checks
+`time.Now().After(expiresAt)` against the sidecar's clock on every use —
+negligible drift on a same-host deployment, real on a split one. When `T`
+passes, the cached grant resets to *unknown*, not to denied: "until T" means
+the operator gets asked again, not that the host becomes forbidden from then
+on. Nothing sweeps this server-side; the proxy enforces `T`, and the console
+derives the "expired" badge client-side from the same timestamp.
+
+**`always` persists to the workspace and is operator-only — checked before
+the run is even confirmed to reference a workspace at all.** A member who
+owns the run may still pick `once`, `run`, or `until`, but is refused
+`always` outright (a `403`) regardless of ownership, and regardless of
+whether the run resolves to a workspace: of the `always`-specific checks,
+authorization runs before validation, on purpose, so a member's reply
+depends only on who is asking, never on what the run happens to reference.
+For an operator, past that gate, `always` writes the
+approved host onto `workspaces.approved_egress`, or the denied host onto
+`workspaces.denied_egress` — the same two lists `PUT
+/workspaces/{id}/approved-egress` and `PUT /workspaces/{id}/denied-egress`
+maintain — so every future run against that workspace inherits the decision
+without re-raising it. The target is the run's **primary** resolved
+workspace (its first referenced workspace, mounts resolved before repos) —
+there is no picker — and only then, for an operator, does a run that
+resolves to no workspace at all get refused: a 400,
+`always needs a workspace: this run references no onboarded workspace`. See
+[OPERATIONS.md](OPERATIONS.md) for the operator-only gate and how to undo an
+`always` decision.
+
+**Deny beats allow when a host ends up on both lists — same rule as
+everywhere else in this doc.** A fresh `always` decision removes the host
+from the *opposite* list as part of the same write, so re-deciding a host
+(`approve · always` then later `deny · always`, or vice versa) never leaves
+it on both. But `approved-egress` and `denied-egress` are also two
+independent full-replace PUTs with no cross-list guard between them, so an
+operator can still hand-place the same host on both by editing each list
+directly. If that happens, the proxy's own evaluation order — not the egress
+API — decides it: denied domains are checked, and win, before allowed ones
+are ever consulted.
+
 ## `eligible_grants[]` — `GrantSpec`
 
 | Field | Type | Default | What it does |
