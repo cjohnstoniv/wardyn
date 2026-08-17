@@ -28,9 +28,7 @@
  * catalogued in docs/DEMO-SCRIPT.md.
  */
 
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { test, expect, chromium, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import {
   DEMO_TASK,
   DEMO_TITLE,
@@ -43,343 +41,25 @@ import {
   WORKSPACE_NAME,
   WORKSPACE_PATH,
 } from "./task";
-import { act, beat, caption, chapter, installOverlay, PACE, spotlight, typeInTerminal } from "./overlay";
+import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
+// The browser, the recorded context and the shared page live in stage.ts:
+// importing it is what registers this file's beforeAll/afterAll, and each act
+// reads the page out of stage() rather than closing over a module-level `let`.
+// The funnel helpers and decide() live in funnel.ts — every video in the 0.5
+// series needs them, and this file is no longer the only spec in the project.
+import { stage } from "./stage";
+import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
 // Sandboxes are real containers and the final act runs a real agent, so these
 // are minutes, not seconds. They are ceilings for waiting on the PRODUCT; the
-// pacing the viewer sees comes from overlay.ts.
+// pacing the viewer sees comes from overlay.ts. (APPROVAL_APPEARS is the third
+// of them and now lives in funnel.ts, beside the decide() that waits on it.)
 const SANDBOX_UP = 180_000;
-const APPROVAL_APPEARS = 300_000;
 const RUN_FINISHES = 900_000;
 
-// One page for the whole recording — a per-test page would flash a new window
-// between acts. describe.serial + a shared page is the standard shape for a
-// walkthrough whose steps genuinely depend on each other.
-let browser: Browser | undefined;
-let context: BrowserContext | undefined;
-let page: Page;
-
-// Where the browser's own recording lands. Resolved from this file so it does
-// not depend on the process cwd; scripts/record-demo.sh joins console.webm onto
-// the terminal segment to make the final video.
-const VIDEO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../test-results/demo-video");
-const VIDEO_OUT = path.join(VIDEO_DIR, "console.webm");
-
 test.describe.configure({ mode: "serial" });
-
-test.beforeAll(async ({ browser: fixtureBrowser, playwright }) => {
-  // Optional fidelity lane: attach to the real Windows Chrome tester already
-  // knows how to launch (~/tester/bin/chrome-cdp.sh --launch) instead of the
-  // WSLg Chromium Playwright brings up itself. Same spec either way.
-  const cdp = process.env.DEMO_CDP;
-  if (cdp) {
-    // Attached to a browser we did not launch: it has no recordVideo, so this
-    // lane relies on the desktop grab alone (and inherits its occlusion risk).
-    browser = await chromium.connectOverCDP(cdp);
-    const ctx = browser.contexts()[0] ?? (await browser.newContext());
-    page = ctx.pages()[0] ?? (await ctx.newPage());
-  } else {
-    // The context is built BY HAND with recordVideo rather than taken from the
-    // `page` fixture, because playwright.config's `use.video` only reaches
-    // contexts the built-in fixtures create — browser.newPage() silently
-    // ignores it and records nothing. One context for the whole file means one
-    // continuous video across all six acts.
-    // An EXPLICIT viewport, not null: the recording is the page, so matching it
-    // exactly to the video canvas removes the grey band that window-sized
-    // (viewport:null) framing leaves where the browser chrome ate the last
-    // ~80px of the 1080.
-    context = await fixtureBrowser.newContext({
-      viewport: { width: 1920, height: 1080 },
-      recordVideo: { dir: VIDEO_DIR, size: { width: 1920, height: 1080 } },
-    });
-    page = await context.newPage();
-  }
-  void playwright;
-
-  // A stack booted with an admin token needs it in localStorage before first
-  // navigation (the app probes /api/v1/runs on mount to decide auth). The
-  // default containerized install is local-mode with no auth at all, so this
-  // is inert there.
-  const token = process.env.WARDYN_DEMO_TOKEN;
-  if (token) {
-    await page.addInitScript((t: string) => {
-      try {
-        localStorage.setItem("wardyn_admin_token", t);
-      } catch {
-        /* private mode — ignore */
-      }
-    }, token);
-  }
-  // Dark-first console, deterministically (theme-provider.tsx storage key) —
-  // the same addInitScript trick the docs screenshots use.
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("wardyn-theme", "dark");
-    } catch {
-      /* ignore */
-    }
-  });
-  await installOverlay(page);
-  await placeWindowInFrame();
-});
-
-/**
- * Put the browser window INSIDE the capture rectangle, and prove it landed.
- *
- * `--window-position=0,0 --window-size=…` is a REQUEST the window manager may
- * ignore, and WSLg's compositor does: on a dual 2560x1440 desktop it placed the
- * window at x≈2292 — outside a 1920x1080+0+0 grab entirely. The recording then
- * succeeds, runs the full six acts, and captures whatever else happened to be
- * in that corner of the screen. (It filmed a browser game once.)
- *
- * CDP's Browser.setWindowBounds is not a hint — it moves the window. Then read
- * the bounds back and fail loudly if they are still outside the frame, because
- * "recorded the wrong pixels" is invisible until someone watches 6 minutes of
- * the wrong thing.
- */
-async function placeWindowInFrame(): Promise<void> {
-  // WxH+X+Y, same syntax record-demo.sh takes; "full" means no constraint.
-  const capture = process.env.WARDYN_DEMO_CAPTURE || "1920x1080+0+0";
-  if (capture === "full") return;
-  const m = capture.match(/^(\d+)x(\d+)\+(\d+)\+(\d+)$/);
-  if (!m) return;
-  const [w, h, x, y] = m.slice(1).map(Number);
-
-  const session = await page.context().newCDPSession(page).catch(() => null);
-  if (!session) return;
-  try {
-    const { windowId } = (await session.send("Browser.getWindowForTarget")) as { windowId: number };
-    // Size the WINDOW to the viewport PLUS the browser's own chrome. Setting
-    // the window to 1920x1080 while the viewport is also 1920x1080 leaves the
-    // page squeezed into whatever is left after the tab strip and address bar
-    // (~90px), which reads on screen as a dead band under the app. Measure the
-    // chrome rather than guessing it — it differs with zoom and channel.
-    const chrome = await page
-      .evaluate(() => ({
-        w: window.outerWidth - window.innerWidth,
-        h: window.outerHeight - window.innerHeight,
-      }))
-      .catch(() => ({ w: 0, h: 0 }));
-    await session.send("Browser.setWindowBounds", {
-      windowId,
-      bounds: {
-        left: x,
-        top: y,
-        width: w + Math.max(0, chrome.w),
-        height: h + Math.max(0, chrome.h),
-        windowState: "normal",
-      },
-    });
-    const { bounds } = (await session.send("Browser.getWindowForTarget")) as {
-      bounds: { left: number; top: number; width: number; height: number };
-    };
-    // Slack covers the browser chrome we deliberately added plus any snapping
-    // the compositor does. This is a "did it land roughly where we asked"
-    // check, not a pixel assertion — Acts 1-6 are recorded from inside the
-    // page now, so the window's exact placement no longer decides the video.
-    const inside =
-      bounds.left >= x - 40 &&
-      bounds.top >= y - 40 &&
-      bounds.left + bounds.width <= x + w + 200 &&
-      bounds.top + bounds.height <= y + h + 200;
-    if (!inside) {
-      throw new Error(
-        `browser window is OUTSIDE the capture frame — it is at ` +
-          `${bounds.width}x${bounds.height}+${bounds.left}+${bounds.top}, frame is ${capture}. ` +
-          `The recording would film whatever else is in that corner of the screen. ` +
-          `Set WARDYN_DEMO_CAPTURE to a rect that contains the window, or use DEMO_CDP with a browser you place yourself.`,
-      );
-    }
-  } finally {
-    await session.detach().catch(() => {});
-  }
-}
-
-test.afterAll(async () => {
-  await caption(page, "").catch(() => {});
-  // Grab the video handle BEFORE closing: closing the context is what flushes
-  // and finalizes the file, and saveAs() waits for that to finish.
-  const video = page.video();
-  if (context) await context.close().catch(() => {});
-  if (video) {
-    await video.saveAs(VIDEO_OUT).catch(() => {
-      /* the raw per-context webm is still in VIDEO_DIR either way */
-    });
-  }
-  // Leave the window open on the CDP lane — it is the human's own browser.
-  if (browser) await browser.close().catch(() => {});
-});
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-/** The funnel's footer "Next: <step>" button. */
-function nextButton(): Locator {
-  return page.getByRole("button", { name: /^Next:/ });
-}
-
-/** Which step the funnel is on, from the layout's "Step N of M" counter. */
-async function stepIndex(): Promise<number> {
-  const t = await page
-    .getByText(/^Step \d+ of \d+$/)
-    .first()
-    .textContent()
-    .catch(() => null);
-  const m = t?.match(/\d+/);
-  return m ? Number(m[0]) : -1;
-}
-
-/**
- * Advance one funnel step, and confirm it actually advanced.
- *
- * Two behaviours make a single click unreliable:
- *  - A blocked step with a remedy REPLACES Next with its own action button
- *    (setup-layout.tsx: `nextGate.blocked && nextGate.action ? <action> :
- *    <Next>`).
- *  - A step can answer Next by revealing MORE OF ITSELF instead of moving on.
- *    The mandatory Corporate network gate does exactly this: the first Next
- *    swaps its "Host proxy" tab for "Egress redirection" and stays on step 2.
- *
- * So the honest primitive is "press Next until the step counter changes",
- * not "press Next once". Both behaviours fall out of that without the driver
- * hardcoding which step is which.
- */
-async function advance(text?: string): Promise<void> {
-  const before = await stepIndex();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const next = nextButton();
-    const caption = attempt === 0 ? text : undefined;
-    if ((await next.count()) === 0) {
-      // Blocked with a remedy: run it, then Next reappears.
-      await act(page, page.locator("footer").getByRole("button").last(), caption);
-    } else {
-      await expect(next).toBeEnabled({ timeout: 120_000 });
-      await act(page, next, caption);
-    }
-    try {
-      await expect.poll(stepIndex, { timeout: 8_000 }).not.toBe(before);
-      return;
-    } catch {
-      /* same step still — it revealed more of itself; press on */
-    }
-  }
-  throw new Error(`funnel stuck on step ${before} after 3 attempts at Next`);
-}
-
-/**
- * Delete any workspace already named WORKSPACE_NAME, via the API.
- *
- * Setup, not choreography — it runs before Act 4 opens the dialog so the act
- * always films a real creation. Mirrors the way the docs-screenshot spec
- * re-stages its data out of band before capturing.
- */
-async function clearWorkspace(): Promise<void> {
-  const headers = process.env.WARDYN_DEMO_TOKEN
-    ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
-    : undefined;
-  const res = await page.request.get("/api/v1/workspaces", { headers }).catch(() => null);
-  if (!res?.ok()) return;
-  const body = await res.json().catch(() => null);
-  const items: { id?: string; name?: string }[] = Array.isArray(body)
-    ? body
-    : (body?.items ?? body?.workspaces ?? []);
-  for (const w of items) {
-    if (w?.id && w.name === WORKSPACE_NAME) {
-      await page.request.delete(`/api/v1/workspaces/${w.id}`, { headers }).catch(() => {});
-    }
-  }
-}
-
-// NOTE: there is deliberately no per-demo scope here. `demo-card-<id>` exists
-// only on the /demos catalog (demo-screen.tsx's DemoCard, which stacks all six
-// on one page); the funnel step renders the shared DemoRunControls BARE
-// (demos-step.tsx), one demo per step. So on this path the page IS the scope,
-// and scoping to a card that never renders is how Act 3 fails. `demo-start-<id>`
-// does live inside DemoRunControls, so starting is still addressed per demo.
-
-// The scope-menu button labels this file actually needs — see
-// ui/src/app/components/wardyn/copy.ts's APPROVAL_SCOPE_LABEL. "run" needs no
-// entry: it's the split button's plain click, never the caret. "until" stays
-// a visible-only menu option (a demo that makes the viewer wait out a clock
-// is a bad demo), so it never appears here either. Every scoped decide() call
-// in this file is an Approve, so this is Approve-flavored only — widen it (and
-// the label lookup in decide() below) the day a Deny needs a non-"run" scope.
-const SCOPE_MENU_LABEL: Record<"once" | "always", string> = { once: "Once", always: "Always" };
-
-/**
- * Approve (or deny) the first pending egress approval on screen.
- *
- * `scope` is a demo card in Act 3 (the funnel renders one per step, so it has
- * to be narrowed) and the whole page in Act 5, where LiveApprovals sits inline
- * under the terminal and there is only one.
- *
- * `decisionScope` picks the split button's caret menu instead of its bare
- * click — see SCOPE_MENU_LABEL above for which scopes are wired.
- */
-async function decide(
-  scope: Page | Locator,
-  choice: "Approve" | "Deny",
-  text: string,
-  host?: string,
-  decisionScope: "run" | "once" | "always" = "run",
-): Promise<void> {
-  // ALWAYS decide a NAMED host, never "whatever is first in the queue".
-  //
-  // A real agent run raises approvals the demo never asked for: Claude Code
-  // reaches for its telemetry endpoint (http-intake.logs.us5.datadoghq.com) and
-  // under "Hold it for approval" that surfaces as a pending row — often BEFORE
-  // the one the act is about. Taking .first() meant the driver approved a
-  // telemetry host on camera while example.com sat pending and undecided. In a
-  // governance demo, approving something you did not mean to approve is the
-  // worst possible frame.
-  const rows = scope.getByTestId("live-approval-row");
-  const row = host ? rows.filter({ hasText: host }).first() : rows.first();
-  await expect(row).toBeVisible({ timeout: APPROVAL_APPEARS });
-  await caption(page, text);
-  await beat(page, PACE.read);
-  if (decisionScope === "run") {
-    // The bare split-button click — today's default scope, unchanged.
-    await act(page, row.getByRole("button", { name: choice }));
-  } else {
-    // A non-default scope lives behind the split button's caret, which opens
-    // into a Radix portal — not a descendant of `row` in the DOM, so the
-    // scope option itself is found on the page, not scoped to the row.
-    // .first(): the row mounts TWO carets with this exact aria-label — Approve's
-    // ScopeMenu and Deny's (live-approvals.tsx mounts ScopeMenu twice). A bare
-    // match is a strict-mode violation that kills the take. DOM order is
-    // Approve, Approve-caret, Deny, Deny-caret, so .first() is Approve's. The
-    // repo's own suite already disambiguates this way (approvals.spec.ts).
-    await act(page, row.getByRole("button", { name: "More options" }).first());
-    // Scope the option to the OPEN MENU, not the page: the funnel rail renders
-    // each step as a button whose accessible name starts with its label, so on
-    // the "Once, or for good" step a page-wide /^Once/ matches the rail button
-    // too — another strict-mode violation. Radix's DropdownMenuContent is
-    // role="menu", and the options inside are plain buttons.
-    await act(
-      page,
-      page.getByRole("menu").getByRole("button", { name: new RegExp(`^${SCOPE_MENU_LABEL[decisionScope]}`) }),
-    );
-  }
-  if (choice === "Deny") {
-    // Deny is irreversible for the session, so it confirms first.
-    const confirm = page.getByRole("alertdialog");
-    await expect(confirm).toBeVisible();
-    await beat(page, PACE.read);
-    await act(page, confirm.getByRole("button", { name: "Deny" }));
-  }
-
-  // PROVE THE DECISION LANDED. Without this, a rejected decide (a 400 from the
-  // scope rules, say) leaves the row pending, the component toasts a failure —
-  // and the driver narrates "Approved…" straight over it, then keeps going. A
-  // green take with a visibly failed decision on camera is precisely the
-  // failure class this project has already shipped three times.
-  if (host) {
-    await expect(rows.filter({ hasText: host })).toHaveCount(0, { timeout: 20_000 });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Act 1 — first light
@@ -387,6 +67,7 @@ async function decide(
 
 test("act 1 — first light", async () => {
   test.setTimeout(180_000);
+  const page = stage();
   await page.goto("/");
   await page.bringToFront();
 
@@ -427,6 +108,7 @@ test("act 1 — first light", async () => {
 
 test("act 2 — barrier, network, model", async () => {
   test.setTimeout(300_000);
+  const page = stage();
   await chapter(page, "Essentials", "The barrier, the network path, the model");
 
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
@@ -458,6 +140,7 @@ test("act 2 — barrier, network, model", async () => {
 
 test("act 3 — the five guardrail demos", async () => {
   test.setTimeout(1_500_000);
+  const page = stage();
   await chapter(page, "The guardrails", "Five sandboxes, five ways the boundary holds");
 
   for (const demo of FUNNEL_DEMOS) {
@@ -585,6 +268,7 @@ test("act 3 — the five guardrail demos", async () => {
 
 test("act 4 — onboard a workspace", async () => {
   test.setTimeout(300_000);
+  const page = stage();
   await chapter(page, "Your work", "Point it at something real");
 
   await expect(page.getByRole("heading", { name: "Onboard a workspace", level: 2 })).toBeVisible({ timeout: 60_000 });
@@ -654,6 +338,7 @@ test("act 4 — onboard a workspace", async () => {
 
 test("act 5 — a real run", async () => {
   test.setTimeout(2_700_000);
+  const page = stage();
   await chapter(page, "A real run", "Actual work, under the same boundary");
 
   await act(page, page.getByRole("button", { name: "New run" }), "Now a real agent, on that workspace, doing real work.");
@@ -907,6 +592,7 @@ test("act 5 — a real run", async () => {
 
 test("act 6 — the receipts", async () => {
   test.setTimeout(300_000);
+  const page = stage();
   await chapter(page, "The receipts", "Everything above, on the record");
 
   await act(page, page.getByRole("tab", { name: /Audit/ }), "Every decision, attributed: the human, the agent, the system.");

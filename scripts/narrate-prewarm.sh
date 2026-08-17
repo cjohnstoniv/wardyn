@@ -24,12 +24,13 @@ SERVER="${REPO_ROOT}/scripts/narrate-server.py"
 
 [[ -x "${PY}" ]] || { echo "prewarm: no renderer at ${PY} — skipping"; exit 0; }
 
-# Every string literal long enough to be a spoken line, from the two files that
-# hold them. `sort -u` because act()/caption() repeat some copy verbatim.
+# Every string literal long enough to be a spoken line, from every demo spec and
+# helper. The whole directory rather than two named files: the 0.5 series is ten
+# specs, and a per-video file left off this list is a take that stops to render
+# each of its own lines — exactly the dead air this script exists to remove.
+# `sort -u` because act()/caption() repeat some copy verbatim.
 mapfile -t LINES < <(
-  grep -ohE '"[A-Z][^"]{24,}"' \
-    "${REPO_ROOT}/ui/e2e/demo/walkthrough.spec.ts" \
-    "${REPO_ROOT}/ui/e2e/demo/task.ts" 2>/dev/null \
+  grep -ohE '"[A-Z][^"]{24,}"' "${REPO_ROOT}"/ui/e2e/demo/*.ts 2>/dev/null \
   | sed 's/^"//; s/"$//' | sort -u
 )
 

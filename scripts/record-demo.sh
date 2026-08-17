@@ -13,6 +13,17 @@
 #   scripts/record-demo.sh --with-terminal  # ALSO film `make setup` off the screen
 #                                          # (clear the top-left corner first!)
 #   scripts/record-demo.sh --silent      # no narration (captions still render)
+#   scripts/record-demo.sh --video 03    # record ONE video of the 0.5 series
+#                                        # (ui/e2e/demo/03-*.spec.ts)
+#
+# THE SERIES. --video <nn> records a single video instead of the whole
+# walkthrough: it picks ui/e2e/demo/<nn>-*.spec.ts as the only spec to run and
+# names the output after it (wardyn-<nn>-<slug>-<stamp>.mp4). Only video 01 —
+# and the no-flag walkthrough, which starts from nothing by definition — wipes
+# the stack first. Every other video opens on state an earlier video left
+# behind (a workspace, a run, a permanent grant), so a reset there does not
+# just cost minutes of dead air, it films the wrong thing. Pass --reset to
+# override that, --no-reset to opt 01 out. See docs/DEMO-SCRIPT.md.
 #
 # BY DEFAULT the video is the console only, recorded by the browser ITSELF
 # (Playwright recordVideo) — no screen grab, so nothing you do on this machine
@@ -53,16 +64,44 @@ DO_TERMINAL=0
 # (scripts/narrate-server.py). Renders offline, cached by content hash, and
 # degrades to a silent take if the renderer is missing — so it is safe on.
 DO_VOICE=1
-for arg in "$@"; do
-  case "$arg" in
-    --no-reset)      DO_RESET=0 ;;
+# Which video of the 0.5 series to record. Empty is the legacy end-to-end
+# walkthrough — every spec the demo project matches, which today is the one
+# six-act file. Env-overridable like every other knob in this script, and
+# exported below because the verifier dispatches on it.
+VIDEO="${WARDYN_DEMO_VIDEO:-}"
+# Whether a reset was actually ASKED for. DO_RESET's default is per-video (only
+# 01 wipes the stack, see below) and a typed flag has to beat that default in
+# both directions — otherwise `--video 05 --reset` would silently not reset.
+RESET_EXPLICIT=0
+# A while/shift loop, not `for arg in "$@"`: --video takes a value, and the for
+# loop cannot consume the next word.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-reset)      DO_RESET=0; RESET_EXPLICIT=1 ;;
+    --reset)         DO_RESET=1; RESET_EXPLICIT=1 ;;
     --no-record)     DO_RECORD=0 ;;
     --with-terminal) DO_TERMINAL=1 ;;
     --silent)        DO_VOICE=0 ;;
-    -h|--help)   sed -n '4,28p' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    # The emptiness check is here rather than with the rest of the validation in
+    # preflight because an empty VIDEO is indistinguishable from no --video at
+    # all — and that path means the whole walkthrough, i.e. reset-all, i.e. a
+    # stack wipe nobody asked for.
+    --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
+    --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
+    -h|--help)   sed -n '4,39p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
+  shift
 done
+
+# The clean slate belongs to video 01 alone. Every later video opens on state
+# an earlier one left behind — the workspace it onboarded, the run it launched,
+# the host it permanently granted — so wiping the stack before, say, video 03
+# does not merely cost minutes of dead air: it films a story whose first half
+# never happened. An explicit --reset/--no-reset always wins.
+if [[ -n "${VIDEO}" && "${VIDEO}" != "01" && "${RESET_EXPLICIT}" == 0 ]]; then
+  DO_RESET=0
+fi
 
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1;35m═══ %s\033[0m\n\n' "$*"; }
@@ -98,6 +137,31 @@ step "Preflight"
 
 command -v docker >/dev/null || die "docker not found"
 [[ -d "${FIXTURE}" ]] || die "missing workspace fixture: ${FIXTURE}"
+
+# Which spec the driver runs, and what the file is called. Resolved HERE, in
+# preflight, for the reason everything else in this section is: a typo'd --video
+# must not be discovered after reset-all has already wiped the stack.
+SPEC=""
+SLUG=""
+PW_FILTER=()
+if [[ -n "${VIDEO}" ]]; then
+  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..10), got: ${VIDEO}"
+  # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
+  # below rejects it, which is one fewer shell option changed under the rest of
+  # this script.
+  MATCHES=("${REPO_ROOT}"/ui/e2e/demo/"${VIDEO}"-*.spec.ts)
+  [[ -f "${MATCHES[0]}" ]] \
+    || die "no spec for --video ${VIDEO} (looked for ui/e2e/demo/${VIDEO}-*.spec.ts). Each series spec lands with its own video; until yours does, record the walkthrough with no --video."
+  [[ "${#MATCHES[@]}" -eq 1 ]] || die "--video ${VIDEO} matches ${#MATCHES[@]} specs: ${MATCHES[*]}"
+  SPEC="${MATCHES[0]##*/}"
+  SLUG="${SPEC#"${VIDEO}"-}"; SLUG="${SLUG%.spec.ts}"
+  # Playwright takes a filename filter as a bare positional argument.
+  PW_FILTER=("${SPEC}")
+fi
+# Exported, not just passed: scripts/verify-demo-take.sh dispatches its
+# per-video checks on this, and the driver can read it too. Empty means the
+# legacy walkthrough, which every consumer already treats as the default.
+export WARDYN_DEMO_VIDEO="${VIDEO}"
 
 if [[ -z "${DEMO_CDP:-}" && -z "${DISPLAY:-}" ]]; then
   die "no DISPLAY — the driver needs a headed browser. Under WSL that means WSLg; or set DEMO_CDP to attach to a Chrome with remote debugging."
@@ -161,8 +225,16 @@ if [[ -z "${OUT_DIR}" ]]; then
 fi
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/local/demo}"
 mkdir -p "${OUT_DIR}" || die "cannot create output dir: ${OUT_DIR}"
-OUT="${OUT_DIR}/wardyn-demo-${STAMP}.mp4"
+# A series take is named for its video, so a folder of them sorts into viewing
+# order instead of into the order someone happened to reshoot them. The whole
+# walkthrough keeps the name it has always had.
+if [[ -n "${VIDEO}" ]]; then
+  OUT="${OUT_DIR}/wardyn-${VIDEO}-${SLUG}-${STAMP}.mp4"
+else
+  OUT="${OUT_DIR}/wardyn-demo-${STAMP}.mp4"
+fi
 
+[[ -n "${VIDEO}" ]] && log "series      video ${VIDEO} · ${SLUG} (${SPEC})"
 log "workspace   ${WORKSPACE_PATH}"
 log "video       ${OUT}"
 log "browser     ${DEMO_CDP:+CDP → ${DEMO_CDP}}${DEMO_CDP:-WSLg Chromium (DISPLAY=${DISPLAY:-})}"
@@ -288,17 +360,25 @@ if [[ "${DO_VOICE}" == 1 ]]; then
   "${REPO_ROOT}/scripts/narrate-prewarm.sh" || log "prewarm failed — lines will render inline instead"
 fi
 
-step "Acts 1-6 · Driving the console"
+if [[ -n "${VIDEO}" ]]; then
+  step "Video ${VIDEO} · ${SLUG} · Driving the console"
+else
+  step "Acts 1-6 · Driving the console"
+fi
 (
   cd "${REPO_ROOT}/ui" || exit 1
   # The driver needs the capture rect too: it moves the browser window into the
   # frame via CDP and REFUSES to run if the window lands outside it. Without
   # that the recording happily films whatever else is in that screen corner.
+  #
+  # PW_FILTER is one spec filename with --video and EMPTY without it — no
+  # positional filter at all, so the demo project's own testMatch decides,
+  # exactly as it did before the series existed.
   WARDYN_DEMO=1 \
   WARDYN_DEMO_WORKSPACE="${WORKSPACE_PATH}" \
   WARDYN_DEMO_CAPTURE="${CAPTURE}" \
   WARDYN_DEMO_VOICE="${DO_VOICE}" \
-    pnpm exec playwright test --project=demo --workers=1 --reporter=line
+    pnpm exec playwright test --project=demo --workers=1 --reporter=line "${PW_FILTER[@]}"
 )
 DRIVER_RC=$?
 

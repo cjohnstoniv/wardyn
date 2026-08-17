@@ -12,7 +12,15 @@
 # take is checked against the audit trail and the filesystem, never the exit
 # code.
 #
+# WHICH take is on the bench comes from WARDYN_DEMO_VIDEO (record-demo.sh
+# --video exports it). Unset means the legacy end-to-end walkthrough, whose
+# checks ARE video 02's — so the default path is byte-for-byte what this script
+# always did. The narration and artifact checks at the bottom are SHARED: they
+# run for every take of every video, because "it recorded" and "it has a voice"
+# are claims no video gets to skip.
+#
 #   scripts/verify-demo-take.sh [video.mp4]
+#   WARDYN_DEMO_VIDEO=05 scripts/verify-demo-take.sh video.mp4
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,6 +35,15 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
 
+# Video 02's own checks — the act-5 governance beats, exactly as this script has
+# always run them, now behind a name so the dispatch below can pick them.
+#
+# A FUNCTION, and deliberately not a subshell or a pipeline: ok()/bad() increment
+# counters that must survive to the summary, and a subshell is precisely how this
+# script once reported success over a real failure (see the temp-file note further
+# down). The body is also deliberately NOT re-indented — those `python3 -c '...'`
+# blocks are single-quoted PYTHON, where leading whitespace is syntax.
+check_video_02() {
 head_ "The real run (act 5)"
 # Select act 5's MAIN run by title. Not "the newest workspace-backed run":
 # act 5 now also launches a second, PROOF run (PROOF_RUN_TITLE) to show the
@@ -175,6 +192,28 @@ print("ALWAYS_CLEAN", not bad)
 else
   printf '    (workspaces API unreachable — stack down?)\n'
 fi
+}
+
+# --- which video is on the bench ---------------------------------------------
+#
+# Unset is the legacy walkthrough: it films act 5, so it gets act 5's checks.
+# The other nine videos are stubs until their spec lands — each one's assertions
+# ship WITH the spec that films them, because a check written before the beat
+# exists is a guess, and a guess that passes is worse than no check at all. What
+# they do get today is every SHARED check below, which is already enough to
+# catch a take that recorded nothing, recorded silently, or recorded at the
+# wrong size.
+case "${WARDYN_DEMO_VIDEO:-}" in
+  ""|02) check_video_02 ;;
+  01|03|04|05|06|07|08|09|10)
+    head_ "Video ${WARDYN_DEMO_VIDEO}"
+    printf '    video-specific checks TBD by spec\n'
+    ;;
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..10, or unset for the walkthrough" ;;
+esac
+
+# --- shared: every take, every video -----------------------------------------
 
 head_ "Narration"
 TL="${REPO_ROOT}/ui/test-results/demo-video/narration.json"

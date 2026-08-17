@@ -9,16 +9,112 @@ it.
 make record-demo                          # the works
 make record-demo ARGS=--no-reset          # keep the current stack (iterating on the driver)
 make record-demo ARGS=--no-record         # drive the UI, capture nothing (preflight)
+make record-demo ARGS="--video 03"        # one video of the 0.5 series (see below)
 ```
 
 | Piece | Where |
 |---|---|
 | Orchestration (reset → capture → `make setup` → driver) | [`scripts/record-demo.sh`](../scripts/record-demo.sh) |
 | The driver (acts 1–6) | [`ui/e2e/demo/walkthrough.spec.ts`](../ui/e2e/demo/walkthrough.spec.ts) |
+| The rig: one browser, one recorded context, one shared page | [`ui/e2e/demo/stage.ts`](../ui/e2e/demo/stage.ts) |
+| Walking the funnel, deciding an approval | [`ui/e2e/demo/funnel.ts`](../ui/e2e/demo/funnel.ts) |
 | Captions, spotlight ring, chapter cards, terminal typing | [`ui/e2e/demo/overlay.ts`](../ui/e2e/demo/overlay.ts) |
 | Task text, workspace path, the five demo commands | [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) |
 | The workspace the run attaches | [`examples/workspaces/demo-node/`](../examples/workspaces/demo-node/) |
 | Playwright `demo` project (headed, 1920×1080, `:8080`) | [`ui/playwright.config.ts`](../ui/playwright.config.ts) |
+
+## The series harness (0.5)
+
+The 0.5 story is not one video, it is ten. Same rig throughout — same driver,
+same overlay, same narration, same verifier — with one spec per video:
+
+```sh
+scripts/record-demo.sh --video 03    # records ui/e2e/demo/03-*.spec.ts, and only that
+scripts/record-demo.sh               # no --video: the end-to-end walkthrough, unchanged
+```
+
+`--video <nn>` does four things and nothing else:
+
+| | |
+|---|---|
+| **Picks the spec** | `ui/e2e/demo/<nn>-*.spec.ts`, handed to Playwright as a positional filter. Resolved in **preflight**, so a number with no spec (or two specs) dies before anything destructive has happened |
+| **Names the output** | `wardyn-<nn>-<slug>-<stamp>.mp4`, the slug taken from the spec's own filename — a folder of takes then sorts into viewing order rather than reshoot order |
+| **Decides the reset** | see below |
+| **Exports `WARDYN_DEMO_VIDEO`** | which is how `verify-demo-take.sh` knows which take it is looking at |
+
+With no `--video` nothing is filtered at all: the `demo` project's own
+`testMatch` decides, exactly as it did before the series existed.
+
+The shared code the ten specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
+(the browser, the recorded context, the one page — importing it registers a
+spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`)
+and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`,
+`decide()`). Both were lifted out of `walkthrough.spec.ts` unchanged. **A spec
+that imports `stage.ts` keeps its own `test.skip(!process.env.WARDYN_DEMO, …)`
+guard** — without it, a bare `pnpm exec playwright test --project=demo` points a
+headed browser at a developer's live stack and starts clicking Launch.
+
+### The clean slate belongs to video 01
+
+`reset-all` runs for **video 01 and the no-flag walkthrough only**. Every other
+`--video` implies `--no-reset`; `--reset` overrides that, `--no-reset` opts 01
+out.
+
+This is not a speed optimisation. The series is shot in an order where each
+video opens on state an earlier one left behind — a workspace that was
+onboarded, a run that was launched, a host that was permanently granted
+(**DA14/SV20**). Inside the **V8 → V2 → V3** window in particular, *every* take
+runs with `--no-reset`: a wipe between them does not merely cost minutes of dead
+air, it films a story whose first half never happened — and the take stays green
+the whole time, which is exactly why the rule lives in the script rather than
+with whoever is holding the clapperboard.
+
+### The SSH videos need the gateway on before `make setup`
+
+`WARDYN_SSH_LISTEN` empty is the product default and means *off*: no listener,
+and the host key is not even generated (`buildOptionalFeatures`,
+`cmd/wardynd/boot_deps.go`). A take that films the SSH pane therefore has to
+bring the stack up with it set, in the shell that runs the recorder — the
+script's `make setup` inherits the environment:
+
+```sh
+export WARDYN_SSH_LISTEN=:2222
+export WARDYN_SSH_ADVERTISE=127.0.0.1:2222   # advisory copy: it is what the pane's ssh command shows
+scripts/record-demo.sh --video 07
+```
+
+Then **preflight the fingerprint before rolling**, not on camera:
+
+```sh
+curl -s localhost:8080/healthz | jq .ssh   # expect enabled: true, plus host_key_fingerprint
+```
+
+`enabled: false` means the variable never reached wardynd (or the image predates
+the gateway) — fix that before the take, because the run-detail card simply does
+not render and there is nothing to film.
+
+The host key is minted and persisted on first boot with the gateway on, so
+**video 01's `reset-all` mints a new one**. Any `known_hosts` entry from an
+earlier stack then makes the client refuse with the full REMOTE HOST
+IDENTIFICATION HAS CHANGED banner — mid-take, in a governance demo, on camera:
+
+```sh
+ssh-keygen -R '[127.0.0.1]:2222'
+```
+
+### The verifier dispatches on the video
+
+`verify-demo-take.sh` reads `WARDYN_DEMO_VIDEO` and picks its checks from it.
+Unset means the legacy walkthrough, which films act 5 — so it gets act 5's
+checks, byte for byte what this script always ran, and that is also `--video 02`.
+The other nine are stubs (`video-specific checks TBD by spec`): **each video's
+assertions ship with the spec that films them**, because a check written before
+the beat exists is a guess, and a guess that passes is worse than no check.
+
+What every take gets regardless is the **shared** half — a narration timeline
+with cues and zero overlaps, and an mp4 that is 1920×1080 and actually carries
+an audio stream. That alone catches a take that recorded nothing, recorded
+silently, or recorded at the wrong size.
 
 ## Before the first take
 
@@ -287,10 +383,17 @@ setup** → lands on Runs.
 ### Act 5 — a real run
 
 **New run** → `/runs/new`. **Title** (required — Launch is disabled without one),
-run type **Agent task**, **Batch**, **Task** textarea, workspace combobox,
-confinement **Confined**, then **Edit hosts…** → dialog **Network for this run**:
-allow the `api.anthropic.com` chip, pick **Hold it for approval**, **Save
-hosts**. Then **Launch run**.
+run type **Agent task**, **Batch** (see the rename note below), **Task**
+textarea, workspace combobox, confinement **Confined**, then **Edit hosts…** →
+dialog **Network for this run**: allow the `api.anthropic.com` chip, pick **Hold
+it for approval**, **Save hosts**. Then **Launch run**.
+
+> **Pending rename:** Track B renames this mode **Batch → Autonomous**. The
+> driver matches `getByRole("radio", { name: /^Batch/ })`, so the day that lands
+> it fails loudly at exactly one line rather than recording an interactive run
+> that never executes the task — but every **Batch** in this document, and in
+> `walkthrough.spec.ts`, is stale from that moment. Re-shooting against a build
+> that already has the rename? Read **Batch** as **Autonomous** throughout.
 
 > **Order matters:** **Batch** is clicked BEFORE the Task box is filled. An
 > interactive run has no Task field at all (the server ignores task for one), so
@@ -389,7 +492,8 @@ assumes the obvious thing:
 - **Run mode defaults to `interactive`** (`initialWizardState()`, wizard-types.ts),
   which launches an IDLE sandbox waiting for a human to type. The agent never
   executes the task, so nothing reaches for `example.com` and the held approval
-  never appears — the run just sits there. Act 5 selects **Batch** explicitly.
+  never appears — the run just sits there. Act 5 selects **Batch** explicitly
+  (**Autonomous** once Track B's rename lands — see Act 5 above).
   This is now STRUCTURAL as well as semantic: the Task field only exists in batch
   mode, so filling it before the **Batch** click targets nothing. An interactive
   run instead offers **Start with** (the agent CLI, or a bare terminal).
@@ -455,7 +559,9 @@ scripts/verify-demo-take.sh /mnt/c/Users/<you>/Videos/wardyn-demo-<ts>.mp4
 ```
 
 It checks the take against the **audit trail and the filesystem**, not the exit
-code, and exits non-zero if any of it fails:
+code, and exits non-zero if any of it fails. The list below is the walkthrough's
+— i.e. video 02's, and the default when `WARDYN_DEMO_VIDEO` is unset; the last
+two entries are shared by every video (see "The series harness" above):
 
 - the act-5 run exists and `api.anthropic.com` was allowed (the model path worked)
 - `example.com` went `egress.pending` → `approval.decide` → `egress.allow`
