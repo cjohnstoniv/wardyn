@@ -111,7 +111,7 @@ while IFS=$'\t' read -r needle src doc; do
 done <<'PROSE'
 WAITING_FOR_CONFIRMATION	internal/types/types.go	ARCHITECTURE.md
 UpdateRunStateIf	internal/api/runs_lifecycle.go	ARCHITECTURE.md
-wait_for_review	internal/types/types.go	ARCHITECTURE.md
+wait_for_review	internal/types/policy.go	ARCHITECTURE.md
 Internal: true	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
 agent-run --idle	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
 wardyn-proxy:	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
@@ -190,7 +190,12 @@ for f in "$TMP"/*.mmd; do
 done
 
 # status-tag consistency: the CC3 maturity word must match across docs
-if ! grep -q 'CC3/Vault (Kata microVM) \*\*\[experimental\]\*\*' README.md; then
+# The README's prose form of this moved into the capability table when the file
+# was cut to under 1,000 words for 0.5 — the sentence this used to pin no longer
+# exists anywhere. What the gate actually protects is the MARKER, not the
+# sentence carrying it: CC3 must never be listed beside its shipped siblings
+# without the word that says it is not one of them.
+if ! grep -q 'Vault (Kata, experimental)' README.md; then
   echo "  FAIL consistency: README CC3 [experimental] tag missing/changed"; fail=1
 fi
 if ! grep -q 'Kata microVM \[experimental\]' threatmodel/THREAT-MODEL.md; then
