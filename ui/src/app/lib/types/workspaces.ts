@@ -193,6 +193,15 @@ export interface Workspace {
   // EXPLICITLY approved by the operator (from suggested_egress) rather than
   // auto-derived. Managed via api.setApprovedEgress (full-replacement PUT).
   approved_egress?: string[];
+  // The OPERATOR-owned mirror of approved_egress: hosts explicitly blocked for
+  // this workspace, written by a `deny · always` approval decision or the
+  // denied-egress PUT (api.setDeniedEgress). Folded into a run's denied
+  // domains at create time, where deny beats allow, allow_all_egress, and a
+  // runtime first-use approval alike. UNLIKE approved_egress, this is NOT
+  // cleared when the workspace's sources change — a permanent deny needs no
+  // re-review against new content. Mirrors internal/types/workspace.go's
+  // Workspace.DeniedEgress.
+  denied_egress?: string[];
   image_ref?: string;
   // Operator-owned model/harness credential binding — see WorkspaceLLMCred.
   // Absent/mode="" => no binding; a picking run falls back to the global

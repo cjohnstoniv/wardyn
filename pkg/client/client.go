@@ -64,6 +64,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -172,10 +173,19 @@ func (e *APIError) envelopeMessage() string {
 
 // CreateRunRequest is the body for POST /api/v1/runs.
 type CreateRunRequest struct {
-	Agent    string     `json:"agent"`
-	Repo     string     `json:"repo"`
-	Task     string     `json:"task,omitempty"`
-	PolicyID *uuid.UUID `json:"policy_id,omitempty"`
+	Agent string `json:"agent"`
+	Repo  string `json:"repo"`
+	Task  string `json:"task,omitempty"`
+	// Title is a short human NAME for the run. Runs that share a title are
+	// grouped in the console's run list. OPTIONAL on the wire even though the
+	// console requires it: the site-config probe, harness login and workspace
+	// record/verify all create runs with no human to name them, and the console
+	// falls back to Task for display. Trimmed and stored on the run row.
+	Title string `json:"title,omitempty"`
+	// Description is optional free-text context — why this run exists. Never
+	// interpreted, only stored and displayed.
+	Description string     `json:"description,omitempty"`
+	PolicyID    *uuid.UUID `json:"policy_id,omitempty"`
 	// ConfinementClass, when set, requests a specific confinement class
 	// ("CC1"/"CC2"/"CC3"). Empty inherits the policy minimum; an unknown
 	// non-empty value is rejected by the server with 400.
@@ -220,6 +230,14 @@ type CreateRunRequest struct {
 	// command in the same governed sandbox (no agent, no LLM credentials — the
 	// BYOA/CI lane; see docs/CI.md). Ignored for an interactive run.
 	TaskMode string `json:"task_mode,omitempty"`
+	// InteractiveStart is TaskMode's interactive counterpart: what the attach
+	// shell opens with. "" / "shell" drops the human into a shell in the
+	// prepared workspace (the long-standing behavior); "agent" additionally
+	// launches the image's agent CLI (claude / codex) there, once, on the first
+	// attach. Request-scoped like TaskMode — never persisted on the run row,
+	// carried to the sandbox as WARDYN_INTERACTIVE_START and consumed by the
+	// image's attach ~/.bashrc. Ignored for a non-interactive run.
+	InteractiveStart string `json:"interactive_start,omitempty"`
 	// Workspaces carries PER-WORKSPACE options — which of a workspace's
 	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
 	// this run enables, and a read-only narrowing — for the workspaces this run
@@ -371,29 +389,58 @@ func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, o
 	return out, err
 }
 
-// approvalDecisionRequest is the shared approve/deny body.
+// approvalDecisionRequest is the shared approve/deny body. Scope/ExpiresAt use
+// the server's decision_scope / decision_expires_at wire names exactly — both
+// omitempty, so a zero DecisionOpts (or no opts at all) puts neither on the
+// wire and the server's ApprovalScope.Normalize() keeps today's run-scoped
+// behavior for that caller.
 type approvalDecisionRequest struct {
-	Reason string `json:"reason,omitempty"`
+	Reason    string        `json:"reason,omitempty"`
+	Scope     ApprovalScope `json:"decision_scope,omitempty"`
+	ExpiresAt *time.Time    `json:"decision_expires_at,omitempty"`
+}
+
+// DecisionOpts is the optional scope/expiry for Approve/Deny. This repo has no
+// WithX functional-option precedent (see ListOpts); DecisionOpts follows the
+// same plain-struct-passed-variadically shape. Pass at most one.
+type DecisionOpts struct {
+	// Scope is the decision's blast radius: ScopeOnce, ScopeRun (the zero
+	// value, and today's default), ScopeUntil, or ScopeAlways. Meaningful
+	// only for an egress_domain approval; the server rejects it otherwise.
+	Scope ApprovalScope
+	// Until is the expiry for Scope == ScopeUntil: required by the server in
+	// that case, and rejected if set for any other scope.
+	Until *time.Time
 }
 
 // Approve transitions an approval request to APPROVED.
 // reason is optional; pass an empty string to omit it.
+// opts is optional (pass at most one); omitting it keeps today's default — a
+// run-scoped approval. See DecisionOpts for once/until/always.
 // Returns 409/APIError when the approval has already been decided.
 // Returns 404/APIError when the approval does not exist.
-func (c *Client) Approve(ctx context.Context, id uuid.UUID, reason string) (types.ApprovalRequest, error) {
+func (c *Client) Approve(ctx context.Context, id uuid.UUID, reason string, opts ...DecisionOpts) (types.ApprovalRequest, error) {
 	var out types.ApprovalRequest
 	body := approvalDecisionRequest{Reason: reason}
+	if len(opts) > 0 {
+		body.Scope, body.ExpiresAt = opts[0].Scope, opts[0].Until
+	}
 	err := c.do(ctx, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", body, &out)
 	return out, err
 }
 
 // Deny transitions an approval request to DENIED (fail closed).
 // reason is optional; pass an empty string to omit it.
+// opts is optional (pass at most one); omitting it keeps today's default — a
+// run-scoped denial. See DecisionOpts for once/until/always.
 // Returns 409/APIError when the approval has already been decided.
 // Returns 404/APIError when the approval does not exist.
-func (c *Client) Deny(ctx context.Context, id uuid.UUID, reason string) (types.ApprovalRequest, error) {
+func (c *Client) Deny(ctx context.Context, id uuid.UUID, reason string, opts ...DecisionOpts) (types.ApprovalRequest, error) {
 	var out types.ApprovalRequest
 	body := approvalDecisionRequest{Reason: reason}
+	if len(opts) > 0 {
+		body.Scope, body.ExpiresAt = opts[0].Scope, opts[0].Until
+	}
 	err := c.do(ctx, http.MethodPost, "/api/v1/approvals/"+id.String()+"/deny", body, &out)
 	return out, err
 }

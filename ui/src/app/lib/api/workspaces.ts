@@ -129,6 +129,22 @@ export const workspaces = {
     return asJson<Workspace>(res);
   },
 
+  // PUT /api/v1/workspaces/{id}/denied-egress  { domains } -> the updated
+  // workspace. setApprovedEgress's mirror for the operator-owned denied-egress
+  // list (Phase 4 revocation): FULL replacement + idempotent, same shape. This
+  // is the only way to undo a `deny · always` decision — including one that
+  // bricked the workspace's model-provider credential injection (deny beats
+  // allow at the proxy) — so the workspace detail screen's Denied hosts card
+  // is the promised cure for the copy in denyDialogCopy/egressBlastRadius's
+  // "always" cases (operator-only, like the route itself).
+  async setDeniedEgress(id: string, domains: string[]): Promise<Workspace> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/denied-egress`, {
+      method: "PUT",
+      body: JSON.stringify({ domains }),
+    });
+    return asJson<Workspace>(res);
+  },
+
   // PUT /api/v1/workspaces/{id}/requirements  { requirements } -> the updated
   // workspace. FULL replacement, like setApprovedEgress above: send the whole
   // desired contract, not a delta. Keys are "secret:<name>" | "egress:<host>" |

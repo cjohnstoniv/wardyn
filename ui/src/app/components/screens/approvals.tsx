@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { canDecideApproval, type ApprovalKind, type ApprovalRequest } from "../../lib/types";
+import { canDecideApproval, decisionArgs, type ApprovalKind, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
@@ -37,6 +37,8 @@ import {
   CAPABILITY,
   OPERATOR_ONLY_REASON,
   WIRE_TO_COPY,
+  approvalScopeBadge,
+  egressBlastRadius,
 } from "../wardyn/copy";
 
 type Filter = "PENDING" | "decided";
@@ -168,19 +170,30 @@ interface Banner {
   blast: string;
 }
 
+// This is a PRE-decision preview, not a live readout of a scope in progress:
+// PendingCard calls it before any scope has been chosen (the picker lives
+// inside ReasonDialog, a separate component this one never sees into), so it
+// always previews what a plain Approve — today's, and the default's,
+// behavior — actually grants. There is deliberately no decisionScope
+// parameter here: an earlier draft threaded one through for a "live" banner
+// that would track the dialog's in-progress selection, but that would need
+// lifting scope state out of ReasonDialog into this screen for no real gain —
+// ReasonDialog already shows every scope's own honest one-liner side by side
+// (APPROVAL_SCOPE_HINT/DENY_SCOPE_HINT in copy.ts), which is a better compare-
+// before-you-pick UX than one line that changes under you. If a live banner is
+// ever wanted here, it belongs inside ReasonDialog itself, driven by its own
+// `scope` state — not bolted onto this pre-decision preview.
 function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
   const ttl = ttlPhrase(scope);
   switch (kind) {
     case "egress_domain": {
       const host = str(scope, "host", "domain");
-      return {
-        what: host
-          ? `Outbound network access from this run to ${host}.`
-          : "Outbound network access from this run to the requested host.",
-        blast: host
-          ? `The run can reach ${host} for its remaining lifetime. No other new domain opens — every other host still gates.`
-          : "The run can reach the approved host. No other new domain opens — every other host still gates.",
-      };
+      // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
+      // state capabilities the scope actually grants… never invent one." The
+      // OLD hardcoded "for its remaining lifetime" claim was wrong for `once`
+      // and hid `always`'s durability entirely. Always "run" here: see this
+      // function's own doc for why that's correct, not a shortcut.
+      return egressBlastRadius("run", host ?? "the requested host");
     }
     case "credential": {
       const ck = credentialKind(scope);
@@ -311,11 +324,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // signal success/failure back to the dialog so it can reset its busy state and
   // only close on success. Returns true on success so ReasonDialog knows whether
   // to close.
-  const decide = async (reason: string): Promise<boolean> => {
+  const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
     try {
-      if (prompt.action === "approve") await api.approve(prompt.id, reason);
-      else await api.deny(prompt.id, reason);
+      const args = decisionArgs(decisionScope, until);
+      if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
+      else await api.deny(prompt.id, reason, ...args);
       toast.success(prompt.action === "approve" ? "Request approved" : "Request denied");
       setPrompt(null);
       load();
@@ -413,7 +427,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         </>
       )}
 
-      <ReasonDialog prompt={prompt} onClose={() => setPrompt(null)} onSubmit={decide} />
+      {/* hasWorkspace: this standalone page never has the run in hand (no
+          getRun fetch backs the list), so — unlike the two mounts that DO
+          know a run's workspace_ids — it deliberately opts back into Always
+          being offered rather than inheriting the fail-safe-disabled default;
+          a member/no-workspace decide still gets the server's honest 400/403. */}
+      <ReasonDialog prompt={prompt} hasWorkspace onClose={() => setPrompt(null)} onSubmit={decide} />
     </div>
   );
 }
@@ -495,6 +514,10 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   const who = item.decided_by || (item.state === "EXPIRED" ? "unanswered" : "system");
   const when = relativeTime(item.decided_at ?? item.requested_at);
   const meta = item.state === "EXPIRED" && !item.decided_by ? `${who} · ${when}` : `by ${who} · ${when}`;
+  // egress_domain only, and only when a decision actually recorded one (Phase
+  // 0 §6) — undefined for EXPIRED (ExpireStale deliberately writes no scope:
+  // an expiry is a sweep nobody decided) and for every other kind.
+  const scopeBadge = approvalScopeBadge(item);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
@@ -508,6 +531,7 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
         {item.run_id}
       </Link>
       <ApprovalStateBadge state={item.state} />
+      {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>
     </div>
   );

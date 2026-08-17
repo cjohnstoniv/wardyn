@@ -57,16 +57,16 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	const q = `
 		INSERT INTO agent_runs
 			(id, created_at, updated_at, created_by, agent, repo, task,
-			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
-		r.AgentExecID,
+		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs,
 	)
 	return scanRun(row)
 }
@@ -75,7 +75,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -190,6 +190,11 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// scanRun is the ONE reader for every agent_runs column list in this package
+// (CreateRun's RETURNING, GetRun, ListRunsPage, ListRunsPageByCreator,
+// ClaimStaleRunWatchers). New columns are APPENDED to the end of all of them
+// and to the end of this Scan — appending is the only edit that cannot
+// silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state string
@@ -197,7 +202,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
-		&r.AgentExecID,
+		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -312,6 +317,19 @@ func workspaceApprovedParam(domains []string) any {
 	return b
 }
 
+// workspaceDeniedParam is workspaceApprovedParam's mirror for the
+// operator-owned denied-egress list; empty ⇒ NULL.
+func workspaceDeniedParam(domains []string) any {
+	if len(domains) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(domains)
+	if err != nil {
+		return nil // unreachable for []string; fail-safe to "nothing denied"
+	}
+	return b
+}
+
 // workspaceLLMCredParam serializes the operator-owned model/harness cred binding
 // for its JSONB column; nil ⇒ NULL (no binding).
 func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
@@ -383,9 +401,13 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 }
 
 // wsCols is the canonical workspace column list (order matches scanWorkspace).
+// denied_egress is appended LAST (not interleaved next to approved_egress):
+// this const feeds both the INSERT list and every RETURNING/SELECT site, so
+// appending is the only edit that cannot silently transpose it past another
+// column of the same underlying type.
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
-	`record_results, llm_cred, attachments, base_image_id`
+	`record_results, llm_cred, attachments, base_image_id, denied_egress`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -393,7 +415,7 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
@@ -401,6 +423,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
 		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
+		workspaceDeniedParam(ws.DeniedEgress),
 	))
 }
 
@@ -418,9 +441,12 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 // UpdateWorkspace replaces a workspace's editable composition (name, sources,
 // base_image, requirements) and bumps updated_at, returning the persisted row.
 // It is a FULL-column write (it also sets profile, image_ref,
-// built_profile_hash, status and the other scan-owned columns), which is why
-// callers must round-trip the fetched row. Returns ErrNotFound when no
-// workspace has the given id.
+// built_profile_hash, status and the other scan-owned columns) — WITH ONE
+// DELIBERATE EXCEPTION: denied_egress is NOT in this SET clause, and must
+// stay that way (see Workspace.DeniedEgress) — a permanent deny is an
+// operator decision that survives a composition edit, unlike ApprovedEgress
+// below. Every other column here is why callers must round-trip the fetched
+// row. Returns ErrNotFound when no workspace has the given id.
 //
 // handleUpdateWorkspace does round-trip, and resets the scan-owned fields +
 // ApprovedEgress itself when the composition changed — the persisted profile
@@ -462,6 +488,111 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET approved_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceApprovedParam(domains), id))
+}
+
+// qAddApprovedEgressDecision and qAddDeniedEgressDecision back
+// AddWorkspaceEgressDecision — one static query per direction, chosen in Go by
+// `allow` rather than interpolating a column name into SQL, so each remains a
+// single auditable literal. Verified against a live Postgres (idempotent
+// re-decide at a full cap, NULL-column start, and the cross-list move all
+// round-trip correctly). Each query:
+//
+//   - appends host to ITS OWN list, deduped: the CASE leaves an already-listed
+//     host's array untouched instead of re-appending it.
+//   - COALESCEs both nullable columns to '[]'::jsonb before touching them
+//     (neither 0010 nor 0040 gives either column a DEFAULT), so a brand-new
+//     workspace's NULL columns behave as empty, not as a NULL propagating
+//     through jsonb_array_length into a false "cap reached".
+//   - guards the cap against the TARGET list ONLY — guarding the wrong column
+//     would refuse a deny·always on a workspace that merely has 64 *approved*
+//     hosts — and ORs in "host already present", so an idempotent re-decide on
+//     an already-full list is never reported as "cap reached".
+//   - unconditionally removes host from the OPPOSITE list via the jsonb `-`
+//     (text) operator (a no-op if absent): deny beats allow everywhere the
+//     proxy evaluates policy, so leaving a re-decided host on both lists would
+//     make one direction a silent no-op.
+//
+// Both effects land in ONE UPDATE: two concurrent `always` decisions on
+// different hosts cannot lose one to a read-modify-write, and a single
+// decision can never half-apply (added-but-not-removed or vice versa).
+const (
+	qAddApprovedEgressDecision = `
+		UPDATE workspaces
+		SET approved_egress = CASE
+				WHEN COALESCE(approved_egress,'[]'::jsonb) @> to_jsonb($2::text) THEN approved_egress
+				ELSE COALESCE(approved_egress,'[]'::jsonb) || to_jsonb($2::text)
+			END,
+			denied_egress = COALESCE(denied_egress,'[]'::jsonb) - $2::text,
+			updated_at = now()
+		WHERE id = $1
+		  AND (
+			jsonb_array_length(COALESCE(approved_egress,'[]'::jsonb)) < $3
+			OR COALESCE(approved_egress,'[]'::jsonb) @> to_jsonb($2::text)
+		  )
+		RETURNING ` + wsCols
+
+	qAddDeniedEgressDecision = `
+		UPDATE workspaces
+		SET denied_egress = CASE
+				WHEN COALESCE(denied_egress,'[]'::jsonb) @> to_jsonb($2::text) THEN denied_egress
+				ELSE COALESCE(denied_egress,'[]'::jsonb) || to_jsonb($2::text)
+			END,
+			approved_egress = COALESCE(approved_egress,'[]'::jsonb) - $2::text,
+			updated_at = now()
+		WHERE id = $1
+		  AND (
+			jsonb_array_length(COALESCE(denied_egress,'[]'::jsonb)) < $3
+			OR COALESCE(denied_egress,'[]'::jsonb) @> to_jsonb($2::text)
+		  )
+		RETURNING ` + wsCols
+)
+
+// AddWorkspaceEgressDecision records one `always`-scoped egress decision for
+// host: on allow it is added to approved_egress (capped at maxApprovedEgress,
+// deduped) and removed from denied_egress; on deny the mirror. host is used
+// verbatim — the caller normalizes and validates it (hostrules.ValidApprovedHost
+// et al.; see internal/api's Phase 2 write-back), matching every other
+// workspace writer in this file.
+//
+// maxApprovedEgress is passed in rather than respelled as a SQL literal here:
+// the single Go const (internal/api/workspaces.go) also enforces the bulk
+// PUT's cap, so the rule lives in exactly one place.
+//
+// Returns ErrConflict — not a bare "not found" — when id exists but the cap
+// guard refused the write, distinguishing "no such workspace" from "cap
+// reached" for the caller while keeping the same (types.Workspace, error)
+// shape every sibling writer uses. Same disambiguation MergeWorkspaceRequirements
+// uses for its own key-count cap.
+func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host string, allow bool, maxApprovedEgress int) (types.Workspace, error) {
+	q := qAddApprovedEgressDecision
+	if !allow {
+		q = qAddDeniedEgressDecision
+	}
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q, id, host, maxApprovedEgress))
+	ws, err = s.hydrateIfOK(ctx, ws, err)
+	if errors.Is(err, ErrNotFound) {
+		// Distinguish "no such workspace" from "cap reached" for the caller.
+		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
+			return types.Workspace{}, ErrConflict
+		}
+		return types.Workspace{}, ErrNotFound
+	}
+	if err != nil {
+		return types.Workspace{}, err
+	}
+	return ws, nil
+}
+
+// SetWorkspaceDeniedEgress replaces ONLY the operator-owned denied-egress
+// column (plus updated_at), returning the updated row — denied_egress's
+// mirror of SetWorkspaceApprovedEgress, backing the Phase 4 revocation PUT.
+// Same anti-clobber discipline: a full-list replace can never clobber a
+// concurrently-persisted async scan. Pass the FULL desired list — like
+// SetWorkspaceApprovedEgress, this replaces rather than merges.
+func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
+		`UPDATE workspaces SET denied_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		workspaceDeniedParam(domains), id))
 }
 
 // SetWorkspaceRequirements replaces ONLY the requirements-contract column
@@ -628,15 +759,21 @@ func (s PG) hydratedScan(ctx context.Context, row pgx.Row) (types.Workspace, err
 	return s.hydrated(ctx, ws)
 }
 
+// scanWorkspace is the ONE reader for every workspaces column list in this
+// package (wsCols feeds CreateWorkspace's RETURNING, GetWorkspace,
+// ListWorkspacesPage, and every scoped Set*/Merge* writer's RETURNING). A new
+// column is APPENDED to the end of wsCols and to the end of this Scan —
+// appending is the only edit that cannot silently transpose two same-typed
+// columns past the compiler.
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var status string
-	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw []byte
+	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw, deniedRaw []byte
 	err := row.Scan(
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
-		&attachmentsRaw, &ws.BaseImageID,
+		&attachmentsRaw, &ws.BaseImageID, &deniedRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -669,6 +806,11 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		// Malformed JSONB is unreachable via workspaceApprovedParam; on the
 		// off chance, fail safe to "nothing approved" rather than error.
 		_ = json.Unmarshal(approvedRaw, &ws.ApprovedEgress)
+	}
+	if deniedRaw != nil {
+		// Malformed JSONB is unreachable via workspaceDeniedParam; on the
+		// off chance, fail safe to "nothing denied" rather than error.
+		_ = json.Unmarshal(deniedRaw, &ws.DeniedEgress)
 	}
 	if llmCredRaw != nil {
 		var c types.WorkspaceLLMCred
@@ -753,13 +895,19 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: marshal approval scope: %w", err)
 	}
+	// The INSERT list deliberately does NOT name decision_scope /
+	// decision_expires_at: a newly-raised approval has no decision yet, and
+	// both columns' own DEFAULTs ('' / NULL) are exactly "no decision
+	// recorded". The RETURNING list DOES name them, so the caller's
+	// ApprovalRequest reflects those defaults rather than the Go zero value
+	// of a field that was never assigned.
 	const q = `
 		INSERT INTO approvals
 			(id, run_id, grant_id, kind, requested_scope, state, requested_at,
 			 decided_at, decided_by, minted_jti, reason)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason`
+			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at`
 	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
@@ -782,7 +930,7 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 func (s PG) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	const q = `
 		SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason
+			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at
 		FROM approvals WHERE id = $1`
 	return scanApproval(s.Pool.QueryRow(ctx, q, id))
 }
@@ -792,18 +940,26 @@ func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) 
 	return s.ListApprovalsPage(ctx, stateFilter, Page{})
 }
 
-// DecideApproval transitions an approval from PENDING to the given state.
+// DecideApproval transitions an approval from PENDING to decision.State.
 // Returns ErrAlreadyDecided if the approval is not PENDING (fail-closed).
 // Uses a single UPDATE with WHERE state='PENDING' to prevent TOCTOU races.
-func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
+//
+// The SET clause below is a SEPARATE list from the RETURNING clause — update
+// only the RETURNING and decision.Scope/ExpiresAt would never persist while
+// the RETURNING happily echoes the un-updated row back, a green result over a
+// silent no-op. Both lists must carry decision_scope/decision_expires_at.
+func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	now := time.Now().UTC()
 	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=$2, decided_by=$3, reason=$4
-		WHERE id=$5 AND state='PENDING'
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
+		WHERE id=$7 AND state='PENDING'
 		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason`
-	a, err := scanApproval(s.Pool.QueryRow(ctx, q, string(state), now, decidedBy, reason, id))
+			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at`
+	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
+		string(decision.State), now, decision.DecidedBy, decision.Reason,
+		string(decision.Scope), decision.ExpiresAt, id,
+	))
 	if errors.Is(err, ErrNotFound) {
 		// Row exists but wasn't PENDING, or doesn't exist at all.
 		// Distinguish by checking existence.
@@ -817,13 +973,19 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, state types.Approv
 	return a, err
 }
 
+// scanApproval is the ONE reader for every approvals column list in this
+// package (CreateApproval's RETURNING, GetApproval, DecideApproval's
+// RETURNING, ListApprovalsPage, ListApprovalsPageByRunCreator). New columns
+// are APPENDED to the end of all of them and to the end of this Scan —
+// appending is the only edit that cannot silently transpose two same-typed
+// columns past the compiler.
 func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	var a types.ApprovalRequest
-	var kind, state string
+	var kind, state, decisionScope string
 	var scopeRaw []byte
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
-		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason,
+		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound
@@ -834,6 +996,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	a.Kind = types.ApprovalKind(kind)
 	a.State = types.ApprovalState(state)
 	a.RequestedScope = json.RawMessage(scopeRaw)
+	a.DecisionScope = types.ApprovalScope(decisionScope)
 	return a, nil
 }
 

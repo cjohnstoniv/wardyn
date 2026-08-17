@@ -214,6 +214,22 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if gerr != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan clone grants: %w", gerr))
 	}
+	// DECISION (Phase 4): a workspace's DeniedEgress deliberately does NOT reach
+	// this policy, unlike confinedEgressDomains/workspace_run.go. src is a
+	// LIBRARY-tier Source (source_scan.go's package doc), not a Workspace, and
+	// it carries no back-reference to one: a Source is attached to zero, one, or
+	// many workspaces via THEIR Attachments (one-directional), so there is no
+	// single well-defined workspace whose DeniedEgress would even apply here —
+	// unlike a workspace step run, which always has exactly one trusted
+	// run.WorkspaceID. Resolving "the" owning workspace would mean a fresh store
+	// scan per launch (indexWorkspacesBySource) for an ambiguous, possibly
+	// multi-valued answer. And unlike confinedEgressDomains's deliberately WIDE
+	// setup allowlist, AllowedDomains here is already minimal by construction
+	// (scanEgressDomains: just this one repo's own clone host, GitHub excluded
+	// entirely — it routes through the broker) — there is essentially nothing
+	// for a deny to subtract from. If a per-source deny is ever wanted, it
+	// belongs on Source itself (mirroring DeniedEgress), not borrowed from an
+	// attaching workspace.
 	scanPolicy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		AllowedDomains:      scanEgressDomains(url),

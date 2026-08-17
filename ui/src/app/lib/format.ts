@@ -38,6 +38,12 @@ export function clockTime(iso: string): string {
   });
 }
 
+/** "5:04 PM" — no seconds, unlike clockTime. The `until {time}` egress-scope
+ *  copy (deny dialogs, the blast-radius banner, the decided-row badge). */
+export function shortTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 /** Best-effort human message for a caught value — an Error's message, or its String(). */
 export function getErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

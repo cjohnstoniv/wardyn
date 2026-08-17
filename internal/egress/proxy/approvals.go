@@ -58,6 +58,22 @@ type hostApproval struct {
 	// lastPoll throttles polling so we hit the control plane at most once per
 	// pollInterval per host while pending.
 	lastPoll time.Time
+	// scope is the DECIDED blast radius, learned from the poll that observed the
+	// terminal state (poll returns it; every writer of `state` must write this
+	// too, or a scope decided while the host was PENDING — the normal path —
+	// silently degrades to run). ALWAYS read it through Normalize(), never with a
+	// raw == compare: the zero value means "decided before scopes existed, or by a
+	// client that does not send one", which Normalize maps to ScopeRun (today's
+	// shipped behavior), while an UNRECOGNISED value can only come from a NEWER
+	// control plane and Normalize floors it to ScopeOnce rather than widening it.
+	// A raw compare throws both of those away and fails open across versions.
+	scope types.ApprovalScope
+	// expiresAt bounds a scope=until grant; zero means no expiry — every
+	// once/run/always entry, and any `until` whose expiry the control plane did
+	// not send (the API rejects until-without-an-expiry at the write boundary, so
+	// that shape only comes from an older peer, and behaving like run is the
+	// honest read of it).
+	expiresAt time.Time
 }
 
 const pollInterval = 2 * time.Second
@@ -117,6 +133,82 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 	}
 }
 
+// Scope enforcement ceilings — the honest limits of what `once` and `until` can
+// promise from inside the proxy. They live here rather than in a doc because
+// every one of them reads as a bug in the field:
+//
+//   - `once` means one DECISION, and how much that covers depends on the
+//     protocol. On HTTPS it is one CONNECT tunnel: Proxy.evaluate is reached
+//     from exactly two callers (handlePlain and handleConnect), serveMITMRequest
+//     never re-enters it, and mitmConnect serves the terminated tunnel with a
+//     real http.Server carrying a 90s IdleTimeout — so MANY requests ride one
+//     grant. On plain HTTP the opposite holds: handlePlain re-enters evaluate
+//     PER REQUEST, so a keep-alive connection burns one `once` per request. The
+//     copy says "one connection": honest for HTTPS, understated (never
+//     overstated) for HTTP.
+//   - A `once` grant is SPENT BEFORE SUCCESS IS GUARANTEED. evaluate falls
+//     through from apApproved into the method check and VetHost IP vetting, and
+//     handleConnect dials only after that — so a DNS-rebind denial or a failed
+//     dial burns the grant and the operator is re-asked. Consuming after the
+//     dial instead would mean holding a.mu across it; this is the cheaper end of
+//     that trade, not an oversight.
+//   - `until` is enforced against TWO CLOCKS. The control plane validates
+//     DecisionExpiresAt (<= now+30d) against its own; this code enforces
+//     time.Now().After(st.expiresAt) against the sidecar's. Negligible when they
+//     share a host, real on a split topology.
+//   - Resolve/ResolveWait can now return apNone, which they never could before
+//     (the expiry reset inside consumeIfOnce). That is FAIL-CLOSED and already
+//     handled: evaluate's approval switch routes apPending and apNone through
+//     the same default arm into egress.Pending. Stated so nobody chases it as a
+//     bug.
+//
+// consumeIfOnce expires a stale grant, then reports the entry's current terminal
+// grant and — when that grant is scope=once — SPENDS it, clearing the WHOLE entry
+// so no sibling can take it again. The caller must hold a.mu.
+//
+// INVARIANT the whole design rests on: A TERMINAL `once` ENTRY NEVER SURVIVES AN
+// UNLOCK. Every write of state/scope/expiresAt — Resolve's snapshot, Resolve's
+// needPoll branch, and ResolveWait's publish — is followed by a consumeIfOnce
+// under the SAME lock. Nothing else in this file makes that visible, so a fourth
+// writer needs a fourth call.
+//
+// Both resets clear the ENTIRE entry, not just `state`. A surviving approvalID is
+// a fail-OPEN blocker: the raise path refuses to overwrite a non-nil id (see
+// Resolve's needRaise branch), so the next request POSTs a fresh approval and
+// DISCARDS its id, and the one after polls the OLD, already-APPROVED id and
+// writes apApproved back — the host re-approves itself with no human in the loop
+// (`once` degrades to run; `until` re-grants itself forever). Reset, do NOT
+// delete: a.hosts[host] is re-read unguarded after the unlock in Resolve's
+// needRaise/needPoll branches, and delete() would nil-panic there.
+//
+// `consumed` is returned explicitly rather than re-derived from st.state == apNone
+// at the call site: after an EXPIRY reset the entry is ALSO apNone, so the derived
+// form is only accidentally correct (the returned `state` is apNone there, which
+// fails the terminal test) and one refactor away from conflating "spent a grant"
+// with "the grant timed out".
+func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consumed bool) {
+	if !st.expiresAt.IsZero() && time.Now().After(st.expiresAt) {
+		// `until T` elapsed -> UNKNOWN, not denied: "until T" means the operator is
+		// re-asked, not that the host became forbidden. Folding this INTO the helper
+		// (rather than checking once at the top of Resolve) is what makes an `until`
+		// shorter than approvalTTL honored to the second EVEN ACROSS A SLOW POLL:
+		// otherwise a round trip straddling T lets the post-poll write stamp
+		// apApproved plus a now-past expiresAt onto an entry whose top-of-Resolve
+		// check already passed, and — since a non-`once` scope is not consumed —
+		// that expired grant is served, bounded only by the 10s client timeout.
+		*st = hostApproval{state: apNone}
+	}
+	state, id = st.state, st.approvalID
+	if (state == apApproved || state == apDenied) && st.scope.Normalize() == types.ScopeOnce {
+		*st = hostApproval{state: apNone}
+		consumed = true
+	}
+	// Either reset also zeroes lastPoll, so a later needPoll is computed from the
+	// zero time — benign, because cur is apNone there and needRaise wins and
+	// overwrites lastPoll before anything acts on it. Noted so nobody chases it.
+	return state, id, consumed
+}
+
 // ResolveWait implements wait_for_review: it HOLDS the caller until the host's
 // approval reaches a terminal state (approved/denied) or the hold deadline
 // passes, reusing Resolve to raise/cache. It fails CLOSED — on deadline, ctx
@@ -170,26 +262,70 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		case <-timeout.C:
 			return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
 		case <-ticker.C:
-			decided, newState := a.poll(ctx, r.ApprovalID)
+			// The hold loop used to return its OWN poll result and ignore the cache:
+			// N held connections each run their own ticker, each poll the SAME
+			// approval, each get apApproved, each return it — up to defaultMaxHolds
+			// callers consuming one `once`. The control plane cannot help, because it
+			// does not know consumption exists; the cache is the only place it does.
+			// So this arm goes through the cache, under the lock, and consumes.
+			decided, newState, polledScope, polledExpiry := a.poll(ctx, r.ApprovalID)
 			if !decided {
 				continue
 			}
-			// Publish the terminal decision to the shared cache so sibling
-			// connections to the same host see it without re-polling.
-			a.mu.Lock()
-			if st := a.hosts[host]; st != nil {
-				st.state = newState
+			// A CLOSURE, so `defer` covers every return path. Do NOT flatten this
+			// into Lock() … early-return … Unlock(): an early return between the
+			// Lock and the Unlock LEAKS a.mu, and then every subsequent Resolve on
+			// ANY host blocks forever and all holdSem slots fill permanently — a
+			// proxy-wide egress outage for the run, far worse than the leak below.
+			return func() resolveResult {
+				a.mu.Lock()
+				defer a.mu.Unlock()
+				st := a.hosts[host]
+				// (1) DISCRIMINATE FIRST. Storing before discriminating re-opens the
+				// fail-open blocker: a stale holder that writes first stamps
+				// apApproved + its scope over a FRESH PENDING entry, then correctly
+				// returns pending to itself — leaving the cache holding
+				// {apApproved, <new PENDING id>}, which the next Resolve serves from
+				// its fast path as a grant no human decided.
+				if st == nil || st.approvalID != r.ApprovalID {
+					// A sibling consumed the grant (which clears the whole entry) and a
+					// fresh raise may already have taken the slot. Write NOTHING; this
+					// holder did not get the grant. Return OUR OWN r.ApprovalID, not
+					// st.approvalID and not Nil: this value goes straight out of
+					// ResolveWait to evaluate, whose pending arm stamps it onto the
+					// decision log only when it is non-Nil — Nil would leave an
+					// audit line saying "blocked, awaiting approval" with no approval to
+					// point at, and st.approvalID would name an approval this caller
+					// never raised. (Resolve's stale path returns st.approvalID instead,
+					// which CAN be Nil — correct there, because that value DOES feed the
+					// concurrent-raise retry loop above and a Nil merely costs one
+					// iteration before the re-raise lands. The asymmetry is deliberate;
+					// don't "fix" one to match the other.)
+					return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
+				}
+				// (2) Publish the terminal decision — state, scope AND expiry — to the
+				// shared cache so sibling connections see it without re-polling.
+				// Publishing stays correct for run/until/always and is harmless for
+				// once, because step (3) clears it before this unlock.
+				st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
 				st.lastPoll = time.Now()
-			}
-			a.mu.Unlock()
-			return resolveResult{State: newState, ApprovalID: r.ApprovalID}
+				// (3) Consume if this was a `once` grant — and expire it if it went
+				// stale while the holder was parked. An already-past expiresAt makes
+				// this return apNone, which evaluate's default arm turns into pending:
+				// fail-closed, and the right answer for a grant that expired before the
+				// holder was released.
+				s, id, _ := consumeIfOnce(st)
+				return resolveResult{State: s, ApprovalID: id}
+			}()
 		}
 	}
 }
 
 // resolveResult is what the proxy needs to act on a first-use decision.
 type resolveResult struct {
-	// Decision is allow (now approved), deny (denied), or pending.
+	// Decision is allow (now approved), deny (denied), pending, or — since
+	// scope=until — apNone, when consumeIfOnce found the grant already expired.
+	// apNone is fail-closed at the caller (see the ceilings note on consumeIfOnce).
 	State approvalState
 	// ApprovalID is set when pending/decided.
 	ApprovalID uuid.UUID
@@ -206,9 +342,13 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		st = &hostApproval{state: apNone}
 		a.hosts[host] = st
 	}
-	// Snapshot under lock; perform network calls without holding the lock.
-	cur := st.state
-	id := st.approvalID
+	// Snapshot under lock; perform network calls without holding the lock. The
+	// snapshot is also a CLAIM-AND-CONSUME: consumeIfOnce first drops an `until`
+	// grant whose T has passed, then SPENDS a `once` grant so no concurrent caller
+	// can take the same one. Both steps are no-ops for run/always — their
+	// expiresAt is the zero value and Normalize never yields once — which is what
+	// keeps the default path byte-identical to before scopes existed.
+	cur, id, consumed := consumeIfOnce(st)
 	needRaise := cur == apNone
 	if needRaise {
 		// Claim the raise UNDER the lock: transition to pending now so a
@@ -231,6 +371,13 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		st.lastPoll = time.Now()
 	}
 	a.mu.Unlock()
+
+	if consumed {
+		// We SPENT the grant; hand it to THIS caller and stop. This must return
+		// BEFORE the switch: the entry is apNone again, so falling through would
+		// re-raise on the very request the operator's decision released.
+		return resolveResult{State: cur, ApprovalID: id}
+	}
 
 	switch {
 	case cur == apApproved && !needPoll:
@@ -269,14 +416,49 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		// after the interval — staleness bounded by the TTL AS LONG AS the control
 		// plane recovers; under a persistent CP outage an already-approved host stays
 		// open (a deliberate availability-over-strictness tradeoff for a live run).
-		decided, newState := a.poll(ctx, id)
+		decided, newState, polledScope, polledExpiry := a.poll(ctx, id)
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		st = a.hosts[host]
-		if decided {
-			st.state = newState
+		if st.approvalID != id {
+			// STALE POLLER. Two goroutines can both pass needPoll whenever a poll
+			// round trip exceeds pollInterval (the client timeout is 10s). The fast
+			// one lands, consumes, and RESETS the entry; a re-raise may already have
+			// claimed the slot. Writing here would resurrect apApproved onto a fresh
+			// PENDING id — the next Resolve serves it from the fast path, and
+			// evaluate stamps that PENDING id onto the ALLOW log, attributing an
+			// allow to an approval nobody decided (breaks the W20-hold-fsm-1 audit
+			// join). It would also let `until` fail open, by re-stamping apApproved
+			// plus a past expiresAt onto an entry a sibling just expired. So write
+			// NOTHING and report pending. None of this was reachable before scopes:
+			// state only moved pending->terminal, so the stale write was idempotent.
+			//
+			// st.approvalID may be Nil here (the entry was reset and not yet
+			// re-raised). That costs ResolveWait's retry loop exactly one iteration
+			// before the re-raise lands, which is why this side returns st.approvalID
+			// while ResolveWait's stale path returns its own r.ApprovalID.
+			return resolveResult{State: apPending, ApprovalID: st.approvalID}
 		}
-		return resolveResult{State: st.state, ApprovalID: st.approvalID}
+		if decided {
+			// SPLIT from the id check ABOVE ON PURPOSE — do not fold them into one
+			// `if decided && st.approvalID == id`. !decided is a TRANSIENT
+			// control-plane error and must stay on today's path (fall through and
+			// return st.state unchanged, which on the TTL-revalidation path is still
+			// apApproved). That is the deliberate availability-over-strictness
+			// tradeoff documented just above; collapsing the two conditions turns it
+			// into a 403 and changes behavior for scope=run — the DEFAULT scope, and
+			// the one this change must leave byte-identical.
+			st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
+		}
+		// This branch is ITSELF a grant-serving site. On the FIRST observation of a
+		// decision the entry was still apPending at the snapshot, so the snapshot's
+		// consume did nothing; without this call the branch returns the grant AND
+		// leaves the entry APPROVED for the next caller to take again. Under
+		// deny_with_review that is the NORMAL path, not a race, and `once` would be
+		// served exactly twice. (Consuming ONLY here is the mirror bug: the fast
+		// path above would hand the cached grant to every concurrent caller.)
+		s, sid, _ := consumeIfOnce(st)
+		return resolveResult{State: s, ApprovalID: sid}
 	default:
 		// Pending but throttled: report pending without a network call.
 		return resolveResult{State: apPending, ApprovalID: id}
@@ -332,31 +514,50 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 // poll fetches an approval's current state. It returns decided=true only for
 // terminal states (APPROVED/DENIED/EXPIRED). EXPIRED is treated as denied
 // (fail closed).
-func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, newState approvalState) {
+//
+// It also returns the DECISION'S SCOPE and expiry, which the caller must store
+// onto the cache entry: this decode already read the whole ApprovalRequest and
+// used to throw both away, and handleInternalGetApproval already writes the full
+// struct — so only the caller-side store is new. Without it every scope decided
+// while the host was PENDING (i.e. the normal path) silently degrades to run.
+//
+// scope/expiresAt are meaningful only when decided; they are zero otherwise, so a
+// transient error can never overwrite a good scope with a blank one — and callers
+// gate the store on `decided` anyway.
+func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, newState approvalState, scope types.ApprovalScope, expiresAt time.Time) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
 	if err != nil {
-		return false, apPending
+		return false, apPending, "", time.Time{}
 	}
 	req.Header.Set("Authorization", "Bearer "+a.token.Get())
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return false, apPending
+		return false, apPending, "", time.Time{}
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return false, apPending
+		return false, apPending, "", time.Time{}
 	}
 	var ar types.ApprovalRequest
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
-		return false, apPending
+		return false, apPending, "", time.Time{}
+	}
+	// Nullable on the wire (it is set only for scope=until), so a nil pointer
+	// becomes the zero time == no expiry.
+	var exp time.Time
+	if ar.DecisionExpiresAt != nil {
+		exp = *ar.DecisionExpiresAt
 	}
 	switch ar.State {
 	case types.ApprovalApproved:
-		return true, apApproved
+		return true, apApproved, ar.DecisionScope, exp
 	case types.ApprovalDenied, types.ApprovalExpired:
-		return true, apDenied
+		// EXPIRED rows carry no scope — the stale-PENDING sweeper is not a human
+		// decision and writes the zero value, which normalizes to run: a cached
+		// deny for the rest of the run, exactly today's behavior.
+		return true, apDenied, ar.DecisionScope, exp
 	default:
-		return false, apPending
+		return false, apPending, "", time.Time{}
 	}
 }

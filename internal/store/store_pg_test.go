@@ -55,7 +55,9 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 	}
 
 	// First decide: APPROVE.
-	result, err := store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalApproved, "alice", "ok")
+	result, err := store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Reason: "ok",
+	})
 	if err != nil {
 		t.Fatalf("first decide: %v", err)
 	}
@@ -64,7 +66,9 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 	}
 
 	// Second decide: must return ErrAlreadyDecided.
-	_, err = store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalDenied, "bob", "changed mind")
+	_, err = store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalDecision{
+		State: types.ApprovalDenied, DecidedBy: "bob", Reason: "changed mind",
+	})
 	if err == nil {
 		t.Fatal("expected ErrAlreadyDecided, got nil")
 	}

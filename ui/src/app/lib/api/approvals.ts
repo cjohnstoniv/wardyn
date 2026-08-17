@@ -4,7 +4,11 @@
  */
 
 // Approval queue: list + approve/deny a pending credential/egress/tool request.
-import type { ApprovalRequest } from "../types";
+// DecisionOptions/decisionArgs live in lib/types/approvals.ts, not here — see
+// that file's comment on decisionArgs for why (every UI test that decides an
+// approval mocks THIS module wholesale, which would silently break a second
+// named export added here).
+import type { ApprovalRequest, DecisionOptions } from "../types";
 import { asJson, unwrapList, wfetch, withLimit } from "./core";
 
 export const approvals = {
@@ -17,20 +21,28 @@ export const approvals = {
     return unwrapList<ApprovalRequest>(await asJson<unknown>(res));
   },
 
-  // POST /api/v1/approvals/{id}/approve  { reason }
-  async approve(id: string, reason: string): Promise<ApprovalRequest> {
+  // POST /api/v1/approvals/{id}/approve  { reason, decision_scope?, decision_expires_at? }
+  async approve(id: string, reason: string, opts?: DecisionOptions): Promise<ApprovalRequest> {
     const res = await wfetch(`/approvals/${encodeURIComponent(id)}/approve`, {
       method: "POST",
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({
+        reason,
+        ...(opts?.scope ? { decision_scope: opts.scope } : {}),
+        ...(opts?.until ? { decision_expires_at: opts.until } : {}),
+      }),
     });
     return asJson<ApprovalRequest>(res);
   },
 
-  // POST /api/v1/approvals/{id}/deny  { reason }
-  async deny(id: string, reason: string): Promise<ApprovalRequest> {
+  // POST /api/v1/approvals/{id}/deny  { reason, decision_scope?, decision_expires_at? }
+  async deny(id: string, reason: string, opts?: DecisionOptions): Promise<ApprovalRequest> {
     const res = await wfetch(`/approvals/${encodeURIComponent(id)}/deny`, {
       method: "POST",
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({
+        reason,
+        ...(opts?.scope ? { decision_scope: opts.scope } : {}),
+        ...(opts?.until ? { decision_expires_at: opts.until } : {}),
+      }),
     });
     return asJson<ApprovalRequest>(res);
   },

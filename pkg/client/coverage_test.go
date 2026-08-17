@@ -38,6 +38,8 @@ var (
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride
 	_ []client.EgressRedirect
+	_ client.ApprovalScope
+	_ client.DecisionOpts
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family

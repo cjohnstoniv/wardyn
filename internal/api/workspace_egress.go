@@ -21,13 +21,27 @@ import (
 // honest", and none of them launch anything.
 
 // unionWorkspaceEgress adds every referenced workspace's trusted egress to the
-// spec's AllowedDomains (deduped, in-place) and returns what it added. Two
-// sources, both operator-sanctioned: the scanned profile's EgressDomains
-// (filename-keyed marker table — never file content) and the workspace's
-// ApprovedEgress (content-derived suggestions the operator explicitly
-// promoted). The scanner's raw SuggestedEgress is deliberately NOT here — a
-// hostile file must never widen an allowlist without a human approval. The
-// deny-list and confinement floor are unaffected.
+// spec's AllowedDomains (deduped, in-place) AND its permanently-denied egress
+// to spec.DeniedDomains (deduped, in-place) — but returns what it added to
+// AllowedDomains ONLY. Three sources, all operator-sanctioned: the scanned
+// profile's EgressDomains (filename-keyed marker table — never file content),
+// the workspace's ApprovedEgress (content-derived suggestions the operator
+// explicitly promoted), and DeniedEgress (the operator's permanent
+// `deny · always` decisions — Phase 4). The scanner's raw SuggestedEgress is
+// deliberately NOT here — a hostile file must never widen an allowlist
+// without a human approval.
+//
+// The return stays ALLOW-shaped on purpose: its two production consumers,
+// runs_create.go's `added_domains` audit and compose_setup.go's "launch will
+// also allow: …" checklist copy, would both misreport a block as a widening
+// if a deny rode along in the same slice. A caller that needs to know what
+// was denied computes it itself (see setupEgressWorkspaceItem, which diffs
+// spec.DeniedDomains before/after this call).
+//
+// The confinement floor is unaffected; the deny-list is not — and deny beats
+// allow, allow_all_egress, and a runtime first-use approval alike wherever the
+// proxy evaluates policy (see docs/POLICIES.md), so a workspace's permanent
+// deny now rides every union this function backs (create, preflight).
 func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) []string {
 	var added []string
 	for _, ws := range workspaces {
@@ -42,6 +56,9 @@ func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspac
 			added = append(added, unionAllowedDomains(spec, filterOffEgress(p.EgressDomains, egressOverriddenOff(ws)))...)
 		}
 		added = append(added, unionAllowedDomains(spec, ws.ApprovedEgress)...)
+		// DeniedEgress folds in too (Phase 4) — deliberately left OUT of `added`,
+		// see the doc comment above for why.
+		unionDeniedDomains(spec, ws.DeniedEgress)
 	}
 	return added
 }
@@ -265,6 +282,13 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // ApprovedEgress. Content-derived SuggestedEgress is NOT included — a build
 // that needs one surfaces as an observed-egress denial the operator can
 // promote (least-privilege, honest).
+//
+// Stays ALLOW-only by return shape, matching unionWorkspaceEgress: the union
+// call below also folds ws.DeniedEgress into base.DeniedDomains, but that half
+// is discarded at the `return` — this function's one caller (workspace_run.go)
+// reads ws.DeniedEgress directly off the raw column for the deny side, since
+// there is no per-source deny CONTRACT to fold the way the required-egress
+// loop below folds allows.
 func confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})

@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// WORKSPACE DETAIL — the addressable hub at /workspaces/:id. Two cards:
-// Recorded sessions (RecordPane — Record Mode, untouched) and Allowed hosts.
-// A workspace is usable the instant it's created (POST /workspaces already
-// accepts {name, sources[], base_image?}), so this page no longer surfaces
-// scan/build machinery at all — Stage 2 stops calling those endpoints.
+// WORKSPACE DETAIL — the addressable hub at /workspaces/:id. Three cards:
+// Recorded sessions (RecordPane — Record Mode, untouched), Allowed hosts, and
+// Denied hosts (Phase 4 revocation — the only console surface for undoing a
+// `deny · always` decision). A workspace is usable the instant it's created
+// (POST /workspaces already accepts {name, sources[], base_image?}), so this
+// page no longer surfaces scan/build machinery at all — Stage 2 stops calling
+// those endpoints.
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
@@ -30,6 +32,7 @@ import { KIND_META, workspaceImage } from "../workspaces";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
+import { DeniedHostsCard } from "./denied-hosts-card";
 import { RecordPane } from "./record-pane";
 import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
 
@@ -334,6 +337,7 @@ export function WorkspaceDetailScreen() {
         </DetailSectionCard>
 
         <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
+        <DeniedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
       </div>
 
       <DeleteConfirmDialog

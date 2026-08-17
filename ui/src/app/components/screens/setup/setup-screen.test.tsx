@@ -173,13 +173,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all nine funnel steps and Next/Back move within bounds", async () => {
+  it("walks all ten funnel steps and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
     // Back-ish verb. STEP_ORDER: essentials [environment, corp_network,
-    // integrations] → demos (four sub-steps) → your work [workspaces] → finish
+    // integrations] → demos (five sub-steps) → your work [workspaces] → finish
     // [review]. Review is the LAST step: the Launch step was cut, because its
     // "Example — not live config" card showed a fabricated task against a repo
     // that may never have been onboarded.
@@ -204,7 +204,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /connect your model/i }),
     ).toBeInTheDocument();
 
-    // The four Demos sub-steps — each renders one demo (heading = its title). The
+    // The five Demos sub-steps — each renders one demo (heading = its title). The
     // first also proves the lazily-loaded detail body mounts (its setup section).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
@@ -217,6 +217,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
     ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /once, or for good/i })).toBeInTheDocument();
 
     // your work: the one workspace step (AddWorkspaceDialog + a simple list).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
@@ -634,11 +636,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (the last step, 9 of 9) — checks live there, not on the
+    // walk to Review (the last step, 10 of 10) — checks live there, not on the
     // barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -688,7 +690,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

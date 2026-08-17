@@ -112,8 +112,8 @@ type approvalService struct {
 func (s *approvalService) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
 	return approval.RequestApproval(ctx, s.st, req)
 }
-func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, approve bool, decidedByType types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return approval.Decide(ctx, s.st, id, approve, decidedByType, decidedBy, reason)
+func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
+	return approval.Decide(ctx, s.st, id, decidedByType, decision)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	return s.st.GetApproval(ctx, id)

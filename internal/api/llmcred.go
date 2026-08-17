@@ -107,12 +107,35 @@ const (
 func modelProviderEgress(ceiling types.RunPolicySpec) []string {
 	var out []string
 	for _, d := range ceiling.AllowedDomains {
-		dl := strings.ToLower(strings.TrimSpace(d))
-		if strings.HasSuffix(dl, "anthropic.com") || dl == "api.openai.com" {
+		if isModelProviderHost(d) {
 			out = append(out, d)
 		}
 	}
 	return out
+}
+
+// isModelProviderHost reports whether h is an LLM model-provider host by the
+// anthropic/openai convention. Extracted from modelProviderEgress's own loop so
+// a REJECT guard (denyAlwaysReject, approvals.go) can test the CANDIDATE rather
+// than test membership in this function's OUTPUT — the difference between the
+// guard working and silently not firing.
+//
+// modelProviderEgress returns ceiling entries VERBATIM, and the canonical
+// ceiling entry is the wildcard: applyLLMCredMount below accepts
+// "api.anthropic.com" or "*.anthropic.com" and its own error text instructs the
+// operator to list "*.anthropic.com (or api.anthropic.com) verbatim". A deny
+// candidate, by contrast, is always a concrete host — hostrules.ValidApprovedHost
+// admits no wildcards. So on a wildcard-only ceiling "api.anthropic.com" is not
+// a member of {"*.anthropic.com"}, a membership test would accept the deny, and
+// the workspace's credential injection would be permanently bricked. A guard
+// whose firing depends on deployment config is worse than one uniformly absent.
+//
+// The suffix match is loose — it also matches evilanthropic.com. For a REJECT
+// guard loose is the fail-CLOSED direction; for modelProviderEgress it only ever
+// filters hosts the OPERATOR already put in their own ceiling.
+func isModelProviderHost(h string) bool {
+	hl := strings.ToLower(strings.TrimSpace(h))
+	return strings.HasSuffix(hl, "anthropic.com") || hl == "api.openai.com"
 }
 
 // ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude

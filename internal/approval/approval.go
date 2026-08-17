@@ -43,9 +43,9 @@ type Store interface {
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	// ListApprovals returns approvals filtered by state (empty = all).
 	ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error)
-	// DecideApproval transitions state from PENDING; returns ErrAlreadyDecided
-	// if the approval is not PENDING.
-	DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error)
+	// DecideApproval transitions state from PENDING to decision.State; returns
+	// ErrAlreadyDecided if the approval is not PENDING.
+	DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error)
 	// Record appends an audit event (approval.decide, approval.expire).
 	Record(ctx context.Context, ev types.AuditEvent) error
 }
@@ -70,6 +70,14 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 	req.DecidedBy = ""
 	req.MintedJTI = ""
 	req.Reason = ""
+	// A freshly-raised approval has no decision, so it has no scope either —
+	// this is the chokepoint the "a compromised sidecar cannot pre-seed the
+	// scope" claim actually rests on (handleInternalRequestApproval decodes
+	// only {Kind, RequestedScope} into a fresh struct, but this zeroing is
+	// what makes that safe by CONSTRUCTION rather than by accident of which
+	// Store backs this call).
+	req.DecisionScope = ""
+	req.DecisionExpiresAt = nil
 
 	created, err := st.CreateApproval(ctx, req)
 	if err != nil {
@@ -106,18 +114,15 @@ func findPendingDup(ctx context.Context, st Store, req types.ApprovalRequest, ha
 	return types.ApprovalRequest{}, false, nil
 }
 
-// Decide approves or denies an existing approval request. decidedBy is the
-// principal that decided and decidedByType is its actor type (human for an OIDC
-// session or a LocalMode operator; system for a bare admin-token caller). The
-// audit event records that exact type so an admin-token decision is not
-// mislabelled as a human approval (invariant 4/6 attribution honesty).
-func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedByType types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error) {
-	newState := types.ApprovalDenied
-	if approve {
-		newState = types.ApprovalApproved
-	}
-
-	result, err := st.DecideApproval(ctx, id, newState, decidedBy, reason)
+// Decide transitions an existing approval request to decision.State (which
+// the caller sets — APPROVED or DENIED; ExpireStale below bypasses Decide
+// entirely for EXPIRED, since a sweep is not a decision). decision.DecidedBy
+// is the principal that decided and decidedByType is its actor type (human
+// for an OIDC session or a LocalMode operator; system for a bare admin-token
+// caller). The audit event records that exact type so an admin-token decision
+// is not mislabelled as a human approval (invariant 4/6 attribution honesty).
+func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
+	result, err := st.DecideApproval(ctx, id, decision)
 	if err != nil {
 		// Return the bare sentinel so callers only need to import this package.
 		if errors.Is(err, ErrAlreadyDecided) {
@@ -130,8 +135,8 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 	action := "approval.decide"
 	data := map[string]any{
 		"approval_id": id,
-		"decision":    string(newState),
-		"reason":      reason,
+		"decision":    string(decision.State),
+		"reason":      decision.Reason,
 	}
 	// Self-joining SIEM stream (W20-hold-fsm-1's companion): surface the
 	// approval's own requested-scope host at the top level, when it has one, so
@@ -143,13 +148,23 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 	if host := requestedScopeHost(result.RequestedScope); host != "" {
 		data["host"] = host
 	}
+	// The decision's BLAST RADIUS, emitted raw (never Normalize()d): "" means
+	// "no scope recorded", and asserting `run` for a decision nobody scoped is
+	// exactly what the empty-string column exists to avoid. Present
+	// unconditionally, like "reason" above, so a SIEM consumer can key on it —
+	// a permanent grant must be readable from the audit stream ALONE, which is
+	// what the demo harness's publish checklist verifies.
+	data["decision_scope"] = string(decision.Scope)
+	if decision.ExpiresAt != nil {
+		data["decision_expires_at"] = decision.ExpiresAt.UTC()
+	}
 	auditData, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		RunID:     &result.RunID,
 		ActorType: decidedByType,
-		Actor:     decidedBy,
+		Actor:     decision.DecidedBy,
 		Action:    action,
 		Target:    id.String(),
 		Outcome:   outcome,
@@ -197,7 +212,11 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 		if ap.RequestedAt.After(cutoff) {
 			continue
 		}
-		if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalExpired, "system", "stale"); err != nil {
+		// Scope is left at its zero value ("", not ScopeRun): an expiry is a
+		// sweep nobody decided, not a decision — see types.ApprovalDecision.
+		if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+			State: types.ApprovalExpired, DecidedBy: "system", Reason: "stale",
+		}); err != nil {
 			if errors.Is(err, ErrAlreadyDecided) {
 				// Race with a concurrent Decide — not an error.
 				continue

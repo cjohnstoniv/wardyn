@@ -130,6 +130,13 @@ type (
 	// it (ApprovalRequest.State).
 	ApprovalState = types.ApprovalState
 
+	// ApprovalScope is how far an Approve/Deny decision reaches: once, run
+	// (the default), until, or always. Set via DecisionOpts on Approve/Deny;
+	// read back on ApprovalRequest.DecisionScope. Meaningful only for an
+	// egress_domain approval — a credential mints once by construction and a
+	// tool_call is bounded by the clamp.
+	ApprovalScope = types.ApprovalScope
+
 	// ConfinementClass declares how strongly a sandbox confines an agent
 	// (AgentRun.ConfinementClass, RunPolicySpec.MinConfinementClass).
 	ConfinementClass = types.ConfinementClass
@@ -174,6 +181,15 @@ const (
 	ApprovalApproved = types.ApprovalApproved
 	ApprovalDenied   = types.ApprovalDenied
 	ApprovalExpired  = types.ApprovalExpired
+)
+
+// ApprovalScope values, for DecisionOpts.Scope on Approve/Deny. Omitting
+// Scope (or passing "") is ScopeRun — today's default, unchanged.
+const (
+	ScopeOnce   = types.ScopeOnce
+	ScopeRun    = types.ScopeRun
+	ScopeUntil  = types.ScopeUntil
+	ScopeAlways = types.ScopeAlways
 )
 
 // RunState values.

@@ -38,6 +38,7 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ApprovalsScreen } from "./approvals";
+import { egressBlastRadius } from "../wardyn/copy";
 
 function renderScreen() {
   return render(
@@ -108,5 +109,53 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
     renderScreen();
     await screen.findByText(/short-lived GitHub token/i);
     expect(screen.getByText(/^grants write$/i)).toBeInTheDocument();
+  });
+});
+
+// egress-scopes: the blast-radius banner (deriveBanner's egress_domain case,
+// approvals.tsx) must become scope-aware — the OLD hardcoded "for its
+// remaining lifetime" claim was wrong for `once` and hid `always`'s
+// durability. deriveBanner itself is not exported (only reachable through
+// rendered output — see the PENDING-card case below), so the per-scope cases
+// are pinned directly against egressBlastRadius, the function deriveBanner
+// reads from (always with the "run" scope in production — see deriveBanner's
+// own doc). reason-dialog.tsx does NOT read egressBlastRadius; its per-option
+// comparison is the separate APPROVAL_SCOPE_HINT/DENY_SCOPE_HINT family.
+describe("egressBlastRadius — per-scope blast-radius copy", () => {
+  it("once: one connection, the next attempt asks again", () => {
+    const b = egressBlastRadius("once", "evil.example.com");
+    expect(b.what).toMatch(/one outbound connection to evil\.example\.com/i);
+    expect(b.blast).toMatch(/the next attempt stops and asks you again/i);
+    expect(b.blast).not.toMatch(/remaining lifetime/i);
+  });
+
+  it("run (the default): honest about ending with the run, nothing wider", () => {
+    const b = egressBlastRadius("run", "evil.example.com");
+    expect(b.blast).toMatch(/evil\.example\.com until it ends/i);
+    expect(b.blast).toMatch(/no other new domain opens/i);
+  });
+
+  it("until: names the time, not a claim about the run's lifetime", () => {
+    const untilIso = new Date("2030-01-01T17:00:00Z").toISOString();
+    const b = egressBlastRadius("until", "evil.example.com", untilIso);
+    expect(b.what).toMatch(/evil\.example\.com until/i);
+    expect(b.blast).toMatch(/asks again/i);
+  });
+
+  it("always: states the workspace-durable widening the OLD copy concealed", () => {
+    const b = egressBlastRadius("always", "evil.example.com");
+    expect(b.what).toMatch(/saved to the workspace/i);
+    expect(b.blast).toMatch(/every future run of the workspace can reach evil\.example\.com/i);
+  });
+
+  // Rendered-output coverage: PendingCard (approvals.tsx) calls deriveBanner
+  // with the DEFAULT "run" scope (nothing has been chosen yet — the picker
+  // lives inside ReasonDialog) — confirm the card no longer shows the false
+  // unconditional claim, and shows the honest "run"-scope wording instead.
+  it("a PENDING egress_domain card previews the default (this-run) scope, not the old unconditional claim", async () => {
+    pending = [{ ...base, kind: "egress_domain", requested_scope: { host: "evil.example.com" } }];
+    renderScreen();
+    await screen.findByText(/evil\.example\.com until it ends/i);
+    expect(screen.queryByText(/for its remaining lifetime/i)).not.toBeInTheDocument();
   });
 });

@@ -124,8 +124,8 @@ func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.App
 func (a approvalStore) ListApprovals(ctx context.Context, st types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).ListApprovals(ctx, st)
 }
-func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, st types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).DecideApproval(ctx, id, st, decidedBy, reason)
+func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
+	return store.NewPG(a.pool).DecideApproval(ctx, id, decision)
 }
 func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 	return a.rec.Record(ctx, ev)
@@ -144,8 +144,8 @@ func (s *approvalService) st() approvalStore { return approvalStore{pool: s.pool
 func (s *approvalService) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
 	return approval.RequestApproval(ctx, s.st(), req)
 }
-func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, approve bool, decidedByType types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return approval.Decide(ctx, s.st(), id, approve, decidedByType, decidedBy, reason)
+func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
+	return approval.Decide(ctx, s.st(), id, decidedByType, decision)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	return store.NewPG(s.pool).GetApproval(ctx, id)

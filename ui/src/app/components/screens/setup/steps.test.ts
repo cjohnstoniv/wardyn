@@ -173,11 +173,12 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["environment", "Environment"],
       ["corp_network", "Corporate network"],
       ["integrations", "Model & git host"],
-      // The four Demos sub-steps — labels come from the demo catalog titles.
+      // The five Demos sub-steps — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
+      ["once-or-for-good", "Once, or for good"],
       // "Your work" is just the one workspace step — the tier-1/2 library
       // steps (Directories & repos, Base images) retired with
       // sources-library.tsx/image-catalog.tsx.
@@ -198,12 +199,13 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "once-or-for-good",
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(9);
+    expect(STEP_ORDER).toHaveLength(10);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
-    // The four Demos sub-steps ARE the demos phase, in catalog order.
+    // The five Demos sub-steps ARE the demos phase, in catalog order.
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
   });
 

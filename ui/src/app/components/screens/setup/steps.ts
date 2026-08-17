@@ -19,7 +19,7 @@ import { T } from "../../../lib/integrations";
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
 // for the step contract; the orchestrator imports these rather than redefining.
 // ------------------------------------------------------------
-// The four hands-on demos are each their own funnel sub-step under "Demos" (so
+// The five hands-on demos are each their own funnel sub-step under "Demos" (so
 // they render as separate items in the rail). Ids mirror the demo catalog so the
 // orchestrator resolves a step's demo by id. FROZEN with the rest of the contract.
 export const DEMO_STEP_IDS = [
@@ -27,6 +27,7 @@ export const DEMO_STEP_IDS = [
   "fail-then-approve",
   "held-at-the-door",
   "lines-that-cant-be-crossed",
+  "once-or-for-good",
 ] as const;
 export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 
@@ -44,14 +45,14 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // and Base images their own steps (`sources`, `images`) alongside `workspaces`
 // under "Your work". Both retired with sources-library.tsx/image-catalog.tsx —
 // `workspaces` (now backed by the single AddWorkspaceDialog, not the retired
-// wizard) is "Your work" again on its own. Current total: 10 (3 essentials + 4
-// demos + 1 your-work + 2 finish — PHASES below is the count to trust, not
+// wizard) is "Your work" again on its own. Current total: 10 (3 essentials + 5
+// demos + 1 your-work + 1 finish — PHASES below is the count to trust, not
 // this history).
 export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
-// to the FROZEN four funnel demo steps — the catalog also carries the harness
+// to the FROZEN five funnel demo steps — the catalog also carries the harness
 // demo (agent-in-the-box, /demos-only, gated on a connected model), which is NOT
 // a Getting-started step and must never enter STEP_LABEL/STEP_HEADING/STEP_ORDER.
 const DEMO_TITLES = Object.fromEntries(

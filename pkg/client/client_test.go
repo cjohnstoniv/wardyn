@@ -265,6 +265,37 @@ func TestApprove_Success(t *testing.T) {
 	}
 }
 
+// TestApprove_WithScope pins the DecisionOpts wire shape: Scope/Until travel
+// as decision_scope/decision_expires_at (approvalDecisionRequest mirrors the
+// server's decisionRequest names exactly), and Until survives the JSON round
+// trip.
+func TestApprove_WithScope(t *testing.T) {
+	id := uuid.New()
+	until := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+	want := types.ApprovalRequest{ID: id, State: types.ApprovalApproved}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checkAuth(t, r)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["decision_scope"] != "until" {
+			t.Errorf("decision_scope = %v, want %q", body["decision_scope"], "until")
+		}
+		got, _ := body["decision_expires_at"].(string)
+		parsed, err := time.Parse(time.RFC3339, got)
+		if err != nil || !parsed.Equal(until) {
+			t.Errorf("decision_expires_at = %q, want %s", got, until.Format(time.RFC3339))
+		}
+		writeJSON(w, http.StatusOK, want)
+	}))
+	defer srv.Close()
+
+	if _, err := newTestClient(srv).Approve(context.Background(), id, "temp",
+		client.DecisionOpts{Scope: client.ScopeUntil, Until: &until}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Deny
 // --------------------------------------------------------------------------
@@ -288,6 +319,34 @@ func TestDeny_Success(t *testing.T) {
 	}
 	if got.State != types.ApprovalDenied {
 		t.Errorf("got state %q, want DENIED", got.State)
+	}
+}
+
+// TestDeny_WithScope pins that Deny wires DecisionOpts the same way Approve
+// does. Approve and Deny build the wire body from independent code (each has
+// its own two-line opts-to-body assignment), so a bug in only one is possible
+// — this and TestApprove_WithScope together are what would catch it.
+func TestDeny_WithScope(t *testing.T) {
+	id := uuid.New()
+	want := types.ApprovalRequest{ID: id, State: types.ApprovalDenied}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checkAuth(t, r)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["decision_scope"] != "once" {
+			t.Errorf("decision_scope = %v, want %q", body["decision_scope"], "once")
+		}
+		if _, present := body["decision_expires_at"]; present {
+			t.Errorf("decision_expires_at present with ScopeOnce: %v", body["decision_expires_at"])
+		}
+		writeJSON(w, http.StatusOK, want)
+	}))
+	defer srv.Close()
+
+	if _, err := newTestClient(srv).Deny(context.Background(), id, "risky",
+		client.DecisionOpts{Scope: client.ScopeOnce}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -7,7 +7,8 @@
 // can't drift (D3/D6/D9/D11/B6 + the honesty rules). Barrier metadata and the
 // every-tier note live in cc-meta.ts (CC_META / CONFINEMENT_CONSTANT_NOTE) —
 // import from there, never duplicate them here.
-import type { ApprovalKind as WireApprovalKind } from "../../lib/types";
+import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../lib/types";
+import { shortTime } from "../../lib/format";
 
 // The single residual-risk prefix (D11) — everywhere a tier is explained, never
 // dropped or softened. The residual text itself is CC_META[*].doesntProtect.
@@ -135,6 +136,145 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   egress: "Network egress",
 };
 
+// ============================================================
+// Egress-approval decision scopes — egress_domain only. Canon strings from
+// egress-scopes-PHASE0-COPY.md (the sign-off artifact; the mock/copy spec is
+// UI source of truth in this repo — do not paraphrase these). Consumed by the
+// three decision surfaces (live-approvals.tsx, reason-dialog.tsx) plus the
+// blast-radius banner and decided-row badge (approvals.tsx, run-detail.tsx).
+// ============================================================
+export const APPROVAL_SCOPE_ORDER: ApprovalScope[] = ["once", "run", "until", "always"];
+
+// Menu label, approve flavor.
+export const APPROVAL_SCOPE_LABEL: Record<ApprovalScope, string> = {
+  once: "Once",
+  run: "This run",
+  until: "Until…",
+  always: "Always",
+};
+// The honest sub-label under each approve option — Phase 0 §1. "Once"
+// deliberately says CONNECTION, not request: on HTTPS the proxy sees one
+// CONNECT tunnel and everything inside it rides one decision; on plain HTTP it
+// re-decides per request. "Connection" is true for the first and understates
+// the second, which is the safe direction.
+export const APPROVAL_SCOPE_HINT: Record<ApprovalScope, string> = {
+  once: "This one connection. The next attempt asks again.",
+  run: "Every attempt until this run ends. (default)",
+  until: "Every attempt until a time you pick, or this run ends.",
+  always: "Also saves it to the workspace — future runs start with it.",
+};
+// Menu label, deny flavor — Phase 0 §2.
+export const DENY_SCOPE_LABEL: Record<ApprovalScope, string> = {
+  once: "Deny once",
+  run: "Deny for this run",
+  until: "Deny until…",
+  always: "Deny always",
+};
+export const DENY_SCOPE_HINT: Record<ApprovalScope, string> = {
+  once: "Blocks this one connection. The next attempt asks again.",
+  run: "Blocks it for the rest of this run.",
+  until: "Blocks it until a time you pick.",
+  always: "Also saves the block to the workspace — future runs start blocked.",
+};
+
+// Preset durations behind "Until…" (Phase 0's control shape). ms, not sec —
+// callers do `new Date(Date.now() + ms)`.
+export const UNTIL_PRESETS: { label: string; ms: number }[] = [
+  { label: "15 minutes", ms: 15 * 60_000 },
+  { label: "1 hour", ms: 60 * 60_000 },
+  { label: "8 hours", ms: 8 * 60 * 60_000 },
+  { label: "24 hours", ms: 24 * 60 * 60_000 },
+];
+
+// The deny confirm dialog's description (Phase 0 §3) — replaces a sentence
+// that was flatly false for two of the four scopes: "Denying blocks this host
+// for the rest of the session — there is no undo and no re-raise once it's
+// denied" is wrong for `once` (which re-raises on the next attempt) and wrong
+// for `always` (which outlives "the session" AND can be undone in the
+// workspace's egress settings). `until` renders the honest reason it's
+// missing a time rather than silently rendering "undefined".
+export function denyDialogCopy(scope: ApprovalScope, opts: { until?: string } = {}): string {
+  switch (scope) {
+    case "once":
+      return "Denying blocks this one connection. The agent can try again, and you'll be asked again.";
+    case "until":
+      return `Denying blocks this host until ${opts.until ? shortTime(opts.until) : "the time you pick"}. After that you'll be asked again.`;
+    case "always":
+      return "Denying blocks this host for the rest of this run and saves the block to the workspace, so future runs start blocked. You can undo it in the workspace's egress settings.";
+    case "run":
+    default:
+      return "Denying blocks this host for the rest of this run. The agent won't be able to reach it, and you won't be asked again.";
+  }
+}
+
+// The blast-radius banner's egress_domain case (Phase 0 §4) — consumed by
+// approvals.tsx's deriveBanner ONLY, always called with the "run" scope: the
+// PENDING card previews what a plain Approve does, before any scope is
+// chosen, and that preview never sees the scope picker inside ReasonDialog
+// (a separate component). reason-dialog.tsx does NOT read this function — its
+// own live per-option comparison is APPROVAL_SCOPE_HINT/DENY_SCOPE_HINT below,
+// a deliberately shorter, host-less copy family (all four scopes shown side
+// by side, so brevity matters more than the fuller prose here). The two
+// families are NOT single-sourced and can drift; keep them saying the same
+// thing about each scope by hand when either changes.
+//
+// The Phase 0 spec interpolates a {workspace} name into the `always` case;
+// this console has no workspace-name lookup in hand on either call site (only
+// workspace_ids — see runs.ts), so it says "the workspace" rather than
+// inventing or fetching one. Upgrade path: thread a name through once a
+// caller actually has one resolved.
+export function egressBlastRadius(scope: ApprovalScope, host: string, until?: string): { what: string; blast: string } {
+  switch (scope) {
+    case "once":
+      return {
+        what: `One outbound connection to ${host}.`,
+        blast: "That one connection. The next attempt stops and asks you again.",
+      };
+    case "until":
+      return {
+        what: `Outbound access to ${host} until ${until ? shortTime(until) : "the time you choose"}.`,
+        blast: `The run can reach ${host} until then; after that it asks again.`,
+      };
+    case "always":
+      return {
+        what: `Outbound access to ${host}, saved to the workspace.`,
+        blast: `This run and every future run of the workspace can reach ${host} without asking. Undo it in the workspace's egress settings.`,
+      };
+    case "run":
+    default:
+      return {
+        what: `Outbound access to ${host} from this run.`,
+        blast: `The run can reach ${host} until it ends. No other new domain opens.`,
+      };
+  }
+}
+
+// Disabled-`Always` reason, no-workspace case (Phase 0 §5) — the OTHER gate,
+// non-operator, reuses OPERATOR_ONLY_REASON below rather than a second string.
+export const ALWAYS_NEEDS_WORKSPACE = "Always needs a workspace — this run isn't attached to one.";
+
+// Decided-row scope badge (Phase 0 §6) — "once" / "this run" / "until 5:04 PM"
+// / "always" / "expired". undefined for a non-egress_domain kind, a row with
+// no recorded decision (PENDING, or decided before this feature shipped), or
+// EXPIRED (ExpireStale writes the zero scope deliberately — see
+// internal/approval/approval.go — an expiry is a sweep nobody decided, not a
+// scope worth badging). Callers pair this with the existing
+// ApprovalStateBadge, which already says Approved/Denied — this is just the
+// "· once" half.
+export function approvalScopeBadge(
+  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at">,
+): string | undefined {
+  if (item.kind !== "egress_domain") return undefined;
+  if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
+  const scope = item.decision_scope;
+  if (!scope) return undefined;
+  if (scope === "until") {
+    const expired = !!item.decision_expires_at && new Date(item.decision_expires_at).getTime() <= Date.now();
+    return expired ? "expired" : item.decision_expires_at ? `until ${shortTime(item.decision_expires_at)}` : "until";
+  }
+  return APPROVAL_SCOPE_LABEL[scope].toLowerCase();
+}
+
 // Run cockpit (/runs/:id) — the terminal-first live-run screen. Every string
 // the redesign introduces lands HERE first, so the four Terminal states and the
 // evidence widgets can't drift into inventing their own vocabulary.
@@ -177,7 +317,10 @@ export const RUN_COCKPIT = {
     "Your session was taken over. Nothing was lost — the terminal is still running; reconnect to take it back.",
   takeOver: "Take over",
   // Deliberately concrete about the consequence: take-over ENDS someone's
-  // session. Mirrors the irreversible-deny confirm in live-approvals.tsx.
+  // session. Mirrors the confirm-required deny in live-approvals.tsx — NOT
+  // "irreversible" (a deny can re-raise at `once` scope and can always be
+  // undone in the workspace's egress settings at `always` scope), just a
+  // consequential action that deserves a stop, same as this one.
   takeOverConfirm: (principal: string) =>
     `${principal} is driving this session now. Taking over disconnects them and records you as the holder in the audit trail.`,
   // 3. No PTY to type into — the agent drives.

@@ -283,6 +283,18 @@ type Workspace struct {
 	// run's allowlist alongside the scanned profile's EgressDomains. Never
 	// written by a scan; cleared when the composition changes.
 	ApprovedEgress []string `json:"approved_egress,omitempty"`
+	// DeniedEgress is the OPERATOR-owned mirror of ApprovedEgress: hosts
+	// explicitly blocked for this workspace, written by a `deny · always`
+	// approval decision (AddWorkspaceEgressDecision) or the denied-egress PUT
+	// (SetWorkspaceDeniedEgress). Folded into a run's denied_domains at
+	// create time, where deny beats allow, allow_all_egress, and a runtime
+	// first-use approval alike. UNLIKE ApprovedEgress, this is NOT cleared
+	// when the workspace's sources change (see migration 0040): that reset
+	// rule is right for a WIDENING (a stale allow should fail closed), but
+	// applying it to a NARROWING would silently drop an operator's permanent
+	// deny the moment content changed — a deny needs no re-review against new
+	// content.
+	DeniedEgress []string `json:"denied_egress,omitempty"`
 	// ActiveRunID is the in-flight scan/record run for this workspace, so the
 	// import panel can poll "is my step still running" without scanning all
 	// runs. Nil when no import step is executing.

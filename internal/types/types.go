@@ -114,13 +114,21 @@ const (
 // Every run gets its own identity (SPIFFE ID), its own credential grants,
 // and its own audit trail.
 type AgentRun struct {
-	ID               uuid.UUID        `json:"id"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	CreatedBy        string           `json:"created_by"` // human principal (token `sub`)
-	Agent            string           `json:"agent"`      // e.g. "claude-code", "codex-cli"
-	Repo             string           `json:"repo"`       // e.g. "org/name"
-	Task             string           `json:"task"`       // human task description
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedBy string    `json:"created_by"` // human principal (token `sub`)
+	Agent     string    `json:"agent"`      // e.g. "claude-code", "codex-cli"
+	Repo      string    `json:"repo"`       // e.g. "org/name"
+	Task      string    `json:"task"`       // human task description
+	// Title is the run's human NAME. Runs that share a title are grouped in the
+	// console's run list. Empty for legacy rows and for system runs (scan,
+	// harness login, workspace record/verify) — the console falls back to Task,
+	// which is the only identity an untitled run has ever had.
+	Title string `json:"title,omitempty"`
+	// Description is optional free-text context: why this run exists. Never
+	// interpreted by the control plane, only displayed.
+	Description      string           `json:"description,omitempty"`
 	PolicyID         *uuid.UUID       `json:"policy_id,omitempty"`
 	ConfinementClass ConfinementClass `json:"confinement_class"`
 	State            RunState         `json:"state"`
@@ -149,6 +157,17 @@ type AgentRun struct {
 	// agent, and the scan-result endpoint persists the derived profile onto this
 	// workspace from this TRUSTED linkage (not sandbox input). Nil for ordinary runs.
 	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty"`
+	// WorkspaceIDs is the READ-ONLY denormalization of the onboarded workspaces
+	// this run's RESOLVED policy spec referenced at create time
+	// (referencedWorkspaces over spec.WorkspaceMounts + spec.WorkspaceRepos).
+	// Set only by handleCreateRun (internal/api/runs.go); the four internal
+	// step-run call sites (record/verify, scan, harness login, probe) leave it
+	// nil. Distinct from WorkspaceID above, which stays the scan/verify/
+	// record-only TRUSTED linkage a sandbox upload authorizes on: this column
+	// grants nothing, is never sandbox input, and exists only to answer "which
+	// workspace(s) does an `always` egress-approval decision persist to". Nil
+	// for a run that references no onboarded workspace.
+	WorkspaceIDs []uuid.UUID `json:"workspace_ids,omitempty"`
 	// SourceID is the TRUSTED run→library-source linkage for a per-source scan
 	// run (the three-tier retarget): the scan-facts upload authorizes on it the
 	// way workspace runs authorize on WorkspaceID. Never set by user runs.
@@ -788,6 +807,69 @@ var (
 	ErrDuplicatePendingApproval = errors.New("duplicate pending approval")
 )
 
+// ApprovalScope is how far a human's approve/deny decision reaches. It is
+// ORTHOGONAL to FirstUseMode: that policy setting decides whether an unknown
+// host is escalated to a human at all; this decides the blast radius of the
+// answer. Only egress_domain approvals carry a non-default scope — a credential
+// mints exactly once by construction and a tool_call is bounded by the clamp.
+type ApprovalScope string
+
+const (
+	// ScopeOnce releases exactly one connection. For HTTPS that is one CONNECT
+	// tunnel (which may carry many requests); for plain HTTP the proxy
+	// re-evaluates per request, so it really is one request there.
+	ScopeOnce ApprovalScope = "once"
+	// ScopeRun holds for the rest of the run. This is the legacy meaning of
+	// every decision made before scopes existed, and stays the default.
+	ScopeRun ApprovalScope = "run"
+	// ScopeUntil holds for the rest of the run OR until DecisionExpiresAt,
+	// whichever comes first. Requires DecisionExpiresAt.
+	ScopeUntil ApprovalScope = "until"
+	// ScopeAlways additionally persists the host onto the run's workspace
+	// (approved_egress / denied_egress) so future runs inherit it. Operator-only.
+	ScopeAlways ApprovalScope = "always"
+)
+
+// Valid reports whether s is empty (unset => legacy run-scoped) or one of the
+// four known scopes. Used to reject a garbage value at the API write boundary,
+// mirroring FirstUseMode.Valid; runtime reads still fail closed via Normalize.
+func (s ApprovalScope) Valid() bool {
+	switch s {
+	case "", ScopeOnce, ScopeRun, ScopeUntil, ScopeAlways:
+		return true
+	default:
+		return false
+	}
+}
+
+// Normalize resolves a stored/wire value for every runtime read, and it treats
+// its two "not a known scope" cases DIFFERENTLY on purpose:
+//
+//   - EMPTY means "an old client, or a row written before this column existed".
+//     Those already meant run-scoped, so widening them to anything else would
+//     silently change shipped behavior. Empty => ScopeRun.
+//   - UNKNOWN NON-EMPTY can only come from a NEWER control plane writing a scope
+//     this binary does not understand (Valid() rejects garbage at the boundary).
+//     Treating that as ScopeRun would be fail-OPEN across versions, so it floors
+//     to the tightest scope instead. Unknown => ScopeOnce.
+//
+// Honest caveat: "tightest" is allow-shaped. On a DENY, once is the WIDER
+// choice (it re-raises; run stays denied), so an unknown scope from the future
+// turns a cached deny into a re-raise. That fails closed at the proxy — the
+// re-raise is denied again under deny_with_review — but it does cost queue
+// noise, so this is not uniformly fail-closed and should not be described as if
+// it were.
+func (s ApprovalScope) Normalize() ApprovalScope {
+	switch s {
+	case ScopeOnce, ScopeRun, ScopeUntil, ScopeAlways:
+		return s
+	case "":
+		return ScopeRun
+	default:
+		return ScopeOnce
+	}
+}
+
 // ApprovalRequest is a blocking human-in-the-loop gate. RequestedScope is
 // EXACTLY what the approver saw; the broker writes MintedJTI back in the
 // same transaction as the mint, yielding the provable join
@@ -804,6 +886,41 @@ type ApprovalRequest struct {
 	DecidedBy      string          `json:"decided_by,omitempty"`
 	MintedJTI      string          `json:"minted_jti,omitempty"`
 	Reason         string          `json:"reason,omitempty"`
+	// DecisionScope is how far the human's decision reaches: once (one
+	// connection), run (rest of this run — the default and the legacy meaning),
+	// until (this run, until DecisionExpiresAt), or always (persisted onto the
+	// workspace so future runs inherit it). Empty on a PENDING row — a decision
+	// nobody has made yet has no scope — which is why the column is
+	// NOT NULL DEFAULT '' rather than DEFAULT 'run'.
+	//
+	// Named decision_scope, NOT scope: RequestedScope above is the unrelated
+	// host JSON, and it is part of the PENDING dedup unique index.
+	DecisionScope ApprovalScope `json:"decision_scope,omitempty"`
+	// DecisionExpiresAt is set only when DecisionScope is until. Nullable, so it
+	// scans into a pointer the way DecidedAt does. NOT the same clock as the
+	// EXPIRED state / approval.expire sweeper, which ages out stale PENDING
+	// requests — this bounds a GRANT that was actually made.
+	DecisionExpiresAt *time.Time `json:"decision_expires_at,omitempty"`
+}
+
+// ApprovalDecision is what a human — or the sweeper, for a stale-PENDING
+// expiry — is deciding: which state the approval moves to, who decided and
+// why, and (egress_domain approvals only) how far the decision reaches. It
+// is threaded as ONE value through DecideApproval and ApprovalService.Decide
+// rather than growing those signatures to five-plus positional parameters.
+//
+// ExpireStale is the one caller that leaves Scope at its zero value (""),
+// never ScopeRun: an expiry is a sweep nobody decided, and ApprovalScope's
+// own doc already explains why an unmade decision must never be asserted as
+// "run"-scoped.
+type ApprovalDecision struct {
+	State     ApprovalState
+	DecidedBy string
+	Reason    string
+	// Scope and ExpiresAt are meaningful only for an egress_domain approval;
+	// every other kind leaves them at the zero value. See ApprovalScope.
+	Scope     ApprovalScope
+	ExpiresAt *time.Time
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke,

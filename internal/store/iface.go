@@ -50,6 +50,16 @@ type Store interface {
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
 	UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error)
 	SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
+	// AddWorkspaceEgressDecision records one `always`-scoped egress decision:
+	// on allow, host is added to approved_egress (capped at maxApprovedEgress,
+	// deduped) and removed from denied_egress; on deny the mirror. Returns
+	// ErrConflict (not ErrNotFound) when id exists but the cap refused the
+	// write. See store.go for the full contract.
+	AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host string, allow bool, maxApprovedEgress int) (types.Workspace, error)
+	// SetWorkspaceDeniedEgress is SetWorkspaceApprovedEgress's mirror for the
+	// operator-owned denied-egress list (Phase 4 revocation PUT): pass the
+	// FULL desired list, replacing rather than merging.
+	SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
 	SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error)
 	SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
@@ -105,7 +115,9 @@ type Store interface {
 	CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error)
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error)
-	DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error)
+	// DecideApproval transitions state from PENDING to decision.State; returns
+	// ErrAlreadyDecided if the approval is not PENDING. See types.ApprovalDecision.
+	DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error)
 
 	// AuditEvent.
 	QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error)

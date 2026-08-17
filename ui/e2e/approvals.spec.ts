@@ -26,6 +26,11 @@ import { test, expect, gotoConsole, sql } from "./fixtures";
 //   * the Decided view surfaces EXPIRED approvals, and a DENIED verdict renders
 //     in the danger/red tone, never green.
 //   * deny requires a reason; approve does not.
+//   * decision-scope (once/this run/until/always — copy.ts's APPROVAL_SCOPE_*):
+//     the ReasonDialog segmented control on this page, the decided-row scope
+//     badge (approvalScopeBadge), and — via the run-cockpit describe block
+//     below — the LiveApprovals split button's caret menu. The confirm button
+//     stays exactly "Approve" no matter which scope is picked.
 // ---------------------------------------------------------------------------
 
 // Every test in this file mutates / reads the SAME shared backend (one wardynd +
@@ -38,6 +43,20 @@ test.describe.configure({ mode: "serial" });
 function anyRunId(): string {
   const id = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
   if (!id) throw new Error("no seeded runs found — is the backend up and seeded?");
+  return id;
+}
+
+// Same run as anyRunId(), forced into RUNNING. LiveApprovals — the split-button
+// decision surface — only mounts when run.state === "RUNNING"
+// (run-detail.tsx:442, inside Cockpit's terminalPane), so the split-button spec
+// needs a run pinned there. The shared seed's non-terminal states aren't stable
+// enough to rely on as-is: runs.spec.ts notes the `none` runner's reconciler
+// can legitimately advance a run away from its seeded state before a spec's
+// tests reach it. Force it directly instead — the same one-column SQL UPDATE
+// technique e2e-backend.sh's own seeder uses to produce its RUNNING fixture.
+function runningRunId(): string {
+  const id = anyRunId();
+  sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${id}'`);
   return id;
 }
 
@@ -94,14 +113,24 @@ async function gotoApprovals(page: Page): Promise<void> {
 function seedReadOnlyFixtures(): void {
   const runId = anyRunId();
   const rows = [
-    `('a0000000-0000-0000-0000-000000000001','${runId}','credential','{"audience":"github.com","scopes":["repo:read"],"ttl":"15m"}'::jsonb,'PENDING',now(),NULL,'','',''),`,
-    `('a0000000-0000-0000-0000-000000000002','${runId}','egress_domain','{"domain":"ro-pending.example.com","port":443}'::jsonb,'PENDING',now(),NULL,'','',''),`,
-    `('a0000000-0000-0000-0000-000000000003','${runId}','credential','{"audience":"ro-approved.example"}'::jsonb,'APPROVED',now()-interval '1 hour',now()-interval '50 min','admin@wardyn','jti-ro-approved','Verified scope is minimal'),`,
-    `('a0000000-0000-0000-0000-000000000004','${runId}','egress_domain','{"domain":"ro-denied.example.org"}'::jsonb,'DENIED',now()-interval '2 hour',now()-interval '110 min','admin@wardyn','','Domain not on allowlist'),`,
-    `('a0000000-0000-0000-0000-000000000005','${runId}','tool_call','{"tool":"ro-expired.exec"}'::jsonb,'EXPIRED',now()-interval '3 hour',now()-interval '2 hour','','','')`,
+    `('a0000000-0000-0000-0000-000000000001','${runId}','credential','{"audience":"github.com","scopes":["repo:read"],"ttl":"15m"}'::jsonb,'PENDING',now(),NULL,'','','',''),`,
+    `('a0000000-0000-0000-0000-000000000002','${runId}','egress_domain','{"domain":"ro-pending.example.com","port":443}'::jsonb,'PENDING',now(),NULL,'','','',''),`,
+    `('a0000000-0000-0000-0000-000000000003','${runId}','credential','{"audience":"ro-approved.example"}'::jsonb,'APPROVED',now()-interval '1 hour',now()-interval '50 min','admin@wardyn','jti-ro-approved','Verified scope is minimal','run'),`,
+    `('a0000000-0000-0000-0000-000000000004','${runId}','egress_domain','{"domain":"ro-denied.example.org"}'::jsonb,'DENIED',now()-interval '2 hour',now()-interval '110 min','admin@wardyn','','Domain not on allowlist','run'),`,
+    `('a0000000-0000-0000-0000-000000000005','${runId}','tool_call','{"tool":"ro-expired.exec"}'::jsonb,'EXPIRED',now()-interval '3 hour',now()-interval '2 hour','','','','')`,
   ].join("\n");
   sql(
-    `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason)
+    // decision_scope (migration 0039) MUST be listed explicitly: an omitted
+    // column defaults to '' for every row (NOT NULL DEFAULT ''), which makes
+    // copy.ts's approvalScopeBadge() return undefined for every decided row —
+    // any scope-badge assertion would then pass vacuously against a blank.
+    // Row 4 (ro-denied.example.org — the only DECIDED egress_domain fixture
+    // here) carries a real 'run' scope so the badge has something to render.
+    // Row 3 (credential) also carries a realistic 'run' even though its kind
+    // means the badge never shows it (approvalScopeBadge is egress_domain-only
+    // by design). Row 5 (EXPIRED) stays '' on purpose, matching ExpireStale's
+    // own deliberate zero-scope write — an expiry is a sweep nobody decided.
+    `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason, decision_scope)
      VALUES ${rows}
      ON CONFLICT (id) DO NOTHING`,
   );
@@ -212,6 +241,16 @@ test.describe("Approvals screen", () => {
     await expect(page.getByText(markerRe("ro-denied.example.org")).first()).toBeVisible();
     await expect(page.getByText(markerRe("ro-expired.exec")).first()).toBeVisible();
 
+    // Decided-row scope badge (Phase 0 §6, copy.ts's approvalScopeBadge) — only
+    // rendered for a DECIDED egress_domain row that carries a decision_scope.
+    // ro-denied.example.org is seeded DENIED + decision_scope 'run' above; the
+    // badge renders "this run" (APPROVAL_SCOPE_LABEL.run, lowercased) beside
+    // the state chip. This is the assertion the column-list omission bug made
+    // impossible: before decision_scope was added to the seed, every decided
+    // row's scope was '', so approvalScopeBadge always returned undefined and
+    // no badge ever rendered — this would have passed vacuously either way.
+    await expect(page.getByText("this run", { exact: true })).toBeVisible();
+
     // Honesty: a DENIED verdict renders in the danger/red tone, never a green ✓.
     await expect(page.getByText("Denied", { exact: true }).first()).toHaveClass(/text-danger/);
 
@@ -275,6 +314,66 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
       await page.getByRole("tab", { name: "Decided" }).click();
       await expect(page.getByText(markerRe(marker))).toHaveCount(1);
       await expect(page.getByText("Approved", { exact: true }).first()).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("picking a non-default decision scope keeps the confirm button honestly labelled \"Approve\", and the decided row picks up that scope's badge", async ({ page }) => {
+    clearPending();
+    const marker = uniqueMarker("scope-flow");
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 } });
+
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      await expect(page.getByText(markerRe(marker)).first()).toBeVisible();
+
+      await page.getByRole("button", { name: "Approve" }).first().click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+
+      // The decision-scope segmented control (reason-dialog.tsx) — rendered
+      // for egress_domain only, all four options present together.
+      const scopeGroup = dialog.getByRole("radiogroup", { name: "Decision scope" });
+      await expect(scopeGroup).toBeVisible();
+      await expect(scopeGroup.getByRole("radio", { name: /^Once\b/ })).toBeVisible();
+      await expect(scopeGroup.getByRole("radio", { name: /^This run\b/ })).toBeVisible();
+      await expect(scopeGroup.getByRole("radio", { name: /^Until…/ })).toBeVisible();
+      await expect(scopeGroup.getByRole("radio", { name: /^Always\b/ })).toBeVisible();
+
+      // Pick "Until…" + a preset (not the default "This run") — this is also
+      // the one scope whose badge depends on decision_expires_at reaching the
+      // row, so picking it proves that field round-trips too, not just
+      // decision_scope.
+      const untilOption = scopeGroup.getByRole("radio", { name: /^Until…/ });
+      await untilOption.click();
+      await expect(untilOption).toHaveAttribute("aria-checked", "true");
+      await dialog.getByRole("button", { name: "15 minutes" }).click();
+
+      // Honesty guard (pre-existing, unrelated to this feature, and NOT to be
+      // weakened by it): no matter which scope is selected, the confirm button
+      // stays exactly "Approve" — reason-dialog.tsx never folds the scope into
+      // the label.
+      await expect(dialog.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: /mint/i })).toHaveCount(0);
+
+      await dialog.getByRole("button", { name: "Approve", exact: true }).click();
+
+      await expect(page.getByText("Request approved")).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+
+      // It re-surfaces in Decided as Approved, carrying an "until <time>"
+      // badge — the live round-trip proof that decision_scope AND
+      // decision_expires_at reach the row (copy.ts's approvalScopeBadge), not
+      // just that the SQL-seeded fixture in the test above can render one.
+      // Not asserting the exact clock text: shortTime() formats via
+      // toLocaleTimeString with no fixed locale/timezone, which is exactly the
+      // kind of thing that is stable on one machine and flaky on another.
+      await page.getByRole("tab", { name: "Decided" }).click();
+      await expect(page.getByText(markerRe(marker))).toHaveCount(1);
+      await expect(page.getByText("Approved", { exact: true }).first()).toBeVisible();
+      await expect(page.getByText(/^until\s/i).first()).toBeVisible();
     } finally {
       deleteApproval(id);
     }
@@ -355,5 +454,90 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
 
     // Restore standing fixtures so subsequent runs of the read-only specs pass.
     seedReadOnlyFixtures();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The OTHER decision surface: LiveApprovals' split button, mounted on the run
+// cockpit (/runs/:id), not the standalone /approvals page above. Unreachable
+// from that page (it uses PendingCard + ReasonDialog's segmented control, not
+// LiveApprovals) — this is the surface the queue tests above cannot exercise,
+// so it gets its own describe block and its own navigation.
+// ---------------------------------------------------------------------------
+test.describe("Approvals — decision-scope split button (run cockpit)", () => {
+  test("the LiveApprovals split button offers all four scopes via its caret, with Always disabled for a workspace-less run", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    // live-approvals.tsx reads requested_scope.host (NOT .domain, unlike the
+    // standalone page's deriveTitle, which checks both) — the key must be
+    // "host" or the row renders "unknown host" instead of this marker.
+    const marker = uniqueMarker("split-button");
+    const id = seedPending({ kind: "egress_domain", scope: { host: marker, port: 443 } });
+
+    try {
+      await page.goto(`/runs/${runId}`);
+      // Sanity: runningRunId()'s forced SQL state actually took, and the
+      // cockpit rendered (LiveApprovals only mounts when run.state ===
+      // "RUNNING" — run-detail.tsx:442).
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      const row = page.getByTestId("live-approval-row");
+      await expect(row).toBeVisible();
+      await expect(row.getByText(markerRe(marker))).toBeVisible();
+
+      // The split button's bare halves stay named "Approve"/"Deny" — same
+      // unanchored match the card buttons above use (not exact:true: that's
+      // reserved in this file for disambiguating a dialog's CONFIRM button
+      // from an "Approve & mint" over-claim, not for these plain row buttons).
+      const approveBtn = row.getByRole("button", { name: "Approve" });
+      const denyBtn = row.getByRole("button", { name: "Deny" });
+      await expect(approveBtn).toBeVisible();
+      await expect(approveBtn).toBeEnabled();
+      await expect(denyBtn).toBeVisible();
+      await expect(denyBtn).toBeEnabled();
+
+      // Two carets on the row (approve's and deny's ScopeMenu instances) share
+      // the same aria-label by design — the component comment is explicit
+      // that neither may say "approve"/"deny" in its accessible name, or an
+      // unanchored /approve/i query upstream would match two buttons. DOM
+      // order is deterministic (approve button, approve caret, deny button,
+      // deny caret), so .first()/.last() disambiguate them here.
+      const approveCaret = row.getByRole("button", { name: "More options" }).first();
+      const denyCaret = row.getByRole("button", { name: "More options" }).last();
+
+      await approveCaret.click();
+      const approveMenu = page.getByRole("menu");
+      await expect(approveMenu).toBeVisible();
+      // All four approve-flavor options render together (ScopeMenu's default,
+      // pre-"Until…"-picked view).
+      await expect(approveMenu.getByRole("button", { name: /^Once\b/ })).toBeVisible();
+      await expect(approveMenu.getByRole("button", { name: /^This run\b/ })).toBeVisible();
+      await expect(approveMenu.getByRole("button", { name: /^Until…/ })).toBeVisible();
+      const alwaysBtn = approveMenu.getByRole("button", { name: /^Always\b/ });
+      await expect(alwaysBtn).toBeVisible();
+      // hasWorkspace is derived from run.workspace_ids, which this seeded run
+      // has none of — Always must be a REAL disabled attribute (not
+      // aria-disabled; the component comment is explicit Playwright would
+      // happily "click" that), with the no-workspace reason shown in its place.
+      await expect(alwaysBtn).toBeDisabled();
+      await expect(
+        approveMenu.getByText("Always needs a workspace — this run isn't attached to one."),
+      ).toBeVisible();
+      // Close without picking — this approval stays undecided for cleanup.
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+
+      // The deny-flavor menu carries its OWN label set (DENY_SCOPE_LABEL) —
+      // spot-check one to prove the verb swap actually renders different copy
+      // rather than reusing the approve labels.
+      await denyCaret.click();
+      const denyMenu = page.getByRole("menu");
+      await expect(denyMenu).toBeVisible();
+      await expect(denyMenu.getByRole("button", { name: /^Deny always\b/ })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+    } finally {
+      deleteApproval(id);
+    }
   });
 });

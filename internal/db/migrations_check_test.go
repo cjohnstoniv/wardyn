@@ -211,6 +211,9 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		{"workspaces", "status", workspaceStatusValues()},
 		{"sources", "status", workspaceStatusValues()},
 		{"sources", "kind", stringSet(string(types.SourceLocalDir), string(types.SourceRepo))},
+		{"approvals", "decision_scope", stringSet(
+			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
+		)},
 		// base_images.kind has no typed Go enum (types.BaseImageEntry.Kind is a
 		// plain string — internal/types/workspace_contract.go) and is validated
 		// ad hoc in internal/api/base_images.go, so this literal list IS the

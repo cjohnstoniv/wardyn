@@ -81,7 +81,13 @@ const ebpfHeartbeatTTL = 2 * time.Minute
 // keeping the API decoupled from concrete storage.
 type ApprovalService interface {
 	Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error)
-	Decide(ctx context.Context, id uuid.UUID, approve bool, decidedByType types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error)
+	// Decide transitions an approval to decision.State (APPROVED or DENIED —
+	// the caller picks; there is no separate approve bool, since
+	// types.ApprovalDecision.State already says which). decidedByType is kept
+	// as its own parameter rather than folded into ApprovalDecision: it is
+	// audit attribution (who/what decided), not a property of the decision
+	// itself.
+	Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error)
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
 }

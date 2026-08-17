@@ -113,7 +113,7 @@ var _ RunsByCreatorPager = PG{}
 func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
 		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
@@ -147,7 +147,7 @@ var _ ApprovalsByRunCreatorPager = PG{}
 func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
 	q := `
 		SELECT a.id, a.run_id, a.grant_id, a.kind, a.requested_scope, a.state, a.requested_at,
-			a.decided_at, a.decided_by, a.minted_jti, a.reason
+			a.decided_at, a.decided_by, a.minted_jti, a.reason, a.decision_scope, a.decision_expires_at
 		FROM approvals a
 		JOIN agent_runs r ON r.id = a.run_id
 		WHERE r.created_by = $1`
@@ -166,7 +166,7 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
 		FROM agent_runs ORDER BY created_at DESC`, nil)
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
 }
@@ -199,7 +199,7 @@ func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, 
 func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
 	q := `
 		SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason
+			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at
 		FROM approvals`
 	var args []any
 	if stateFilter != "" {

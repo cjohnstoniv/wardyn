@@ -664,6 +664,86 @@ func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
 	}
 }
 
+// --scope/--until must reach the wire as decision_scope/decision_expires_at —
+// the same two-line assignment exists in both approvalDecisionCmd's RunE and
+// the SDK's Approve/Deny, so this is the one check that would catch either
+// dropping it.
+func TestApproveCmd_WithScopeAndUntil(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.ApprovalRequest{
+		ID: uuid.New(), State: types.ApprovalApproved,
+	})
+
+	apID := uuid.New()
+	before := time.Now()
+	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok",
+		"--scope", "until", "--until", "2h")
+	if err != nil {
+		t.Fatalf("approve returned error: %v", err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(srv.last().body, &body)
+	if body["decision_scope"] != "until" {
+		t.Errorf("decision_scope = %v, want %q", body["decision_scope"], "until")
+	}
+	got, _ := body["decision_expires_at"].(string)
+	expiresAt, err := time.Parse(time.RFC3339, got)
+	if err != nil {
+		t.Fatalf("decision_expires_at %q did not parse as RFC3339: %v", got, err)
+	}
+	if d := expiresAt.Sub(before); d < 90*time.Minute || d > 150*time.Minute {
+		t.Errorf("decision_expires_at = %s, want ~2h after %s", expiresAt, before)
+	}
+}
+
+// A bare --scope (no --until) must not touch decision_expires_at — the server
+// rejects an until-less until, but ScopeOnce/ScopeRun/ScopeAlways have none.
+func TestApproveCmd_WithScopeOnly(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.ApprovalRequest{
+		ID: uuid.New(), State: types.ApprovalApproved,
+	})
+
+	if err := execCmd(t, "approve", uuid.New().String(), "--url", srv.URL, "--token", "tok",
+		"--scope", "once"); err != nil {
+		t.Fatalf("approve returned error: %v", err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(srv.last().body, &body)
+	if body["decision_scope"] != "once" {
+		t.Errorf("decision_scope = %v, want %q", body["decision_scope"], "once")
+	}
+	if _, present := body["decision_expires_at"]; present {
+		t.Errorf("decision_expires_at present with no --until: %v", body["decision_expires_at"])
+	}
+}
+
+func TestParseDecisionUntil(t *testing.T) {
+	t.Run("duration", func(t *testing.T) {
+		before := time.Now()
+		got, err := parseDecisionUntil("2h")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if d := got.Sub(before); d < 90*time.Minute || d > 150*time.Minute {
+			t.Errorf("got %s, want ~2h after %s", got, before)
+		}
+	})
+	t.Run("RFC3339", func(t *testing.T) {
+		want := time.Now().Add(48 * time.Hour).Truncate(time.Second).UTC()
+		got, err := parseDecisionUntil(want.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got.Equal(want) {
+			t.Errorf("got %s, want %s", got, want)
+		}
+	})
+	t.Run("garbage", func(t *testing.T) {
+		if _, err := parseDecisionUntil("not-a-time"); err == nil {
+			t.Error("expected error for unparseable --until, got nil")
+		}
+	})
+}
+
 // --------------------------------------------------------------------------
 // audit command
 // --------------------------------------------------------------------------

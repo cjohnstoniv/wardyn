@@ -57,19 +57,17 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 	return req, nil
 }
 
-func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, approve bool, byType types.ActorType, by, reason string) (types.ApprovalRequest, error) {
+func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, byType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	if f.decideErr != nil {
 		return types.ApprovalRequest{}, f.decideErr
 	}
 	ap := f.byID[id]
 	ap.ID = id
-	if approve {
-		ap.State = types.ApprovalApproved
-	} else {
-		ap.State = types.ApprovalDenied
-	}
-	ap.DecidedBy = by
-	ap.Reason = reason
+	ap.State = decision.State
+	ap.DecidedBy = decision.DecidedBy
+	ap.Reason = decision.Reason
+	ap.DecisionScope = decision.Scope
+	ap.DecisionExpiresAt = decision.ExpiresAt
 	f.byID[id] = ap
 	return ap, nil
 }

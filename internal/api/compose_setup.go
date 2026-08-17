@@ -518,20 +518,39 @@ func setupEgressDroppedItems(droppedDomains []string) []SetupItem {
 // setupEgressWorkspaceItem is informational only: it reports the egress domains
 // the referenced workspaces' scanned profiles would add at LAUNCH (the real
 // union happens on the create path, in unionWorkspaceEgress) — computed here on
-// a COPY of AllowedDomains, since unionWorkspaceEgress mutates its spec argument
+// spec.Clone() (types.go), since unionWorkspaceEgress mutates its spec argument
 // IN PLACE (workspace_run.go) and this proposal's spec must not be touched
-// before the operator approves it. ok=false when there are no referenced
-// workspaces (nothing to union).
+// before the operator approves it. Clone, not a hand-rolled AllowedDomains-only
+// append: this row now also reports the denied side (Phase 4), and a partial
+// copy that deep-copies only AllowedDomains is exactly the bug resolvePolicy's
+// own doc comment (runs_policy.go) already describes taking once on this same
+// field family — a caller's `append` into a shared backing array let one run's
+// egress domain silently replace another's. ok=false when there are no
+// referenced workspaces (nothing to union).
 func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Workspace) (SetupItem, bool) {
 	if len(workspaces) == 0 {
 		return SetupItem{}, false
 	}
-	dup := spec
-	dup.AllowedDomains = append([]string(nil), spec.AllowedDomains...)
+	dup := spec.Clone()
+	beforeDenied := len(dup.DeniedDomains)
 	added := unionWorkspaceEgress(&dup, workspaces)
+	// unionWorkspaceEgress only APPENDS new entries (unionDomains, helpers.go),
+	// so everything past the pre-call length is exactly what THIS call added —
+	// same trick as diffing `added`, just done by hand since the denied side
+	// deliberately isn't in the return value (see unionWorkspaceEgress's doc).
+	blocked := dup.DeniedDomains[beforeDenied:]
 	detail := "no additional egress needed beyond the current allowlist"
-	if len(added) > 0 {
+	switch {
+	case len(added) > 0 && len(blocked) > 0:
+		detail = "launch will also allow: " + strings.Join(added, ", ") + " and will block: " + strings.Join(blocked, ", ")
+	case len(added) > 0:
 		detail = "launch will also allow: " + strings.Join(added, ", ")
+	case len(blocked) > 0:
+		// A host here is in a REFERENCED WORKSPACE's DeniedEgress — surfaced so it
+		// never reads as "will also allow" while actually being blocked at runtime
+		// (the same understating-the-envelope failure preflight.go's own comment
+		// says this whole checklist exists to prevent).
+		detail = "launch will block: " + strings.Join(blocked, ", ")
 	}
 	// Content-derived suggestions are shown, explicitly labeled NOT allowed —
 	// the operator promotes them per-workspace (approved egress) if wanted.

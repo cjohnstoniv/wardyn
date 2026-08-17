@@ -102,18 +102,23 @@ func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, no
 	return claims, run, true
 }
 
-// unionAllowedDomains appends any of add not already in spec.AllowedDomains
-// (deduped, in-place, empty entries skipped) and returns what was actually
-// added. Dedupe is case/space-insensitive — the same key composer.Clamp and
-// domainAllowedExact already use, and what the proxy concludes (CompilePolicy
-// lowercases before matching). Keying on raw bytes instead let an operator's
-// `API.Anthropic.com` re-add a second, semantically identical entry AND report
-// it to the operator as a widening that had not happened. Stored spelling is
-// the operator's own; only the equality test is normalized.
-func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
+// unionDomains appends any of add not already in *dst (deduped, in-place,
+// empty entries skipped) and returns what was actually added. Dedupe is
+// case/space-insensitive — the same key composer.Clamp and domainAllowedExact
+// already use, and what the proxy concludes (CompilePolicy lowercases before
+// matching). Keying on raw bytes instead let an operator's `API.Anthropic.com`
+// re-add a second, semantically identical entry AND report it to the operator
+// as a widening that had not happened. Stored spelling is the operator's own;
+// only the equality test is normalized.
+//
+// Takes *[]string rather than *RunPolicySpec so it can back BOTH
+// unionAllowedDomains (spec.AllowedDomains) and unionDeniedDomains
+// (spec.DeniedDomains, Phase 4) off one implementation — the two lists share
+// the exact same dedupe/append contract, only the target field differs.
+func unionDomains(dst *[]string, add []string) []string {
 	key := func(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
 	have := map[string]bool{}
-	for _, d := range spec.AllowedDomains {
+	for _, d := range *dst {
 		have[key(d)] = true
 	}
 	var added []string
@@ -122,10 +127,29 @@ func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
 			continue
 		}
 		have[key(d)] = true
-		spec.AllowedDomains = append(spec.AllowedDomains, d)
+		*dst = append(*dst, d)
 		added = append(added, d)
 	}
 	return added
+}
+
+// unionAllowedDomains is unionDomains applied to spec.AllowedDomains — see
+// unionDomains for the dedupe rule. ~11 production call sites key on this
+// exact signature; extend behavior via unionDomains, never by changing this
+// one's shape.
+func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
+	return unionDomains(&spec.AllowedDomains, add)
+}
+
+// unionDeniedDomains is unionAllowedDomains' Phase-4 twin: unionDomains applied
+// to spec.DeniedDomains instead of AllowedDomains. Used by unionWorkspaceEgress
+// to fold a workspace's permanent `deny · always` decisions (Workspace.
+// DeniedEgress) into a run the same way ApprovedEgress folds into
+// AllowedDomains. No production call site reports what this adds the way
+// unionAllowedDomains's return is consumed elsewhere — see unionWorkspaceEgress
+// for why the denied side stays out of ITS return value too.
+func unionDeniedDomains(spec *types.RunPolicySpec, add []string) []string {
+	return unionDomains(&spec.DeniedDomains, add)
 }
 
 // refreshRun re-reads a run after a state-changing step (build failure,

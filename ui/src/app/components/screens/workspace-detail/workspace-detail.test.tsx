@@ -17,6 +17,7 @@ const setWorkspaceLLMCredMock = vi.fn();
 const recordTaskMock = vi.fn();
 const promoteRecordEgressMock = vi.fn();
 const setApprovedEgressMock = vi.fn();
+const setDeniedEgressMock = vi.fn();
 const buildWorkspaceMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: {
@@ -27,6 +28,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
     recordTask: (...a: unknown[]) => recordTaskMock(...a),
     promoteRecordEgress: (...a: unknown[]) => promoteRecordEgressMock(...a),
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
+    setDeniedEgress: (...a: unknown[]) => setDeniedEgressMock(...a),
     buildWorkspace: (...a: unknown[]) => buildWorkspaceMock(...a),
     createWorkspace: vi.fn(),
   },
@@ -168,13 +170,14 @@ describe("WorkspaceDetailScreen — Delete workspace", () => {
   });
 });
 
-describe("WorkspaceDetailScreen — two cards only", () => {
-  it("renders 'Recorded sessions' (renamed from 'Sessions') and 'Allowed hosts', never the retired Requirements/Detected/Env-as-code cards", async () => {
+describe("WorkspaceDetailScreen — three cards only", () => {
+  it("renders 'Recorded sessions' (renamed from 'Sessions'), 'Allowed hosts', and 'Denied hosts', never the retired Requirements/Detected/Env-as-code cards", async () => {
     getWorkspaceMock.mockResolvedValue(ws());
     renderDetail();
     expect(await screen.findByText("Recorded sessions")).toBeInTheDocument();
     expect(screen.getByText(/Run a task once with everything open/)).toBeInTheDocument();
     expect(screen.getByText("Allowed hosts · 1")).toBeInTheDocument();
+    expect(screen.getByText("Denied hosts · 0")).toBeInTheDocument();
     expect(screen.queryByText("Requirements")).not.toBeInTheDocument();
     expect(screen.queryByText("Detected, not required")).not.toBeInTheDocument();
     expect(screen.queryByText("Env as code")).not.toBeInTheDocument();
@@ -228,6 +231,26 @@ describe("WorkspaceDetailScreen — Allowed hosts card", () => {
     getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org"], record_results: { "build-test": rr } }));
     renderDetail();
     expect(await screen.findByText('promoted from session "build-and-test"')).toBeInTheDocument();
+  });
+});
+
+describe("WorkspaceDetailScreen — Denied hosts card", () => {
+  it("shows nothing denied by default", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    expect(await screen.findByText("Denied hosts · 0")).toBeInTheDocument();
+    expect(screen.getByText("Nothing denied.")).toBeInTheDocument();
+  });
+
+  it("a denied host renders a remove control that PUTs the narrowed denylist", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ denied_egress: ["evil.example.com"] }));
+    setDeniedEgressMock.mockResolvedValue(ws({ denied_egress: [] }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    expect(await screen.findByText("Denied hosts · 1")).toBeInTheDocument();
+    expect(screen.getByText("denied for this workspace")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove evil.example.com" }));
+    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", []));
   });
 });
 
@@ -301,10 +324,11 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
 // This screen never read useOperator at all — a viewer saw enabled
 // Delete/lane toggles/record controls that all 403 server-side.
 describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () => {
-  it("disables the Sessions card's session controls and the Allowed hosts remove control", async () => {
+  it("disables the Sessions card's session controls, the Allowed hosts remove control, and the Denied hosts remove control", async () => {
     getWorkspaceMock.mockResolvedValue(
       ws({
         approved_egress: ["registry.npmjs.org"],
+        denied_egress: ["evil.example.com"],
         record_results: {
           "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" },
         },
@@ -319,5 +343,6 @@ describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () 
     expect(screen.getByLabelText(/session name/i)).toBeDisabled();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove registry.npmjs.org" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove evil.example.com" })).toBeDisabled();
   });
 });

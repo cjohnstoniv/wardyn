@@ -224,6 +224,11 @@ func (s *Server) routes() chi.Router {
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			// Denied-egress twin (Phase 4 revocation) — the only way to undo a
+			// `deny · always` decision, including curing an already-bricked
+			// workspace (H5); see handleSetDeniedEgress's doc comment for why its
+			// validator is deliberately narrower than the approved-egress one above.
+			operatorOnly.Put("/workspaces/{id}/denied-egress", s.handleSetDeniedEgress)
 			// Bind (or clear) the workspace/container's model/harness creds — a run
 			// that picks it inherits them (applyWorkspaceCreds). Scoped write.
 			operatorOnly.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)

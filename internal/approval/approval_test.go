@@ -54,7 +54,7 @@ func (f *fakeStore) ListApprovals(_ context.Context, stateFilter types.ApprovalS
 	return out, nil
 }
 
-func (f *fakeStore) DecideApproval(_ context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
+func (f *fakeStore) DecideApproval(_ context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, a := range f.records {
@@ -63,10 +63,12 @@ func (f *fakeStore) DecideApproval(_ context.Context, id uuid.UUID, state types.
 				return types.ApprovalRequest{}, approval.ErrAlreadyDecided
 			}
 			now := time.Now().UTC()
-			f.records[i].State = state
+			f.records[i].State = decision.State
 			f.records[i].DecidedAt = &now
-			f.records[i].DecidedBy = decidedBy
-			f.records[i].Reason = reason
+			f.records[i].DecidedBy = decision.DecidedBy
+			f.records[i].Reason = decision.Reason
+			f.records[i].DecisionScope = decision.Scope
+			f.records[i].DecisionExpiresAt = decision.ExpiresAt
 			return f.records[i], nil
 		}
 	}
@@ -166,7 +168,9 @@ func TestDecide_Approve(t *testing.T) {
 	runID := uuid.New()
 
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
-	result, err := approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice@example.com", "looks good")
+	result, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Reason: "looks good",
+	})
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -200,7 +204,9 @@ func TestDecide_AdminTokenRecordsAsSystem(t *testing.T) {
 	runID := uuid.New()
 
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
-	if _, err := approval.Decide(ctx, st, ap.ID, true, types.ActorSystem, "admin-token", "ok"); err != nil {
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorSystem, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "admin-token", Reason: "ok",
+	}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	if len(st.audit) == 0 {
@@ -227,7 +233,9 @@ func TestDecide_AuditDataIncludesRequestedScopeHost(t *testing.T) {
 
 	scope := json.RawMessage(`{"host":"api.github.com","mode":"deny_with_review"}`)
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, scope))
-	if _, err := approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice@example.com", "ok"); err != nil {
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Reason: "ok",
+	}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	if len(st.audit) == 0 {
@@ -253,7 +261,9 @@ func TestDecide_AuditDataOmitsHostWhenScopeHasNone(t *testing.T) {
 	runID := uuid.New()
 
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
-	if _, err := approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice", "ok"); err != nil {
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Reason: "ok",
+	}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	var data map[string]any
@@ -271,7 +281,9 @@ func TestDecide_Deny(t *testing.T) {
 	runID := uuid.New()
 
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
-	result, err := approval.Decide(ctx, st, ap.ID, false, types.ActorHuman, "bob@example.com", "too risky")
+	result, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalDenied, DecidedBy: "bob@example.com", Reason: "too risky",
+	})
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -286,9 +298,13 @@ func TestDecide_AlreadyDecided(t *testing.T) {
 	runID := uuid.New()
 
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredential, json.RawMessage(`{}`)))
-	_, _ = approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "alice", "ok")
+	_, _ = approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Reason: "ok",
+	})
 	// Second decision on the same approval must fail.
-	_, err := approval.Decide(ctx, st, ap.ID, false, types.ActorHuman, "bob", "changed my mind")
+	_, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalDenied, DecidedBy: "bob", Reason: "changed my mind",
+	})
 	if !isAlreadyDecided(err) {
 		t.Errorf("expected ErrAlreadyDecided, got %v", err)
 	}
@@ -342,7 +358,9 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 		st.records[i].RequestedAt = time.Now().UTC().Add(-10 * time.Hour)
 	}
 	// Approve concurrently.
-	_, _ = approval.Decide(ctx, st, ap.ID, true, types.ActorHuman, "human", "ok")
+	_, _ = approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "human", Reason: "ok",
+	})
 
 	// ExpireStale should skip the already-decided record gracefully.
 	expired, err := approval.ExpireStale(ctx, st, 5*time.Hour)

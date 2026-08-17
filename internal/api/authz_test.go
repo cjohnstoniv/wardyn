@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -114,6 +115,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/scan":                         {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/build":                        {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/llm-cred":                      {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements":                  {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record":                       {class: classAdmin},
@@ -478,13 +480,25 @@ func TestDecide_MemberKindRestriction(t *testing.T) {
 // stub (empty list / ErrNotFound / no-op) — the matrix's job is the
 // authorization boundary, not full functional fidelity per route.
 type authzStore struct {
-	mu      sync.Mutex
-	runs    map[uuid.UUID]types.AgentRun
-	tickets map[string]store.AttachTicket
+	mu   sync.Mutex
+	runs map[uuid.UUID]types.AgentRun
+	// workspaces is real rather than a hard-wired ErrNotFound because `always`
+	// — the one decision scope that writes durable config — is otherwise
+	// unreachable: decide()'s rule 7 loads the workspace and the write-back
+	// updates it, so a stub can only ever exercise always's REJECT paths and a
+	// green build would never notice the durable half regressing. Seeded ids
+	// only; an unseeded id still answers ErrNotFound, so every route the matrix
+	// above walks reads exactly as it did before.
+	workspaces map[uuid.UUID]types.Workspace
+	tickets    map[string]store.AttachTicket
 }
 
 func newAuthzStore() *authzStore {
-	return &authzStore{runs: map[uuid.UUID]types.AgentRun{}, tickets: map[string]store.AttachTicket{}}
+	return &authzStore{
+		runs:       map[uuid.UUID]types.AgentRun{},
+		workspaces: map[uuid.UUID]types.Workspace{},
+		tickets:    map[string]store.AttachTicket{},
+	}
 }
 
 var _ store.Store = (*authzStore)(nil)
@@ -592,14 +606,60 @@ func (s *authzStore) CreateWorkspace(_ context.Context, ws types.Workspace) (typ
 	}
 	return ws, nil
 }
-func (s *authzStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
+func (s *authzStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	return ws, nil
 }
 func (s *authzStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
 func (s *authzStore) UpdateWorkspace(context.Context, uuid.UUID, types.Workspace) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
 }
-func (s *authzStore) SetWorkspaceApprovedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
+func (s *authzStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	ws.ApprovedEgress = domains
+	s.workspaces[id] = ws
+	return ws, nil
+}
+
+// AddWorkspaceEgressDecision mirrors the SEMANTICS of the PG statement backing
+// it, not merely its signature. The cross-list removal is the half worth
+// mirroring: deny beats allow everywhere the proxy evaluates policy, so a host
+// left on both lists makes one direction a silent no-op — a fake that only
+// appended would let exactly that regression through green. Dedupe and the
+// "an already-listed host always passes the cap" rule are here for the same
+// reason: an idempotent re-decide must not be reported as "cap reached".
+func (s *authzStore) AddWorkspaceEgressDecision(_ context.Context, id uuid.UUID, host string, allow bool, maxApproved int) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	add, remove := &ws.ApprovedEgress, &ws.DeniedEgress
+	if !allow {
+		add, remove = remove, add
+	}
+	if !slices.Contains(*add, host) {
+		if len(*add) >= maxApproved {
+			return types.Workspace{}, store.ErrConflict
+		}
+		*add = append(*add, host)
+	}
+	*remove = slices.DeleteFunc(*remove, func(h string) bool { return h == host })
+	s.workspaces[id] = ws
+	return ws, nil
+}
+func (s *authzStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
 }
 func (s *authzStore) SetWorkspaceLLMCred(context.Context, uuid.UUID, *types.WorkspaceLLMCred) (types.Workspace, error) {
@@ -703,7 +763,7 @@ func (s *authzStore) GetApproval(context.Context, uuid.UUID) (types.ApprovalRequ
 func (s *authzStore) ListApprovals(context.Context, types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return nil, nil
 }
-func (s *authzStore) DecideApproval(context.Context, uuid.UUID, types.ApprovalState, string, string) (types.ApprovalRequest, error) {
+func (s *authzStore) DecideApproval(context.Context, uuid.UUID, types.ApprovalDecision) (types.ApprovalRequest, error) {
 	return types.ApprovalRequest{}, store.ErrNotFound
 }
 
@@ -813,7 +873,7 @@ func (a *authzApprovals) Request(_ context.Context, req types.ApprovalRequest) (
 	return req, nil
 }
 
-func (a *authzApprovals) Decide(_ context.Context, id uuid.UUID, approve bool, _ types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error) {
+func (a *authzApprovals) Decide(_ context.Context, id uuid.UUID, _ types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	ap, ok := a.byID[id]
@@ -823,12 +883,9 @@ func (a *authzApprovals) Decide(_ context.Context, id uuid.UUID, approve bool, _
 	if ap.State != types.ApprovalPending {
 		return types.ApprovalRequest{}, store.ErrAlreadyDecided
 	}
-	if approve {
-		ap.State = types.ApprovalApproved
-	} else {
-		ap.State = types.ApprovalDenied
-	}
-	ap.DecidedBy, ap.Reason = decidedBy, reason
+	ap.State = decision.State
+	ap.DecidedBy, ap.Reason = decision.DecidedBy, decision.Reason
+	ap.DecisionScope, ap.DecisionExpiresAt = decision.Scope, decision.ExpiresAt
 	a.byID[id] = ap
 	return ap, nil
 }

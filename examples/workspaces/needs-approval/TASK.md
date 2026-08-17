@@ -43,8 +43,11 @@ Then observe:
 1. An approval entry for example.com appears in the Approvals tab with
    kind=egress_domain and state=PENDING.
 2. Audit contains egress.pending for example.com, carrying the approval_id.
-3. After APPROVE: audit contains approval.decide outcome=approved AND
-   egress.allow for example.com; agent receives a response.
-4. After DENY: audit contains approval.decide outcome=denied AND
-   egress.deny for example.com; agent receives HTTP 403 from the proxy.
+3. After APPROVE: audit contains approval.decide outcome=approved
+   decision_scope=run AND egress.allow for example.com; agent receives a
+   response. (decision_scope=run is the default — the CLI/UI examples above
+   pass no scope.)
+4. After DENY: audit contains approval.decide outcome=denied
+   decision_scope=run AND egress.deny for example.com; agent receives HTTP
+   403 from the proxy.
 5. In both cases the run continues (it is not killed by the deny).

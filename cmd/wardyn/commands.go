@@ -72,6 +72,7 @@ func normalizeConfinement(s string) string {
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
+	var title, description string
 	var devcontainerRepo, devcontainerRef string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
@@ -91,6 +92,7 @@ func runCmd(client clientFn) *cobra.Command {
 			}
 			body := sdk.CreateRunRequest{
 				Agent: agent, Repo: repo, Task: task,
+				Title: title, Description: description,
 				// normalizeConfinement resolves a fence/wall/vault alias to its CC
 				// code; anything else (including already-CC1/2/3 or "") is unchanged.
 				ConfinementClass: normalizeConfinement(confinement), Interactive: interactive,
@@ -172,6 +174,8 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
+	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
+	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
@@ -530,11 +534,16 @@ func approvalsCmd(client clientFn) *cobra.Command {
 				return emitJSON(aps)
 			}
 			tw := newTab()
-			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tREQUESTED")
+			// SCOPE is appended last, not inserted, so a script scraping the first
+			// N columns by position is unaffected. It prints "" for a still-PENDING
+			// row or a credential/tool_call approval — neither has a decision scope
+			// (DecisionScope's own doc: empty means nobody has decided yet) — which
+			// reads as a blank cell, not a bug.
+			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tREQUESTED\tSCOPE")
 			for _, a := range aps {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 					a.ID, short(a.RunID.String()), a.Kind, a.State,
-					a.RequestedAt.Format(time.RFC3339))
+					a.RequestedAt.Format(time.RFC3339), a.DecisionScope)
 			}
 			return tw.Flush()
 		},
@@ -548,13 +557,15 @@ func approvalsCmd(client clientFn) *cobra.Command {
 
 // approvalDecisionCmd builds the approve/deny command. The two decisions are
 // one operation with a different verb (the domain layer already models it that
-// way: approval.Decide takes an approve bool), so they share one body. decide is
-// an unbound method expression — client() must resolve INSIDE RunE, after the
-// persistent --url/--token flags are parsed.
+// way: approval.Decide's ApprovalDecision.State is just APPROVED vs DENIED), so
+// they share one body. decide is an unbound method expression — client() must
+// resolve INSIDE RunE, after the persistent --url/--token flags are parsed.
+// Its variadic sdk.DecisionOpts tail matches what (*sdk.Client).Approve and
+// .Deny actually are as method expressions; RunE always passes exactly one.
 func approvalDecisionCmd(client clientFn, verb, short string,
-	decide func(*sdk.Client, context.Context, uuid.UUID, string) (types.ApprovalRequest, error),
+	decide func(*sdk.Client, context.Context, uuid.UUID, string, ...sdk.DecisionOpts) (types.ApprovalRequest, error),
 ) *cobra.Command {
-	var reason string
+	var reason, scope, until string
 	cmd := &cobra.Command{
 		Use:   verb + " <approval-id>",
 		Short: short,
@@ -564,7 +575,15 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 			if err != nil {
 				return err
 			}
-			ap, err := decide(client(), cmd.Context(), id, reason)
+			opts := sdk.DecisionOpts{Scope: types.ApprovalScope(scope)}
+			if until != "" {
+				t, err := parseDecisionUntil(until)
+				if err != nil {
+					return err
+				}
+				opts.Until = &t
+			}
+			ap, err := decide(client(), cmd.Context(), id, reason, opts)
 			if err != nil {
 				return err
 			}
@@ -573,7 +592,25 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "reason recorded in the audit trail")
+	cmd.Flags().StringVar(&scope, "scope", "",
+		"decision scope for an egress_domain approval: once|run|until|always (default run — today's behavior; rejected on a credential or tool_call approval)")
+	cmd.Flags().StringVar(&until, "until", "",
+		"expiry for --scope=until: a duration (e.g. 2h) or an RFC3339 timestamp; requires --scope=until, rejected otherwise")
 	return cmd
+}
+
+// parseDecisionUntil parses --until as either a duration relative to now
+// (e.g. "2h") or an absolute RFC3339 timestamp, matching what
+// decision_expires_at accepts on the wire either way.
+func parseDecisionUntil(s string) (time.Time, error) {
+	if d, err := time.ParseDuration(s); err == nil {
+		return time.Now().Add(d), nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("--until %q is not a duration (e.g. 2h) or an RFC3339 timestamp", s)
+	}
+	return t, nil
 }
 
 // auditCmd shows the audit trail for a run. The per-run trail caps at 1000

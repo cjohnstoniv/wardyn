@@ -1,0 +1,15 @@
+-- Operator-owned per-workspace egress DENIALS: the mirror of approved_egress
+-- (0010), written by a `deny · always` approval decision or the denied-egress
+-- PUT. OWNED BY THE OPERATOR — never written by a scan, and folded into a run's
+-- denied_domains at create time, where deny beats allow, allow_all_egress, and
+-- a runtime first-use approval on every port.
+--
+-- UNLIKE approved_egress, this is NOT cleared when the workspace's sources
+-- change (internal/api/workspaces.go's `if sourcesChanged` block). That rule is
+-- right for a WIDENING — dropping a stale allow fails closed — but inverting it
+-- onto a NARROWING would silently drop an operator's permanent deny the moment
+-- content changed, which is the one fail-open move available here. A deny needs
+-- no re-review against new content: the operator said "never this host".
+--
+-- NULL/empty = nothing denied.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS denied_egress JSONB;
