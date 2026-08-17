@@ -282,9 +282,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// the member gate above already forced egress_domain or 404. Gate the load
 	// on `always` alone and an operator POSTing {"decision_scope":"once"} at a
 	// CREDENTIAL approval gets a 200 and a persisted scope that means nothing —
-	// precisely what rule 4 exists to refuse. "" normalizes to run, so the
-	// default and bodyless paths still read nothing.
-	needAP := scope.Normalize() != types.ScopeRun
+	// precisely what rule 4 exists to refuse. Gate on ANY explicit scope, "run"
+	// included: an explicit {"decision_scope":"run"} at a credential approval
+	// was accepted and persisted before this, contradicting rule 4's own docs
+	// and the CLI's --scope help. Only the truly bodyless/default "" path
+	// skips the load.
+	needAP := scope != ""
 	if needAP && !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
@@ -369,7 +372,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		case run.WorkspaceID != nil:
 			target = *run.WorkspaceID
 		default:
-			writeError(w, http.StatusBadRequest, "always needs a workspace: this run references no onboarded workspace")
+			// "no recorded workspace link", not "references no workspace": a run
+			// created before migration 0041 has a NULL workspace_ids even when
+			// it referenced one — the server only knows what was recorded.
+			writeError(w, http.StatusBadRequest, "always needs a workspace: this run has no recorded workspace link")
 			return
 		}
 
@@ -635,6 +641,16 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 // approval itself already stands; this is the durable echo, not the decision.
 func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest, byType types.ActorType, by string) {
 	if ap.Kind != types.ApprovalEgressDomain || s.cfg.Store == nil {
+		return
+	}
+	// Scope gate, reading the RETURNING echo (ap.DecisionScope) like the
+	// deny·always write-back does: an explicitly EPHEMERAL decision must not
+	// leave the widest durable mark this handler can make. `once` promised
+	// "the next attempt asks again"; `until` promised a time-box — a permanent
+	// required contract row contradicts both. ""/run (the verify loop's normal
+	// path) and always keep learning. If time-boxed grants should teach the
+	// contract after all, drop ScopeUntil here — a one-line owner decision.
+	if sc := ap.DecisionScope.Normalize(); sc == types.ScopeOnce || sc == types.ScopeUntil {
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, ap.RunID)

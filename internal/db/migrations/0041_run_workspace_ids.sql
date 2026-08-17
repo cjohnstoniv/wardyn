@@ -5,6 +5,13 @@
 -- policy — which it could not do anyway, since agent_runs stores only policy_id
 -- and an inline-policy run has no policy row at all.
 --
+-- NULL has a THIRD meaning besides "plain run" and "internal step run": any
+-- run created by a pre-0041 binary — no backfill is possible (inline-policy
+-- runs have no policy row to re-resolve), so `always` is refused on those
+-- rows with the honest "no recorded workspace link" message until the next
+-- run-create writes the column. Self-healing per deployment, one upgrade
+-- window wide.
+--
 -- DISTINCT FROM workspace_id, which stays the scan/verify/record-only TRUSTED
 -- linkage that sandbox uploads authorize on and that a user run must never
 -- claim. This column is a read-only convenience: it grants nothing, it is never
