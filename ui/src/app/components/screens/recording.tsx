@@ -15,6 +15,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import type { AgentRun, Recording } from "../../lib/types";
+import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { health } from "../../lib/api/health";
@@ -174,7 +175,7 @@ export function RecordingScreen() {
       if (agentFacet !== "all" && e.run.agent !== agentFacet) return false;
       if (stateFacet !== "all" && e.run.state !== stateFacet) return false;
       if (q) {
-        const hay = `${e.run.task} ${e.run.repo} ${e.run.id} ${e.run.agent}`.toLowerCase();
+        const hay = `${e.run.title ?? ""} ${e.run.task} ${e.run.repo} ${e.run.id} ${e.run.agent}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -351,7 +352,7 @@ export function RecordingScreen() {
         <Dialog open onOpenChange={(open) => !open && setPlaying(null)}>
           <DialogContent className="sm:max-w-3xl">
             <DialogHeader>
-              <DialogTitle className="truncate pr-6">{playing.run.task}</DialogTitle>
+              <DialogTitle className="truncate pr-6">{runHeadline(playing.run)}</DialogTitle>
               <DialogDescription className="flex flex-wrap items-center gap-2">
                 <AgentBadge agent={playing.run.agent} />
                 <ConfinementChip value={playing.run.confinement_class} />
@@ -409,8 +410,8 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
         <div className="flex flex-1 flex-col gap-2.5 p-3.5 pb-0">
           <div className="flex items-start gap-2.5">
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground" title={run.task}>
-                {run.task}
+              <p className="truncate text-sm font-medium text-foreground" title={run.task || undefined}>
+                {runHeadline(run)}
               </p>
               <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                 <AgentBadge agent={run.agent} />

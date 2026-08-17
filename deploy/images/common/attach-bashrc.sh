@@ -33,3 +33,33 @@ if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}" ] || [ -f "$HOME/.wardyn/workdir
   fi
   unset _wd
 fi
+
+# WARDYN_INTERACTIVE_START=agent (CreateRunRequest.interactive_start): the
+# operator asked to land IN the agent CLI rather than at a bare prompt. Placed
+# after the cd above so the agent starts in the prepared workspace, not $HOME.
+#
+# RUN it, never exec — quitting the agent drops back to this shell in the same
+# workspace instead of ending the attach session.
+#
+# The marker makes this a FIRST-SHELL affordance rather than a per-shell one: a
+# new tmux window/pane and a second (SSH) attach each get a plain shell. Note
+# the common case needs no marker at all — the attach chain is `tmux
+# new-session -A -s wardyn`, so a second attach REJOINS the first session and
+# never sources this file again; the marker covers the shells tmux spawns
+# itself.
+#
+# The command is resolved from a fixed list against PATH, never from the
+# request: each image ships exactly one of these, so there is no path by which
+# client-supplied text reaches a shell here.
+if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; then
+  mkdir -p "$HOME/.wardyn" 2>/dev/null
+  : > "$HOME/.wardyn/agent-started" 2>/dev/null
+  for _c in claude codex; do
+    if command -v "$_c" >/dev/null 2>&1; then
+      printf '\033[36m▸ starting %s — exit it for a shell.\033[0m\n' "$_c"
+      "$_c"
+      break
+    fi
+  done
+  unset _c
+fi

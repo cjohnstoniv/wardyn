@@ -428,6 +428,7 @@ function SessionCard({
             reasonApprove="approved in replay"
             reasonDeny="rejected in replay"
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
+            hasWorkspace
           />
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(confinedRR.run_id)}>
             <Square className="size-3.5" /> Done
@@ -519,6 +520,7 @@ function OrphanedSessionCard({
             reasonApprove="approved in replay"
             reasonDeny="rejected in replay"
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
+            hasWorkspace
           />
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}

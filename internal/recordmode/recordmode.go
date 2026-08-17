@@ -316,7 +316,14 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 		case d.AllowCount > 0:
 			allowed = append(allowed, d.Host)
 		case d.DenyCount > 0:
-			warnings = append(warnings, fmt.Sprintf("host %s observed but only DENIED (never allowed); excluded from allowed_domains", d.Host))
+			// A recording session is allow-all, so an observed denial here is
+			// something no run-wide policy would produce — the two live causes
+			// are the unconditional builtin blocks (metadata/private-IP) and a
+			// permanent `always`-scoped workspace deny (Phase 4), which a
+			// record session's allow-all does NOT override. Name both, so an
+			// operator staring at a missing allowlist entry looks in the right
+			// place instead of re-scanning the policy that isn't the cause.
+			warnings = append(warnings, fmt.Sprintf("host %s observed but only DENIED (never allowed) — a builtin block or a permanent workspace deny, not this session's policy; excluded from allowed_domains", d.Host))
 		default: // pending only
 			warnings = append(warnings, fmt.Sprintf("host %s observed but only PENDING (never allowed); excluded from allowed_domains", d.Host))
 		}
@@ -326,6 +333,13 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 	if len(allowed) == 0 {
 		warnings = append(warnings, "no allowed egress observed; synthesized spec denies ALL egress (allow_all_egress=false, empty allowlist) — confirm the run genuinely needed none")
 	}
+	// DeniedDomains is never synthesized: a recording only ever proves what WAS
+	// reached, never what should stay blocked, so promoting one would be a
+	// guess dressed up as an observation. Not fail-open — a workspace's own
+	// permanent deny list still applies at replay time, folded in at run
+	// creation regardless of what this spec carries — but say so, or the
+	// synthesized spec reads as a complete envelope when it is allow-only.
+	warnings = append(warnings, "denied_domains are never synthesized from a recording; a promoted policy inherits only the workspace's own permanent deny list, applied at run creation")
 
 	// ── Forced invariants (mitigate the recording's inherent under-coverage). ──
 	// The snapshot can only prove what the run HAPPENED to use, never the full set

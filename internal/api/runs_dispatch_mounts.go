@@ -191,7 +191,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
@@ -206,6 +206,16 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// everything above/below (clone, grants, egress, recording) is identical.
 	if taskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
+	}
+	// interactive_start=agent: the attach shell opens IN the image's agent CLI
+	// instead of a bare shell. Consumed by attach-bashrc.sh (the image's
+	// ~/.bashrc), which the tmux/bash attach chain sources — the same seam its
+	// existing prep-done wait already rides. Gated on `interactive` HERE rather
+	// than in a doc comment, so "ignored for a non-interactive run" is
+	// structurally true: a batch run can never carry this env no matter what
+	// the request said.
+	if interactive && interactiveStart == "agent" {
+		sandboxEnv["WARDYN_INTERACTIVE_START"] = "agent"
 	}
 	if firstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()

@@ -35,6 +35,7 @@ type dispatchParams struct {
 	Injections         []runner.InjectionGrant    // proxy-side credential injections
 	Interactive        bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
+	InteractiveStart   string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
 	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
 	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
@@ -153,7 +154,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+

@@ -906,7 +906,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       )}
 
       {/* Take-over ends another human's live session, so it gets the same
-          confirm stop as the irreversible deny in live-approvals.tsx. */}
+          confirm stop as the deny confirm in live-approvals.tsx. (NOT
+          "irreversible" — a deny can re-raise at `once` scope and can always
+          be undone in the workspace's egress settings at `always` scope;
+          this is a consequential-action stop, not a claim about undoability.) */}
       <AlertDialog open={confirmTakeover} onOpenChange={(o) => !o && setConfirmTakeover(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>

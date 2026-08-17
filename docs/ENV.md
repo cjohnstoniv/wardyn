@@ -216,6 +216,7 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
 | `WARDYN_MITM_CA_PEM` | string (PEM) | (unset) | MITM CA the sandbox trusts |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
+| `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI (`claude`/`codex`) in the prepared workspace, once, on first attach; unset/`shell` is a bare shell. Read by `attach-bashrc.sh` (the image's `~/.bashrc`), so it covers the console terminal and the SSH gateway alike. Only ever set for interactive runs |
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
 | `WARDYN_PROBE_FROM_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `from` URL the probe fetches directly (`--noproxy`), to check whether the mirror is actually enforced |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |

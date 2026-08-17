@@ -61,6 +61,19 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 	return out
 }
 
+// workspaceIDsOf extracts the ids from referencedWorkspaces' result, in the
+// same order — the slice handleCreateRun denormalizes onto
+// AgentRun.WorkspaceIDs at create time. A nil/empty wsRefs yields a nil
+// slice (not an empty-but-non-nil one), so the persisted column is SQL NULL
+// exactly when this run references no onboarded workspace.
+func workspaceIDsOf(wsRefs []types.Workspace) []uuid.UUID {
+	var ids []uuid.UUID
+	for _, ws := range wsRefs {
+		ids = append(ids, ws.ID)
+	}
+	return ids
+}
+
 // workspaceSourcesOfType filters ws.Sources down to entries of typ, preserving
 // order.
 func workspaceSourcesOfType(ws types.Workspace, typ types.WorkspaceSourceType) []types.WorkspaceSource {
@@ -268,6 +281,17 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// Same interactive attach either way.
 		AllowAllEgress: !confined,
 		AllowedDomains: confinedEgressDomains(ws),
+		// The operator's permanent per-workspace denies (Phase 4's `deny · always`)
+		// must reach BOTH branches above, not just the confined AllowedDomains set —
+		// deny beats allow_all_egress at the proxy (docs/POLICIES.md), so this line
+		// is what actually stops the AllowAllEgress:true LEARNING session from
+		// reaching (and then durably LEARNING — offering for promotion) a host the
+		// operator already permanently blocked, which is exactly the branch that
+		// looks least like it needs a deny-list. Raw column, not routed through
+		// confinedEgressDomains: that helper's return stays allow-only (mirrors
+		// unionWorkspaceEgress's contract) and there is no per-source deny contract
+		// to fold the way the required-egress loop inside it folds allows.
+		DeniedDomains: ws.DeniedEgress,
 		// In a confined replay, an off-policy host ESCALATES to the operator instead
 		// of a silent hard-deny — so a "bad curl" surfaces an approve/reject decision
 		// in the record panel as it happens. Inert under allow-all, so it's a no-op
