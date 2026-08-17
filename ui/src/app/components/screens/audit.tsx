@@ -70,7 +70,8 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
 //   egress.allow / egress.deny / egress.pending, llm.scan.<action>
 //   kernel.process.exec / kernel.network.connect / kernel.file.write / ...
 //   credential.mint / credential.revoke, identity.mint / identity.revoke,
-//   secret.read / secret.write / secret.delete
+//   secret.read / secret.write / secret.delete, integration.*,
+//   run.llm.subscription_inject
 //   approval.decide / approval.expire
 //   run.kill
 //   everything else — run.create/build/dispatch/complete/..., session.*,
@@ -104,7 +105,13 @@ function eventKind(action: string): EventKind {
     // DEADCODE-4: an integration IS credential material by reference (hosts/
     // header/credentials) — writing, deleting or adopting one belongs beside
     // secret.*/credential.*, not lumped into the lifecycle catch-all.
-    action.startsWith("integration.")
+    action.startsWith("integration.") ||
+    // run.llm.subscription_inject is the managed-subscription credential
+    // being injected proxy-side — a credential event wearing a run.* prefix,
+    // not a run lifecycle step. (run.llm.bedrock stays in the lifecycle
+    // catch-all: it's dispatch-time model-access wiring, not itself named a
+    // credential family the way the other rows in this branch are.)
+    action === "run.llm.subscription_inject"
   ) {
     return "credentials";
   }
@@ -127,6 +134,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
   "run.workspace.collision": "detected a workspace directory collision",
+  "run.workspace.requirement.egress": "applied a workspace's required egress to the run",
+  "run.workspace.requirement.secret": "granted a workspace's required secret to the run",
+  "run.workspace.requirement.integration": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "run.compose": "produced a run proposal",
   "run.compose.clarify": "asked a clarifying question",
@@ -135,6 +145,13 @@ const ACTION_VERB: Record<string, string> = {
   "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
+  "run.llm.bedrock": "configured Bedrock model access for the run",
+  // Deliberately NOT "the managed subscription credential": the same action
+  // fires for source="subscription" (the operator's own resident Anthropic
+  // OAuth token) as for source="managed" (the Wardyn-captured one), and only
+  // the event's data carries which — naming one mode would be false on half
+  // the rows.
+  "run.llm.subscription_inject": "injected the subscription credential at the proxy",
   "secret.read": "read a secret into the run",
   "secret.write": "stored a secret",
   "secret.delete": "deleted a secret",
@@ -148,6 +165,10 @@ const ACTION_VERB: Record<string, string> = {
   "session.detach": "detached from the run's terminal",
   "session.recording": "recorded the terminal session",
   "recording.upload": "uploaded the run recording",
+  "ssh.auth": "an ssh authentication attempt against a run's terminal",
+  "ssh.exec": "ran a command over the run's ssh channel",
+  "ssh.sftp": "an sftp session against the run's sandbox",
+  "ssh.forward": "an ssh port forward into the run's sandbox",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",
   "kernel.file.write": "observed a write to a sensitive path",

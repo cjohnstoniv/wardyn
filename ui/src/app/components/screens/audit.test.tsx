@@ -284,6 +284,61 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("Created the run")).not.toBeInTheDocument();
   });
 
+  // The ssh gateway, workspace-requirement fold, and LLM dispatch families had
+  // no ACTION_VERB rows either — same DEADCODE-4 shape (real backend actions,
+  // zero prose), just discovered after the tier-1/tier-2/integration sweep.
+  it("renders prose, not raw dotted actions, for the ssh/workspace-requirement/llm families", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "ssh.auth", target: "SHA256:abc", outcome: "success" }),
+      ev({ id: "e2", action: "ssh.exec", target: "run-1" }),
+      ev({ id: "e3", action: "ssh.sftp", target: "run-1" }),
+      ev({ id: "e4", action: "ssh.forward", target: "127.0.0.1:8080" }),
+      ev({ id: "e5", action: "run.workspace.requirement.egress", target: "ws-1" }),
+      ev({ id: "e6", action: "run.workspace.requirement.secret", target: "OPENAI_API_KEY" }),
+      ev({ id: "e7", action: "run.workspace.requirement.integration", target: "corp-anthropic" }),
+      ev({ id: "e8", action: "run.llm.bedrock", target: "run-1" }),
+      ev({ id: "e9", action: "run.llm.subscription_inject", target: "run-1" }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText(/An ssh authentication attempt against a run's terminal/)).toBeInTheDocument();
+    expect(screen.getByText(/Ran a command over the run's ssh channel/)).toBeInTheDocument();
+    expect(screen.getByText(/An sftp session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.getByText(/An ssh port forward into the run's sandbox/)).toBeInTheDocument();
+    expect(screen.getByText(/Applied a workspace's required egress to the run — ws-1/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Granted a workspace's required secret to the run — OPENAI_API_KEY/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Applied a workspace's required integration to the run — corp-anthropic/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Configured Bedrock model access for the run/)).toBeInTheDocument();
+    expect(screen.getByText(/Injected the subscription credential at the proxy/)).toBeInTheDocument();
+    expect(screen.queryByText("ssh.auth")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.workspace.requirement.egress")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.llm.subscription_inject")).not.toBeInTheDocument();
+  });
+
+  // run.llm.subscription_inject is a credential event (the subscription
+  // credential being injected proxy-side) wearing a run.* prefix — without an
+  // explicit override it falls into the run.*/session.*/policy.* lifecycle
+  // catch-all, same trap integration.* was in before DEADCODE-4.
+  it("classifies run.llm.subscription_inject under the Credentials facet, not Lifecycle", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "run.llm.subscription_inject", target: "run-1" }),
+      ev({ id: "e2", action: "run.create" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(/Injected the subscription credential at the proxy/);
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Credentials$/i }));
+
+    expect(screen.getByText(/Injected the subscription credential at the proxy/)).toBeInTheDocument();
+    expect(screen.queryByText("Created the run")).not.toBeInTheDocument();
+  });
+
   it("filters by event kind via the Event facet select", async () => {
     listAuditMock.mockResolvedValue([
       ev({ id: "e1", action: "run.create" }),
