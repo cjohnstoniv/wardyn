@@ -15,6 +15,9 @@
 #   scripts/record-demo.sh --silent      # no narration (captions still render)
 #   scripts/record-demo.sh --video 03    # record ONE video of the 0.5 series
 #                                        # (ui/e2e/demo/03-*.spec.ts)
+#   scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+#                                        # film host-shell beats instead of (or
+#                                        # before) the browser ones
 #
 # THE SERIES. --video <nn> records a single video instead of the whole
 # walkthrough: it picks ui/e2e/demo/<nn>-*.spec.ts as the only spec to run and
@@ -32,6 +35,17 @@
 # --with-terminal additionally films `make setup` off the screen and joins it on
 # the front. That segment IS a screen grab of a fixed rectangle and has twice
 # captured whatever the operator was doing instead; clear the corner first.
+#
+# THE TERMINAL LANE. Two videos of the series have no page to film: V09 (CI &
+# headless) is a policy file, a `scripts/ci-run.sh` invocation, its exit code and
+# its artifacts; V10 (audit & attach) is three terminals holding an ssh session
+# each. --terminal-script <path> runs that script under the SAME gdigrab capture
+# Act 0 uses, with scripts/demo-typist.sh giving it say/type_cmd/beat/chapter —
+# the terminal's answer to ui/e2e/demo/overlay.ts, narration included. A video
+# may be terminal-only (no <nn>-*.spec.ts exists), browser-only, or both; both
+# are joined into ONE mp4, terminal first, with the two narration timelines
+# merged so the whole thing speaks. Same capture-region discipline applies, for
+# as long as the beats run rather than only during Act 0.
 #
 # Playwright's clicks are synthetic and never move the OS pointer, so the driver
 # paints its own ring and captions — see ui/e2e/demo/overlay.ts. Those captions
@@ -69,6 +83,9 @@ DO_VOICE=1
 # six-act file. Env-overridable like every other knob in this script, and
 # exported below because the verifier dispatches on it.
 VIDEO="${WARDYN_DEMO_VIDEO:-}"
+# A host-shell beat script to film (see THE TERMINAL LANE above). Empty means the
+# browser lane alone, which is every video the series has shot so far.
+TERMINAL_SCRIPT="${WARDYN_DEMO_TERMINAL_SCRIPT:-}"
 # Whether a reset was actually ASKED for. DO_RESET's default is per-video (only
 # 01 wipes the stack, see below) and a typed flag has to beat that default in
 # both directions — otherwise `--video 05 --reset` would silently not reset.
@@ -88,7 +105,12 @@ while [[ $# -gt 0 ]]; do
     # stack wipe nobody asked for.
     --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
     --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
-    -h|--help)   sed -n '4,39p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
+    --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
+    # Pattern-bounded rather than a line count: this header grows, and a stale
+    # `4,39p` silently truncates --help to something that no longer mentions the
+    # flag the reader came for.
+    -h|--help)   sed -n '4,/^#   claude setup-token/p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
@@ -138,25 +160,45 @@ step "Preflight"
 command -v docker >/dev/null || die "docker not found"
 [[ -d "${FIXTURE}" ]] || die "missing workspace fixture: ${FIXTURE}"
 
+# The beat script is validated HERE for the same reason --video is: a typo, or a
+# script with a syntax error in it, must die before reset-all has wiped the stack
+# — not two minutes into a take that then films a bash error message.
+if [[ -n "${TERMINAL_SCRIPT}" ]]; then
+  [[ "${TERMINAL_SCRIPT}" = /* ]] || TERMINAL_SCRIPT="${REPO_ROOT}/${TERMINAL_SCRIPT}"
+  [[ -f "${TERMINAL_SCRIPT}" ]] || die "no such terminal beat script: ${TERMINAL_SCRIPT}"
+  bash -n "${TERMINAL_SCRIPT}" || die "terminal beat script does not parse: ${TERMINAL_SCRIPT}"
+fi
+
 # Which spec the driver runs, and what the file is called. Resolved HERE, in
 # preflight, for the reason everything else in this section is: a typo'd --video
 # must not be discovered after reset-all has already wiped the stack.
 SPEC=""
 SLUG=""
 PW_FILTER=()
+# Whether the browser lane runs at all. A terminal-only video (V09/V10 before
+# their browser halves exist) has no spec to hand Playwright.
+RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
   [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..10), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.
   MATCHES=("${REPO_ROOT}"/ui/e2e/demo/"${VIDEO}"-*.spec.ts)
-  [[ -f "${MATCHES[0]}" ]] \
-    || die "no spec for --video ${VIDEO} (looked for ui/e2e/demo/${VIDEO}-*.spec.ts). Each series spec lands with its own video; until yours does, record the walkthrough with no --video."
-  [[ "${#MATCHES[@]}" -eq 1 ]] || die "--video ${VIDEO} matches ${#MATCHES[@]} specs: ${MATCHES[*]}"
-  SPEC="${MATCHES[0]##*/}"
-  SLUG="${SPEC#"${VIDEO}"-}"; SLUG="${SLUG%.spec.ts}"
-  # Playwright takes a filename filter as a bare positional argument.
-  PW_FILTER=("${SPEC}")
+  if [[ -f "${MATCHES[0]}" ]]; then
+    [[ "${#MATCHES[@]}" -eq 1 ]] || die "--video ${VIDEO} matches ${#MATCHES[@]} specs: ${MATCHES[*]}"
+    SPEC="${MATCHES[0]##*/}"
+    SLUG="${SPEC#"${VIDEO}"-}"; SLUG="${SLUG%.spec.ts}"
+    # Playwright takes a filename filter as a bare positional argument.
+    PW_FILTER=("${SPEC}")
+  elif [[ -n "${TERMINAL_SCRIPT}" ]]; then
+    # Terminal-only: the beat script IS the video, and the slug comes off its
+    # filename the same way it would have come off the spec's, so the take still
+    # lands as wardyn-<nn>-<slug>-<stamp>.mp4 and sorts with its siblings.
+    RUN_DRIVER=0
+    SLUG="${TERMINAL_SCRIPT##*/}"; SLUG="${SLUG%.sh}"; SLUG="${SLUG#"${VIDEO}"-}"
+  else
+    die "no spec for --video ${VIDEO} (looked for ui/e2e/demo/${VIDEO}-*.spec.ts). Each series spec lands with its own video; until yours does, record the walkthrough with no --video — or pass --terminal-script if this one is a terminal video."
+  fi
 fi
 # Exported, not just passed: scripts/verify-demo-take.sh dispatches its
 # per-video checks on this, and the driver can read it too. Empty means the
@@ -234,7 +276,8 @@ else
   OUT="${OUT_DIR}/wardyn-demo-${STAMP}.mp4"
 fi
 
-[[ -n "${VIDEO}" ]] && log "series      video ${VIDEO} · ${SLUG} (${SPEC})"
+[[ -n "${VIDEO}" ]] && log "series      video ${VIDEO} · ${SLUG} (${SPEC:-terminal-only})"
+[[ -n "${TERMINAL_SCRIPT}" ]] && log "terminal    ${TERMINAL_SCRIPT}"
 log "workspace   ${WORKSPACE_PATH}"
 log "video       ${OUT}"
 log "browser     ${DEMO_CDP:+CDP → ${DEMO_CDP}}${DEMO_CDP:-WSLg Chromium (DISPLAY=${DISPLAY:-})}"
@@ -264,6 +307,10 @@ log "seeded $(find "${WORKSPACE_PATH}" -type f -not -path '*/.git/*' | wc -l) fi
 
 FFPID=""
 FIFO=""
+# Set once a screen grab has actually rolled, so the assembly and the narration
+# offset ask "is there a terminal segment?" rather than re-deriving it from the
+# flags — with --terminal-script there are now two reasons for one to exist.
+HAVE_TERMINAL=0
 stop_capture() {
   [[ -n "${FFPID}" ]] || return 0
   # ffmpeg finalizes the container on 'q'. Signalling a Windows binary through
@@ -276,7 +323,12 @@ stop_capture() {
 }
 trap stop_capture EXIT INT TERM
 
-if [[ "${DO_RECORD}" == 1 && "${DO_TERMINAL}" == 1 ]]; then
+# One screen grab, two callers: --with-terminal starts it before Act 0, and
+# --terminal-script starts it before the beat script if Act 0 did not already.
+# A function rather than a second copy of the pipeline — there is exactly one
+# ffmpeg, one FIFO and one stop_capture in this script and that stays true.
+start_capture() {
+  [[ "${DO_RECORD}" == 1 && -z "${FFPID}" ]] || return 0
   step "Rolling (screen grab — keep the capture region clear)"
   # WxH+X+Y -> gdigrab's -video_size / -offset_x / -offset_y.
   GEOM=()
@@ -295,11 +347,20 @@ if [[ "${DO_RECORD}" == 1 && "${DO_TERMINAL}" == 1 ]]; then
     -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
     "$(wslpath -w "${OUT}")" < "${FIFO}" &
   FFPID=$!
+  # The picture's t=0, handed to the beat script so its narration cues are timed
+  # from the START OF THE VIDEO and not from the moment the script happened to
+  # run. Without it, beats filmed after Act 0 would be spoken early by Act 0's
+  # whole length. (gdigrab's own start-up latency is a few hundred ms; lines are
+  # held for seconds, so that is under the noise floor.)
+  export WARDYN_DEMO_CAPTURE_ZERO="$(date +%s%3N)"
   exec 9>"${FIFO}"
   sleep 2
   kill -0 "${FFPID}" 2>/dev/null || die "ffmpeg exited immediately — check that gdigrab can see the desktop"
+  HAVE_TERMINAL=1
   log "capturing desktop → ${OUT}"
-fi
+}
+
+[[ "${DO_TERMINAL}" == 1 ]] && start_capture
 
 # --- act 0: cold start ------------------------------------------------------
 
@@ -333,12 +394,39 @@ else
 fi
 ./wardyn setup status || true
 
+# --- the terminal beats -----------------------------------------------------
+
+# The host-shell half of a video: `cat` a policy, run a pipeline, hold an ssh
+# session — beats no browser can drive. The script gets its captions, typing,
+# pauses and voice from scripts/demo-typist.sh; everything this end has to do is
+# roll the camera and run it.
+TERM_RC=0
+TERM_TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration-terminal.json"
+if [[ -n "${TERMINAL_SCRIPT}" ]]; then
+  # Deleted BEFORE the beats for narrator.ts's reason, one lane over: the typist
+  # only writes this file once a line has actually rendered, so a stale timeline
+  # from an earlier take survives a fully silent run and gets muxed onto
+  # tonight's picture at yesterday's offsets. Worse than silent.
+  rm -f "${TERM_TIMELINE}"
+  # With --with-terminal the grab is already rolling and Act 0 is on the front of
+  # this same segment; without it, the camera starts here, so `make setup` stays
+  # off camera and the video opens on the beats.
+  start_capture
+  step "Terminal beats · ${TERMINAL_SCRIPT##*/}"
+  WARDYN_DEMO=1 \
+  WARDYN_DEMO_VOICE="${DO_VOICE}" \
+  WARDYN_DEMO_WORKSPACE="${WORKSPACE_PATH}" \
+    bash "${TERMINAL_SCRIPT}"
+  TERM_RC=$?
+  [[ "${TERM_RC}" -eq 0 ]] || log "terminal beats exited ${TERM_RC} — this take is incomplete"
+fi
+
 # --- acts 1-6: the driver ---------------------------------------------------
 
-# Stop the desktop grab HERE. Act 0 is a terminal and has to be filmed off the
-# screen, but the browser records itself from the inside (playwright.config's
-# demo project), which is the only capture on this host that cannot be ruined
-# by another window sitting on top of the frame.
+# Stop the desktop grab HERE. The terminal — Act 0, or a --terminal-script's
+# beats — has to be filmed off the screen, but the browser records itself from
+# the inside (playwright.config's demo project), which is the only capture on
+# this host that cannot be ruined by another window sitting on top of the frame.
 stop_capture
 
 # Warm the narration cache first: an unrendered line otherwise renders INLINE
@@ -360,6 +448,8 @@ if [[ "${DO_VOICE}" == 1 ]]; then
   "${REPO_ROOT}/scripts/narrate-prewarm.sh" || log "prewarm failed — lines will render inline instead"
 fi
 
+DRIVER_RC=0
+if [[ "${RUN_DRIVER}" == 1 ]]; then
 if [[ -n "${VIDEO}" ]]; then
   step "Video ${VIDEO} · ${SLUG} · Driving the console"
 else
@@ -381,6 +471,9 @@ fi
     pnpm exec playwright test --project=demo --workers=1 --reporter=line "${PW_FILTER[@]}"
 )
 DRIVER_RC=$?
+fi
+# A failed beat script must fail the take too — it is half the video now.
+[[ "${DRIVER_RC}" -eq 0 ]] && DRIVER_RC="${TERM_RC}"
 
 # --- wrap -------------------------------------------------------------------
 
@@ -390,25 +483,39 @@ trap - EXIT INT TERM
 # --- assemble the final video -----------------------------------------------
 #
 # The console segment is the browser's own recording and is always correct. The
-# terminal segment is a screen grab and only exists with --with-terminal; when
-# it does, the two are concatenated (re-encoded to a common 1920x1080/30, since
-# they come from different sources).
-BROWSER_VID="${REPO_ROOT}/ui/test-results/demo-video/console.webm"
-if [[ ! -s "${BROWSER_VID}" ]]; then
-  BROWSER_VID="$(ls -t "${REPO_ROOT}"/ui/test-results/demo-video/*.webm 2>/dev/null | head -1)"
+# terminal segment is a screen grab and exists with --with-terminal or
+# --terminal-script; when both are present they are concatenated, terminal
+# first, re-encoded to a common 1920x1080/30 since they come from different
+# sources. A terminal-only video skips all of that: gdigrab already wrote h264
+# in an mp4 at the requested size, so the grab IS the finished picture.
+BROWSER_VID=""
+if [[ "${RUN_DRIVER}" == 1 ]]; then
+  # Only probed when the driver actually ran. Otherwise the `ls -t` fallback
+  # would happily adopt a webm from LAST NIGHT'S take and staple it onto a
+  # terminal video that has no console segment at all.
+  BROWSER_VID="${REPO_ROOT}/ui/test-results/demo-video/console.webm"
+  if [[ ! -s "${BROWSER_VID}" ]]; then
+    BROWSER_VID="$(ls -t "${REPO_ROOT}"/ui/test-results/demo-video/*.webm 2>/dev/null | head -1)"
+  fi
 fi
 FINAL=""
+# Whether the two segments really were concatenated — the narration offset below
+# hangs off this, and inferring it from the flags again would be one more place
+# for the two answers to disagree.
+JOINED=0
 V="[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,setsar=1,fps=30"
 
 if [[ "${DO_RECORD}" == 1 && -n "${BROWSER_VID}" && -s "${BROWSER_VID}" ]]; then
-  if [[ "${DO_TERMINAL}" == 1 && -s "${OUT}" ]]; then
+  if [[ "${HAVE_TERMINAL}" == 1 && -s "${OUT}" ]]; then
     step "Joining terminal + console segments"
     FINAL="${OUT%.mp4}-full.mp4"
     "${FFMPEG}" -hide_banner -loglevel error -y \
       -i "$(wslpath -w "${OUT}")" -i "$(wslpath -w "${BROWSER_VID}")" \
       -filter_complex "${V}[a];[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,setsar=1,fps=30[b];[a][b]concat=n=2:v=1[v]" \
       -map "[v]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-      "$(wslpath -w "${FINAL}")" || { log "join failed — segments are still usable separately"; FINAL=""; }
+      "$(wslpath -w "${FINAL}")" \
+      && JOINED=1 \
+      || { log "join failed — segments are still usable separately"; FINAL=""; }
   else
     step "Encoding the console recording"
     FINAL="${OUT}"
@@ -416,6 +523,9 @@ if [[ "${DO_RECORD}" == 1 && -n "${BROWSER_VID}" && -s "${BROWSER_VID}" ]]; then
       -vf "fps=30,setsar=1" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
       "$(wslpath -w "${FINAL}")" || { log "encode failed — the raw webm is still there"; FINAL=""; }
   fi
+elif [[ "${DO_RECORD}" == 1 && "${HAVE_TERMINAL}" == 1 && -s "${OUT}" ]]; then
+  step "Terminal-only take"
+  FINAL="${OUT}"
 fi
 
 # --- narration ---------------------------------------------------------------
@@ -424,12 +534,14 @@ fi
 # is VP8, which cannot be stream-copied into an mp4 container; and muxing here
 # means the picture is encoded exactly once, so narration cannot soften the text.
 TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration.json"
-if [[ "${DO_VOICE}" == 1 && -n "${FINAL}" && -s "${FINAL}" && -s "${TIMELINE}" ]]; then
+[[ "${RUN_DRIVER}" == 1 && -s "${TIMELINE}" ]] || TIMELINE=""
+if [[ "${DO_VOICE}" == 1 && -n "${FINAL}" && -s "${FINAL}" ]] \
+   && [[ -n "${TIMELINE}" || -s "${TERM_TIMELINE}" ]]; then
   step "Adding narration"
-  # With --with-terminal the console segment is concatenated AFTER Act 0, so
-  # every cue is late by exactly Act 0's duration.
+  # When the console segment is concatenated AFTER a terminal one, every browser
+  # cue is late by exactly the terminal segment's duration.
   OFFSET=0
-  if [[ "${DO_TERMINAL}" == 1 && -s "${OUT}" ]]; then
+  if [[ "${JOINED}" == 1 ]]; then
     OFFSET="$(python3 -c "
 import subprocess,sys
 out=subprocess.run(['${FFMPEG}','-hide_banner','-i',r'$(wslpath -w "${OUT}")'],capture_output=True,text=True).stderr
@@ -441,9 +553,27 @@ else: print(0)
 " 2>/dev/null || echo 0)"
     log "console segment starts at ${OFFSET}ms — shifting cues"
   fi
+  # ONE timeline reaches the mux, because it takes one --offset-ms and the two
+  # lanes need two: the terminal lane's cues are already timed from the start of
+  # the picture (start_capture exports WARDYN_DEMO_CAPTURE_ZERO), while the
+  # browser lane's are timed from the console segment, which begins OFFSET into
+  # it. So the browser cues are shifted here and the merged file is muxed flat.
+  MUX_TIMELINE="${TIMELINE}"
+  if [[ -s "${TERM_TIMELINE}" ]]; then
+    MUX_TIMELINE="${TERM_TIMELINE}"
+    if [[ -n "${TIMELINE}" ]]; then
+      MUX_TIMELINE="${REPO_ROOT}/ui/test-results/demo-video/narration-joined.json"
+      jq -s --argjson off "${OFFSET}" \
+        '{zero: .[0].zero, cues: (.[0].cues + [.[1].cues[] | .tMs += $off])}' \
+        "${TERM_TIMELINE}" "${TIMELINE}" >"${MUX_TIMELINE}" \
+        || { log "timeline merge failed — narrating the terminal half only"; MUX_TIMELINE="${TERM_TIMELINE}"; }
+      log "merged $(jq '.cues | length' "${MUX_TIMELINE}" 2>/dev/null || echo '?') cues across both lanes"
+    fi
+    OFFSET=0
+  fi
   NARRATED="${FINAL%.mp4}-narrated.mp4"
   if python3 "${REPO_ROOT}/scripts/narrate-mux.py" --ffmpeg "${FFMPEG}" \
-      --video "${FINAL}" --timeline "${TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}"; then
+      --video "${FINAL}" --timeline "${MUX_TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}"; then
     FINAL="${NARRATED}"
   else
     log "narration mux failed — the silent video above is still good"
@@ -468,11 +598,11 @@ fi
 if [[ -n "${BROWSER_VID}" && -s "${BROWSER_VID}" ]]; then
   log "  console segment (browser-recorded, always correct): ${BROWSER_VID}"
 fi
-if [[ "${DO_TERMINAL}" == 1 && -s "${OUT}" ]]; then
+if [[ "${HAVE_TERMINAL}" == 1 && -s "${OUT}" && "${FINAL}" != "${OUT}" ]]; then
   log "  terminal segment (screen grab): ${OUT}"
 fi
 if [[ "${DRIVER_RC}" -ne 0 ]]; then
-  log "driver exited ${DRIVER_RC} — the recording is incomplete. Playwright's report:"
-  log "  ui/../test/reports/e2e/playwright-report/index.html"
+  log "driver exited ${DRIVER_RC} — the recording is incomplete."
+  [[ "${RUN_DRIVER}" == 1 ]] && log "  Playwright's report: ui/../test/reports/e2e/playwright-report/index.html"
 fi
 exit "${DRIVER_RC}"

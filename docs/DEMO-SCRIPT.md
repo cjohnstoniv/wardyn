@@ -10,6 +10,8 @@ make record-demo                          # the works
 make record-demo ARGS=--no-reset          # keep the current stack (iterating on the driver)
 make record-demo ARGS=--no-record         # drive the UI, capture nothing (preflight)
 make record-demo ARGS="--video 03"        # one video of the 0.5 series (see below)
+make record-demo ARGS="--video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh"
+                                          # a terminal-first video (see below)
 ```
 
 | Piece | Where |
@@ -19,6 +21,7 @@ make record-demo ARGS="--video 03"        # one video of the 0.5 series (see bel
 | The rig: one browser, one recorded context, one shared page | [`ui/e2e/demo/stage.ts`](../ui/e2e/demo/stage.ts) |
 | Walking the funnel, deciding an approval | [`ui/e2e/demo/funnel.ts`](../ui/e2e/demo/funnel.ts) |
 | Captions, spotlight ring, chapter cards, terminal typing | [`ui/e2e/demo/overlay.ts`](../ui/e2e/demo/overlay.ts) |
+| The same vocabulary for host-shell beats (`--terminal-script`) | [`scripts/demo-typist.sh`](../scripts/demo-typist.sh) |
 | Task text, workspace path, the five demo commands | [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) |
 | The workspace the run attaches | [`examples/workspaces/demo-node/`](../examples/workspaces/demo-node/) |
 | Playwright `demo` project (headed, 1920×1080, `:8080`) | [`ui/playwright.config.ts`](../ui/playwright.config.ts) |
@@ -116,6 +119,76 @@ with cues and zero overlaps, and an mp4 that is 1920×1080 and actually carries
 an audio stream. That alone catches a take that recorded nothing, recorded
 silently, or recorded at the wrong size.
 
+### The terminal lane: `--terminal-script`
+
+Two videos of the series have no page to film. **V09 (CI & headless)** is a
+policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
+and its artifacts; **V10 (audit & attach)** is three terminals each holding
+`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key. Playwright cannot drive
+either of them.
+
+```sh
+scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+```
+
+runs that beat script under the **same** gdigrab capture Act 0 uses — same
+`FIFO`, same `stop_capture`, one ffmpeg — and the script gets its presentation
+from [`scripts/demo-typist.sh`](../scripts/demo-typist.sh), which is the
+terminal's answer to `overlay.ts`:
+
+| Verb | The browser lane's equivalent |
+|---|---|
+| `narration_zero` / `narration_end` | `narrationZero()` / `narrationEnd()` — opens and closes the clock |
+| `say "<line>"` | `caption()` — prints the line, speaks it through the same Kokoro server, and **holds the terminal until the clip has finished** (+300ms), so speech never runs over the next command |
+| `type_cmd "<command>"` | `typeInTerminal()` — echoes the command at 45ms/char, runs it, shows its real output. The status is returned *and* left in `TYPIST_RC`, and `$?` is restored before the command runs so a beat of `echo $?` reports the pipeline's code and not the keystroke loop's |
+| `beat <ms>` | `beat()` — a pause, for pacing only |
+| `chapter "<title>" "<sub>"` | `chapter()` — cleared screen, title held ~2.6s, cleared again |
+
+A beat script is an ordinary bash script that sources the typist:
+
+```sh
+. "$(dirname "${BASH_SOURCE[0]}")/../demo-typist.sh"
+narration_zero
+chapter "CI & headless" "The same governance, unattended"
+say "This is the policy the pipeline runs under."
+type_cmd "cat examples/policies/ci.json"
+type_cmd 'echo $?'
+narration_end
+```
+
+**A video may be terminal-only, browser-only, or both.** With `--terminal-script`
+and no `ui/e2e/demo/<nn>-*.spec.ts`, the beats *are* the video and the driver
+never starts — the slug then comes off the script's filename, so the take still
+lands as `wardyn-<nn>-<slug>-<stamp>.mp4` and sorts with its siblings. With both,
+the terminal segment is filmed first and joined onto the front of `console.webm`
+by the same concat `--with-terminal` has always used (so the joined file keeps
+that lane's `…-full.mp4` name, and `…-full-narrated.mp4` once it speaks).
+
+Narration crosses the seam. The typist writes its own
+`ui/test-results/demo-video/narration-terminal.json` — narrator.ts rewrites
+`narration.json` wholesale after every cue, so a shared file would lose every
+terminal cue the moment the driver spoke — and `record-demo.sh` merges the two,
+shifting the **browser** cues by the terminal segment's measured duration, then
+muxes the merged timeline flat. The terminal cues need no shift because
+`start_capture` exports `WARDYN_DEMO_CAPTURE_ZERO` and `narration_zero` times
+from the start of the *picture*, not from the moment the beat script happened to
+run.
+
+Two things to know before rolling:
+
+- **The capture region is live for the whole beat script, not just Act 0.** Same
+  warning as `--with-terminal`, for longer: WSLg cannot raise or z-order windows
+  from Linux, so whatever sits in that rectangle is what gets filmed, and you
+  cannot tell until you watch it. It has eaten two takes. Without
+  `--with-terminal` the camera starts *after* `make setup`, so the video opens on
+  the beats rather than on two minutes of bring-up — but the corner still has to
+  be clear from that point on.
+- **Warm the voice first.** `narrate-prewarm.sh` only reads `ui/e2e/demo/*.ts`,
+  so a beat script's lines are not pre-rendered and the first take of a new line
+  pauses ~1.5s while Kokoro renders it. Clips are cached by content hash, so a
+  `--no-record` dry run of the beat script (or simply the previous take) makes
+  the real one warm.
+
 ## Before the first take
 
 ```sh
@@ -154,6 +227,7 @@ mattering: see "The video is captured from TWO sources" below.
 |---|---|---|
 | Acts 1–6 — the console | **the browser recording itself** (Playwright `recordVideo`) | **always** → `…/Videos/wardyn-demo-<ts>.mp4` |
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
+| Host-shell beats (V09, V10) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot
@@ -235,6 +309,7 @@ default; `make record-demo ARGS=--silent` turns it off (captions still render).
 | `scripts/narrate-server.py` | Long-lived TTS server. **Kokoro-82M** (Apache-2.0, offline) with the installed **piper** as automatic fallback. One JSON line in, one clip out. |
 | `ui/e2e/demo/narrator.ts` | Spawns it, records a `{file, tMs, durMs}` timeline to `ui/test-results/demo-video/narration.json`. |
 | `ui/e2e/demo/overlay.ts` | `caption()`/`chapter()` speak their own text; `beat()`/`act()` hold for `max(nominal beat, audio + 300ms)`. |
+| `scripts/demo-typist.sh` | The terminal lane's half of the same thing — its own coprocess, the same cue shape, `narration-terminal.json`, merged in by the recorder. |
 | `scripts/narrate-mux.py` | Lays the timeline onto the finished mp4, video stream-copied. |
 
 One-time setup (already done on this machine, in `~/.cache/wardyn-narrate/`):
