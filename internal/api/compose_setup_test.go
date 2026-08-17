@@ -92,7 +92,7 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
 
 	// Provisioned: satisfied, no fix.
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), &composeLLMAccess{Provisioned: true, Note: "ok"}, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), &composeLLMAccess{Provisioned: true, Note: "ok"})
 	it, ok := findItem(items, "llm_access:claude-code")
 	if !ok {
 		t.Fatal("expected an llm_access item")
@@ -103,7 +103,7 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 
 	// Missing: destructive-relevant "missing" status + add_secret fix naming the
 	// agent's provider secret.
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), &composeLLMAccess{Provisioned: false, Note: "no model access"}, nil, composeSubscriptionState{})
+	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), &composeLLMAccess{Provisioned: false, Note: "no model access"})
 	it, ok = findItem(items, "llm_access:claude-code")
 	if !ok {
 		t.Fatal("expected an llm_access item")
@@ -113,7 +113,7 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 	}
 
 	// Nil llmAccess (non-LLM agent): no row at all.
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	if _, ok := findItem(items, "llm_access:claude-code"); ok {
 		t.Error("nil llmAccess must produce no llm_access row")
 	}
@@ -140,7 +140,7 @@ func TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret(t *testing.T
 			}),
 		}},
 	}
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), &composeLLMAccess{Provisioned: false, Note: "no model access"}, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), &composeLLMAccess{Provisioned: false, Note: "no model access"})
 	it, ok := findItem(items, "llm_access:claude-code")
 	if !ok {
 		t.Fatal("expected an llm_access item")
@@ -161,7 +161,7 @@ func TestDeriveSetupItems_SecretPresentAbsent(t *testing.T) {
 		gitPATGrant("dev.azure.com", "ado-pat"),
 	}}
 
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("anthropic-api-key"), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("anthropic-api-key"), nil)
 
 	present, ok := findItem(items, "secret:anthropic-api-key")
 	if !ok || present.Status != "satisfied" || present.Fix != nil {
@@ -182,7 +182,7 @@ func TestDeriveSetupItems_SecretDedupsByName(t *testing.T) {
 		apiKeyGrant("api.anthropic.com", "shared-secret"),
 		gitPATGrant("dev.azure.com", "shared-secret"),
 	}}
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("shared-secret"), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("shared-secret"), nil)
 	n := 0
 	for _, it := range items {
 		if it.Kind == "secret" && it.ID == "secret:shared-secret" {
@@ -210,7 +210,7 @@ func TestDeriveSetupItems_WorkspaceStatuses(t *testing.T) {
 	}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "local:ready"}
 
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 
 	got, ok := findItem(items, "workspace:"+ready.ID.String())
 	if !ok || got.Status != "satisfied" {
@@ -241,7 +241,7 @@ func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromWorkspaceRepos(t *testi
 	// Mirrors what the FIXED applyWorkspaces now produces for a git-primary
 	// selection: the repo lands in WorkspaceRepos, not just the run.Repo label.
 	spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "octocat/Hello-World"}}}
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 	got, ok := findItem(items, "workspace:"+primary.ID.String())
 	if !ok || got.Status != "satisfied" {
 		t.Errorf("primary git workspace = %+v (ok=%v), want a satisfied row resolved from spec.WorkspaceRepos", got, ok)
@@ -263,7 +263,7 @@ func TestDeriveSetupItems_WorkspaceRowsComeOnlyFromSpec(t *testing.T) {
 	srv := newSetupTestServer(primary)
 	for _, repo := range []string{"octocat/Hello-World", "local:proj", "ephemeral"} {
 		run := composer.RunInput{Agent: "claude-code", Repo: repo}
-		items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+		items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 		for _, it := range items {
 			if it.Kind == "workspace" {
 				t.Errorf("repo=%q with an EMPTY spec must not produce a workspace row, got %+v", repo, it)
@@ -278,7 +278,7 @@ func TestDeriveSetupItems_RepoCredentialGitHubTokenUnverified(t *testing.T) {
 	srv := newSetupTestServer()
 	run := composer.RunInput{Agent: "claude-code", Repo: "octocat/Hello-World"}
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{githubTokenGrant()}}
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 	got, ok := findItem(items, "repo_credential:github_token")
 	if !ok || got.Status != "unverified" || got.Fix != nil {
 		t.Errorf("github_token repo_credential = %+v (ok=%v), want unverified with no fix (mint-time brokered)", got, ok)
@@ -290,58 +290,18 @@ func TestDeriveSetupItems_RepoCredentialGitPATPresentAbsent(t *testing.T) {
 	run := composer.RunInput{Agent: "claude-code", Repo: "local:proj"}
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gitPATGrant("dev.azure.com", "ado-pat")}}
 
-	present := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("ado-pat"), nil, nil, composeSubscriptionState{})
+	present := srv.deriveSetupItems(context.Background(), run, spec, secretsWith("ado-pat"), nil)
 	got, ok := findItem(present, "repo_credential:git_pat:dev.azure.com")
 	if !ok || got.Status != "satisfied" || got.Fix != nil {
 		t.Errorf("git_pat repo_credential w/ secret = %+v, want satisfied", got)
 	}
 
-	absent := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	absent := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 	got, ok = findItem(absent, "repo_credential:git_pat:dev.azure.com")
 	if !ok || got.Status != "missing" || got.Fix == nil || got.Fix.SecretName != "ado-pat" {
 		t.Errorf("git_pat repo_credential w/o secret = %+v, want missing + add_secret(ado-pat)", got)
 	}
 }
-
-// ── egress (dropped) ─────────────────────────────────────────────────────────
-
-func TestDeriveSetupItems_EgressDropped(t *testing.T) {
-	srv := newSetupTestServer()
-	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, []string{"evil.example.com"}, composeSubscriptionState{})
-	got, ok := findItem(items, "egress:dropped:evil.example.com")
-	if !ok || got.Status != "missing" || got.Fix == nil || got.Fix.Action != "none" {
-		t.Errorf("dropped-domain item = %+v (ok=%v), want missing + fix action \"none\"", got, ok)
-	}
-	// No drops => no rows.
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
-	for _, it := range items {
-		if it.Kind == "egress" && it.ID != "egress:workspace" {
-			t.Errorf("expected no dropped-egress rows with an empty diff, got %+v", it)
-		}
-	}
-}
-
-// ── egress (workspace, informational) ───────────────────────────────────────
-
-// workspaceWithProfilePath is the fixed local_dir path workspaceWithProfile's
-// workspace mounts at — shared with its caller's WorkspaceMounts entry so the
-// mount actually resolves back to this workspace via indexWorkspacesBySource.
-const workspaceWithProfilePath = "/home/me/proj"
-
-func workspaceWithProfile(t *testing.T, egressDomains ...string) types.Workspace {
-	t.Helper()
-	profile, err := json.Marshal(map[string]any{"egress_domains": egressDomains, "confidence": "high"})
-	if err != nil {
-		t.Fatalf("marshal profile: %v", err)
-	}
-	return types.Workspace{
-		ID:      uuid.New(),
-		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: workspaceWithProfilePath}},
-		Name:    "proj", Status: types.WorkspaceScanned, Profile: profile,
-	}
-}
-
 func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *testing.T) {
 	ws := workspaceWithProfile(t, "registry.npmjs.org", "pypi.org")
 	srv := newSetupTestServer(ws)
@@ -352,7 +312,7 @@ func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *
 	}
 	run := composer.RunInput{Agent: "claude-code", Repo: "local:proj"}
 
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 	got, ok := findItem(items, "egress:workspace")
 	if !ok || got.Status != "satisfied" {
 		t.Fatalf("workspace-egress info row = %+v (ok=%v), want satisfied", got, ok)
@@ -368,7 +328,7 @@ func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *
 func TestDeriveSetupItems_EgressWorkspaceInfoAbsentWithNoWorkspaces(t *testing.T) {
 	srv := newSetupTestServer()
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	if _, ok := findItem(items, "egress:workspace"); ok {
 		t.Error("expected no egress:workspace row when there are no referenced workspaces")
 	}
@@ -383,7 +343,7 @@ func TestDeriveSetupItems_BackendAbsentWithNoExplicitClass(t *testing.T) {
 	srv := newSetupTestServer()
 	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{ConfinementClasses: []types.ConfinementClass{types.CC1}}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	for _, it := range items {
 		if it.Kind == "backend" {
 			t.Errorf("expected no backend row with no explicit class, got %+v", it)
@@ -398,7 +358,7 @@ func TestDeriveSetupItems_BackendSatisfied(t *testing.T) {
 		Resolved:           map[types.ConfinementClass]string{types.CC2: "oci/runsc"},
 	}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC2)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC2")
 	if !ok || got.Status != "satisfied" || got.Fix != nil || !strings.Contains(got.Detail, "oci/runsc") {
 		t.Errorf("satisfied backend item = %+v (ok=%v), want satisfied, no fix, substrate in detail", got, ok)
@@ -414,7 +374,7 @@ func TestDeriveSetupItems_BackendFallsBackToPolicyFloor(t *testing.T) {
 	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{ConfinementClasses: []types.ConfinementClass{types.CC1}}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"} // no ConfinementClass
 	spec := types.RunPolicySpec{MinConfinementClass: types.CC2}
-	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC2")
 	if !ok || got.Status != "missing" {
 		t.Errorf("policy-floor-derived backend item = %+v (ok=%v), want a missing CC2 row", got, ok)
@@ -425,7 +385,7 @@ func TestDeriveSetupItems_BackendCC2NeedsSetup(t *testing.T) {
 	srv := newSetupTestServer()
 	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{ConfinementClasses: []types.ConfinementClass{types.CC1}}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC2)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC2")
 	if !ok || got.Status != "missing" || got.Fix == nil || got.Fix.Action != "none" || !strings.Contains(got.Detail, "wardyn setup wall") {
 		t.Errorf("CC2-unavailable backend item = %+v (ok=%v), want missing + fix action \"none\" + fixable wall guidance", got, ok)
@@ -446,7 +406,7 @@ func TestDeriveSetupItems_BackendNonContiguousClassesMirrorsLaunchGate(t *testin
 		Resolved:           map[types.ConfinementClass]string{types.CC3: "oci/kata-runtime"},
 	}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC2)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC2")
 	if !ok {
 		t.Fatal("no backend:CC2 row for an explicit CC2 run")
@@ -466,7 +426,7 @@ func TestDeriveSetupItems_BackendCC3SplitsOnKVM(t *testing.T) {
 	srv := newSetupTestServer()
 	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{ConfinementClasses: []types.ConfinementClass{types.CC1, types.CC2}}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC3)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC3")
 	if !ok || got.Status != "missing" || got.Fix == nil || got.Fix.Action != "none" {
 		t.Fatalf("CC3-unavailable backend item = %+v (ok=%v), want missing + fix action \"none\"", got, ok)
@@ -489,7 +449,7 @@ func TestDeriveSetupItems_BackendCC3SplitsOnKVM(t *testing.T) {
 func TestDeriveSetupItems_BackendNoRunner(t *testing.T) {
 	srv := newSetupTestServer()
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC1)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC1")
 	if !ok || got.Status != "missing" || got.Fix == nil || got.Fix.Action != "none" {
 		t.Errorf("no-runner backend item = %+v (ok=%v), want missing + fix action \"none\"", got, ok)
@@ -500,68 +460,19 @@ func TestDeriveSetupItems_BackendCapabilitiesProbeError(t *testing.T) {
 	srv := newSetupTestServer()
 	srv.cfg.Runner = setupTestRunner{capsErr: errors.New("docker daemon unreachable")}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC1)}
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil)
 	got, ok := findItem(items, "backend:CC1")
 	if !ok || got.Status != "unverified" || !strings.Contains(got.Detail, "docker daemon unreachable") {
 		t.Errorf("probe-error backend item = %+v (ok=%v), want unverified carrying the probe error", got, ok)
 	}
 }
-
-// ── config_pair (F2) ─────────────────────────────────────────────────────────
-
-func TestDeriveSetupItems_ConfigPairSubscriptionMount(t *testing.T) {
-	srv := newSetupTestServer()
-	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
-
-	// Not requested this round: no row at all.
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
-	if _, ok := findItem(items, "config_pair:use_subscription:claude_cred_mount"); ok {
-		t.Error("expected no config_pair row when subscription mode wasn't requested")
-	}
-
-	// Requested and applyLLMCredMount actually injected the mounts: satisfied,
-	// carrying its (possibly empty) reused warning verbatim.
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil,
-		composeSubscriptionState{Requested: true, Injected: true})
-	it, ok := findItem(items, "config_pair:use_subscription:claude_cred_mount")
-	if !ok || it.Status != "satisfied" || it.Fix == nil || it.Fix.Action != "none" {
-		t.Errorf("injected config_pair = %+v (ok=%v), want satisfied + fix action \"none\"", it, ok)
-	}
-
-	// Requested but NOT applied (the silent-degrade case this item exists to
-	// surface): missing, and the Detail is applyLLMCredMount's OWN reason —
-	// reused verbatim, never reworded.
-	reason := "subscription mode requested but the operator policy does not bless a Claude credential mount"
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil,
-		composeSubscriptionState{Requested: true, Injected: false, Warnings: []string{reason}})
-	it, ok = findItem(items, "config_pair:use_subscription:claude_cred_mount")
-	if !ok || it.Status != "missing" || it.Detail != reason {
-		t.Errorf("degraded config_pair = %+v (ok=%v), want missing + detail == reused reason %q", it, ok, reason)
-	}
-
-	// M6: a MANAGED-subscription pin nothing can deliver (no setup-token
-	// connected) is the SAME shape (Requested && !Injected && !Managed) —
-	// pinned with compose.go's own exact wording so a future rewrite of that
-	// message can't silently drift from what this row actually renders.
-	managedReason := "this run's resolved integration is a managed Claude subscription, but no setup-token is " +
-		"connected — falling back to a brokered API key; connect it in Getting Started."
-	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil,
-		composeSubscriptionState{Requested: true, Injected: false, Warnings: []string{managedReason}})
-	it, ok = findItem(items, "config_pair:use_subscription:claude_cred_mount")
-	if !ok || it.Status != "missing" || it.Detail != managedReason {
-		t.Errorf("managed-pin-not-delivered config_pair = %+v (ok=%v), want missing + detail == %q", it, ok, managedReason)
-	}
-}
-
-// ── residency (F3) ───────────────────────────────────────────────────────────
-
 func TestDeriveSetupItems_Residency(t *testing.T) {
 	srv := newSetupTestServer()
 
 	// llm_access, api-key mode (no Claude cred mount in the FINAL spec): proxy_injected.
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
 	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(),
-		&composeLLMAccess{Provisioned: true, Note: "ok"}, nil, composeSubscriptionState{})
+		&composeLLMAccess{Provisioned: true, Note: "ok"})
 	it, ok := findItem(items, "llm_access:claude-code")
 	if !ok || it.Residency != "proxy_injected" {
 		t.Errorf("api-key llm_access residency = %+v (ok=%v), want proxy_injected", it, ok)
@@ -576,7 +487,7 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 	// api.anthropic.com request through the sandbox's proxy env.
 	subSpec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Target: claudeCredTarget}}}
 	items = srv.deriveSetupItems(context.Background(), run, subSpec, secretsWith(),
-		&composeLLMAccess{Provisioned: true, Note: "ok"}, nil, composeSubscriptionState{})
+		&composeLLMAccess{Provisioned: true, Note: "ok"})
 	it, ok = findItem(items, "llm_access:claude-code")
 	if !ok || it.Residency != "resident_mount" {
 		t.Errorf("subscription llm_access residency = %+v (ok=%v), want resident_mount", it, ok)
@@ -591,7 +502,7 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 		apiKeyGrant("api.anthropic.com", "anthropic-api-key"),
 		gitPATGrant("dev.azure.com", "ado-pat"),
 	}}
-	items = srv.deriveSetupItems(context.Background(), run, secretSpec, secretsWith("anthropic-api-key", "ado-pat"), nil, nil, composeSubscriptionState{})
+	items = srv.deriveSetupItems(context.Background(), run, secretSpec, secretsWith("anthropic-api-key", "ado-pat"), nil)
 	it, ok = findItem(items, "secret:anthropic-api-key")
 	if !ok || it.Residency != "proxy_injected" {
 		t.Errorf("api_key secret residency = %+v (ok=%v), want proxy_injected", it, ok)
@@ -603,7 +514,7 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 
 	// repo_credential: both github_token and git_pat sub-cases are brokered_mint.
 	repoSpec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{githubTokenGrant(), gitPATGrant("dev.azure.com", "ado-pat")}}
-	items = srv.deriveSetupItems(context.Background(), run, repoSpec, secretsWith("ado-pat"), nil, nil, composeSubscriptionState{})
+	items = srv.deriveSetupItems(context.Background(), run, repoSpec, secretsWith("ado-pat"), nil)
 	it, ok = findItem(items, "repo_credential:github_token")
 	if !ok || it.Residency != "brokered_mint" {
 		t.Errorf("github_token repo_credential residency = %+v (ok=%v), want brokered_mint", it, ok)
@@ -645,7 +556,7 @@ func TestDeriveSetupItems_WorkspaceSecrets(t *testing.T) {
 	srv := newSetupTestServer(ws)
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
 
-	items := srv.deriveSetupItems(context.Background(), run, mountSpec("/w"), secretsWith("database-url"), nil, nil, composeSubscriptionState{})
+	items := srv.deriveSetupItems(context.Background(), run, mountSpec("/w"), secretsWith("database-url"), nil)
 
 	sat, ok := findItem(items, "workspace_secret:database-url")
 	if !ok || sat.Kind != "workspace_secret" || sat.Status != "satisfied" || sat.Fix != nil {
@@ -680,7 +591,7 @@ func TestDeriveSetupItems_WorkspaceSecretsCapped(t *testing.T) {
 	})
 	srv := newSetupTestServer(ws)
 	items := srv.deriveSetupItems(context.Background(), composer.RunInput{Agent: "claude-code", Repo: "ephemeral"},
-		mountSpec("/w"), secretsWith(), nil, nil, composeSubscriptionState{})
+		mountSpec("/w"), secretsWith(), nil)
 
 	rows := 0
 	for _, it := range items {
@@ -711,7 +622,7 @@ func TestDeriveSetupItems_WorkspaceNeedsDetails(t *testing.T) {
 	srv := newSetupTestServer(ws)
 	spec := mountSpec("/w")
 	items := srv.deriveSetupItems(context.Background(), composer.RunInput{Agent: "claude-code", Repo: "ephemeral"},
-		spec, secretsWith(), nil, nil, composeSubscriptionState{})
+		spec, secretsWith(), nil)
 
 	wsRow, ok := findItem(items, "workspace:"+ws.ID.String())
 	if !ok || !strings.Contains(wsRow.Detail, "postgres, redis") || !strings.Contains(wsRow.Detail, "backend/.env") {

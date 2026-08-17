@@ -211,7 +211,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// spec, so the checklist must keep seeing the FULL spec.
 	llmAccess := s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
 
-	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess, nil, composeSubscriptionState{})
+	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess)
 	writeJSON(w, http.StatusOK, preflightResponse{
 		SetupItems:               items,
 		EnforcedConfinementClass: enforced,

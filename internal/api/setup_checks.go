@@ -152,7 +152,7 @@ func llmProviderCheck(llmDetail string) SetupCheck {
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
 		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
-		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (the Integrations step, \"Connect what's outside Wardyn\"), or bind creds to a workspace/container.",
+		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Model & git host\" setup step), or bind creds to a workspace/container.",
 	}
 }
 

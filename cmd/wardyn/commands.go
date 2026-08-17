@@ -257,6 +257,9 @@ func printPreflight(ctx context.Context, c *sdk.Client, body sdk.CreateRunReques
 		return emitJSON(pf)
 	}
 	fmt.Printf("dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
+	for _, warn := range pf.Warnings {
+		fmt.Printf("warning: %s\n", warn)
+	}
 	tw := newTab()
 	fmt.Fprintln(tw, "STATUS\tLABEL\tKIND\tREQUIRED_BY\tDETAIL")
 	for _, it := range pf.SetupItems {

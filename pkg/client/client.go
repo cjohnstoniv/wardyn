@@ -320,6 +320,11 @@ type PreflightItem struct {
 type PreflightResult struct {
 	SetupItems               []PreflightItem        `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// Warnings carries resolveRunPolicy's clamp notes — a member's silently
+	// narrowed inline policy, a filtered grant. The dry run is the ONLY place
+	// these surface (launch never returns them), so dropping them here left a
+	// member with no way to learn their policy was clamped at all.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

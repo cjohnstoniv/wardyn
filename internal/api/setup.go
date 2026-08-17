@@ -376,8 +376,8 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 		return SetupCheck{
 			ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "ok",
 			Detail: "Your Claude login is staged for sandbox use — a run picks it up once its resolved integration is " +
-				"a resident-host Claude subscription. Adopt the derived \"Claude subscription (resident host)\" " +
-				"integration under Integrations and mark it the agent-runs default, or pin it on a workspace's Model access.",
+				"a resident-host Claude subscription. Save the \"Claude subscription (resident host)\" connection under " +
+				"Settings → Model provider (saving it makes it the agent-runs default), or pin it on a workspace's Model access.",
 		}, true
 	}
 	fix := "Run `make stage-claude` on the host — it stages the login and restarts wardynd onto the subscription ceiling."

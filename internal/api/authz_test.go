@@ -805,11 +805,6 @@ func (s *authzStore) ConsumeAttachTicket(_ context.Context, token string, _ time
 	}
 	return t, ok, nil
 }
-func (s *authzStore) PutComposeResult(context.Context, uuid.UUID, []byte) error { return nil }
-func (s *authzStore) TakeComposeResult(context.Context, uuid.UUID) ([]byte, bool, error) {
-	return nil, false, nil
-}
-func (s *authzStore) DiscardComposeResult(context.Context, uuid.UUID) error { return nil }
 
 // SSH gateway key registry (rebase compile trap, per the reviewer's own
 // note): store.Store gained these four methods on the SSH lane

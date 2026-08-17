@@ -37,7 +37,7 @@ type dispatchParams struct {
 	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	InteractiveStart   string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
 	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
-	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
+	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
 	// env this run needs (runToolchainNeeds over its workspaces' profiles).
 	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
@@ -169,13 +169,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
-	// Caller-supplied non-secret env (p.ExtraEnv): compose-only mode's
-	// WARDYN_COMPOSE_* (discriminator + base64 prompt/schema), or the AWS harness
-	// login's pre-login WARDYN_AWS_SSO_CONFIG_B64 — the same "only a
-	// discriminator + non-secret payload changes; clone/grants/EGRESS/recording/
-	// LLM-injection are identical" contract as scan/verify/exec. resolveLLMTransport
-	// below sees an ordinary (no-WorkspaceID) claude-code run and injects the
-	// managed subscription token proxy-side from the launcher's policy.
+	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
+	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
+	// settings — the same "only a discriminator + non-secret payload changes;
+	// clone/grants/EGRESS/recording/LLM-injection are identical" contract as
+	// scan/verify/exec. resolveLLMTransport below sees an ordinary
+	// (no-WorkspaceID) claude-code run and injects the managed subscription
+	// token proxy-side from the launcher's policy.
 	for k, v := range p.ExtraEnv {
 		sandboxEnv[k] = v
 	}

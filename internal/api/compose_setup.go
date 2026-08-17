@@ -26,7 +26,7 @@ import (
 // (add_secret/scan_workspace), so it needs its own shape rather than reusing
 // SetupCheck's.
 type SetupItem struct {
-	Kind       string    `json:"kind"` // "llm_access" | "secret" | "workspace" | "workspace_secret" | "repo_credential" | "egress" | "backend" | "config_pair"
+	Kind       string    `json:"kind"` // "llm_access" | "secret" | "workspace" | "workspace_secret" | "repo_credential" | "egress" | "backend"
 	ID         string    `json:"id"`   // stable "<kind>:<key>", e.g. "secret:anthropic-api-key"
 	Label      string    `json:"label"`
 	RequiredBy string    `json:"required_by"`
@@ -62,33 +62,18 @@ type SetupFix struct {
 	WorkspaceID string `json:"workspace_id,omitempty"` // ID, not source — api.scanWorkspace takes an id
 }
 
-// composeSubscriptionState is the subscription-request <-> credential-mount
-// PAIR's reconciled verdict, computed ONCE at the runComposePipeline call site
-// (applyLLMCredMount) and threaded through here so setupSubscriptionMountItem
-// never recomputes it — the checklist row can then never disagree with the
-// Warnings panel that already carries the same Reason text.
-type composeSubscriptionState struct {
-	Requested bool     // the resolved integration asks for the resident-host subscription transport
-	Injected  bool     // applyLLMCredMount's verdict: did the ceiling mounts land in the FINAL spec
-	Managed   bool     // no ceiling mount, but a Wardyn-managed setup-token serves this run proxy-side
-	Warnings  []string // applyLLMCredMount's own explanation, reused verbatim
-}
-
 // deriveSetupItems computes the composed run's setup checklist from the FINAL
 // (post-clamp) spec — the same trust boundary composer.Grade uses. Called once
 // per compose round, after grading and before the advisory audit is assembled
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
 // inform the review panel (Decision 4).
-func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess, droppedDomains []string, sub composeSubscriptionState) []SetupItem {
+func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
 	var items []SetupItem
 
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
 		items = append(items, it)
 	}
 	if it, ok := setupLLMAccessItem(run.Agent, llmAccess, spec); ok {
-		items = append(items, it)
-	}
-	if it, ok := setupSubscriptionMountItem(sub); ok {
 		items = append(items, it)
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
@@ -102,7 +87,6 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, workspaces, presentSecrets)...)
 	items = append(items, setupRepoCredentialItems(spec, presentSecrets)...)
-	items = append(items, setupEgressDroppedItems(droppedDomains)...)
 	if it, ok := setupEgressWorkspaceItem(spec, workspaces); ok {
 		items = append(items, it)
 	}
@@ -167,50 +151,6 @@ func setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.Ru
 			it.Fix = &SetupFix{Action: "add_secret", SecretName: secretName}
 		}
 	}
-	return it, true
-}
-
-// setupSubscriptionMountItem is the "config_pair" checklist row for the
-// subscription-request <-> credential-mount PAIR: applyLLMCredMount
-// (compose.go) already reconciles the run's resolved integration against the
-// control-plane-wide bless (ceilingBlessesClaudeCreds) and the FINAL egress
-// state (anthropicReachable), and today silently degrades to the api-key path
-// (or to no access at all) when they disagree, with the reason buried in a
-// generic Warnings bullet. This surfaces that SAME verdict (sub.Injected/
-// Warnings — reused verbatim, never recomputed) as its own structured row.
-// ok=false when subscription mode wasn't requested this round (nothing to
-// reconcile).
-func setupSubscriptionMountItem(sub composeSubscriptionState) (SetupItem, bool) {
-	if !sub.Requested {
-		return SetupItem{}, false
-	}
-	it := SetupItem{
-		Kind:       "config_pair",
-		ID:         "config_pair:use_subscription:claude_cred_mount",
-		Label:      "Paired setting: subscription mode + credential mount",
-		RequiredBy: "the requested Claude subscription transport",
-		Fix:        &SetupFix{Action: "none"},
-	}
-	detail := strings.Join(sub.Warnings, " ")
-	switch {
-	case sub.Managed:
-		it.Status = "satisfied"
-		it.Label = "Subscription mode: Wardyn-managed token"
-		detail = "no operator-blessed credential mount, but a Wardyn-managed Claude subscription (setup-token) is connected and injected PROXY-SIDE for this run — the sandbox holds only an inert sentinel."
-	case sub.Injected:
-		it.Status = "satisfied"
-		if detail == "" {
-			detail = "the operator-blessed Claude credential mounts were injected for this run."
-		}
-	default:
-		it.Status = "missing"
-		if detail == "" {
-			// NOTE (wire/UI): an undeliverable subscription pin no longer falls back
-			// to api-key (PARITY-1) — it leaves the run with NO model access.
-			detail = "subscription mode was requested but not applied; this run has NO model access until it is connected."
-		}
-	}
-	it.Detail = detail
 	return it, true
 }
 
@@ -496,25 +436,6 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 	return items
 }
 
-// setupEgressDroppedItems turns the pre/post-clamp domain diff (computed at the
-// compose.go call site, right after composer.Clamp) into one informational row
-// per dropped domain. Action "none": the only fix is the OPERATOR widening
-// their own ceiling policy — no button this server can drive.
-func setupEgressDroppedItems(droppedDomains []string) []SetupItem {
-	items := make([]SetupItem, 0, len(droppedDomains))
-	for _, d := range droppedDomains {
-		items = append(items, SetupItem{
-			Kind: "egress", ID: "egress:dropped:" + d,
-			Label:      "Egress dropped: " + d,
-			RequiredBy: "the proposed task",
-			Status:     "missing",
-			Detail:     "not in the operator's egress allowlist; widen the ceiling policy to allow it",
-			Fix:        &SetupFix{Action: "none"},
-		})
-	}
-	return items
-}
-
 // setupEgressWorkspaceItem is informational only: it reports the egress domains
 // the referenced workspaces' scanned profiles would add at LAUNCH (the real
 // union happens on the create path, in unionWorkspaceEgress) — computed here on
@@ -738,7 +659,7 @@ func integrationSetupItem(id, wsName string, integ types.Integration, ok bool, p
 	}
 	switch {
 	case !ok:
-		it.Detail = "No integration named " + id + " is configured, so this workspace's requirement opens nothing. Add it under Integrations."
+		it.Detail = "No integration named " + id + " is configured, so this workspace's requirement opens nothing. Connect it under Settings."
 		return it
 	case integ.Disabled:
 		it.Detail = "Integration " + id + " is turned off, so it opens no hosts and delivers no credential."
