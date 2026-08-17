@@ -50,7 +50,17 @@ import { HarnessLoginPane } from "./harness-login-pane";
 export const S = {
   MODEL_TITLE: "Model provider",
   MODEL_LEDE: "Agent runs need one. Governed commands don't.",
-  MODEL_FOOTER: "Keys never enter the sandbox — the egress proxy injects them on the wire.",
+  // The old footer said "Keys never enter the sandbox" full stop, which is true
+  // of the subscription lane, both api-key lanes, and Bedrock's BEARER key — the
+  // proxy injects a static header on the wire for all four. It is NOT true of
+  // this card's Bedrock SSO lane: AWS signs each request with SigV4 in-process,
+  // so there is no header to swap and the credential is materialized inside the
+  // sandbox (resolveBedrockAuth's ssoInject branch, runs_bedrock.go — and the
+  // aws-access-key-id fallback below it). ARCHITECTURE.md invariant 1 names the
+  // same exception. A blanket promise the card's own third lane breaks is worse
+  // than a longer sentence.
+  MODEL_FOOTER:
+    "The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it.",
   GIT_TITLE: "Git host",
   GIT_LEDE: "How Wardyn clones your private repos.",
   GIT_FOOTER: "Public repos clone with no credential at all.",

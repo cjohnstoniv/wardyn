@@ -167,11 +167,11 @@ export const DEMOS: Demo[] = [
   {
     id: "lines-that-cant-be-crossed",
     title: "Lines that can't be crossed",
-    teaches: "allow_all_egress: the public internet is open, but cloud-metadata and private/LAN ranges are blocked no matter what.",
+    teaches: "allow_all_egress: the public internet is open, yet cloud-metadata and private/LAN addresses have no route out at all.",
     overview:
-      "The opposite extreme: egress is wide open to the public internet, yet two lines still hold no matter what — the cloud-metadata endpoint (169.254.169.254, where cloud credentials live) and every private/LAN range are refused unconditionally. No policy, and no 'allow all', can open them. Run this to see the guardrails that survive even the loosest egress.",
+      "The opposite extreme: egress is wide open to the public internet, yet two addresses stay out of reach — the cloud-metadata endpoint (169.254.169.254, where cloud credentials live) and every private/LAN range. These are not policy: the sandbox has no route to them, so nothing reaches the proxy, there is no setting that opens them, and there is no approval to raise or deny. Run this to see the limits that were never yours to change.",
     caution:
-      "Fence (CC1) shares your machine's kernel and this box allows the public internet — the widest window Wardyn opens. It's safe here only because nothing is mounted: no repo, no key, no workspace. The point of this demo is the two denials that still hold with egress wide open.",
+      "Fence (CC1) shares your machine's kernel and this box allows the public internet — the widest window Wardyn opens. It's safe here only because nothing is mounted: no repo, no key, no workspace. The point of this demo is the two addresses that stay unreachable with egress wide open.",
     policy: {
       ...SHARED,
       allowed_domains: [],
@@ -185,17 +185,17 @@ export const DEMOS: Demo[] = [
       },
       {
         cmd: "curl -sSI --max-time 5 http://169.254.169.254/latest/meta-data/",
-        text: "Denied — you'll see a 403 (or a curl error), and a deny row in the Audit panel. That address is where cloud credentials live; no policy can open it.",
+        text: "Fails instantly — curl can't connect. That address is where cloud credentials live, and the sandbox has no route to it: nothing reaches the proxy, so the Audit panel stays quiet. There was never a decision to make.",
       },
       {
         cmd: "curl -sSI --max-time 5 http://192.168.1.1/",
-        text: "Denied the same way. Private/LAN ranges are blocked regardless of policy.",
+        text: "Fails the same way, and just as silently. Private/LAN ranges are off the map too — nothing to approve, nothing to log.",
       },
     ],
     setupUi: [
       "New Run → pick a barrier (Fence here; nothing is mounted, so the blast radius is a bare sandbox).",
       "In Network, pick Everything — open egress.",
-      "The cloud-metadata + private-range blocks are not user-configurable — they always apply.",
+      "The cloud-metadata + private-range limits aren't settings — there is no route there to allow.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
     ],
   },

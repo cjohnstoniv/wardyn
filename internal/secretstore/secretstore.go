@@ -8,7 +8,13 @@
 //   - openbao: OpenBao KV + leases (v1.0).
 //
 // Secrets are late-bound: they are resolved at use time by the broker or
-// injected proxy-side. They never enter a sandbox's environment or disk.
+// injected proxy-side, so as a RULE no value lands in a sandbox's environment
+// or disk. It is a rule with named, bounded exceptions, not an invariant — a
+// credential that structurally cannot be handed over on the wire (no header to
+// swap, no broker seam to mint through) has to go resident instead.
+// ARCHITECTURE.md invariant 1 is the authoritative list of which credentials
+// those are and what bounds each one. Deliberately NOT restated here: a second
+// copy of that list is the thing that drifts out of date.
 // Audit coverage of reads is partial and honestly bounded: the proxy-side
 // api_key injection path emits a dedicated secret.read event
 // (internal/api/injection.go); the broker's git_pat and GitHub App private-key

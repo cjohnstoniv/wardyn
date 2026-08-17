@@ -227,15 +227,14 @@ test("act 3 — the five guardrail demos", async () => {
     if (demo.id === "lines-that-cant-be-crossed") {
       // Prove the block from the TERMINAL, not the audit panel.
       //
-      // The demo card's own copy says you'll see "a deny row in the Audit
-      // panel" for these two. You will not, and it is not a bug in the block —
-      // it is the block being stronger than advertised. https://example.com
+      // The demo card says these two produce no audit row, and that is what we
+      // assert — the silence is the block being stronger than a logged deny,
+      // not a gap in it. https://example.com
       // goes out via CONNECT through the egress proxy, so the proxy decides it
       // and logs an allow. A direct-to-IP http:// request has no proxy in its
       // path and the sandbox carries NO DEFAULT ROUTE, so it dies at the
       // network layer in ~0ms — curl (7), never reaching the proxy that would
-      // have recorded a decision. Asserting the audit row here would be
-      // asserting the app's overclaim.
+      // have recorded a decision. The terminal is the only witness there is.
       await expect(page.locator(".xterm-screen").first()).toContainText(/Failed to connect to 169\.254\.169\.254/, {
         timeout: 60_000,
       });
