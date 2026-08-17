@@ -174,7 +174,13 @@ fi
 # must not be discovered after reset-all has already wiped the stack.
 SPEC=""
 SLUG=""
-PW_FILTER=()
+# With no --video this is the legacy end-to-end walkthrough, and it is named
+# EXPLICITLY rather than left empty. An empty filter means "every spec the demo
+# project matches", which was the same thing back when walkthrough.spec.ts was
+# the only file in ui/e2e/demo — it is not any more. The ten series specs live
+# beside it now, so an empty filter would run all eleven back to back into one
+# recording, after a reset-all wiped the state the later ones expect to inherit.
+PW_FILTER=("walkthrough.spec.ts")
 # Whether the browser lane runs at all. A terminal-only video (V09/V10 before
 # their browser halves exist) has no spec to hand Playwright.
 RUN_DRIVER=1
@@ -461,9 +467,10 @@ fi
   # frame via CDP and REFUSES to run if the window lands outside it. Without
   # that the recording happily films whatever else is in that screen corner.
   #
-  # PW_FILTER is one spec filename with --video and EMPTY without it — no
-  # positional filter at all, so the demo project's own testMatch decides,
-  # exactly as it did before the series existed.
+  # PW_FILTER is always exactly one spec filename: the --video one, or
+  # walkthrough.spec.ts when no video was asked for. Never empty — see where it
+  # is set for why letting the demo project's testMatch decide stopped being
+  # safe once the ten series specs landed beside the walkthrough.
   WARDYN_DEMO=1 \
   WARDYN_DEMO_WORKSPACE="${WORKSPACE_PATH}" \
   WARDYN_DEMO_CAPTURE="${CAPTURE}" \
