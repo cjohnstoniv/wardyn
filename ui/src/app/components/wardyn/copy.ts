@@ -370,6 +370,9 @@ export const RUN_COCKPIT = {
   // module exists to prevent.
   noFilesChanged: "No files changed yet.",
   noSandboxYet: "No sandbox for this run yet.",
+  // The OTHER 409: a finished run whose sandbox was torn down. Two strings for
+  // two opposite facts — "yet" on a run that ended days ago read as a promise.
+  sandboxGone: "This run has finished — its sandbox is gone.",
   // A transient poll failure. Deliberately not an error banner: both widgets
   // keep their last-good data on a background poll blip (the run screen's own
   // rule — see the load() catch in run-detail.tsx), so this is a quiet note,

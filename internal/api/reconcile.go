@@ -99,9 +99,12 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 }
 
 // reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass, closing
-// W15-W15c-terminal-lifecycle-4: a terminal run's SandboxRef only survives
-// finalizeRunTail non-empty when THAT run's own StopSandbox call failed
-// (finalizeRunTail's doc comment) — and this file's other three passes
+// W15-W15c-terminal-lifecycle-4: on the finalizeRunTail path a terminal run's
+// SandboxRef only survives non-empty when THAT run's own StopSandbox call
+// failed (the tail clears it on success). Kill and idle-stop tear down on
+// their own paths and never clear, so their runs also reach this sweep — a
+// safe no-op retry against an already-gone sandbox — and this file's other
+// three passes
 // deliberately skip terminal runs (they exist to finish an INCOMPLETE run,
 // not to retry a completed one's cleanup; isTerminalRunState guards below).
 // Nothing else ever revisits the abandoned container (and its proxy sidecar,
@@ -114,11 +117,11 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // sweeps; a still-failing teardown leaves it set (stopSandboxOrAudit already
 // audits it with teardown_error) for the NEXT boot to retry.
 //
-// It also re-runs revokeRunCascade (bug-lifecycle-1 / W22-S1-7): a terminal
-// run's SandboxRef surviving means that run's ORIGINAL finalizeRunTail call
-// hit a failure, but revokeRunCascade runs there BEFORE the StopSandbox that
-// may have failed — so a run that reaches this pass may carry an un-revoked
-// identity/broker credential regardless of the teardown outcome. Retrying is
+// It also re-runs revokeRunCascade (bug-lifecycle-1 / W22-S1-7): a run that
+// reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
+// teardown fail after its revoke ran — or its revoke itself fail — so it may
+// carry an un-revoked identity/broker credential regardless of the teardown
+// outcome. Retrying is
 // safe: revokeRunCascade's own doc marks it idempotent (a deny of an
 // already-denied token/credential is a no-op), so re-running it on an
 // already-revoked run costs one wasted call, never a double-effect.

@@ -203,6 +203,14 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, runFilesUnsupportedMsg)
 		return
 	}
+	// A finished run's sandbox is gone (finalize clears the ref on a clean
+	// teardown; kill/idle-stop leave a stale one) — refuse crisply BEFORE the
+	// ref check so both shapes get the same honest answer instead of a 500 +
+	// an audit failure row per widget mount.
+	if run.State.IsTerminal() {
+		writeError(w, http.StatusConflict, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		return
+	}
 	// A run that never dispatched (or whose sandbox was never recorded) has no
 	// working tree to read. A crisp 409 beats handing an empty ref to the
 	// driver and surfacing whatever error it invents — same shape as

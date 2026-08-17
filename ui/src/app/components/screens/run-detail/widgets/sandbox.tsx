@@ -59,10 +59,10 @@ export function SandboxWidget({ runId, live }: { runId: string; live: boolean })
   }, [load]);
   usePoll(() => load(false), POLL_MS, !live);
 
-  return <WidgetCard title="Sandbox" Icon={Box}>{renderBody(state)}</WidgetCard>;
+  return <WidgetCard title="Sandbox" Icon={Box}>{renderBody(state, live)}</WidgetCard>;
 }
 
-function renderBody(state: SandboxState): React.ReactNode {
+function renderBody(state: SandboxState, live: boolean): React.ReactNode {
   switch (state.kind) {
     case "loading":
       return (
@@ -73,7 +73,11 @@ function renderBody(state: SandboxState): React.ReactNode {
         </div>
       );
     case "no-sandbox":
-      return <p className="text-[0.75rem] text-muted-foreground">{RUN_COCKPIT.noSandboxYet}</p>;
+      return (
+        <p className="text-[0.75rem] text-muted-foreground">
+          {live ? RUN_COCKPIT.noSandboxYet : RUN_COCKPIT.sandboxGone}
+        </p>
+      );
     case "unsupported":
       return <p className="text-[0.75rem] text-muted-foreground">{RUN_COCKPIT.execUnsupported}</p>;
     case "error":

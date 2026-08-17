@@ -80,7 +80,7 @@ export function FilesChangedWidget({ runId, live }: { runId: string; live: boole
       }
       bodyClassName="p-0"
     >
-      {renderBody(state)}
+      {renderBody(state, live)}
     </WidgetCard>
   );
 }
@@ -97,7 +97,7 @@ function sumCounted(files: RunFileStat[]): { added: number; deleted: number } {
   );
 }
 
-function renderBody(state: FilesState): React.ReactNode {
+function renderBody(state: FilesState, live: boolean): React.ReactNode {
   switch (state.kind) {
     case "loading":
       return (
@@ -111,7 +111,7 @@ function renderBody(state: FilesState): React.ReactNode {
     case "vcs-unknown":
       return <Quiet text={RUN_COCKPIT.vcsUnknown(state.path)} />;
     case "no-sandbox":
-      return <Quiet text={RUN_COCKPIT.noSandboxYet} />;
+      return <Quiet text={live ? RUN_COCKPIT.noSandboxYet : RUN_COCKPIT.sandboxGone} />;
     case "unsupported":
       return <Quiet text={RUN_COCKPIT.execUnsupported} />;
     case "error":

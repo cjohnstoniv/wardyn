@@ -263,6 +263,7 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 		runID.String(), outcome, mustJSON(data)))
 	s.revokeRunCascade(ctx, runID)
+	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
 		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
 			td := make(map[string]any, len(data)+1)
@@ -272,10 +273,24 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 			td["teardown_error"] = serr.Error()
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(td)))
+		} else {
+			teardownOK = true
 		}
 	}
 	s.reconcileWorkspaceRun(ctx, runID)
 	s.reconcileRecordRun(ctx, runID)
+	// Clear the ref LAST, and only when this call's own StopSandbox succeeded.
+	// LAST because reconcileRecordRun above still reads run.SandboxRef to tell
+	// "the sandbox never started" from "capture was empty". Success-only because
+	// the boot orphan sweep keys on a terminal run STILL carrying a ref — after
+	// this line that means exactly "teardown failed", the case it exists for.
+	// Kill/idle-stop tear down on their own paths and never clear; the evidence
+	// endpoints' terminal-state guard covers those runs. A failed clear is
+	// deliberately ignored: it degrades to the pre-clear behavior the boot
+	// sweep already retries.
+	if teardownOK && s.cfg.Store != nil {
+		_ = s.cfg.Store.SetSandboxRef(ctx, runID, "")
+	}
 }
 
 // failAndRevoke transitions a run from `from` to FAILED and, if that CAS won, runs

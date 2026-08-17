@@ -164,6 +164,13 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	// different fact from the Files widget beside it, which returns a crisp 409
 	// for exactly this state — the same split verdict the no-runner case was
 	// already fixed for.
+	// Same terminal-first ordering as the Files widget beside it: a finished
+	// run answers "gone", never a 500 (finalize clears the ref on clean
+	// teardown; kill/idle-stop leave a stale one).
+	if run.State.IsTerminal() {
+		writeError(w, http.StatusConflict, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		return
+	}
 	if run.SandboxRef == "" {
 		writeError(w, http.StatusConflict, "run has no sandbox to inspect (state="+string(run.State)+")")
 		return
