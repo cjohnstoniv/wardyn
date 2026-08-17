@@ -38,7 +38,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   projects: [
-    { name: "chromium", testIgnore: ["screenshots/**"], use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: ["screenshots/**", "demo/**"], use: { ...devices["Desktop Chrome"] } },
     {
       // screenshots: regenerates the docs/img UI PNGs (e2e/screenshots/docs.spec.ts)
       // against the dedicated backend booted by scripts/screenshots.sh. Its own
@@ -50,6 +50,53 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
+      // demo: drives the screen recording (e2e/demo/walkthrough.spec.ts) against
+      // the REAL compose stack on :8080 — a live runner, real sandboxes, a
+      // connected model. The hermetic `-runner none` backend the chromium gate
+      // uses cannot start a demo sandbox, so this project deliberately does not
+      // share its base URL. Headed, because something has to be on screen to
+      // film. Driven by scripts/record-demo.sh (`make record-demo`); the spec
+      // self-skips without WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a
+      // browser at a developer's live stack and start clicking Launch.
+      //
+      // viewport:null hands sizing to the real window (--window-size below), so
+      // the captured frame is the browser, not a letterboxed page inside it.
+      // No retries: a retry would restart the recording halfway through.
+      name: "demo",
+      testMatch: "demo/**/*.spec.ts",
+      retries: 0,
+      timeout: 30 * 60_000,
+      use: {
+        // Deliberately NOT ...devices["Desktop Chrome"]: that preset carries
+        // deviceScaleFactor, which Playwright refuses to combine with a null
+        // viewport ("deviceScaleFactor is not supported with null viewport").
+        // The preset's other fields (a fake UA, a fixed viewport, touch flags)
+        // are all things this project wants the real window to decide anyway.
+        baseURL: process.env.WARDYN_DEMO_BASE_URL || "http://localhost:8080",
+        headless: false,
+        viewport: null,
+        // The browser records ITSELF. A desktop grab of this window is at the
+        // mercy of whatever else is on that monitor: WSLg presents these as
+        // RAIL windows, so from Linux we can neither raise them reliably nor
+        // even read the true z-order (X stacking is not the Windows
+        // compositor's). A take once filmed a browser game that was sitting on
+        // top of the frame for six minutes. Playwright's capture comes from
+        // inside the page, so occlusion and window position cannot corrupt it.
+        // The OS cursor is absent either way — overlay.ts draws its own.
+        video: { mode: "on", size: { width: 1920, height: 1080 } },
+        // Playwright's default action timeout is UNLIMITED, so a locator that
+        // matches nothing parks the driver on screen until the whole act's
+        // budget expires — it looks exactly like the app hanging, or like the
+        // driver waiting on a human (it never does). Fail the click instead.
+        // Generous, because these clicks land on a real, busy console.
+        actionTimeout: 45_000,
+        trace: "off",
+        launchOptions: {
+          args: ["--window-position=0,0", "--window-size=1920,1080", "--hide-crash-restore-bubble"],
+        },
       },
     },
   ],

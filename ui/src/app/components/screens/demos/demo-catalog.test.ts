@@ -8,25 +8,29 @@ import { UNLISTED_RULES } from "../new-run/network-dialog";
 import { DEMOS } from "./demo-catalog";
 
 // Keyless, workspace-free, LLM-free sandboxes an operator drives by hand.
-// DEMOS also carries a sixth, harness-aware demo (needsModel) — kept out of
+// DEMOS also carries a seventh, harness-aware demo (needsModel) — kept out of
 // this subset since it trades the shared invariants below (empty
 // allowed_domains, a pasted command) for a real, egress-scoped agent task.
 const KEYLESS = DEMOS.filter((d) => !d.needsModel);
 
 // The original showcase quartet — the first four keyless demos, each covering
-// a distinct first_use_approval / allow-all combo. The fifth keyless demo
-// (record-a-policy) sits on a different axis entirely (Record Mode, not an
-// egress-approval-mode showcase) and deliberately REUSES the open-egress
-// demo's own combo — recording needs egress wide open, that's the point, not
-// a new mode to distinguish — so it's excluded from the distinctness checks
-// below and asserted on separately.
-const SHOWCASE_QUARTET = KEYLESS.filter((d) => d.id !== "record-a-policy");
+// a distinct first_use_approval / allow-all combo. Two later keyless demos sit
+// on different axes entirely and deliberately REUSE an earlier combo rather
+// than inventing a new mode to distinguish, so both are excluded from the
+// distinctness checks below and asserted on separately:
+// - record-a-policy reuses the open-egress combo (Record Mode, not an
+//   egress-approval-mode showcase — recording needs egress wide open, that's
+//   the point).
+// - once-or-for-good reuses fail-then-approve's deny_with_review (the
+//   decision-SCOPE axis, not a new first_use_approval mode — scope is
+//   orthogonal to FirstUseMode).
+const SHOWCASE_QUARTET = KEYLESS.filter((d) => d.id !== "record-a-policy" && d.id !== "once-or-for-good");
 
 describe("demo catalog", () => {
-  it("ships exactly five keyless demos with distinct ids/titles", () => {
-    expect(KEYLESS).toHaveLength(5);
-    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(5);
-    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(5);
+  it("ships exactly six keyless demos with distinct ids/titles", () => {
+    expect(KEYLESS).toHaveLength(6);
+    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(6);
+    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(6);
   });
 
   it("every demo (including the harness one) is CC1, auto-stops, and grants/mounts/repos nothing", () => {
@@ -83,7 +87,7 @@ describe("demo catalog", () => {
     // Interactive like the rest (the operator runs `claude` in the attached
     // terminal) — a command step to paste, not an autonomous task.
     expect(d.steps.some((s) => s.cmd?.includes("claude"))).toBe(true);
-    // Egress is scoped to Anthropic, not deny-all like the keyless four.
+    // Egress is scoped to Anthropic, not deny-all like the keyless six.
     expect(d.policy.allowed_domains.length).toBeGreaterThan(0);
     expect(d.policy.allowed_domains.every((h) => h.includes("anthropic.com"))).toBe(true);
   });
@@ -115,6 +119,19 @@ describe("demo catalog", () => {
         `${demo.id} should quote "${title}"`,
       ).toBe(true);
     }
+  });
+
+  // once-or-for-good is a SECOND deny_with_review demo (fail-then-approve is
+  // the first), so the DEMOS.find(...) above — first match wins — never
+  // reaches its setupUi. Address this one by id rather than assuming the
+  // generic check above covers it.
+  it("once-or-for-good's setupUi also quotes the deny_with_review rule title verbatim", () => {
+    const demo = DEMOS.find((d) => d.id === "once-or-for-good")!;
+    const title = UNLISTED_RULES.find((r) => r.id === "deny_with_review")!.title;
+    expect(
+      demo.setupUi.some((line) => line.includes(`'${title}'`)),
+      `${demo.id} should quote "${title}"`,
+    ).toBe(true);
   });
 
   // The steps must not send anyone to a screen that no longer exists.

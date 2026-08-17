@@ -104,3 +104,7 @@ ds-bundle/
 # local audit / scratch notes (never published)
 /*_AUDIT.md
 /.audit-*
+
+# demo-harness byproducts (narrate-*.py cache; up-reset corp baseline stub)
+__pycache__/
+/corp-baseline.json

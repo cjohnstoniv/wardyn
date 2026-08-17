@@ -1,0 +1,9 @@
+{
+  "name": "slugify-demo",
+  "private": true,
+  "type": "module",
+  "description": "Minimal workspace for the Wardyn demo recording — no dependencies.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

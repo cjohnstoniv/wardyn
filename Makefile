@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -623,6 +623,13 @@ test-e2e-ui: ## Playwright UI e2e vs a seeded backend (needs Docker + chromium)
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
 screenshots: ## Regenerate docs/img UI screenshots (run after visible UI changes)
 	./scripts/screenshots.sh
+
+# Re-shoots the demo video: virgin host -> make setup -> the funnel -> a real
+# governed run -> the audit trail. DESTRUCTIVE (wipes the compose stack first).
+# Needs a Windows ffmpeg (winget.exe install Gyan.FFmpeg) and a Claude subscription token
+# at ~/.wardyn-demo-token. Beat sheet + re-shoot notes: docs/DEMO-SCRIPT.md.
+record-demo: ## Record the demo video (DESTRUCTIVE: resets the stack; ARGS: --no-reset, --no-record)
+	./scripts/record-demo.sh $(ARGS)
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
 # host (advanced escape hatch — wardynd runs as you, using your resident Claude

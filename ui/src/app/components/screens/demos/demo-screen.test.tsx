@@ -115,7 +115,7 @@ describe("DemoScreen", () => {
     expect(await screen.findByTestId("demo-terminated")).toBeInTheDocument();
   });
 
-  it("renders the five keyless demo cards, and hides the harness demo without a model", async () => {
+  it("renders the six keyless demo cards, and hides the harness demo without a model", async () => {
     renderScreen();
     for (const d of DEMOS.filter((d) => !d.needsModel)) {
       expect(await screen.findByText(d.title)).toBeInTheDocument();
@@ -163,7 +163,7 @@ describe("DemoScreen", () => {
     renderScreen();
     expect(await screen.findByTestId("demos-not-ready")).toBeInTheDocument();
     const starts = screen.getAllByRole("button", { name: /start demo/i });
-    expect(starts).toHaveLength(5);
+    expect(starts).toHaveLength(6);
     for (const b of starts) expect(b).toBeDisabled();
   });
 

@@ -3,21 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Demo sandbox catalog — four hands-on, workspace-free, LLM-free demos that a
+// Demo sandbox catalog — six hands-on, workspace-free, LLM-free demos that a
 // new user can run BEFORE onboarding any repo or key, to prove Wardyn's egress
 // confinement first-hand. Each launches an interactive CC1 sandbox via the
 // existing POST /api/v1/runs (interactive + inline_policy); the operator drives
-// plain curl in the attached terminal and watches the policy hold. All four are
+// plain curl in the attached terminal and watches the policy hold. All six are
 // CC1 / auto-stop 900s / no grants / no mounts / no repos by construction.
 //
-// A fifth, harness-aware demo (needsModel:true) rounds out the set: same CC1 /
+// A seventh, harness-aware demo (needsModel:true) rounds out the set: same CC1 /
 // no-grants / no-mounts / no-repos confinement and the same interactive idle
 // sandbox, but egress is scoped to Anthropic's API and the operator runs a REAL
 // Claude Code agent (`claude`) in the attached terminal — authenticating through
 // the connected model, injected proxy-side. Wardyn governs any workload — a
 // coding agent is the flagship case, not the only one — so this demo is gated on
 // a connected model (demo-screen.tsx) and shown alongside, never instead of, the
-// keyless four (which stay entirely LLM-free).
+// keyless six (which stay entirely LLM-free).
 import type { RunPolicySpec } from "../../../lib/types";
 import { lsGet, lsSet } from "../../../lib/storage";
 
@@ -57,7 +57,7 @@ export interface Demo {
   teaches: string;
   /** A fuller "what to expect" — 2-3 sentences, shown in the detailed view. */
   overview: string;
-  /** Honest danger note (demo 4 only — CC1 + open egress). */
+  /** Honest danger note (allow-all-egress demos only — CC1 + open egress). */
   caution?: string;
   policy: RunPolicySpec;
   steps: DemoStep[];
@@ -110,7 +110,7 @@ export const DEMOS: Demo[] = [
     title: "Fail, then approve",
     teaches: "deny_with_review: the first hit is denied but raises an approval; approve it and a retry passes.",
     overview:
-      "Same default-deny, but a blocked host isn't the end of the story: the first attempt is denied AND raises an approval you can grant. Approve it and the very next try to that host succeeds — the grant sticks for the rest of the run. Good for exploratory work where you want to vet each new destination once, on the fly.",
+      "Same default-deny, but a blocked host isn't the end of the story: the first attempt is denied AND raises an approval you can grant. Approve it and the very next try to that host succeeds — the grant sticks for the rest of the run. Good for exploratory work where you want to vet each new destination as it comes up.",
     policy: {
       ...SHARED,
       allowed_domains: [],
@@ -123,7 +123,7 @@ export const DEMOS: Demo[] = [
       },
       { text: "Click Approve." },
       {
-        text: "Run the same command again — HTTP/2 200. Approved hosts stay allowed for the rest of this run.",
+        text: "Run the same command again — HTTP/2 200. A plain Approve keeps it allowed for the rest of this run (the split button's caret offers other options).",
       },
     ],
     setupUi: [
@@ -266,6 +266,37 @@ export const DEMOS: Demo[] = [
       "Pick Record — allow everything, which is what makes the recording honest.",
       "Launch interactive, attach the terminal, and run whatever the task actually needs.",
       "From the run's own page, synthesize a policy from what it did — same action this demo's “Turn this into a policy” takes.",
+    ],
+  },
+  {
+    id: "once-or-for-good",
+    title: "Once, or for good",
+    teaches: "The Once scope grants exactly one connection, not the run — approve it and the very next attempt has to ask again.",
+    overview:
+      "Every approval above stuck around for the rest of the run once granted. Once is narrower: it spends itself on the single connection it was raised for, so the next attempt to that same host is refused all over again and raises a brand-new approval — nothing lingers by accident. Reach for it to unblock one call without opening the host for good.",
+    policy: {
+      ...SHARED,
+      allowed_domains: [],
+      first_use_approval: "deny_with_review",
+    },
+    steps: [
+      {
+        cmd: "curl -sSI https://example.com",
+        text: "Fails, and an approval request appears below the terminal.",
+      },
+      {
+        text: "Click the split button's caret next to Approve and choose Once — one connection, not the rest of the run.",
+      },
+      {
+        cmd: "curl -sSI https://example.com",
+        text: "Same command — HTTP/2 200. Run it a third time and it's refused all over again: the Once grant already spent itself, so it has to ask again.",
+      },
+    ],
+    setupUi: [
+      "New Run → pick any barrier (Fence is fine for a demo).",
+      "In Network, pick None — no hosts at all.",
+      "Edit hosts… → 'Deny, but ask' for anything unlisted.",
+      "Launch interactive; when a request appears, use the split button's caret to grant Once instead of a plain Approve.",
     ],
   },
 ];

@@ -144,7 +144,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
         //
-        // W3-S1-1: the four keyless demos' cards promise "no allowed
+        // W3-S1-1: the keyless demos' cards promise "no allowed
         // destinations / no key" — without task_mode="exec" the server still
         // folds the operator's site-wide model integration onto ANY run
         // (foldRunIntegration only skips it for task_mode=exec; see
@@ -407,6 +407,11 @@ export function DemoRunControls({
         <LiveApprovals
           runId={run.id}
           idleHint="Off-policy egress you trigger surfaces here to approve or deny, live."
+          // Demo sandboxes are workspace-free by construction (see this
+          // file's own header comment) — Always renders disabled, and that
+          // disabled state IS the demo's lesson (the "once-or-for-good" card
+          // teaches it explicitly).
+          hasWorkspace={false}
         />
         <DemoAuditPanel runId={run.id} />
         <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>

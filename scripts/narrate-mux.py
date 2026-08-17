@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Lay the narration timeline onto the recorded video.
+
+    scripts/narrate-mux.py --video console.mp4 --timeline narration.json \
+                           --out narrated.mp4 [--ffmpeg /path/to/ffmpeg.exe] \
+                           [--offset-ms N]
+
+Each cue is delayed to its own timestamp and the whole set is mixed into one
+track. Video is stream-copied — this never re-encodes the picture, so it cannot
+soften the text the framing work was done to keep sharp.
+
+--offset-ms shifts every cue, for the `--with-terminal` case where the console
+recording is concatenated AFTER a screen-grabbed Act 0 and every narration
+timestamp is therefore late by Act 0's duration.
+
+Built as a script rather than shell string-building because a full take is ~50
+cues: that is ~50 inputs and a ~100-clause filtergraph, which is unreadable and
+unquotable in bash.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def find_ffmpeg(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    which = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
+    if which:
+        return which
+    # gdigrab is a Windows device, so record-demo.sh installs the Windows build;
+    # find it the same way (winget's zip package edits the WINDOWS PATH, which a
+    # WSL shell only inherits at startup).
+    for p in Path("/mnt/c/Users").glob(
+        "*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"
+    ):
+        return str(p)
+    raise SystemExit("narrate-mux: no ffmpeg found (pass --ffmpeg)")
+
+
+def winpath(ffmpeg: str, p: str) -> str:
+    """ffmpeg.exe cannot read /home/... — hand it a Windows path."""
+    if not ffmpeg.endswith(".exe"):
+        return p
+    out = subprocess.run(["wslpath", "-w", p], capture_output=True, text=True)
+    return out.stdout.strip() or p
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--video", required=True)
+    ap.add_argument("--timeline", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--ffmpeg")
+    ap.add_argument("--offset-ms", type=int, default=0)
+    args = ap.parse_args()
+
+    ffmpeg = find_ffmpeg(args.ffmpeg)
+    cues = json.loads(Path(args.timeline).read_text()).get("cues", [])
+    cues = [c for c in cues if Path(c["file"]).exists()]
+    if not cues:
+        print("narrate-mux: no cues — leaving the video silent", file=sys.stderr)
+        return 2
+
+    # Overlap is not fatal (amix handles it) but it means a line was cut off on
+    # screen, which is a directing bug worth seeing.
+    overlaps = sum(
+        1 for i, c in enumerate(cues) if i and c["tMs"] < cues[i - 1]["tMs"] + cues[i - 1]["durMs"]
+    )
+    if overlaps:
+        print(f"narrate-mux: WARNING {overlaps} cue(s) overlap the previous line", file=sys.stderr)
+
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", winpath(ffmpeg, args.video)]
+    for c in cues:
+        cmd += ["-i", winpath(ffmpeg, c["file"])]
+
+    parts = []
+    for i, c in enumerate(cues):
+        delay = max(0, c["tMs"] + args.offset_ms)
+        # adelay wants one value per channel; the clips are mono, but state both
+        # so a stereo clip is not silently half-delayed.
+        parts.append(f"[{i + 1}:a]adelay={delay}|{delay}[a{i}]")
+    mix = "".join(f"[a{i}]" for i in range(len(cues)))
+    # normalize=0: amix otherwise divides volume by the input count, which with
+    # ~50 inputs makes the narration inaudible.
+    parts.append(f"{mix}amix=inputs={len(cues)}:normalize=0:dropout_transition=0[a]")
+
+    cmd += [
+        "-filter_complex", ";".join(parts),
+        "-map", "0:v", "-map", "[a]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+        # Deliberately NO -shortest: the mixed track ends at the last cue and the
+        # video runs on past it, so -shortest would truncate the picture to the
+        # final spoken word. Default behaviour keeps the longest input, which is
+        # the video — exactly what we want.
+        winpath(ffmpeg, args.out),
+    ]
+
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stderr.strip()[-800:], file=sys.stderr)
+        return 1
+    print(f"narrate-mux: {len(cues)} cues -> {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -81,6 +81,13 @@ every event of a run.
 | 4 | `needs-approval/` | First-use approval queue: PENDING -> APPROVED or DENIED | Approval entry with `kind=egress_domain` for `example.com` visible in the UI Approvals tab; approving unlocks subsequent requests; denying produces `egress.deny` |
 | 5 | `github-push/` | Brokered git credential chain: `credential` ApprovalRequest -> approve -> time-limited token (or fail-closed without a GitHub App); the token is handed to `wardyn-git-helper` and never enters the sandbox env | a PENDING `kind=credential` approval in the Approvals tab (the raise itself is not a separate audit event); on approval the broker runs the mint path and writes `credential.mint` with `outcome=success` (or `outcome=failure` if no GitHub App is configured — the fail-closed path is the expected PASS for a stock demo) |
 | 6 | `long-running/` | Lifecycle reaper auto-stop | Run advances to STOPPED after `auto_stop_after_sec`; audit event `run.autostop` is emitted; the sandbox container is removed |
+| 7 | `demo-node/` | All three egress verdicts in one run, alongside real work | `node --test` passes and the run has a real diff; `example.com` is held then approved (`egress.pending` → `approval.decide approved` → `egress.allow`); `169.254.169.254` is denied with `rule_source=builtin:private-ip` and raises no approval |
+
+Scenario 7 is the one the demo recording drives (`scripts/record-demo.sh`); it is
+Node rather than Python because the `claude-code` agent image ships Node but no
+`pytest`. It is also the only scenario meant to be **copied** before use — the
+recording script materializes it at a scratch path and `git init`s it, so the
+agent's edits never land in this repo.
 
 ## Workspace source layout
 

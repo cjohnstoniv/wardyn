@@ -23,14 +23,14 @@ const DEMO_TITLES = [
 ];
 
 test.describe("Demo sandboxes", () => {
-  test("the catalog renders all four keyless demos", async ({ page }) => {
+  test("the catalog renders the keyless demos", async ({ page }) => {
     await page.goto("/demos");
     await expect(page.getByRole("heading", { name: "Demo sandboxes" })).toBeVisible();
     for (const title of DEMO_TITLES) {
       await expect(page.getByRole("heading", { name: title })).toBeVisible();
     }
-    // The harness-aware fifth demo's llmReady-gated visibility (needsModel —
-    // demo-screen.tsx's visibleDemos filter) is NOT asserted here: this
+    // The harness-aware needsModel demo's llmReady-gated visibility
+    // (demo-screen.tsx's visibleDemos filter) is NOT asserted here: this
     // shared hermetic backend runs fullyParallel alongside specs that seed a
     // real AI secret, so a negative "it's absent"
     // assertion here would race it. That gating is deterministic unit
@@ -44,7 +44,7 @@ test.describe("Demo sandboxes", () => {
     // Browsing works, but no barrier is ready → every Start is closed, with a hint.
     await expect(page.getByTestId("demos-not-ready")).toBeVisible();
     const starts = page.getByRole("button", { name: /start demo/i });
-    // The four keyless demos always render; the harness-aware fifth
+    // The keyless demos always render; the harness-aware demo
     // ("agent-in-the-box", needsModel) appears only once a model is connected
     // (demo-screen filters on llmReady), so the visible count tracks model
     // readiness. Pin the invariant this test exists for instead — on a
