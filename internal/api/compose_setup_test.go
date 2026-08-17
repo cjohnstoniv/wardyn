@@ -302,6 +302,21 @@ func TestDeriveSetupItems_RepoCredentialGitPATPresentAbsent(t *testing.T) {
 		t.Errorf("git_pat repo_credential w/o secret = %+v, want missing + add_secret(ado-pat)", got)
 	}
 }
+const workspaceWithProfilePath = "/home/me/proj"
+
+func workspaceWithProfile(t *testing.T, egressDomains ...string) types.Workspace {
+	t.Helper()
+	profile, err := json.Marshal(map[string]any{"egress_domains": egressDomains, "confidence": "high"})
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	return types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: workspaceWithProfilePath}},
+		Name:    "proj", Status: types.WorkspaceScanned, Profile: profile,
+	}
+}
+
 func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *testing.T) {
 	ws := workspaceWithProfile(t, "registry.npmjs.org", "pypi.org")
 	srv := newSetupTestServer(ws)
