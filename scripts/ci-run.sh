@@ -132,7 +132,23 @@ export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
 cleanup() {
   local code=$?
   if [[ "${WARDYN_CI_KEEP:-}" == "1" ]]; then
-    warn "WARDYN_CI_KEEP=1 — leaving the stack up (tear down with: ${COMPOSE[*]} down --volumes)"
+    # Print a teardown line the operator can actually paste into a fresh shell.
+    # THREE env vars are load-bearing and none of them survives this process: the
+    # CI overlay binds ${WARDYN_CI_TOOLS_DIR:?...}, so compose refuses to load the
+    # project at all without it; WARDYN_NS is what the recordings volume and the
+    # control-plane network are NAMED after, so a `down --volumes` without it
+    # reaps the default-named objects and leaves this job's behind; and
+    # DOCKER_HOST names the daemon the stack actually lives on —
+    # wardyn_pick_docker_host derives it (a dual-daemon box lands on the native
+    # dockerd, not the default context), so a paste without it addresses the WRONG
+    # daemon, finds no such project, and exits 0 having removed nothing while the
+    # trailing rm still deletes the tools dir the still-live wardynd is bind-
+    # mounting. Emitted only when set, so a single-daemon host gets no noise.
+    # Keeping the stack also skips the rm -rf below, so the tools dir outlives the
+    # job with its path visible only in scrollback — hence the trailing rm, in the
+    # same command, on the same line.
+    warn "WARDYN_CI_KEEP=1 — leaving the stack up, and the runner-tools dir ${TOOLS_DIR} with it. Tear both down with:"
+    warn "  ${DOCKER_HOST:+DOCKER_HOST='${DOCKER_HOST}' }WARDYN_NS='${WARDYN_NS}' WARDYN_CI_TOOLS_DIR='${TOOLS_DIR}' ${COMPOSE[*]} down --volumes && rm -rf '${TOOLS_DIR}'"
   else
     log "Tearing down the compose stack (volumes included — the stack is ephemeral)"
     # compose down only reaps objects compose itself created. The docker runner
@@ -214,9 +230,21 @@ run_args=("${base_args[@]}" --wait --timeout "${TIMEOUT}" --json)
 log "Launching governed run: wardyn ${run_args[*]}"
 run_json="${OUT_DIR}/run.json"
 run_log="${OUT_DIR}/run.log"
-wardyn "${run_args[@]}" >"${run_json}" 2>"${run_log}"
-run_code=$?
-cat "${run_log}" >&2
+# --wait blocks for the whole governed run — minutes, often tens of them. Buffer
+# its stderr into run.log and cat the file afterwards (what this used to do) and
+# the job prints NOTHING until the run is already over: not even the run id, and
+# a job the pipeline kills mid-wait loses the whole buffer, console and artifact
+# alike. tee puts each line on the console as it happens AND still lands the copy
+# in run.log. This is NOT a heartbeat: waitForRun (cmd/wardyn/commands.go) prints
+# once when the wait starts and once when it ends, so a long wait is still silent
+# in between — an inactivity timeout on the pipeline still needs its own answer.
+# Redirection order is load-bearing: `2>&1` duplicates stderr onto the pipe while
+# stdout is still the pipe, and only THEN does stdout move to run.json — so the
+# --json contract keeps the structured stdout clean, with no progress mixed in.
+# PIPESTATUS[0] rather than $? because $? is now tee's: this script's whole
+# contract is exiting with the RUN's code.
+wardyn "${run_args[@]}" 2>&1 >"${run_json}" | tee "${run_log}" >&2
+run_code=${PIPESTATUS[0]}
 
 # --json's structured stdout survives a --wait run cleanly; the old scrape of a
 # "created run <id>..." text line broke the moment anything else printed first.
