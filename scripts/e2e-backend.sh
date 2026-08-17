@@ -173,7 +173,27 @@ cmd_down_quiet() {
   # — that would tear down sibling instances during the per-screen e2e fanout).
   local port="${ADDR#*:}"
   if command -v fuser >/dev/null 2>&1; then fuser -k "${port}/tcp" >/dev/null 2>&1 || true; fi
-  sleep 0.3
+
+  # WAIT for the port to actually be free, rather than guessing.
+  #
+  # This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up per spec
+  # file on the SAME port, so the next `up` raced a socket the kill had not
+  # finished releasing. It flaked two ways, both seen: the new wardynd fails to
+  # bind (run-ui-e2e reports "backend up failed for <spec>" and scores the whole
+  # file as failed), or it binds while the dying process still answers, and the
+  # spec loads against a backend that stops mid-run.
+  local waited=0
+  while [[ ${waited} -lt 50 ]]; do
+    if command -v fuser >/dev/null 2>&1; then
+      fuser "${port}/tcp" >/dev/null 2>&1 || return 0
+    else
+      sleep 0.3
+      return 0
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  log "port ${port} still busy after 5s — continuing; the next bind may fail"
 }
 
 cmd_down() {
@@ -189,8 +209,14 @@ cmd_seed() {
   log "Seeding deterministic fixtures via API + SQL"
   # A handful of runs (the none runner leaves them PENDING; we re-state below).
   local agents=(claude-code codex-cli claude-code claude-code codex-cli claude-code claude-code claude-code claude-code)
+  # Fixtures 0 and 1 deliberately SHARE a title so the Runs board actually has a
+  # group to render — a title held by only one run is not a group (runs.tsx's
+  # titleGroups), so without a repeat the grouping path would go unexercised.
+  # The rest stay untitled on purpose: that is the legacy/CLI/system-run shape,
+  # and it must keep rendering by task (runHeadline).
+  local titles=("e2e group" "e2e group" "" "" "" "" "" "" "")
   for i in "${!agents[@]}"; do
-    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"task\":\"e2e fixture ${i}\"}" >/dev/null || true
+    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"}" >/dev/null || true
   done
   # Diversify states deterministically by created order so specs can target them.
   psql_e2e >/dev/null <<'SQL' || true

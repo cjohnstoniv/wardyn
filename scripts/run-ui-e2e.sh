@@ -63,7 +63,21 @@ fi
 pass=0; fail=0; failed_specs=()
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
-  ./scripts/e2e-backend.sh up >/dev/null 2>&1 || { log "backend up failed for ${base}"; fail=$((fail+1)); failed_specs+=("${base}"); continue; }
+  # Retry once, and SHOW the failure. This used to be a single attempt with all
+  # output sent to /dev/null, so a transient port race looked identical to a
+  # genuine spec failure — the run reported "<spec> failed" with nothing to read.
+  if ! ./scripts/e2e-backend.sh up >/tmp/wardyn-e2e-up.$$ 2>&1; then
+    log "backend up failed for ${base} — retrying once"
+    tail -20 /tmp/wardyn-e2e-up.$$ >&2 || true
+    ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
+    if ! ./scripts/e2e-backend.sh up >/tmp/wardyn-e2e-up.$$ 2>&1; then
+      log "backend up failed for ${base} (twice) — this is the backend, not the spec"
+      tail -30 /tmp/wardyn-e2e-up.$$ >&2 || true
+      rm -f /tmp/wardyn-e2e-up.$$
+      fail=$((fail+1)); failed_specs+=("${base}"); continue
+    fi
+  fi
+  rm -f /tmp/wardyn-e2e-up.$$
   log "running ${base} against a fresh backend"
   if ( cd ui && pnpm exec playwright test "e2e/${base}" --workers=1 --reporter=line ); then
     pass=$((pass+1))
