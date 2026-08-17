@@ -18,7 +18,7 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import { WORKSPACE_NAME } from "./task";
-import { act, beat, caption, PACE } from "./overlay";
+import { act, beat, caption, PACE, spotlight } from "./overlay";
 import { stage } from "./stage";
 
 // A held request waits on a HUMAN, so this is minutes, not seconds. It is a
@@ -151,8 +151,17 @@ export async function decide(
   const rows = scope.getByTestId("live-approval-row");
   const row = host ? rows.filter({ hasText: host }).first() : rows.first();
   await expect(row).toBeVisible({ timeout: APPROVAL_APPEARS });
+  // Give the viewer the ROW before the verdict. The approval often appears
+  // below the terminal, and the old shape scrolled to it as a side effect of
+  // the click itself — the row flashed into frame and was decided in the same
+  // second, which on camera read as "something happened, apparently". Scroll
+  // it into view first, park the ring on it, say the line, and hold a breath;
+  // only then decide. The extra ~2s comes out of the 30s decision window,
+  // which has room for it.
+  await row.scrollIntoViewIfNeeded().catch(() => {});
+  await spotlight(page, row);
   await caption(page, text);
-  await beat(page, PACE.read);
+  await beat(page, PACE.read + 900);
   if (decisionScope === "run") {
     // The bare split-button click — today's default scope, unchanged.
     await act(page, row.getByRole("button", { name: choice }));

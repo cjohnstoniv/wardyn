@@ -403,7 +403,12 @@ export function DemoRunControls({
   if (running && run) {
     return (
       <div className="mt-4 space-y-2">
-        <AttachTerminal runId={run.id} />
+        {/* Shorter than the 70vh default ON PURPOSE: a demo's whole story is
+            the terminal AND the approvals strip under it — a command hangs, a
+            row appears, a human decides, the command resumes. At 70vh the strip
+            lives below the fold, so the decision happens off screen and the
+            resume looks like magic. 42vh keeps both halves in one 1080p frame. */}
+        <AttachTerminal runId={run.id} heightClass="h-[42vh]" />
         <LiveApprovals
           runId={run.id}
           idleHint="Off-policy egress you trigger surfaces here to approve or deny, live."
