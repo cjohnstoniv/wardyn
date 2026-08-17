@@ -208,21 +208,6 @@ export function compositionSummary(ws: Workspace): string | null {
   return bits.join(" · ");
 }
 
-export type WizardStepId =
-  | "basics"
-  | "access"
-  | "egress"
-  | "confinement"
-  | "review";
-
-export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
-  { id: "basics", label: "Basics" },
-  { id: "access", label: "Access" },
-  { id: "egress", label: "Egress" },
-  { id: "confinement", label: "Confinement" },
-  { id: "review", label: "Review" },
-];
-
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
 // bug by constraining the picker to exactly these dotted ids.
 // SEAM: there is no harness/tool-catalog endpoint exposed to the UI yet (no GET
@@ -271,6 +256,12 @@ export const PRESET_DOMAINS: string[] = [
 
 export interface WizardState {
   // --- Step 1: basics ---
+  // The run's NAME. Required by the New Run screen (the server is deliberately
+  // tolerant — see CreateRunRequest.Title): runs sharing a title are grouped on
+  // the Runs board, so this is the one field that makes a run findable later.
+  title: string;
+  // Optional free-text note: why this run exists. Shown on run detail.
+  description: string;
   // "agent" (default) vs "command" (task_mode=exec, no agent/model involved).
   runType: RunType;
   agent: WizardAgent;
@@ -283,7 +274,15 @@ export interface WizardState {
   // run.workspaces[] entry carrying its enabledOptional/readOnly options.
   workspaces: RunWorkspaceSelection[];
   mode: RunMode;
+  // The agent's PROMPT for a batch run, or the shell command for a "command"
+  // run. An INTERACTIVE run has no task at all — the server ignores it for one,
+  // so the screen hides the field and buildSpec sends "" (see interactiveStart,
+  // which is what an interactive run configures instead).
   task: string;
+  // What an INTERACTIVE run's attach shell opens with: the image's agent CLI in
+  // the prepared workspace, or a bare terminal there. Ignored for every other
+  // run mode. Defaults to "agent": you picked "Agent task" and named an agent.
+  interactiveStart: "shell" | "agent";
   // The Basics "start from" picker's current value — either a recorded profile's
   // key or a saved policy's id. When set, that source has populated steps 2-4 and
   // the wizard offers "Review Now" to fast-track straight to Review. Cleared when
@@ -357,6 +356,8 @@ export interface WizardState {
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
   return {
+    title: "",
+    description: "",
     runType: "agent",
     agent: "claude-code",
     workspaces: [],
@@ -370,6 +371,10 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     // parity. See pass3-ux-proposal.md §4.
     mode: "interactive",
     task: "",
+    // You chose "Agent task" and named an agent; attaching should hand you that
+    // agent, not a prompt you then have to type its name at. Opt out for a
+    // plain terminal in the same prepared workspace.
+    interactiveStart: "agent",
 
     githubEnabled: false,
     githubRepos: "",
@@ -435,7 +440,7 @@ export function isValidDomain(d: string): boolean {
 
 // Split a free-text repo list ("org/a, org/b") into trimmed non-empty entries.
 // EXPORTED: shared with wizard-spec.ts's buildSpec (github_token grant scope)
-// and validateStep below.
+// and buildSpec's grant emission.
 export function parseRepoList(raw: string): string[] {
   return raw
     .split(/[\s,]+/)
@@ -444,7 +449,7 @@ export function parseRepoList(raw: string): string[] {
 }
 
 // The ONE predicate for "is there a real git_pat grant" — shared by buildSpec's
-// grant emission, its requiredHosts union, and validateStep's error, so a
+// grant emission and its requiredHosts union, so a
 // half-configured PAT (host with no secret, or vice versa) can never widen
 // egress for a grant that was never minted (D5/claim4). EXPORTED: buildSpec
 // and impliedEgressHosts live in wizard-spec.ts now.
@@ -490,7 +495,19 @@ export function resolvedMountReadOnly(
   path: string = ws.source,
 ): boolean {
   const req = workspaceRequirements(ws)[`write:${path}`];
-  const grantedDefault = req?.level === "required" || (sel.enabledOptional ?? []).includes(`write:${path}`);
+  // A source the operator explicitly ticked "Allow writes to this directory"
+  // on grants write the same way a required write: row does. Without this the
+  // checkbox in AddWorkspaceDialog is a NO-OP for anything launched from the
+  // UI: it stores sources[].writable=true, nothing ever creates a write: row,
+  // so every mount resolved here came out read-only and an agent's edits could
+  // not reach the host. internal/api/workspace_run.go already does exactly
+  // this (`ro := !src.Writable`) — this is the client mirror catching up, and
+  // it widens nothing that a human did not tick.
+  const src = resolvableSources(ws).find((s) => (s.path ?? s.source) === path);
+  const grantedDefault =
+    req?.level === "required" ||
+    (sel.enabledOptional ?? []).includes(`write:${path}`) ||
+    src?.writable === true;
   if (!grantedDefault) return true;
   return sel.readOnly === true;
 }
@@ -651,8 +668,8 @@ export function agentLabel(agent: WizardAgent): string {
   return agent === "codex-cli" ? "Codex CLI" : "Claude Code";
 }
 
-// EXPORTED: wizard-spec.ts's buildSpec (and wizardStateFromProposal /
-// validateStep below) share this ONE dedupe.
+// EXPORTED: wizard-spec.ts's buildSpec and wizardStateFromProposal share this
+// ONE dedupe.
 export function dedupe(xs: string[]): string[] {
   return Array.from(new Set(xs.map((x) => x.trim()).filter(Boolean)));
 }
@@ -897,43 +914,12 @@ export function applyProfileSpecToState(
   };
 }
 
-export function validateStep(id: WizardStepId, state: WizardState): string | null {
-  switch (id) {
-    case "basics": {
-      // A workspace is OPTIONAL: zero mounts => an ephemeral scratch run (buildSpec
-      // leaves repo "" and emits no workspace_mounts/repos). Only a batch run needs
-      // a task; an interactive run comes up idle for the operator to drive.
-      if (state.mode === "batch" && !state.task.trim())
-        return "An autonomous run needs a task to perform.";
-      return null;
-    }
-    case "access": {
-      if (state.githubEnabled && !parseRepoList(state.githubRepos).length)
-        return "Add at least one repo for the GitHub token, or disable it.";
-      if (state.githubEnabled && state.githubTtlMinutes <= 0)
-        return "GitHub token TTL must be a positive number of minutes.";
-      if (state.gitPatEnabled && !gitPatConfigured(state))
-        return "Git PAT needs both a host and a stored secret.";
-      return null;
-    }
-    case "egress": {
-      // Allow-all egress is deny-list only — no allowed domain is required.
-      if (state.allowAllEgress) return null;
-      if (!dedupe(state.allowedDomains).length)
-        return "Allow at least one egress domain.";
-      return null;
-    }
-    case "confinement": {
-      if (state.lifecycle === "auto" && state.autoStopMinutes <= 0)
-        return "Auto-stop window must be a positive number of minutes.";
-      return null;
-    }
-    case "review": {
-      if (state.saveAsProfile && !state.profileName.trim())
-        return "Name the profile, or turn off save-as-profile.";
-      return null;
-    }
-    default:
-      return null;
-  }
-}
+// RETIRED: validateStep(WizardStepId, WizardState) + WIZARD_STEPS/WizardStepId
+// were the five-step wizard's per-step gate. That wizard was replaced by the
+// single-page new-run-screen.tsx, which never called them — so they had no
+// non-test caller at all, and they had started to describe a form that no
+// longer exists (no title, and a task field on interactive runs). Two answers
+// to "is this run valid?", one of them wrong and unreachable, is how the wrong
+// one gets wired up later. The live answer is new-run-screen.tsx's `problem`
+// memo; the git_pat rule that lived here is enforced where it matters, by
+// gitPatConfigured() inside buildSpec (wizard-spec.ts).

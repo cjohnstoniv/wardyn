@@ -101,18 +101,31 @@ export function buildSpec(
   run: CreateRunInputWithComposition;
   inline_policy: RunPolicySpec;
 } {
-  const interactive = state.mode === "interactive";
+  // A SHELL COMMAND is unattended by definition, so it forces batch here rather
+  // than trusting state.mode. This is not cosmetic: the server ignores task for
+  // an interactive run, so an "interactive shell command" used to launch a
+  // sandbox that never ran the command the operator typed — silently. Deriving
+  // it at the composer means no stale state.mode can resurrect that.
+  const interactive = state.runType === "agent" && state.mode === "interactive";
 
   // --- run scalars ---
   const run: CreateRunInputWithComposition = {
     agent: state.agent as Agent,
     repo: "",
-    // An interactive run comes up idle (the backend ignores task for it), but
-    // sending the trimmed task is harmless and preserves it for display.
-    task: state.task.trim(),
+    // An interactive run has NO task field on the screen and the backend ignores
+    // task for one anyway. Send "" rather than whatever was typed before a mode
+    // toggle: run.task is the run's headline everywhere, and a headline claiming
+    // work the run never did is worse than an empty one.
+    task: interactive ? "" : state.task.trim(),
     confinement_class: state.confinementClass,
     interactive,
   };
+  // The run's name (its grouping key on the board) and optional note.
+  if (state.title.trim()) run.title = state.title.trim();
+  if (state.description.trim()) run.description = state.description.trim();
+  // Interactive only, and only the non-default: "shell" IS the long-standing
+  // behavior, so it never needs to go on the wire.
+  if (interactive && state.interactiveStart === "agent") run.interactive_start = "agent";
   // BYOI: a user-supplied base image the backend wraps with the runner tools.
   if (state.image.trim()) {
     run.image = state.image.trim();

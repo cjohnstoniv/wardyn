@@ -4,17 +4,22 @@
  */
 
 // UNIFIED RUNS — one screen, two densities:
-//   - Board: the live run card board (auto-refreshed every ~3s), grouped
-//     Needs-attention / Active / Done-by-outcome.
-//   - Table: the same runs in a dense, horizontally-scrollable table.
+//   - Board: the live run card board (auto-refreshed every ~3s), grouped by the
+//     run's TITLE — runs that share one are the same piece of work.
+//   - Table: the same runs and the same groups, dense and horizontally
+//     scrollable, with a header row per group.
+// This used to group by state (Needs-attention / Active / Done-by-outcome).
+// Titles replaced that as the grouping axis; the triage it provided survives in
+// the state facet, in the attention-first ordering, and in each group header's
+// per-state counts. See titleGroups.
 // Every card / row navigates to the addressable /runs/:id detail page.
 // "New run" lives in the app shell top bar.
 import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Archive, BellRing, Check, Eye, FilterX, GitBranch, LayoutGrid, MoreHorizontal, RotateCw, Rows3, Search, ShieldX, Skull, Square, TerminalSquare } from "lucide-react";
+import { BellRing, Eye, FilterX, GitBranch, LayoutGrid, MoreHorizontal, RotateCw, Rows3, Search, Skull, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, RunState, SetupStatus } from "../../lib/types";
-import { isTerminalRunState } from "../../lib/types";
+import { isTerminalRunState, runHeadline } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
 import { setup as setupApi } from "../../lib/api/setup";
 import { LIST_LIMIT } from "../../lib/api/core";
@@ -54,17 +59,43 @@ const SETUP_POLL_MS = 5000;
 // into the amber "Needs your attention" section (so they never render twice).
 const ATTENTION_STATES = new Set<string>(["FAILED", "WAITING_FOR_CONFIRMATION"]);
 
-// Done section, grouped by terminal outcome. FAILED is intentionally absent — a
-// failed run is surfaced under "Needs your attention" instead (sidebar mirror).
-const DONE_GROUPS: { key: string; label: string; Icon: React.ElementType; tint: string }[] = [
-  { key: "COMPLETED", label: "Completed", Icon: Check, tint: "text-success" },
-  { key: "STOPPED", label: "Stopped", Icon: Square, tint: "text-muted-foreground" },
-  { key: "KILLED", label: "Killed", Icon: ShieldX, tint: "text-danger" },
-  { key: "ARCHIVED", label: "Archived", Icon: Archive, tint: "text-muted-foreground" },
-];
-
-// Per-outcome-group collapsed preview before "Show all N".
+// Per-group collapsed preview before "Show all N".
 const GROUP_PREVIEW = 3;
+
+// ── title grouping ──────────────────────────────────────────────────────────
+// The board groups by the run's TITLE: runs that share one are the same piece
+// of work, and seeing the twelve nightly audits as one thing is the point of
+// naming them. It replaced grouping by state — the triage that gave up is
+// preserved two ways: the state facet still narrows BEFORE grouping, and the
+// input list arrives pre-ordered attention → active → done, so a group holding
+// a failed run floats to the top for free and its header says so.
+//
+// A title held by only ONE run is not a group. Those, and every untitled run
+// (legacy rows, CLI runs, the server's own system runs), fall into a single
+// trailing grid — a header per singleton is noise, not structure.
+//
+// ponytail: computed over the LOADED page, not the server. A title split across
+// a pagination boundary groups per page; add a server-side group-by if run
+// counts ever outgrow LIST_LIMIT.
+function titleGroups(runs: AgentRun[]): { groups: { title: string; runs: AgentRun[] }[]; loose: AgentRun[] } {
+  const by = new Map<string, AgentRun[]>();
+  for (const r of runs) {
+    const t = (r.title ?? "").trim();
+    if (t) by.set(t, [...(by.get(t) ?? []), r]);
+  }
+  const groups = [...by].filter(([, rs]) => rs.length > 1).map(([title, rs]) => ({ title, runs: rs }));
+  const grouped = new Set(groups.flatMap((g) => g.runs.map((r) => r.id)));
+  return { groups, loose: runs.filter((r) => !grouped.has(r.id)) };
+}
+
+// What one card/row calls itself. INSIDE a group the title is already on the
+// header, so the row's job is to distinguish this run from its siblings — the
+// task does that; the title would print three identical cards. Outside a group
+// the run has to name itself, which is runHeadline's whole purpose.
+function rowHeadline(run: AgentRun, grouped: boolean): string {
+  if (!grouped) return runHeadline(run);
+  return run.task || (run.interactive ? "Interactive session" : "—");
+}
 // Table display cap (client-side; listRuns returns the full set) + load-more step.
 const TABLE_STEP = 25;
 
@@ -180,6 +211,7 @@ export function RunsScreen() {
         r.id.toLowerCase().includes(q) ||
         r.agent.toLowerCase().includes(q) ||
         r.repo.toLowerCase().includes(q) ||
+        (r.title ?? "").toLowerCase().includes(q) ||
         (r.workspace_path ?? "").toLowerCase().includes(q) ||
         r.task.toLowerCase().includes(q) ||
         r.created_by.toLowerCase().includes(q)
@@ -206,12 +238,14 @@ export function RunsScreen() {
   const facetAttention = stateFacet === "all" || stateFacet === "attention" ? attention : [];
   const facetActive = stateFacet === "all" || stateFacet === "active" ? active : [];
   const facetDone = stateFacet === "all" || stateFacet === "done" ? done : [];
-  const visibleCount = facetAttention.length + facetActive.length + facetDone.length;
-  const noMatches = status === "ready" && !trueEmpty && visibleCount === 0;
-
-  const showAttention = facetAttention.length > 0;
-  const showActive = facetActive.length > 0;
-  const showDone = facetDone.length > 0;
+  // Concatenated in triage order — attention, then active, then done
+  // newest-first. Both densities group THIS list, so group ordering and
+  // within-group ordering both fall out of it with no comparator: a group
+  // holding a failed run necessarily contains the earliest element and sorts
+  // first. Keep the concatenation order if you touch this.
+  const visible = [...facetAttention, ...facetActive, ...facetDone];
+  const noMatches = status === "ready" && !trueEmpty && visible.length === 0;
+  const { groups: titled, loose } = titleGroups(visible);
 
   const openRun = (id: string) => navigate(`/runs/${encodeURIComponent(id)}`);
 
@@ -357,48 +391,43 @@ export function RunsScreen() {
         </div>
       ) : mode === "board" ? (
         <div className="space-y-7">
-          {showAttention && (
-            <section aria-label="Needs your attention">
-              <SectionHeading
-                Icon={BellRing}
-                iconTint="text-warning"
-                title="Needs your attention"
-                titleTint="text-warning"
-                count={attention.length}
-                countTint="warning"
-              />
-              <CardGrid>
-                {attention.map((run) => (
-                  <RunCard key={run.id} run={run} attention onOpen={openRun} onKill={kill} />
-                ))}
-              </CardGrid>
-            </section>
-          )}
-
-          {showActive && (
-            <section aria-label="Active">
-              <SectionHeading title="Active" count={active.length} />
-              <CardGrid>
-                {active.map((run) => (
-                  <RunCard key={run.id} run={run} onOpen={openRun} onKill={kill} />
-                ))}
-              </CardGrid>
-            </section>
-          )}
-
-          {showDone && (
-            <DoneSection
-              done={done}
-              expanded={expanded}
-              setExpanded={setExpanded}
+          {titled.map((g) => (
+            <TitleGroup
+              key={g.title}
+              title={g.title}
+              runs={g.runs}
+              open={!!expanded[g.title]}
+              onToggle={() => setExpanded((s) => ({ ...s, [g.title]: !s[g.title] }))}
               onOpen={openRun}
               onKill={kill}
             />
+          ))}
+
+          {loose.length > 0 && (
+            <section aria-label="Ungrouped">
+              {/* Only labelled when there is something to distinguish it FROM —
+                  on a board with no shared titles, "Ungrouped" describes every
+                  run on the page and says nothing. */}
+              {titled.length > 0 && <SectionHeading title="Ungrouped" count={loose.length} />}
+              <CardGrid>
+                {loose.map((run) => (
+                  <RunCard
+                    key={run.id}
+                    run={run}
+                    attention={ATTENTION_STATES.has(run.state as string)}
+                    done={isTerminalRunState(run.state)}
+                    onOpen={openRun}
+                    onKill={kill}
+                  />
+                ))}
+              </CardGrid>
+            </section>
           )}
         </div>
       ) : (
         <RunsTable
-          rows={[...facetAttention, ...facetActive, ...facetDone]}
+          groups={titled}
+          loose={loose}
           cap={tableCap}
           onLoadMore={() => setTableCap((c) => c + TABLE_STEP)}
           onOpen={openRun}
@@ -484,82 +513,80 @@ function CardGrid({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DoneSection({
-  done,
-  expanded,
-  setExpanded,
+// One title's runs: the board's grouping unit now that runs are named.
+//
+// The header carries per-state counts, which is what makes replacing the old
+// Needs-attention / Active / Done sections honest — the triage those sections
+// provided is still legible here, per group, instead of splitting one piece of
+// work across three places on the page.
+function TitleGroup({
+  title,
+  runs,
+  open,
+  onToggle,
   onOpen,
   onKill,
 }: {
-  done: AgentRun[];
-  expanded: Record<string, boolean>;
-  setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  title: string;
+  runs: AgentRun[];
+  open: boolean;
+  onToggle: () => void;
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
-  const groups = DONE_GROUPS.map((g) => ({
-    ...g,
-    runs: done.filter((r) => (r.state as string) === g.key),
-  })).filter((g) => g.runs.length > 0);
-
-  const shownCount = groups.reduce(
-    (n, g) => n + (expanded[g.key] ? g.runs.length : Math.min(GROUP_PREVIEW, g.runs.length)),
-    0,
-  );
-  const hasHidden = done.length > shownCount;
-  // fix: this used to be `shownCount >= done.length` — a count coincidence,
-  // true even with nothing ever expanded whenever every group happens to fit
-  // within GROUP_PREVIEW (small Done sections). That rendered a "Show fewer"
-  // button wired to a toggleAll() that was a no-op (nothing was expanded to
-  // collapse). Derive it from the real per-group expanded state instead.
-  const anyExpanded = Object.values(expanded).some(Boolean);
-
-  const toggleAll = () =>
-    setExpanded(anyExpanded ? {} : Object.fromEntries(groups.map((g) => [g.key, true])));
+  // Distinct states in the order they appear — which is triage order, since
+  // `visible` arrives attention → active → done (see its comment).
+  const states: string[] = [];
+  for (const r of runs) if (!states.includes(r.state as string)) states.push(r.state as string);
+  const needsEyes = runs.some((r) => ATTENTION_STATES.has(r.state as string));
+  const shown = open ? runs : runs.slice(0, GROUP_PREVIEW);
 
   return (
-    <section aria-label="Done">
-      <SectionHeading title="Done" count={done.length} hint="grouped by outcome" />
-      <div className="space-y-5">
-        {groups.map((g) => {
-          const isOpen = !!expanded[g.key];
-          const shown = isOpen ? g.runs : g.runs.slice(0, GROUP_PREVIEW);
-          return (
-            <div key={g.key}>
-              <div className="mb-2.5 flex items-center gap-2">
-                <g.Icon className={cn("size-3.5", g.tint)} />
-                <span className="text-[0.7813rem] font-semibold text-foreground">{g.label}</span>
-                <span className="text-xs text-muted-foreground">{g.runs.length}</span>
-                {g.runs.length > GROUP_PREVIEW && (
-                  <button
-                    onClick={() =>
-                      setExpanded((s) => ({ ...s, [g.key]: !s[g.key] }))
-                    }
-                    className="ml-1 text-xs font-medium text-primary hover:underline"
-                  >
-                    {isOpen ? "Show fewer" : `Show all ${g.runs.length}`}
-                  </button>
-                )}
-              </div>
-              <CardGrid>
-                {shown.map((run) => (
-                  <RunCard key={run.id} run={run} done onOpen={onOpen} onKill={onKill} />
-                ))}
-              </CardGrid>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-5 flex items-center justify-center gap-3">
-        <span className="text-xs text-muted-foreground">
-          Showing {shownCount} of {done.length} done runs
+    <section aria-label={title}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {needsEyes && <BellRing className="size-3.5 text-warning" aria-hidden="true" />}
+        <h2
+          className={cn(
+            "max-w-[420px] truncate text-[0.8125rem] font-semibold",
+            needsEyes ? "text-warning" : "text-foreground",
+          )}
+          title={title}
+        >
+          {title}
+        </h2>
+        <span className="rounded-full bg-muted px-1.5 text-[0.6875rem] font-semibold text-muted-foreground">
+          {runs.length}
         </span>
-        {(hasHidden || anyExpanded) && done.length > GROUP_PREVIEW && (
-          <Button variant="outline" size="sm" onClick={toggleAll}>
-            {anyExpanded ? "Show fewer" : "Show all"}
-          </Button>
+        <span className="flex flex-wrap items-center gap-1.5">
+          {states.map((st) => {
+            const n = runs.filter((r) => (r.state as string) === st).length;
+            return (
+              <span key={st} className="flex items-center gap-1">
+                <RunStateBadge state={st} />
+                {n > 1 && <span className="text-[0.6875rem] text-muted-foreground">×{n}</span>}
+              </span>
+            );
+          })}
+        </span>
+        {runs.length > GROUP_PREVIEW && (
+          <button onClick={onToggle} className="ml-1 text-xs font-medium text-primary hover:underline">
+            {open ? "Show fewer" : `Show all ${runs.length}`}
+          </button>
         )}
       </div>
+      <CardGrid>
+        {shown.map((run) => (
+          <RunCard
+            key={run.id}
+            run={run}
+            grouped
+            attention={ATTENTION_STATES.has(run.state as string)}
+            done={isTerminalRunState(run.state)}
+            onOpen={onOpen}
+            onKill={onKill}
+          />
+        ))}
+      </CardGrid>
     </section>
   );
 }
@@ -568,12 +595,16 @@ function RunCard({
   run,
   attention,
   done,
+  grouped,
   onOpen,
   onKill,
 }: {
   run: AgentRun;
   attention?: boolean;
   done?: boolean;
+  /** This card sits under a shared-title header, so it names its own work
+   *  rather than repeating the title — see rowHeadline. */
+  grouped?: boolean;
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
@@ -603,7 +634,7 @@ function RunCard({
       <div className="flex items-start gap-2.5">
         <AgentBadge agent={run.agent} withLabel={false} />
         <p className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
-          {run.task || "—"}
+          {rowHeadline(run, !!grouped)}
         </p>
         <RunActions run={run} terminal={terminal} attachable={attachable} onOpen={onOpen} onKill={onKill} />
       </div>
@@ -663,19 +694,30 @@ function RunCard({
 }
 
 function RunsTable({
-  rows,
+  groups,
+  loose,
   cap,
   onLoadMore,
   onOpen,
   onKill,
 }: {
-  rows: AgentRun[];
+  groups: { title: string; runs: AgentRun[] }[];
+  loose: AgentRun[];
   cap: number;
   onLoadMore: () => void;
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
-  const shown = rows.slice(0, cap);
+  // The same grouping the board shows, flattened into rows with a header row
+  // per group so members are adjacent AND labelled. Capping the FLATTENED list
+  // (rather than per group) keeps "N of M" meaning what it always did.
+  const flat: ({ header: string } | AgentRun)[] = [
+    ...groups.flatMap((g) => [{ header: g.title }, ...g.runs]),
+    ...loose,
+  ];
+  const rows = [...groups.flatMap((g) => g.runs), ...loose];
+  const groupedIds = new Set(groups.flatMap((g) => g.runs.map((r) => r.id)));
+  const shown = flat.slice(0, cap + groups.length);
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <Table className="min-w-[960px]">
@@ -691,7 +733,19 @@ function RunsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {shown.map((run) => {
+          {shown.map((row) => {
+            if ("header" in row) {
+              return (
+                <TableRow key={`h:${row.header}`} className="hover:bg-transparent">
+                  <TableCell colSpan={7} className="bg-surface-2/40 py-1.5">
+                    <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {row.header}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              );
+            }
+            const run = row;
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
             return (
@@ -707,7 +761,7 @@ function RunsTable({
                   <div className="flex min-w-0 items-center gap-2.5">
                     <AgentBadge agent={run.agent} withLabel={false} />
                     <span className="block max-w-[320px] truncate text-sm font-medium text-foreground">
-                      {run.task || "—"}
+                      {rowHeadline(run, groupedIds.has(run.id))}
                     </span>
                   </div>
                 </TableCell>

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,6 +34,14 @@ var reservedRunTasks = map[string]bool{
 	"workspace record": true,
 	"workspace verify": true,
 }
+
+// Length ceilings for the run's free-text display fields. Both are trust
+// boundaries: the values land in a TEXT column and are rendered on every run
+// row in the console. Generous enough that no real name or note is refused.
+const (
+	maxRunTitleLen       = 200
+	maxRunDescriptionLen = 2000
+)
 
 // decodeAndValidateCreateRun decodes the POST /api/v1/runs body and applies the
 // fail-closed request-shape checks: agent required, BYOI/devcontainer
@@ -120,6 +127,28 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", "", false
 	}
 
+	// interactive_start is task_mode's interactive counterpart and gets the same
+	// closed-enum treatment. NOTE there is deliberately no title requirement
+	// here: the console requires one, but the site-config probe, harness login
+	// and workspace record/verify all create runs with no human to name them,
+	// so a 400 would break every one of them. Title is a display field; the
+	// console is where it is required.
+	if req.InteractiveStart != "" && req.InteractiveStart != "shell" && req.InteractiveStart != "agent" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown interactive_start %q (want shell or agent)", req.InteractiveStart))
+		return req, "", "", false
+	}
+
+	// Title/description are free text bound for a TEXT column and every run row
+	// in the console — cap them at the door rather than discovering a 40KB
+	// "title" in the list view. Generous enough that no real name is refused.
+	if len(req.Title) > maxRunTitleLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("title is too long (%d chars, max %d)", len(req.Title), maxRunTitleLen))
+		return req, "", "", false
+	}
+	if len(req.Description) > maxRunDescriptionLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("description is too long (%d chars, max %d)", len(req.Description), maxRunDescriptionLen))
+		return req, "", "", false
+	}
 
 	// A run-explicit integration_id must name a real, run-selectable
 	// (AI-provider) integration — checked eagerly, before any run is created,

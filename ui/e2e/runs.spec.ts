@@ -23,9 +23,12 @@ import type { Page, Locator } from "@playwright/test";
 //   fixture 7 -> KILLED                   (done)
 //   fixture 8 -> ARCHIVED                 (done)
 //
-// The board groups runs into "Needs your attention" (FAILED +
-// WAITING_FOR_CONFIRMATION), "Active" (non-terminal, non-attention), and "Done"
-// (terminal, grouped by outcome). State is asserted via the RunStateBadge TEXT
+// The board groups runs by TITLE. The seeder gives fixtures 0 and 1 the SAME
+// title ("e2e group") so there is a real group to render — a title held by one
+// run is not a group — and leaves the rest untitled, which is the legacy / CLI /
+// system-run shape that must keep rendering by task. Triage survives the change
+// as the state facet, attention-first ordering, and per-state counts in each
+// group header. State is asserted via the RunStateBadge TEXT
 // (primitives.tsx), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
 //   WAITING_FOR_CONFIRMATION "Awaiting confirmation", COMPLETED "Completed",
@@ -82,15 +85,19 @@ function runRow(page: Page, task: string): Locator {
 }
 
 test.describe("Runs board (default view)", () => {
-  test("boots into the board with attention / active / done sections", async ({ page }) => {
+  test("boots into the board with runs grouped by title", async ({ page }) => {
     await openRuns(page);
 
-    // The three board sections render (SectionHeading <h2>s).
-    await expect(page.getByRole("heading", { name: "Needs your attention" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Active" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Done" })).toBeVisible();
+    // Fixtures 0 and 1 share a title, so they render under one group header.
+    // The rest are untitled and fall into the trailing ungrouped grid.
+    const group = page.getByRole("region", { name: "e2e group" });
+    await expect(group).toBeVisible();
+    await expect(group.getByText("e2e fixture 0")).toBeVisible();
+    await expect(group.getByText("e2e fixture 1")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Ungrouped" })).toBeVisible();
 
-    // Every seeded run's task is on the board (all 9 render, grouped).
+    // Every seeded run is still on the board — an untitled run names itself by
+    // its task exactly as it did before titles existed.
     for (const f of FIXTURES) {
       await expect(page.getByText(f.task)).toBeVisible();
     }

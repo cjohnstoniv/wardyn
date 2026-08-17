@@ -128,6 +128,15 @@ export const runs = {
     // BYOI + governed-command pass-through — previously dropped on the floor here.
     if (input.image) body.image = input.image;
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+    // The run's name/note and the interactive start choice — same lesson as the
+    // two above: this whitelist is hand-built, so an unlisted field is discarded
+    // between the form and the wire with no error anywhere. The title the
+    // operator typed would simply never exist.
+    if ("title" in input && input.title) body.title = input.title;
+    if ("description" in input && input.description) body.description = input.description;
+    if ("interactive_start" in input && input.interactive_start) {
+      body.interactive_start = input.interactive_start;
+    }
     // Composition-model pass-through. This whitelist has dropped a wizard field
     // on the floor once before (image/task_mode, above) — a selection the
     // operator made, silently discarded between the form and the wire. These

@@ -23,6 +23,30 @@ import { WidgetCard } from "../../../wardyn/primitives";
 export function IdentityWidget({ run }: { run: AgentRun }) {
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
+      {/* The command bar's h1 is the run's TITLE now, and it truncates to one
+          line in a 52px non-wrapping row — so the task (the actual prompt the
+          agent was given) and the description have no other home on the page.
+          Prose, above the dl, and only when there is something to say. */}
+      {(run.task || run.description) && (
+        <div className="mb-3 space-y-2 border-b border-border pb-3">
+          {run.task && (
+            <div>
+              <p className="mb-0.5 text-[0.75rem] text-muted-foreground">Task</p>
+              <p className="whitespace-pre-wrap text-[0.75rem] leading-snug text-foreground">
+                {run.task}
+              </p>
+            </div>
+          )}
+          {run.description && (
+            <div>
+              <p className="mb-0.5 text-[0.75rem] text-muted-foreground">Why</p>
+              <p className="whitespace-pre-wrap text-[0.75rem] leading-snug text-muted-foreground">
+                {run.description}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[0.75rem]">
         <dt className="text-muted-foreground">Run</dt>
         <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.id}>

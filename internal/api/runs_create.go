@@ -670,8 +670,11 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // addition under its own event so provenance stays per-source:
 //
 //   - Onboarded-workspace profiles: union each referenced workspace's detected
-//     package registries (the operator onboarded + reviewed these workspaces).
-//     The deny-list + confinement floor are unaffected.
+//     package registries (the operator onboarded + reviewed these workspaces)
+//     AND each workspace's permanent DeniedEgress into spec.DeniedDomains
+//     (Phase 4, unionWorkspaceEgress) — the confinement floor alone is
+//     unaffected now; the deny-list is deliberately not, or a workspace's
+//     `deny · always` decision would never reach a real run.
 //   - Site-config SCM hosts: the operator's declared enterprise SCM hosts
 //     (GHES / ADO Server — see unionSiteConfigScmHosts), which unlike
 //     github.com/dev.azure.com have no built-in egress bundle.

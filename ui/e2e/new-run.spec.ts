@@ -33,16 +33,29 @@ test.describe("New run — one page", () => {
     await expect(page.getByRole("heading", { name: "What to run" })).toBeVisible();
   });
 
+  // The form's fields follow the run mode. Interactive is the default, and an
+  // interactive run has NO task — the server ignores one, so the screen asks
+  // what to start with instead of for a prompt nothing will read.
+  test("the fields follow the run mode", async ({ page }) => {
+    await openNewRun(page);
+    await expect(page.getByRole("radiogroup", { name: "Start with" })).toBeVisible();
+    await expect(page.getByLabel("Task")).toHaveCount(0);
+
+    await page.getByRole("radio", { name: /^Batch/ }).click();
+    await expect(page.getByLabel("Task")).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Start with" })).toHaveCount(0);
+  });
+
   // The choice that proves a run needn't involve AI. It re-labels the field and
-  // swaps the help text, because a shell command is run verbatim.
+  // swaps the help text, because a shell command is run verbatim — and it is
+  // unattended by definition, so the run mode disappears with the agent picker.
   test("Shell command drops the agent picker and relabels the field", async ({ page }) => {
     await openNewRun(page);
-    await expect(page.getByLabel("Task")).toBeVisible();
-
     await page.getByRole("radio", { name: "Shell command" }).click();
     await expect(page.getByLabel("Command")).toBeVisible();
     await expect(page.getByText(/Run verbatim in the sandbox/)).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Agent" })).toHaveCount(0);
+    await expect(page.getByRole("radiogroup", { name: "Run mode" })).toHaveCount(0);
   });
 
   // The rail is the whole point: it answers "what can this run do" while you
@@ -112,8 +125,21 @@ test.describe("New run — one page", () => {
   // or fail on who ran it. It is pinned in new-run-screen.test.tsx instead,
   // where the SetupStatus is controlled.
 
+  // Every run is named: the title is the grouping key on the Runs board, so
+  // Launch stays disabled — and says why — until there is one.
+  test("Launch waits for a title, and says what it is waiting for", async ({ page }) => {
+    await openNewRun(page);
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeDisabled();
+    await expect(page.getByText("Give this run a title.")).toBeVisible();
+
+    await page.getByLabel("Title").fill("e2e smoke");
+    await expect(launch).toBeEnabled();
+  });
+
   test("launching creates a run and lands on its detail page", async ({ page }) => {
     await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e smoke");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
   });

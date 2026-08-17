@@ -12,6 +12,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, Clock, Link as LinkIcon, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
+import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RUN_COCKPIT } from "../wardyn/copy";
@@ -101,9 +102,9 @@ export function SummaryHeader({
           what it's doing — and the page's only h1). */}
       <h1
         className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
-        title={run.task}
+        title={run.task || undefined}
       >
-        {run.task || "—"}
+        {runHeadline(run)}
       </h1>
 
       {/* repo / workspace path — required to stay visible (not "genuinely

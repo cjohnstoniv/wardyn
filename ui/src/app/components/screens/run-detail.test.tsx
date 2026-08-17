@@ -11,7 +11,8 @@
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 const getRunMock = vi.fn();
@@ -173,5 +174,56 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     // merely queued approval, and isHeld is shared with the strip below so the
     // two can never disagree.
     expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
+  });
+});
+
+// hasWorkspace must cover workspace_id, not just workspace_ids: a record/
+// verify step run carries the former only (its workspace_ids is always
+// empty — see runHasWorkspace's doc in lib/types/runs.ts), and the server's
+// rule-5 tie-break accepts `always` there. Reading workspace_ids alone showed
+// Always disabled with the false reason "this run isn't attached to one".
+describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspace_ids", () => {
+  it("a record/verify-shaped run (workspace_id set, workspace_ids empty) offers Always", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "egress_domain",
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+        requested_scope: { host: "api.github.com" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING", workspace_ids: [], workspace_id: "ws-1" });
+
+    const strip = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(strip).getAllByRole("button", { name: /more options/i })[0]);
+
+    const always = await screen.findByRole("button", { name: /^Always/ });
+    expect(always).not.toBeDisabled();
+    expect(screen.queryByText(/isn't attached to one/i)).not.toBeInTheDocument();
+  });
+
+  it("an ordinary run with neither field set still shows Always disabled, with why", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "egress_domain",
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+        requested_scope: { host: "api.github.com" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING" });
+
+    const strip = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(strip).getAllByRole("button", { name: /more options/i })[0]);
+
+    const always = await screen.findByRole("button", { name: /^Always/ });
+    expect(always).toBeDisabled();
+    expect(screen.getByText(/isn't attached to one/i)).toBeInTheDocument();
   });
 });

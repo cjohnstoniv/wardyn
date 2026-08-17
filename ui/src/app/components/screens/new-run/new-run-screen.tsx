@@ -30,6 +30,7 @@ import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Field } from "../../wardyn/form-primitives";
@@ -169,6 +170,24 @@ export function NewRunScreen() {
   // fails its first model call, so the rail must say so BEFORE launch rather
   // than promising credentials that cannot be minted.
   const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
+  // Existing run titles, offered as a native <datalist> under the Title input.
+  // Grouping is by EXACT string, so without this the operator has to retype a
+  // title character-perfect for a run to ever join its family — the feature
+  // would look broken while working precisely as designed.
+  const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
+
+  React.useEffect(() => {
+    runsApi
+      .listRuns()
+      .then((rs) =>
+        setKnownTitles(
+          [...new Set(rs.map((r) => (r.title ?? "").trim()).filter(Boolean))].sort(),
+        ),
+      )
+      .catch(() => {
+        /* the datalist simply offers nothing — never blocks a launch */
+      });
+  }, []);
 
   React.useEffect(() => {
     setupApi
@@ -186,6 +205,18 @@ export function NewRunScreen() {
       .catch(() => {
         /* the Saved-policy lane simply offers nothing — never blocks a launch */
       });
+  }, []);
+
+  // useWorkspaceList does NOT fetch on mount — every caller loads it itself
+  // (setup-screen.tsx does the same in its own mount effect). Without this the
+  // Workspace select only ever offers "Ephemeral scratch", so a workspace
+  // onboarded anywhere else — Getting started, the Workspaces screen — could
+  // not be attached to a run at all; the only way into the list was to add one
+  // from this page in this session.
+  React.useEffect(() => {
+    reloadWorkspaces();
+    // run once on mount — reload is stable (useCallback([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
@@ -215,6 +246,24 @@ export function NewRunScreen() {
 
   const isAgent = state.runType === "agent";
   const isRecord = confinement === "record";
+  // A shell command is unattended by definition — buildSpec forces batch for
+  // one, so the Run mode segment is hidden rather than offering a combination
+  // that would silently drop the command.
+  const isInteractive = isAgent && state.mode === "interactive";
+  const agentLabel = state.agent === "codex-cli" ? "Codex CLI" : "Claude Code";
+
+  // The screen's ONE validation rule. Deliberately a local derivation rather
+  // than a shared validator: it answers "can this button be pressed", which is
+  // this screen's question, and a second general-purpose answer living
+  // elsewhere is what drifts out of sync with the form it describes.
+  const needsTask = !isAgent || state.mode === "batch";
+  const problem = !state.title.trim()
+    ? "Give this run a title."
+    : needsTask && !state.task.trim()
+      ? isAgent
+        ? "A batch run needs a task to perform."
+        : "Enter a command to run."
+      : null;
 
   // Which preset the current host list corresponds to — derived, never stored,
   // so an edit in the dialog is reflected here instead of silently disagreeing.
@@ -259,15 +308,9 @@ export function NewRunScreen() {
           ? { ...run, policy_id: state.selectedPolicyId, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) }
           : { ...run, inline_policy },
       );
-      if (state.saveAsProfile && state.profileName.trim()) {
-        // AFTER the launch, best-effort: the run carries inline_policy and is
-        // self-contained, so a name collision here must not undo a live run.
-        try {
-          await policiesApi.createPolicy(state.profileName.trim(), inline_policy);
-        } catch {
-          /* best-effort — the run already launched */
-        }
-      }
+      // (A best-effort "save this as a policy" write used to live here, gated on
+      // state.saveAsProfile — a flag no control on this screen has ever set. It
+      // was unreachable from the moment the five-step wizard was replaced.)
       surfaceRunWarnings(created);
       navigate(`/runs/${encodeURIComponent(created.id)}`);
     } catch (e) {
@@ -288,6 +331,50 @@ export function NewRunScreen() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         {/* ── Left: the form ─────────────────────────────────────── */}
         <div className="min-w-0 space-y-4">
+          {/* Identity first: the one thing that makes this run findable a week
+              from now, and the only field on the page that is always required. */}
+          <SectionCard title="This run">
+            <div className="space-y-4">
+              <Field
+                label="Title"
+                htmlFor="nr-title"
+                required
+                hint="Runs that share a title are grouped together on the Runs board."
+              >
+                <Input
+                  id="nr-title"
+                  required
+                  // Native datalist: existing titles are offered as you type, so
+                  // joining a family is a pick rather than an exact retype. No
+                  // combobox library, and typing something new still just works.
+                  list="nr-known-titles"
+                  placeholder="Refactor the payments module"
+                  value={state.title}
+                  onChange={(e) => patch({ title: e.target.value })}
+                />
+                <datalist id="nr-known-titles">
+                  {knownTitles.map((t) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+              </Field>
+
+              <Field
+                label="Description"
+                htmlFor="nr-description"
+                hint="Optional. Why this run exists — for whoever reads it later."
+              >
+                <Textarea
+                  id="nr-description"
+                  rows={2}
+                  placeholder="Ticket 4412 — the refund path double-charges on retry."
+                  value={state.description}
+                  onChange={(e) => patch({ description: e.target.value })}
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
           <SectionCard title="What to run">
             <div className="space-y-4">
               {/* The choice that proves a run needn't involve AI at all. */}
@@ -315,34 +402,63 @@ export function NewRunScreen() {
                 </Field>
               )}
 
-              <Field
-                label={isAgent ? "Task" : "Command"}
-                htmlFor="nr-task"
-                hint={
-                  isAgent
-                    ? "Described in plain English. The agent decides how to do it."
-                    : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
-                }
-              >
-                <Textarea
-                  id="nr-task"
-                  rows={4}
-                  className={isAgent ? undefined : "font-mono"}
-                  placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
-                  value={state.task}
-                  onChange={(e) => patch({ task: e.target.value })}
+              {/* The mode comes BEFORE the field it selects: an interactive run
+                  is configured by a startup choice, a batch run by a prompt, and
+                  a shell command by the command — never all three at once.
+                  Hidden for Shell command, which is unattended by definition. */}
+              {isAgent && (
+                <Seg
+                  label="Run mode"
+                  value={state.mode}
+                  onChange={(id) => patch({ mode: id as WizardState["mode"] })}
+                  options={[
+                    { id: "batch", label: "Batch — run it unattended" },
+                    { id: "interactive", label: "Interactive — I drive the terminal" },
+                  ]}
                 />
-              </Field>
+              )}
 
-              <Seg
-                label="Run mode"
-                value={state.mode}
-                onChange={(id) => patch({ mode: id as WizardState["mode"] })}
-                options={[
-                  { id: "autonomous", label: "Batch — run it unattended" },
-                  { id: "interactive", label: "Interactive — I drive the terminal" },
-                ]}
-              />
+              {isInteractive ? (
+                // No task: the server ignores one for an interactive run, so
+                // asking for a prompt nothing will read is a lie the old screen
+                // told. What an interactive run actually configures is what
+                // greets you when you attach.
+                <Field
+                  label="Start with"
+                  hint="The workspace is prepared before you land in it. Same barrier, same recording either way."
+                >
+                  <Seg
+                    label="Start with"
+                    value={state.interactiveStart}
+                    onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
+                    options={[
+                      { id: "agent", label: `${agentLabel} — launch it in the workspace` },
+                      { id: "shell", label: "Terminal — a shell in the workspace dir" },
+                    ]}
+                  />
+                </Field>
+              ) : (
+                <Field
+                  label={isAgent ? "Task" : "Command"}
+                  htmlFor="nr-task"
+                  required
+                  hint={
+                    isAgent
+                      ? "Described in plain English. The agent decides how to do it."
+                      : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
+                  }
+                >
+                  <Textarea
+                    id="nr-task"
+                    rows={4}
+                    required
+                    className={isAgent ? undefined : "font-mono"}
+                    placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
+                    value={state.task}
+                    onChange={(e) => patch({ task: e.target.value })}
+                  />
+                </Field>
+              )}
             </div>
           </SectionCard>
 
@@ -564,6 +680,21 @@ export function NewRunScreen() {
               </p>
             </RailSection>
 
+            {/* What actually happens when this launches. The startup choice is
+                a real fork now, and the rail is where this screen states
+                consequences rather than leaving them to be discovered. */}
+            <RailSection title="Startup">
+              <p className="text-[0.75rem] text-muted-foreground">
+                {isInteractive
+                  ? state.interactiveStart === "agent"
+                    ? `Comes up idle with the workspace ready. Attaching starts ${agentLabel} in it.`
+                    : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
+                  : isAgent
+                    ? `${agentLabel} runs the task unattended, then the run stops.`
+                    : "The command runs unattended in the sandbox, then the run stops."}
+              </p>
+            </RailSection>
+
             <RailSection title="Recording">
               <p className="text-[0.75rem] text-muted-foreground">
                 Every keystroke and every outbound connection.
@@ -578,10 +709,16 @@ export function NewRunScreen() {
             </p>
           )}
 
-          <Button className="mt-4 w-full" disabled={launching} onClick={launch}>
+          <Button className="mt-4 w-full" disabled={launching || !!problem} onClick={launch}>
             {launching && <Loader2 className="size-4 animate-spin" />}
             Launch run
           </Button>
+          {/* A disabled button that doesn't say why is a dead end. This screen
+              had NO client-side validation at all before — an empty form
+              launched, and the server's rejection arrived after the fact. */}
+          {problem && !launching && (
+            <p className="mt-2 text-center text-[0.75rem] text-muted-foreground">{problem}</p>
+          )}
         </aside>
       </div>
 

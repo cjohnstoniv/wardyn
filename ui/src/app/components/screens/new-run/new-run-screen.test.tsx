@@ -23,7 +23,10 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { createRun: vi.fn(), listRuns: () => Promise.resolve([]) } }));
-vi.mock("../../../lib/api/workspaces", () => ({ workspaces: { listWorkspaces: () => Promise.resolve([]) } }));
+const listWorkspacesMock = vi.fn();
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
+}));
 
 import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -38,7 +41,24 @@ function renderScreen() {
   );
 }
 
-beforeEach(() => getSetupStatusMock.mockReset().mockResolvedValue(baseStatus()));
+beforeEach(() => {
+  getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
+});
+
+// Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
+// itself. This screen didn't, so its only fetch was the Add-workspace dialog's
+// onCreated callback, and the Workspace select offered nothing but "Ephemeral
+// scratch". A workspace onboarded in Getting started or on the Workspaces
+// screen could not be attached to a run at all: the only way into the list was
+// to re-add it from this page, in this session. Caught by the demo recording
+// driver, which onboards a workspace in one act and attaches it in the next.
+describe("NewRunScreen — an already-onboarded workspace is attachable", () => {
+  it("loads the workspace list on mount", async () => {
+    renderScreen();
+    await waitFor(() => expect(listWorkspacesMock).toHaveBeenCalled());
+  });
+});
 
 describe("NewRunScreen — the rail tells the truth about model access", () => {
   // An agent run with no provider launches and then fails its first model call.
@@ -93,5 +113,61 @@ describe("NewRunScreen — the rail counts hosts the way the policy does", () =>
     renderScreen();
     await user.click(await screen.findByRole("radio", { name: /Common package registries/ }));
     expect(screen.getByText(/^1[0-9] hosts allowed$/)).toBeInTheDocument();
+  });
+});
+
+// The form's fields FOLLOW the run mode. This screen used to show one Task box
+// for every run, including interactive ones — where the server ignores task
+// entirely, so the operator typed a prompt nothing would ever read.
+describe("NewRunScreen — the form matches the run mode", () => {
+  it("asks an interactive run what to start with, not for a task", async () => {
+    renderScreen();
+    // Interactive is the default (initialWizardState), so this is the state the
+    // screen opens in.
+    expect(await screen.findByRole("radiogroup", { name: "Start with" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Task")).not.toBeInTheDocument();
+  });
+
+  it("asks a batch run for a task, and drops the startup choice", async () => {
+    renderScreen();
+    await user.click(await screen.findByRole("radio", { name: /^Batch/ }));
+    expect(screen.getByLabelText("Task")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Start with" })).not.toBeInTheDocument();
+  });
+
+  // A shell command is unattended by definition. Offering "Interactive" for one
+  // used to produce a run that silently never executed the command (the server
+  // drops task_mode for an interactive run).
+  it("hides the run mode for a shell command, which is always unattended", async () => {
+    renderScreen();
+    await user.click(await screen.findByRole("radio", { name: "Shell command" }));
+    expect(screen.getByLabelText("Command")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Run mode" })).not.toBeInTheDocument();
+  });
+});
+
+// Before this, the screen had NO client-side validation at all: an empty form
+// launched, and the server's answer arrived after the fact.
+describe("NewRunScreen — Launch says what it is waiting for", () => {
+  it("is disabled without a title, and says so", async () => {
+    renderScreen();
+    const launch = await screen.findByRole("button", { name: /Launch run/ });
+    expect(launch).toBeDisabled();
+    expect(screen.getByText("Give this run a title.")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    expect(launch).toBeEnabled();
+  });
+
+  it("still waits for the task on a batch run", async () => {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("radio", { name: /^Batch/ }));
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    expect(launch).toBeDisabled();
+    expect(screen.getByText(/needs a task to perform/)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Task"), "fix the flaky test");
+    expect(launch).toBeEnabled();
   });
 });

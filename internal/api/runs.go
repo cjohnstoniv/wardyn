@@ -173,6 +173,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Agent:            req.Agent,
 		Repo:             req.Repo,
 		Task:             req.Task,
+		Title:            strings.TrimSpace(req.Title),
+		Description:      strings.TrimSpace(req.Description),
 		PolicyID:         policyID,
 		ConfinementClass: enforced,
 		State:            types.RunPending,
@@ -180,6 +182,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		RunnerTarget:     s.cfg.RunnerTarget,
 		Interactive:      req.Interactive,
 		WorkspacePath:    workspacePath,
+		WorkspaceIDs:     workspaceIDsOf(wsRefs), // resolved at :142, same spec as WorkspacePath above
 		AutoStopAfterSec: spec.AutoStopAfterSec,
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
@@ -232,6 +235,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// The run row doesn't store task_mode (request-scoped), so the audit
 		// event is the provenance record that this run ran a plain command.
 		createAuditData["task_mode"] = req.TaskMode
+	}
+	if req.Interactive && req.InteractiveStart != "" {
+		// Same reason as task_mode above: interactive_start is request-scoped, so
+		// the audit event is the only record that this sandbox opened straight
+		// into the agent CLI rather than a bare shell.
+		createAuditData["interactive_start"] = req.InteractiveStart
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createAuditData)))
@@ -287,6 +296,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Injections:         gw.injections,
 			Interactive:        req.Interactive,
 			TaskMode:           req.TaskMode,
+			InteractiveStart:   req.InteractiveStart,
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
 			Toolchains:         runToolchainNeeds(wsRefs),

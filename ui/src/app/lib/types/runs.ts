@@ -51,6 +51,13 @@ export interface AgentRun {
   agent: Agent;
   repo: string;
   task: string;
+  // The run's human NAME. Runs sharing a title are grouped on the Runs board.
+  // Optional so a legacy row, an older backend, or a system run (scan, harness
+  // login, workspace record) still type-checks — see runHeadline, which is what
+  // every display site must use rather than reading title or task directly.
+  title?: string;
+  // Optional free-text context: why this run exists. Shown on run detail.
+  description?: string;
   policy_id?: string;
   confinement_class: ConfinementClass;
   state: RunState;
@@ -69,6 +76,24 @@ export interface AgentRun {
   // devcontainer build, workspace-built, or BYOI-wrapped) — provenance, shown
   // on run detail. Empty/absent for legacy rows.
   image?: string;
+  // The scan/verify/record-only TRUSTED linkage (internal/types/types.go's
+  // AgentRun.WorkspaceID) — set for a record/verify step run, nil for an
+  // ordinary user run. Modeled here ONLY so runHasWorkspace (below) can read
+  // it: a record/verify run's workspace_ids is always empty (handleCreateRun
+  // is the only writer of that column; the four internal step-run call sites
+  // leave it nil), so gating "Always" on workspace_ids alone wrongly disables
+  // it for exactly the run kind whose server-side rule-5 tie-break accepts it.
+  // Nothing else in the console reads this field — don't widen its use beyond
+  // runHasWorkspace without re-reading that server-side rule.
+  workspace_id?: string;
+  // READ-ONLY denormalization of the onboarded workspaces this run resolved to
+  // at create time (referencedWorkspaces over the widened spec) — mirrors
+  // internal/types/types.go's AgentRun.WorkspaceIDs. Distinct from
+  // workspace_id above. Empty/absent for a run that resolved to no workspace
+  // (most demo/system runs) or a pre-existing row. Don't read this field
+  // directly to gate "Always" — use runHasWorkspace(run), which also covers
+  // workspace_id; see its doc for why.
+  workspace_ids?: string[];
 }
 
 // ============================================================
@@ -166,12 +191,43 @@ export function isTerminalRunState(state: RunState): boolean {
   return (TERMINAL_RUN_STATES as readonly string[]).includes(state as string);
 }
 
+// The ONE display fallback for "what is this run called?", used everywhere a run
+// is named (the board, the table, the run-detail h1, audit, recording).
+//
+// It has to be shared because NEITHER field is sufficient alone: an interactive
+// run carries no task at all (the server ignores task for one, so the console
+// stops sending it), and every run created before titles existed — plus every
+// system run — carries no title. A site that reads one field directly renders a
+// bare "—" for half the runs on the board.
+export function runHeadline(run: Pick<AgentRun, "title" | "task">): string {
+  return (run.title ?? "").trim() || run.task || "—";
+}
+
+// Whether an `always` egress-approval decision has somewhere on THIS run to
+// persist to — the ONE place that answers it, mirroring the server's own
+// rule-5 tie-break (internal/api/approvals.go): workspace_ids first, falling
+// back to workspace_id. NEITHER field is sufficient alone: an ordinary user
+// run has workspace_ids but no workspace_id, while a record/verify step run
+// is the reverse (its workspace_ids is always empty — see workspace_id's
+// doc). Reading workspace_ids alone — as run-detail.tsx once did — shows
+// Always disabled on a record/verify run with the false reason "this run
+// isn't attached to one", when the server would accept it.
+export function runHasWorkspace(run: Pick<AgentRun, "workspace_ids" | "workspace_id">): boolean {
+  return (run.workspace_ids?.length ?? 0) > 0 || !!run.workspace_id;
+}
+
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
 export interface CreateRunInput {
   agent: Agent;
   repo: string;
   task: string;
+  // The run's name (grouping key) and an optional note on why it exists.
+  // Optional on the wire — the server accepts a titleless run so the CLI and
+  // the server's own system runs keep working — but REQUIRED by the New Run
+  // screen, which is where a human is present to name the thing.
+  title?: string;
+  description?: string;
   policy_id?: string;
   confinement_class?: ConfinementClass;
   interactive?: boolean;
@@ -184,6 +240,11 @@ export interface CreateRunInput {
   // command in the same governed sandbox — no agent, no LLM credentials.
   // Ignored for an interactive run. Omitted → "harness" (backward-compatible).
   task_mode?: "harness" | "exec";
+  // task_mode's INTERACTIVE counterpart: what the attach shell opens with.
+  // "agent" launches the image's agent CLI in the prepared workspace once, on
+  // first attach; "shell" / omitted is a bare terminal there. Ignored for a
+  // non-interactive run (the server drops it structurally).
+  interactive_start?: "shell" | "agent";
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory

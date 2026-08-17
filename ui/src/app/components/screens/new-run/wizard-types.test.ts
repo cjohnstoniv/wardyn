@@ -11,8 +11,10 @@ import {
   initialWizardState,
   isValidDomain,
   primaryWorkspaceId,
+  resolvedMountReadOnly,
+  gitPatConfigured,
+  impliedEgressHosts,
   secretAutoGrants,
-  validateStep,
   wizardStateFromProposal,
 } from "./wizard-types";
 import type { RunWorkspaceSelectionWire } from "./wizard-types";
@@ -118,21 +120,13 @@ describe("comesWithLine — reflects this run's enabled Optional rows (Item 4)",
   });
 });
 
-// Ephemeral runs: a workspace is OPTIONAL. Basics gates only the batch-needs-a-task
-// rule; an interactive run with zero workspaces is valid and buildSpec degrades to
-// an empty scratch run (repo "", no workspace mounts/repos).
-describe("validateStep — Basics is workspace-optional (ephemeral runs)", () => {
-  it("passes an interactive run with no workspace", () => {
-    const state = { ...initialWizardState(), workspaces: [], mode: "interactive" as const };
-    expect(validateStep("basics", state)).toBeNull();
-  });
-
-  it("still requires a task for a batch run", () => {
-    const state = { ...initialWizardState(), workspaces: [], mode: "batch" as const, task: "" };
-    expect(validateStep("basics", state)).toMatch(/task/i);
-  });
-
-  it("buildSpec degrades to an ephemeral scratch run with zero workspaces", () => {
+// A workspace is OPTIONAL: zero selections is a valid ephemeral scratch run, and
+// buildSpec has to degrade to one rather than emitting a dangling mount. (This
+// used to also cover validateStep's batch-needs-a-task rule; that gate now lives
+// in new-run-screen.tsx's `problem` memo, where it can see the whole form — see
+// wizard-types.ts's RETIRED note.)
+describe("buildSpec is workspace-optional (ephemeral runs)", () => {
+  it("degrades to an ephemeral scratch run with zero workspaces", () => {
     const { run, inline_policy } = buildSpec({ ...initialWizardState(), workspaces: [] });
     expect(run.repo).toBe("");
     expect(inline_policy.workspace_mounts).toBeUndefined();
@@ -330,44 +324,58 @@ describe("wizardStateFromProposal — threads the echoed workspace_selections (I
   });
 });
 
-// D5/claim4: validateStep("access") used to check only the GitHub repo list +
-// TTL — a git_pat switched on with a host-or-secret left blank produced no
-// error and an enabled Next, yet (pre-fix) still widened egress to the typed
-// host with no PAT ever brokered to reach it.
-describe("validateStep — Access: half-configured git_pat (D5/claim4)", () => {
-  it("errors when enabled with a host but no stored secret", () => {
+// D5/claim4: a git_pat switched on with the host OR the secret left blank must
+// never widen egress to the typed host — no PAT is ever brokered to reach it, so
+// the allowance would be a hole with nothing behind it.
+//
+// This used to be asserted through validateStep("access")'s error string. That
+// was always the weaker test: it checked that the wizard SAID no, not that the
+// launched spec was safe. Now that validateStep is gone (see wizard-types.ts's
+// RETIRED note), assert the property itself — on gitPatConfigured, the ONE
+// predicate buildSpec gates both the grant and the egress union on.
+describe("half-configured git_pat neither grants nor widens (D5/claim4)", () => {
+  const half = [
+    { name: "a host but no stored secret", gitPatHost: "dev.azure.com", gitPatSecretName: "" },
+    { name: "a secret but no host", gitPatHost: "", gitPatSecretName: "ado-pat" },
+  ];
+  for (const c of half) {
+    it(`emits no git_pat grant and no implied host for ${c.name}`, () => {
+      const state = {
+        ...initialWizardState(),
+        gitPatEnabled: true,
+        gitPatHost: c.gitPatHost,
+        gitPatSecretName: c.gitPatSecretName,
+      };
+      expect(gitPatConfigured(state)).toBe(false);
+      const { inline_policy } = buildSpec(state);
+      expect((inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
+      expect(impliedEgressHosts(state).some((h) => h.why === "Git PAT")).toBe(false);
+      expect(inline_policy.allowed_domains).not.toContain("dev.azure.com");
+    });
+  }
+
+  it("is inert when disabled, regardless of host/secret", () => {
+    const state = {
+      ...initialWizardState(),
+      gitPatEnabled: false,
+      gitPatHost: "dev.azure.com",
+      gitPatSecretName: "ado-pat",
+    };
+    expect(gitPatConfigured(state)).toBe(false);
+    expect(buildSpec(state).inline_policy.allowed_domains).not.toContain("dev.azure.com");
+  });
+
+  it("grants AND allows the host once both are set", () => {
     const state = {
       ...initialWizardState(),
       gitPatEnabled: true,
       gitPatHost: "dev.azure.com",
-      gitPatSecretName: "",
-    };
-    expect(validateStep("access", state)).toBe("Git PAT needs both a host and a stored secret.");
-  });
-
-  it("errors when enabled with a secret but no host", () => {
-    const state = {
-      ...initialWizardState(),
-      gitPatEnabled: true,
-      gitPatHost: "",
       gitPatSecretName: "ado-pat",
     };
-    expect(validateStep("access", state)).toBe("Git PAT needs both a host and a stored secret.");
-  });
-
-  it("passes when disabled, regardless of host/secret", () => {
-    const state = { ...initialWizardState(), gitPatEnabled: false, gitPatHost: "", gitPatSecretName: "" };
-    expect(validateStep("access", state)).toBeNull();
-  });
-
-  it("passes when enabled with both host and secret set", () => {
-    const state = {
-      ...initialWizardState(),
-      gitPatEnabled: true,
-      gitPatHost: "dev.azure.com",
-      gitPatSecretName: "ado-pat",
-    };
-    expect(validateStep("access", state)).toBeNull();
+    expect(gitPatConfigured(state)).toBe(true);
+    const { inline_policy } = buildSpec(state);
+    expect((inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(true);
+    expect(inline_policy.allowed_domains).toContain("dev.azure.com");
   });
 });
 
@@ -510,3 +518,42 @@ describe("applyProfileSpecToState — keeps every Basics choice, incl. runType a
   });
 });
 
+
+// Regression: AddWorkspaceDialog's "Allow writes to this directory" stores
+// sources[].writable=true, but nothing creates a `write:<path>` requirement
+// row — so resolving write access from requirements ALONE made that checkbox a
+// no-op for every run launched from the UI. The mount came out read-only, the
+// agent's edits never reached the host, and the run still reported success.
+// internal/api/workspace_run.go has always honored src.Writable; this is the
+// client mirror agreeing with it.
+describe("resolvedMountReadOnly — an explicitly writable source grants write", () => {
+  const writableWs = {
+    id: "ws-w",
+    name: "slugify",
+    kind: "local_dir",
+    source: "/home/me/slugify",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+    sources: [{ type: "local_dir", path: "/home/me/slugify", target: "/home/agent/work", writable: true }],
+  } as unknown as Workspace;
+
+  const readOnlyWs = {
+    ...writableWs,
+    sources: [{ type: "local_dir", path: "/home/me/slugify", target: "/home/agent/work" }],
+  } as unknown as Workspace;
+
+  it("mounts read-WRITE when the operator ticked the box", () => {
+    expect(resolvedMountReadOnly(writableWs, { workspaceId: "ws-w" }, "/home/me/slugify")).toBe(false);
+  });
+
+  it("still defaults to read-only when they did not", () => {
+    expect(resolvedMountReadOnly(readOnlyWs, { workspaceId: "ws-w" }, "/home/me/slugify")).toBe(true);
+  });
+
+  it("lets an explicit per-run readOnly NARROW a writable source back down", () => {
+    expect(
+      resolvedMountReadOnly(writableWs, { workspaceId: "ws-w", readOnly: true }, "/home/me/slugify"),
+    ).toBe(true);
+  });
+});

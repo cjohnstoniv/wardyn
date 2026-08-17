@@ -43,7 +43,7 @@ export function RunContextRow({ runId }: { runId: string }) {
         <>
           <AgentBadge agent={run.agent} withLabel={false} />
           <span className="min-w-0 max-w-full truncate text-sm font-medium text-foreground">
-            {run.task || "Interactive session"}
+            {(run.title ?? "").trim() || run.task || "Interactive session"}
           </span>
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />

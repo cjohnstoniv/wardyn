@@ -21,8 +21,11 @@ import {
 import { toast } from "sonner";
 import {
   canDecideApproval,
+  decisionArgs,
+  runHasWorkspace,
   type AgentRun,
   type ApprovalRequest,
+  type ApprovalScope,
   type AuditEvent,
   type CredentialGrant,
   type EgressDecision,
@@ -65,6 +68,7 @@ import {
   RUN_COCKPIT,
   RUN_MODE,
   VIEWER_APPROVAL_BLOCKS_NOTE,
+  approvalScopeBadge,
 } from "../wardyn/copy";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
@@ -213,11 +217,12 @@ export function RunDetailScreen() {
     }
   };
 
-  const submitDecision = async (reason: string): Promise<boolean> => {
+  const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!decide) return false;
     try {
-      if (decide.action === "approve") await approvalsApi.approve(decide.id, reason);
-      else await approvalsApi.deny(decide.id, reason);
+      const args = decisionArgs(scope, until);
+      if (decide.action === "approve") await approvalsApi.approve(decide.id, reason, ...args);
+      else await approvalsApi.deny(decide.id, reason, ...args);
       toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
       setDecide(null);
       load(false);
@@ -363,6 +368,12 @@ export function RunDetailScreen() {
 
       <ReasonDialog
         prompt={decide}
+        // Always is greyed out when THIS run resolves to no onboarded
+        // workspace (Phase 1e's read-only denormalization) — see
+        // reason-dialog.tsx's own doc for why the default is false.
+        // runHasWorkspace also covers workspace_id, not just workspace_ids:
+        // a record/verify step run carries the former only.
+        hasWorkspace={!!run && runHasWorkspace(run)}
         onClose={() => setDecide(null)}
         onSubmit={submitDecision}
       />
@@ -448,7 +459,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} />
         </div>
       )}
     </>
@@ -640,6 +651,7 @@ function ApprovalsTab({
         // the KIND question: egress_domain is a member act on an owned run,
         // credential/tool_call stay admin-only regardless (see its doc).
         const canDecide = canDecideApproval(operator, a.kind);
+        const scopeBadge = approvalScopeBadge(a);
         return (
           <div key={a.id} className="rounded-xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -658,6 +670,11 @@ function ApprovalsTab({
             {a.decided_by && (
               <div className="mt-2 text-xs text-muted-foreground">
                 Decided by <span className="text-foreground">{a.decided_by}</span>
+                {/* Scope badge (Phase 0 §6) — the console's DecidedRow shows
+                    the same fact; without it here the cockpit would show a
+                    decided egress row and the console would show it grew a
+                    scope, for the SAME approval. */}
+                {scopeBadge && <> · {scopeBadge}</>}
                 {a.reason && <> · {a.reason}</>}
               </div>
             )}

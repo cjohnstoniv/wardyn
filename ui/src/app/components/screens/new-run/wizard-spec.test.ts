@@ -657,3 +657,62 @@ describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
   });
 });
 
+
+// What the run's MODE puts on the wire. Each of these was, at some point, a
+// field silently ignored or silently dropped between the form and the sandbox.
+describe("buildSpec — the run mode decides what ships", () => {
+  it("an interactive run sends no task, and its startup choice", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "interactive",
+      // Text typed before the operator toggled the mode. The server ignores
+      // task for an interactive run, and run.task is the run's HEADLINE
+      // everywhere — shipping this would caption the run with work it never did.
+      task: "left over from batch mode",
+      interactiveStart: "agent",
+    });
+    expect(run.interactive).toBe(true);
+    expect(run.task).toBe("");
+    expect(run.interactive_start).toBe("agent");
+  });
+
+  it("omits interactive_start for the default shell start", () => {
+    const { run } = buildSpec({ ...initialWizardState(), mode: "interactive", interactiveStart: "shell" });
+    // "shell" IS the long-standing behavior, so it never needs to go on the
+    // wire — and the server's own default has to keep meaning the same thing.
+    expect(run.interactive_start).toBeUndefined();
+  });
+
+  it("a batch run sends the task as the agent's prompt", () => {
+    const { run } = buildSpec({ ...initialWizardState(), mode: "batch", task: "  fix the flaky test  " });
+    expect(run.interactive).toBe(false);
+    expect(run.task).toBe("fix the flaky test");
+    expect(run.interactive_start).toBeUndefined();
+  });
+
+  // The bug this closes: a shell command left on the (default) interactive mode
+  // launched a sandbox that NEVER ran the command — the server ignores task_mode
+  // for an interactive run, so the whole point of the run vanished silently.
+  it("a shell command is unattended even if the mode still says interactive", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "command",
+      mode: "interactive",
+      task: "make test",
+    });
+    expect(run.interactive).toBe(false);
+    expect(run.task_mode).toBe("exec");
+    expect(run.task).toBe("make test");
+  });
+
+  it("carries the title and description, trimmed, and omits an empty description", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      title: "  Refund flow  ",
+      description: "  ticket 4412  ",
+    });
+    expect(run.title).toBe("Refund flow");
+    expect(run.description).toBe("ticket 4412");
+    expect(buildSpec({ ...initialWizardState(), title: "x" }).run.description).toBeUndefined();
+  });
+});

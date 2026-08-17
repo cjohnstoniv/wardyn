@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { AuditEvent, CredentialGrant, EgressDecision } from "../../../../lib/types";
+import type { AgentRun, AuditEvent, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
 const getResourcesMock = vi.fn();
@@ -22,6 +22,7 @@ import { EgressWidget } from "./egress";
 import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
+import { IdentityWidget } from "./identity";
 
 beforeEach(() => {
   getFilesMock.mockReset();
@@ -152,5 +153,39 @@ describe("EgressWidget", () => {
     expect(screen.getByText("1 held")).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
     expect(screen.getByText("api.github.com")).toBeInTheDocument();
+  });
+});
+
+// The command bar's h1 is the run's TITLE now, and it truncates in a 52px
+// non-wrapping row — so the task (the prompt the agent was actually given) and
+// the description have nowhere else to live on the page. Overview is the canvas
+// cockpit; this widget is the only prose surface left.
+describe("IdentityWidget", () => {
+  const run: AgentRun = {
+    id: "run-1",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    created_by: "me",
+    agent: "claude-code",
+    repo: "acme/widgets",
+    task: "Fix the flaky auth tests",
+    confinement_class: "CC2",
+    state: "RUNNING",
+    spiffe_id: "spiffe://x",
+    runner_target: "docker",
+  };
+
+  it("carries the full task and the description when the run has them", () => {
+    render(<IdentityWidget run={{ ...run, title: "Refund flow", description: "ticket 4412" }} />);
+    expect(screen.getByText("Fix the flaky auth tests")).toBeInTheDocument();
+    expect(screen.getByText("ticket 4412")).toBeInTheDocument();
+  });
+
+  // An interactive run has no task at all and most runs have no description —
+  // empty labelled rows would be worse than none.
+  it("shows neither label when there is nothing to say", () => {
+    render(<IdentityWidget run={{ ...run, task: "", description: "" }} />);
+    expect(screen.queryByText("Task")).not.toBeInTheDocument();
+    expect(screen.queryByText("Why")).not.toBeInTheDocument();
   });
 });

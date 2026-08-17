@@ -19,6 +19,7 @@ import {
   CircleX,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
+import { runHeadline } from "../../lib/types";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
@@ -531,8 +532,8 @@ function DrillBanner({
       ) : run ? (
         <>
           <AgentBadge agent={run.agent} />
-          <span className="max-w-[280px] truncate text-sm text-muted-foreground" title={run.task}>
-            {run.task}
+          <span className="max-w-[280px] truncate text-sm text-muted-foreground" title={run.task || undefined}>
+            {runHeadline(run)}
           </span>
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />

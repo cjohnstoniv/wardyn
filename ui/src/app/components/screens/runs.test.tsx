@@ -303,24 +303,39 @@ describe("RunsScreen — loading skeleton matches the active density", () => {
   });
 });
 
-// fix: Done section's global "Show fewer"/"Show all" toggle used to be gated
-// on `shownCount >= done.length` — a count coincidence true even when nothing
-// was ever expanded, whenever every group happened to fit within
-// GROUP_PREVIEW. That rendered a dead "Show fewer" button wired to a
-// toggleAll() no-op.
-describe("RunsScreen board — Done section's global toggle is never a dead no-op control", () => {
-  it("renders no global toggle when nothing is hidden and nothing is expanded (two small Done groups)", async () => {
-    const doneRuns: AgentRun[] = [
-      { ...run, id: "run-c1", state: "COMPLETED" },
-      { ...run, id: "run-c2", state: "COMPLETED" },
-      { ...run, id: "run-s1", state: "STOPPED" },
-      { ...run, id: "run-s2", state: "STOPPED" },
-    ];
-    listRunsMock.mockResolvedValue(doneRuns);
+// fix: the board's collapse toggle used to be gated on `shownCount >=
+// done.length` — a count coincidence true even when nothing had ever been
+// expanded, whenever every group happened to fit within GROUP_PREVIEW. That
+// rendered a dead "Show fewer" button wired to a no-op. The section it lived on
+// (Done, grouped by outcome) is gone — the board groups by title now — but the
+// invariant is the same and rides on the same GROUP_PREVIEW: never render a
+// control that has nothing to do.
+describe("RunsScreen board — a group's collapse toggle is never a dead control", () => {
+  const inGroup = (id: string, over: Partial<AgentRun> = {}): AgentRun => ({
+    ...run,
+    id,
+    title: "Nightly dependency audit",
+    state: "COMPLETED",
+    ...over,
+  });
+
+  it("renders no toggle when the whole group already fits", async () => {
+    listRunsMock.mockResolvedValue([inGroup("run-c1"), inGroup("run-c2")]);
     renderScreen();
-    await screen.findByText("Done");
+    await screen.findByRole("region", { name: "Nightly dependency audit" });
     expect(screen.queryByRole("button", { name: /^show fewer$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^show all$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^show all/i })).not.toBeInTheDocument();
+  });
+
+  it("renders one when the group actually has more to show", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    listRunsMock.mockResolvedValue(
+      ["run-c1", "run-c2", "run-c3", "run-c4"].map((id) => inGroup(id)),
+    );
+    renderScreen();
+    const toggle = await screen.findByRole("button", { name: "Show all 4" });
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: /^show fewer$/i })).toBeInTheDocument();
   });
 });
 
@@ -334,5 +349,55 @@ describe("RunsScreen — Live indicator uses the shared Chip primitive (matches 
     await screen.findByRole("button", { name: /run actions/i });
     const chip = screen.getByTitle("Polling for new runs");
     expect(chip).toHaveTextContent("Live · refreshes every 3s");
+  });
+});
+
+// The board's grouping axis is the run's TITLE — runs that share one are the
+// same piece of work. It replaced grouping by state; see runs.tsx's titleGroups.
+describe("RunsScreen — runs are grouped by title", () => {
+  const titled = (id: string, title: string, over: Partial<AgentRun> = {}): AgentRun => ({
+    ...run,
+    id,
+    title,
+    ...over,
+  });
+
+  it("puts runs that share a title under one header, with per-state counts", async () => {
+    listRunsMock.mockResolvedValue([
+      titled("r1", "Nightly dependency audit"),
+      titled("r2", "Nightly dependency audit", { state: "COMPLETED" }),
+    ]);
+    renderScreen();
+
+    const group = await screen.findByRole("region", { name: "Nightly dependency audit" });
+    // The header carries the count, and each card names its OWN work rather
+    // than reprinting the title it already sits under.
+    expect(within(group).getByText("2")).toBeInTheDocument();
+    expect(within(group).getAllByText("Fix flaky auth tests")).toHaveLength(2);
+  });
+
+  // A group of one is not a group. Untitled runs — every row created before
+  // titles existed, every CLI run, every system run — must keep rendering, and
+  // by their task, which is the only name they have ever had.
+  it("leaves a lone titled run and every untitled run ungrouped, named by task", async () => {
+    listRunsMock.mockResolvedValue([titled("r1", "One-off cleanup"), run]);
+    renderScreen();
+
+    await waitFor(() => expect(listRunsMock).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "One-off cleanup" })).not.toBeInTheDocument();
+    // Ungrouped cards name themselves: the titled one by its title, the
+    // untitled legacy row by its task.
+    expect(await screen.findByText("One-off cleanup")).toBeInTheDocument();
+    expect(screen.getByText("Fix flaky auth tests")).toBeInTheDocument();
+  });
+
+  // The regression this whole fallback exists for: an interactive run carries
+  // NO task at all now, so a card reading it directly renders a bare dash.
+  it("names an interactive run with no task by its title", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Debug the payments box", task: "", interactive: true },
+    ]);
+    renderScreen();
+    expect(await screen.findByText("Debug the payments box")).toBeInTheDocument();
   });
 });
