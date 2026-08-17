@@ -420,7 +420,7 @@ at a corporate IdP that isn't hand-curated the same way.
 
 ## Workspaces: three tiers
 
-[Watch — Workspaces & secrets (2:00–2:30)](README.md#v04--workspaces--secrets)
+[Watch — Add a workspace (~4:00)](README.md#v02--add-a-workspace)
 
 A workspace is not one unit of configuration. Wardyn splits it into three:
 

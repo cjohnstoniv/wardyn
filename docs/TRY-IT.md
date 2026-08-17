@@ -1,6 +1,6 @@
 # Try Wardyn in 10 minutes
 
-[Watch — Your first run (2:30–3:00)](README.md#v02--your-first-run)
+[Watch — Your first run (2:30–3:00)](README.md#v03--your-first-run)
 
 The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
@@ -118,7 +118,7 @@ point at any RUNNING sandbox.
 
 ## Level 2 — real Claude Code run (bring an Anthropic API key)
 
-[Watch — The run cockpit (2:00–2:30)](README.md#v03--the-run-cockpit)
+[Watch — The run cockpit (2:00–2:30)](README.md#v04--the-run-cockpit)
 
 ```sh
 # 1. Store the key (write-only; no API path ever returns it):

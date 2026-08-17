@@ -28,23 +28,23 @@ live with the v0.5.0 release assets.*
 
 #### V01 — Getting started
 
-One command to a governed host. 6:00–6:30 ·
+From nothing to a governed host, guardrails proved on camera. ~9:00 ·
 [watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-01-getting-started.mp4)
 
-#### V02 — Your first run
+#### V02 — Add a workspace
+
+The one directory a run may touch, and secrets nobody can read back. ~4:00 ·
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-02-add-a-workspace.mp4)
+
+#### V03 — Your first run
 
 A real agent does real work inside the boundary. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-02-your-first-run.mp4)
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-03-your-first-run.mp4)
 
-#### V03 — The run cockpit
+#### V04 — The run cockpit
 
 The terminal is the run. 2:00–2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-03-run-cockpit.mp4)
-
-#### V04 — Workspaces & secrets
-
-What a run may touch, and what it never holds. 2:00–2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-04-workspaces-and-secrets.mp4)
+[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-04-run-cockpit.mp4)
 
 #### V05 — Approvals & egress
 

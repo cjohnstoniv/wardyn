@@ -4,7 +4,7 @@
  */
 
 /*
- * V02 — Your first run.
+ * V03 — Your first run.
  *
  * The second video of the 0.5 series. V01 stood the stack up, walked the
  * Getting Started funnel and onboarded a workspace; nothing has yet RUN inside
@@ -17,14 +17,14 @@
  * handling, the unnamed-workspace-combobox workaround, decide()'s
  * decide-by-host discipline and the terminal-state wait are all hard-won on
  * camera. What act 5 had that this does NOT: the `always` scope, the workspace
- * receipt and the proof run. Those are V05's, and V02 deliberately grants only
+ * receipt and the proof run. Those are V05's, and V03 deliberately grants only
  * "This run" so a later take of V05 still gets to raise its own hold.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
  * product is broken. It runs against the REAL compose stack on :8080 with a
- * live runner, real sandboxes and a CONNECTED MODEL — V02 is one of the three
- * quota-bound videos (V02/V03/V08), and there is no model-free variant here on
+ * live runner, real sandboxes and a CONNECTED MODEL — V03 is one of the three
+ * quota-bound videos (V03/V04/V08), and there is no model-free variant here on
  * purpose: every SAY line in the script is committed to an agent writing code.
  *
  * STATE IT INHERITS, and what it re-stages for itself:
@@ -36,8 +36,8 @@
  *  - A model provider is connected (V01 did it). Asserted before Launch,
  *    because the rail renders "No model provider is connected…" and beat 6
  *    spotlights that rail on camera.
- *  - Per SV16/SV20 this take is shot INSIDE the V08 → V02 → V03 window, so it
- *    is recorded with `scripts/record-demo.sh --video 02 --no-reset`. A reset
+ *  - Per SV16/SV20 this take is shot INSIDE the V08 → V03 → V04 window, so it
+ *    is recorded with `scripts/record-demo.sh --video 03 --no-reset`. A reset
  *    would destroy V08's reused run, the connected model lane and the SSH host
  *    key. Hygiene inside the window is DA5's workspace-scoped clearing only —
  *    which is exactly what this file's beforeAll does.
@@ -46,8 +46,8 @@
  * the rest of the suite: a copy change breaks this loudly and in one place,
  * markup churn does not break it at all.
  *
- * Driven by scripts/record-demo.sh --video 02 (it globs 02-*.spec.ts and names
- * the take wardyn-02-your-first-run-<stamp>.mp4 — docs/README.md links that
+ * Driven by scripts/record-demo.sh --video 03 (it globs 02-*.spec.ts and names
+ * the take wardyn-03-your-first-run-<stamp>.mp4 — docs/README.md links that
  * exact asset name, so this FILENAME IS LOAD-BEARING).
  */
 
@@ -72,7 +72,7 @@ const RUN_FINISHES = 900_000;
 /**
  * This run's TITLE, and the key everything downstream finds it by.
  *
- * UNIQUE TO V02 on purpose (DA5). The series shoots ten videos against one
+ * UNIQUE TO V03 on purpose (DA5). The series shoots ten videos against one
  * long-lived stack, several of them launch runs, and scripts/verify-demo-take.sh
  * picks this take's run out of `wardyn runs list` BY EXACT TITLE — a title
  * shared with the walkthrough's own run (task.ts's DEMO_TITLE) would have the
@@ -82,7 +82,7 @@ const RUN_FINISHES = 900_000;
  * or leave both at their defaults. It is read from the environment here so one
  * export drives the driver and the verifier together.
  */
-const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "V02 — slugify, one held host";
+const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "V03 — slugify, one held host";
 
 /** Filled on camera in beat 1. Short: the field renders two rows. */
 const RUN_DESCRIPTION = "First governed run of the series — real code, one host held at the door.";
@@ -97,7 +97,7 @@ const MOUNT_TARGET = "/home/agent/work";
 // listed here rather than in a shoot-day note because a precondition that
 // lives only in prose gets forgotten:
 //
-//   1. Record with `scripts/record-demo.sh --video 02 --no-reset` (SV20). The
+//   1. Record with `scripts/record-demo.sh --video 03 --no-reset` (SV20). The
 //      harness re-materializes ~/wardyn-demo/slugify from the fixture on EVERY
 //      invocation regardless of --no-reset, so the on-disk workspace is always
 //      virgin; what --no-reset protects is V08's run and the model lane.
@@ -408,7 +408,7 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // approval" that surfaces as a pending row, often ABOVE the one this beat is
   // about. Approving something you did not mean to approve is the worst
   // possible frame in a governance demo. (That telemetry row is deliberately
-  // left undecided and unnarrated here: the script gives V02 no line for it.)
+  // left undecided and unnarrated here: the script gives this video no line for it.)
   //
   // The BARE Approve — the split button's plain click, which is "This run".
   // Not the caret: the scope ladder is V05's video, and an `always` here would

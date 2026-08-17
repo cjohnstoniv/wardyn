@@ -4,7 +4,7 @@
  */
 
 /*
- * V03 — The run cockpit.
+ * V04 — The run cockpit.
  *
  * The third video of the 0.5 series. It films ONE screen: /runs/:id, the
  * terminal-first cockpit. Five beats — the terminal is the run, the header is
@@ -79,7 +79,7 @@ test.describe.configure({ mode: "serial" });
  *  5. Exactly ONE live interactive run exists on the stack. Beat 1 opens the
  *     board's single "Attach" button; two of them is an ambiguous take, and the
  *     spec fails rather than guessing.
- *  6. `scripts/record-demo.sh --video 03 --no-reset` (SV20). Never without
+ *  6. `scripts/record-demo.sh --video 04 --no-reset` (SV20). Never without
  *     --no-reset.
  *
  * Quota: this video makes NO model call, so it needs no quota of its own — but
