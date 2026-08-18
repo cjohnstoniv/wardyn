@@ -8,6 +8,59 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-18
+
+### Security
+
+- **Go-live hardening: 29 confirmed ship-blockers closed across two adversarial
+  review waves**, each with a regression test proven to fail on the pre-fix
+  commit. The load-bearing ones: a member's `inline_policy` `llm_inspection`
+  block is now clamped under the default ceiling (its `detector_sidecar_url`
+  could otherwise become an un-allowlisted egress channel), and its secret
+  corpus is referenced by name and resolved only at dispatch — never stored in
+  a policy row, written to the append-only audit log, or copied into a
+  compose/profile proposal; the git-broker's value-returning mint lanes refuse
+  the GitHub App private key and the other reserved platform secrets; a
+  **disabled** integration no longer grants a run model access; an explicit
+  `WARDYN_LOCAL_MODE=true` no longer silently disables a configured OIDC/RBAC
+  deployment (boot refuses the contradiction); a client-settable `run.Task` can
+  no longer forge the operator-reserved harness-login path; SSH `ssh.auth`
+  success is audited only after signature verification, not at key-offer time;
+  an empty-ceiling `github_token` repo list is deny-all for a hand-authored
+  spec; a tokened corp-mirror redirect is dialed to its real port, not always
+  443; the exec-less (krun/CC3) sandbox path now applies the same fail-closed
+  resource-cap gate as the exec path; and the host ground-truth sensor no
+  longer forwards uncorrelated host-wide kernel events to the audit log/SIEM by
+  default.
+- **OIDC sessions now carry a derived admin/member role** (`WARDYN_OIDC_ROLE_MAP`,
+  `internal/auth/oidc`'s `deriveRole`). Upgrading forces one SSO re-login: a pre-0.5
+  session cookie carries no role and now decodes as no session (`decodeSession`), never
+  as an authenticated session with an undefined role.
+- **Authorization enforcement: the admin/member role is now enforced, plus
+  owner-or-admin scoping.** `requireOperator`/`isOperator` gate on the session's
+  role instead of re-checking `WARDYN_OIDC_OPERATOR_EMAILS` directly (the
+  allowlist still works — it feeds role derivation via `LegacyAdminEmails`, one
+  source of truth instead of two). `GET /metrics` now carries the admin gate
+  explicitly. A member is scoped to their OWN runs/approvals on `GET /runs`,
+  `GET /approvals` (unscoped), and `GET /audit` (`?run_id=` of an owned run,
+  else an empty result — never a cross-user leak); `GET/kill/profile/grants` on
+  a run, the recording replay, an approval decide, and the attach-ticket mint
+  all use an owner-or-admin gate that answers a foreign resource with the
+  byte-identical 404 a missing one gets (no existence oracle). Attach tickets
+  now carry the minting principal's role (migration 0034), since the
+  interactive-attach WebSocket's `?ticket=` lane authenticates entirely off the
+  ticket and never runs the normal session check. `GET /setup/status` redacts
+  operator-diagnostic detail (environment checks, resident CLI detection,
+  secret names, runner detail) for a member. A member's `inline_policy` on
+  `POST /runs` (and its preflight dry-run) is now clamped to the operator's
+  default policy ceiling before resolution, and bringing a custom sandbox
+  image (`image`) is admin-only. Two routes move from admin-only to
+  owner-or-admin: minting an attach ticket and deciding an approval, both
+  restricted to the run's own creator (or an admin) either way. A new
+  `authz.denied` audit action records a member's admin-surface or BYOI
+  denials (not a foreign-resource 404 — that stays silent by design, matching
+  the no-existence-oracle rule above).
+
 ### Added
 
 - **An interactive run can start on a seed, at boot.** The run's `task` —
@@ -78,6 +131,82 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the same `Runner.Attach`). **Needs an image rebuild** — `make agent-images-core`
   — to take effect; until then an older image ignores the variable and degrades
   to a shell, which is the previous behavior.
+- **The Integrations page's Tools tab**, the integration→tool "carries"
+  chips in the workspace wizard (base-image, build, and verify steps), and
+  the client-side mirrors of the bake conditions. Tools are what the image
+  carries; the Integrations surface now speaks only to connections.
+
+- **The `artifact_mirror`/`host_proxy` derivations.** The Integrations surface
+  no longer synthesizes rows from `EgressRedirects`/`UpstreamProxySecretRef`:
+  that is network topology, it already has a surface (Corporate network), and
+  showing it twice made one config look like two. Nothing about how a run
+  redirects or chains through the corporate proxy changes.
+- **Kubernetes runner substrate** (`internal/runner/k8s`, `-tags k8s`,
+  `WARDYN_RUNNER=k8s`): a second, independent confinement substrate behind the
+  existing `substrate.Substrate` seam — wardynd creates/manages sandboxes as
+  pods instead of Docker containers. L1 (NetworkPolicy-enforced), not L0
+  (structural) like Docker: a boot-time two-phase egress canary proves the
+  cluster's CNI actually enforces `NetworkPolicy` before the substrate will
+  start at all, refusing to boot otherwise
+  (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the loud, logged opt-out). CC1
+  out of the box; `WARDYN_CONFINEMENT_MAP`/the chart's `k8s.runtimeClasses`
+  pin CC2/CC3 to a registered RuntimeClass. Not at parity with Docker yet —
+  no BYOI/devcontainer builds, no `local_dir` mounts, no per-pod PIDs/disk
+  enforcement, no k8s ground-truth correlator (see
+  `deploy/helm/wardyn/README.md`/`docs/OPERATIONS.md`'s "Known gaps").
+- **The Helm chart (`deploy/helm/wardyn`) can now create sandboxes, not just
+  the control plane.** `k8s.enabled=true` wires the substrate above into a
+  real install: least-privilege `Role`/`RoleBinding` + `ClusterRole` scoped to
+  exactly the verbs the substrate issues, a default-deny `NetworkPolicy`
+  extended with apiserver egress and a runs-namespace ingress peer, and a new
+  `k8s_egress_containment` setup check the console surfaces (Enforcing / Not
+  enforcing / Indeterminate). `test/conformance`'s `conformance-k8s` CI job
+  now proves the substrate on a real cluster (kind, `disableDefaultCNI` + a
+  pinned Calico manifest — kind's default CNI does not enforce
+  `NetworkPolicy`); the suite's one L0-specific case self-skips there by
+  design (the substrate claims L1, not L0) and a dedicated L1 case proves
+  what it actually claims instead. New `.claude/skills/wardyn-k8s-setup`
+  skill: cluster prereqs, values authoring, wiring Entra ID App Roles for
+  admin/member RBAC, install/verify, and a symptom→cause→fix table.
+- **Native SSH into a running sandbox.** `wardynd` serves `ssh
+  <run-id>@host` (registered public keys only, owner-only authorization)
+  directly into the same tmux session the web terminal attaches to: exec
+  (exit-code propagation), the sandbox's own `sftp-server` subsystem, and
+  `-L` port forwarding restricted to the sandbox's own loopback. Each
+  primitive gets its own audit action (`ssh.exec`/`ssh.sftp`/`ssh.forward`);
+  the shell path is recorded exactly like the browser terminal (`ssh-`
+  prefixed session key). Off by default (`WARDYN_SSH_LISTEN` unset — no
+  listener, no host key even generated). See `docs/SSH.md`.
+- **Member console.** The web console is now role- and kind-aware: a
+  member's nav hides operator-only surfaces (policy/workspace/secret CRUD,
+  BYOI), and the approvals view renders per-kind — `egress_domain` approvals
+  a member can decide, `credential`/`tool_call` ones they can only view.
+  Getting Started gained a Kubernetes-runner flavor (source-honest copy for
+  what the k8s substrate does and doesn't support yet).
+- **Signed, published release images.** `.github/workflows/release.yml`
+  builds and pushes the four images a release ships (`wardynd`,
+  `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
+  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag, cosign-signs each keylessly
+  (Fulcio/Rekor via the Actions OIDC token), and publishes a CycloneDX SBOM via
+  the existing `make sbom` target as a downloadable workflow artifact
+  (deliberately not auto-attached to the GitHub Release — RELEASING.md's
+  release step is manual by design; attach it by hand if wanted). linux/amd64
+  only today.
+- **CLI confinement-tier aliases + `/healthz` friendly names.** The run
+  commands accept `--confinement fence|wall|vault` as aliases for CC1/CC2/CC3
+  (with trust-model flag help), and `/healthz` now exposes a
+  `confinement_names` CC-code→friendly-name map (mirroring the console's
+  `cc-meta.ts`) so a scriptable consumer learns "CC1" means "Fence" without
+  hardcoding it (`internal/api/server.go`, `commands.go`, `types.go`).
+- **Sandbox image builder setup check (`env_builder`).** `/setup/status` now
+  reports whether the per-run image builder is wired — the path a
+  devcontainer build or a `--image` (BYOI) run needs. INFO (never a warning)
+  when off, the bare-binary default, so a `--image`/devcontainer run that
+  would otherwise silently no-op reads as a real, fixable checklist row.
+- **Non-blocking model-resolution warning.** A codex or managed-subscription
+  run whose model access resolves ambiguously now surfaces an advisory
+  warning (`resolveRunLLMAccess`/`runNeedsModelWarning`, `runs.go`) instead of
+  failing opaquely at dispatch.
 
 ### Changed
 
@@ -89,87 +218,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the command, because the server ignores `task_mode` for an interactive run.
   Launch is now disabled until the form is complete, and says what it is waiting
   for; previously the screen had no client-side validation at all.
-
-### Removed
-
-- **BREAKING — generic integration kinds.** `PUT /api/v1/integrations/{id}` now
-  answers 400 for any kind outside the closed set (`anthropic_api_key`,
-  `anthropic_subscription`, `bedrock`, `openai_api_key`, `github_app`,
-  `git_host`), and the error names what is accepted. Generic kinds — package
-  feeds, container registries, cloud providers, data stores, MCP servers, work
-  tracking, observability, "other service" — were the operator-extensibility
-  surface behind the Integrations catalog, and that catalog is gone. **A row
-  stored under an earlier release is not destroyed:** it still deserializes,
-  still sits in `SiteConfig`, and is still injected into a granted run by
-  `internal/api/integrations_run.go`. It simply cannot be edited through the API
-  any more.
-- **BREAKING — `azure_openai` as an integration kind.** Its one capability
-  powered the AI Run Composer, which was also removed; no agent tool can be
-  pointed at an Azure OpenAI deployment. An `azure-openai-key` left in the
-  secret store is untouched and inert.
-- **BREAKING — `pkg/client`'s `CreateRunRequest.ComposeSessionID`**, with its
-  server-side UUID validation and `run.create` audit stamping. The only thing
-  that ever produced a real value was the composer, so the field had become one
-  that accepted any UUID and correlated it to a conversation that can no longer
-  exist.
-- **The `/integrations` page** (and `/integrations/:id`). Both redirect to the
-  new `/settings`. Connections are four cards there — Host, Model provider, Git
-  host, Your SSH keys — each a radio group over concrete lanes, replacing a
-  catalog of seven kinds plus a generic escape hatch and a 931-line Add dialog.
-- **The integration verification-probe framework**: `POST
-  /api/v1/integrations/{id}/test`, `IntegrationProbe`, `IntegrationProbeStatus`
-  and the in-memory probe cache. Settings states what is STORED and says so
-  plainly rather than dialing the provider; a real run is the real test. A
-  `probe` key on a row stored under an earlier release is ignored, not rejected.
-- **`POST /api/v1/integrations/{id}/adopt`.** Adoption promoted a derived row
-  into a stored one so the catalog could edit it. A `PUT` onto a derived id used
-  to answer 409 pointing at that route — a dead end once it was unregistered —
-  so the write IS the adoption now, carrying the same audit event.
-
-### Security
-
-- **Go-live hardening: 29 confirmed ship-blockers closed across two adversarial
-  review waves**, each with a regression test proven to fail on the pre-fix
-  commit. The load-bearing ones: a member's `inline_policy` `llm_inspection`
-  block is now clamped under the default ceiling (its `detector_sidecar_url`
-  could otherwise become an un-allowlisted egress channel), and its secret
-  corpus is referenced by name and resolved only at dispatch — never stored in
-  a policy row, written to the append-only audit log, or copied into a
-  compose/profile proposal; the git-broker's value-returning mint lanes refuse
-  the GitHub App private key and the other reserved platform secrets; a
-  **disabled** integration no longer grants a run model access; an explicit
-  `WARDYN_LOCAL_MODE=true` no longer silently disables a configured OIDC/RBAC
-  deployment (boot refuses the contradiction); a client-settable `run.Task` can
-  no longer forge the operator-reserved harness-login path; SSH `ssh.auth`
-  success is audited only after signature verification, not at key-offer time;
-  an empty-ceiling `github_token` repo list is deny-all for a hand-authored
-  spec; a tokened corp-mirror redirect is dialed to its real port, not always
-  443; the exec-less (krun/CC3) sandbox path now applies the same fail-closed
-  resource-cap gate as the exec path; and the host ground-truth sensor no
-  longer forwards uncorrelated host-wide kernel events to the audit log/SIEM by
-  default.
-
-### Fixed
-
-- **The live e2e suite no longer calls a deleted route.** `test/e2e/live`
-  (`-tags docker`) still POSTed `/api/v1/runs/compose`, so its composer sub-test
-  would have 404'd on the next run. It is daemon-gated and not part of
-  `make ci`, so nothing caught it.
-- **The Settings Git host card validates the host before storing a credential.**
-  Without it a shape-invalid host stored its secret under `git-pat-<slug>` and
-  only failed later when the `scm_hosts` write was rejected — leaving a
-  credential saved under a name nothing would ever read.
-
-- **~180 additional go-live findings** across the first-run/setup funnel, the
-  new-run flow, workspaces, integrations, approvals, recordings, and the
-  audit/policy/secrets screens — broken promises, misleading copy, dead ends,
-  and **WCAG 2.1 AA accessibility** gaps (keyboard operability, `aria-current`
-  /`aria-pressed`/`aria-label` on custom controls, theme-invariant contrast on
-  the terminal player, and destructive-action confirmations). Documentation and
-  threat-model claims were reconciled against the shipped code throughout.
-
-### Changed
-
 - **The Getting Started funnel is 10 steps, not 12.** The Directories & repos
   and Base images steps are gone; "Your work" is one step (Workspaces). The
   connection step renders the same two Settings cards rather than embedding the
@@ -247,123 +295,60 @@ and does not yet follow semantic versioning (interfaces are not stable).
   trusted. (docs/OPERATIONS.md "Every generated image carries the
   claude-code CLI as standard tooling".)
 
-### Added
+### Removed
 
-- **The Integrations page's Tools tab**, the integration→tool "carries"
-  chips in the workspace wizard (base-image, build, and verify steps), and
-  the client-side mirrors of the bake conditions. Tools are what the image
-  carries; the Integrations surface now speaks only to connections.
-
-- **The `artifact_mirror`/`host_proxy` derivations.** The Integrations surface
-  no longer synthesizes rows from `EgressRedirects`/`UpstreamProxySecretRef`:
-  that is network topology, it already has a surface (Corporate network), and
-  showing it twice made one config look like two. Nothing about how a run
-  redirects or chains through the corporate proxy changes.
-
-## [0.5.0] — 2026-08-12
-
-### Security
-
-- **OIDC sessions now carry a derived admin/member role** (`WARDYN_OIDC_ROLE_MAP`,
-  `internal/auth/oidc`'s `deriveRole`). Upgrading forces one SSO re-login: a pre-0.5
-  session cookie carries no role and now decodes as no session (`decodeSession`), never
-  as an authenticated session with an undefined role.
-- **Authorization enforcement: the admin/member role is now enforced, plus
-  owner-or-admin scoping.** `requireOperator`/`isOperator` gate on the session's
-  role instead of re-checking `WARDYN_OIDC_OPERATOR_EMAILS` directly (the
-  allowlist still works — it feeds role derivation via `LegacyAdminEmails`, one
-  source of truth instead of two). `GET /metrics` now carries the admin gate
-  explicitly. A member is scoped to their OWN runs/approvals on `GET /runs`,
-  `GET /approvals` (unscoped), and `GET /audit` (`?run_id=` of an owned run,
-  else an empty result — never a cross-user leak); `GET/kill/profile/grants` on
-  a run, the recording replay, an approval decide, and the attach-ticket mint
-  all use an owner-or-admin gate that answers a foreign resource with the
-  byte-identical 404 a missing one gets (no existence oracle). Attach tickets
-  now carry the minting principal's role (migration 0034), since the
-  interactive-attach WebSocket's `?ticket=` lane authenticates entirely off the
-  ticket and never runs the normal session check. `GET /setup/status` redacts
-  operator-diagnostic detail (environment checks, resident CLI detection,
-  secret names, runner detail) for a member. A member's `inline_policy` on
-  `POST /runs` (and its preflight dry-run) is now clamped to the operator's
-  default policy ceiling before resolution, and bringing a custom sandbox
-  image (`image`) is admin-only. Two routes move from admin-only to
-  owner-or-admin: minting an attach ticket and deciding an approval, both
-  restricted to the run's own creator (or an admin) either way. A new
-  `authz.denied` audit action records a member's admin-surface or BYOI
-  denials (not a foreign-resource 404 — that stays silent by design, matching
-  the no-existence-oracle rule above).
-
-### Added
-
-- **Kubernetes runner substrate** (`internal/runner/k8s`, `-tags k8s`,
-  `WARDYN_RUNNER=k8s`): a second, independent confinement substrate behind the
-  existing `substrate.Substrate` seam — wardynd creates/manages sandboxes as
-  pods instead of Docker containers. L1 (NetworkPolicy-enforced), not L0
-  (structural) like Docker: a boot-time two-phase egress canary proves the
-  cluster's CNI actually enforces `NetworkPolicy` before the substrate will
-  start at all, refusing to boot otherwise
-  (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the loud, logged opt-out). CC1
-  out of the box; `WARDYN_CONFINEMENT_MAP`/the chart's `k8s.runtimeClasses`
-  pin CC2/CC3 to a registered RuntimeClass. Not at parity with Docker yet —
-  no BYOI/devcontainer builds, no `local_dir` mounts, no per-pod PIDs/disk
-  enforcement, no k8s ground-truth correlator (see
-  `deploy/helm/wardyn/README.md`/`docs/OPERATIONS.md`'s "Known gaps").
-- **The Helm chart (`deploy/helm/wardyn`) can now create sandboxes, not just
-  the control plane.** `k8s.enabled=true` wires the substrate above into a
-  real install: least-privilege `Role`/`RoleBinding` + `ClusterRole` scoped to
-  exactly the verbs the substrate issues, a default-deny `NetworkPolicy`
-  extended with apiserver egress and a runs-namespace ingress peer, and a new
-  `k8s_egress_containment` setup check the console surfaces (Enforcing / Not
-  enforcing / Indeterminate). `test/conformance`'s `conformance-k8s` CI job
-  now proves the substrate on a real cluster (kind, `disableDefaultCNI` + a
-  pinned Calico manifest — kind's default CNI does not enforce
-  `NetworkPolicy`); the suite's one L0-specific case self-skips there by
-  design (the substrate claims L1, not L0) and a dedicated L1 case proves
-  what it actually claims instead. New `.claude/skills/wardyn-k8s-setup`
-  skill: cluster prereqs, values authoring, wiring Entra ID App Roles for
-  admin/member RBAC, install/verify, and a symptom→cause→fix table.
-- **Native SSH into a running sandbox.** `wardynd` serves `ssh
-  <run-id>@host` (registered public keys only, owner-only authorization)
-  directly into the same tmux session the web terminal attaches to: exec
-  (exit-code propagation), the sandbox's own `sftp-server` subsystem, and
-  `-L` port forwarding restricted to the sandbox's own loopback. Each
-  primitive gets its own audit action (`ssh.exec`/`ssh.sftp`/`ssh.forward`);
-  the shell path is recorded exactly like the browser terminal (`ssh-`
-  prefixed session key). Off by default (`WARDYN_SSH_LISTEN` unset — no
-  listener, no host key even generated). See `docs/SSH.md`.
-- **Member console.** The web console is now role- and kind-aware: a
-  member's nav hides operator-only surfaces (policy/workspace/secret CRUD,
-  BYOI), and the approvals view renders per-kind — `egress_domain` approvals
-  a member can decide, `credential`/`tool_call` ones they can only view.
-  Getting Started gained a Kubernetes-runner flavor (source-honest copy for
-  what the k8s substrate does and doesn't support yet).
-- **Signed, published release images.** `.github/workflows/release.yml`
-  builds and pushes the four images a release ships (`wardynd`,
-  `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
-  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag, cosign-signs each keylessly
-  (Fulcio/Rekor via the Actions OIDC token), and publishes a CycloneDX SBOM via
-  the existing `make sbom` target as a downloadable workflow artifact
-  (deliberately not auto-attached to the GitHub Release — RELEASING.md's
-  release step is manual by design; attach it by hand if wanted). linux/amd64
-  only today.
-- **CLI confinement-tier aliases + `/healthz` friendly names.** The run
-  commands accept `--confinement fence|wall|vault` as aliases for CC1/CC2/CC3
-  (with trust-model flag help), and `/healthz` now exposes a
-  `confinement_names` CC-code→friendly-name map (mirroring the console's
-  `cc-meta.ts`) so a scriptable consumer learns "CC1" means "Fence" without
-  hardcoding it (`internal/api/server.go`, `commands.go`, `types.go`).
-- **Sandbox image builder setup check (`env_builder`).** `/setup/status` now
-  reports whether the per-run image builder is wired — the path a
-  devcontainer build or a `--image` (BYOI) run needs. INFO (never a warning)
-  when off, the bare-binary default, so a `--image`/devcontainer run that
-  would otherwise silently no-op reads as a real, fixable checklist row.
-- **Non-blocking model-resolution warning.** A codex or managed-subscription
-  run whose model access resolves ambiguously now surfaces an advisory
-  warning (`resolveRunLLMAccess`/`runNeedsModelWarning`, `runs.go`) instead of
-  failing opaquely at dispatch.
+- **BREAKING — generic integration kinds.** `PUT /api/v1/integrations/{id}` now
+  answers 400 for any kind outside the closed set (`anthropic_api_key`,
+  `anthropic_subscription`, `bedrock`, `openai_api_key`, `github_app`,
+  `git_host`), and the error names what is accepted. Generic kinds — package
+  feeds, container registries, cloud providers, data stores, MCP servers, work
+  tracking, observability, "other service" — were the operator-extensibility
+  surface behind the Integrations catalog, and that catalog is gone. **A row
+  stored under an earlier release is not destroyed:** it still deserializes,
+  still sits in `SiteConfig`, and is still injected into a granted run by
+  `internal/api/integrations_run.go`. It simply cannot be edited through the API
+  any more.
+- **BREAKING — `azure_openai` as an integration kind.** Its one capability
+  powered the AI Run Composer, which was also removed; no agent tool can be
+  pointed at an Azure OpenAI deployment. An `azure-openai-key` left in the
+  secret store is untouched and inert.
+- **BREAKING — `pkg/client`'s `CreateRunRequest.ComposeSessionID`**, with its
+  server-side UUID validation and `run.create` audit stamping. The only thing
+  that ever produced a real value was the composer, so the field had become one
+  that accepted any UUID and correlated it to a conversation that can no longer
+  exist.
+- **The `/integrations` page** (and `/integrations/:id`). Both redirect to the
+  new `/settings`. Connections are four cards there — Host, Model provider, Git
+  host, Your SSH keys — each a radio group over concrete lanes, replacing a
+  catalog of seven kinds plus a generic escape hatch and a 931-line Add dialog.
+- **The integration verification-probe framework**: `POST
+  /api/v1/integrations/{id}/test`, `IntegrationProbe`, `IntegrationProbeStatus`
+  and the in-memory probe cache. Settings states what is STORED and says so
+  plainly rather than dialing the provider; a real run is the real test. A
+  `probe` key on a row stored under an earlier release is ignored, not rejected.
+- **`POST /api/v1/integrations/{id}/adopt`.** Adoption promoted a derived row
+  into a stored one so the catalog could edit it. A `PUT` onto a derived id used
+  to answer 409 pointing at that route — a dead end once it was unregistered —
+  so the write IS the adoption now, carrying the same audit event.
 
 ### Fixed
 
+- **The live e2e suite no longer calls a deleted route.** `test/e2e/live`
+  (`-tags docker`) still POSTed `/api/v1/runs/compose`, so its composer sub-test
+  would have 404'd on the next run. It is daemon-gated and not part of
+  `make ci`, so nothing caught it.
+- **The Settings Git host card validates the host before storing a credential.**
+  Without it a shape-invalid host stored its secret under `git-pat-<slug>` and
+  only failed later when the `scm_hosts` write was rejected — leaving a
+  credential saved under a name nothing would ever read.
+
+- **~180 additional go-live findings** across the first-run/setup funnel, the
+  new-run flow, workspaces, integrations, approvals, recordings, and the
+  audit/policy/secrets screens — broken promises, misleading copy, dead ends,
+  and **WCAG 2.1 AA accessibility** gaps (keyboard operability, `aria-current`
+  /`aria-pressed`/`aria-label` on custom controls, theme-invariant contrast on
+  the terminal player, and destructive-action confirmations). Documentation and
+  threat-model claims were reconciled against the shipped code throughout.
 - **`ssh.forward` audit rows survived a killed session.** A client that
   killed its whole SSH session mid-`-L`-forward could race
   `handleSSHConn`'s connection-teardown context cancellation against
