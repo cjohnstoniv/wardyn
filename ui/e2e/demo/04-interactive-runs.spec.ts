@@ -299,9 +299,20 @@ test("V04 beat 4 — the boundary", async () => {
   await caption(page, "The proxy strips what the sandbox sent, and attaches the live token at the boundary.");
 
   // \b matters: "credentials" from beat 3 is still in scrollback and contains
-  // "red". A word-bounded colour proves an actual answer arrived.
-  await expect(screen).toContainText(/\b(red|yellow|blue)\b/i, { timeout: MODEL_ANSWERS });
-  await expect(screen).not.toContainText(/invalid.*key|authentication_error|credit balance/i);
+  // "red". A word-bounded colour proves an actual answer arrived — and the
+  // refusals race it, so a doomed take dies in seconds with a named reason
+  // instead of waiting out the full answer window. Take 1 hit exactly this:
+  // "You've hit your weekly limit · resets ..." — the subscription's own
+  // quota, which no preflight can detect because only a real call reveals it.
+  const OUTCOME = /\b(red|yellow|blue)\b|hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i;
+  await expect(screen).toContainText(OUTCOME, { timeout: MODEL_ANSWERS });
+  const text = (await screen.textContent()) ?? "";
+  expect(
+    /\b(red|yellow|blue)\b/i.test(text) && !/hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i.test(text),
+    `the model call was refused, not answered — the terminal shows a quota/auth failure. ` +
+      `A weekly-limit refusal cannot be fixed by a retake; wait for the reset (the message names it) ` +
+      `or connect a different subscription token, then re-shoot.`,
+  ).toBe(true);
   await caption(page, "A real answer, in a box that could not have paid for it. The key stayed outside.");
   await beat(page, PACE.read + 1000);
 });
