@@ -71,13 +71,33 @@ def main() -> int:
         print("narrate-mux: no cues — leaving the video silent", file=sys.stderr)
         return 2
 
-    # Overlap is not fatal (amix handles it) but it means a line was cut off on
-    # screen, which is a directing bug worth seeing.
-    overlaps = sum(
-        1 for i, c in enumerate(cues) if i and c["tMs"] < cues[i - 1]["tMs"] + cues[i - 1]["durMs"]
-    )
-    if overlaps:
-        print(f"narrate-mux: WARNING {overlaps} cue(s) overlap the previous line", file=sys.stderr)
+    # Two voices at once is the one defect every listener notices. A SMALL
+    # collision (the V01 class: a consistent few-hundred-ms accounting bias
+    # between the spec's awaited duration and the clip the mux actually lays
+    # down) is resolved here, at the layer that owns physical realizability:
+    # slide the colliding cue to just after the previous clip. The on-screen
+    # caption led its audio by that same sub-second sliver — invisible. A BIG
+    # collision stays a loud warning and an unshifted cue: that is a directing
+    # bug (a line genuinely cut off on screen) the verifier must keep failing,
+    # not something to quietly re-time into a different video.
+    CLAMP_MS = 1500
+    GAP_MS = 120
+    shifted = 0
+    big = 0
+    for i in range(1, len(cues)):
+        prev_end = cues[i - 1]["tMs"] + cues[i - 1]["durMs"]
+        gap = cues[i]["tMs"] - prev_end
+        if gap >= 0:
+            continue
+        if -gap <= CLAMP_MS:
+            cues[i]["tMs"] = prev_end + GAP_MS
+            shifted += 1
+        else:
+            big += 1
+    if shifted:
+        print(f"narrate-mux: {shifted} cue(s) slid to clear a sub-{CLAMP_MS}ms collision", file=sys.stderr)
+    if big:
+        print(f"narrate-mux: WARNING {big} cue(s) overlap the previous line by >{CLAMP_MS}ms — a line was cut off on screen", file=sys.stderr)
 
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", winpath(ffmpeg, args.video)]
     for c in cues:

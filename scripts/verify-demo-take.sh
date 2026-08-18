@@ -848,8 +848,12 @@ if [[ -s "${TL}" ]]; then
   python3 - "${TL}" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); c = d.get("cues", [])
-ov = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"])
-print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   overlaps: {ov}")
+# The mux slides sub-1500ms collisions (narrate-mux.py's CLAMP_MS — the
+# accounting-bias class); only a bigger one ships as two voices at once, so
+# only a bigger one fails the take. Keep this threshold equal to the mux's.
+ov = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"] - 1500)
+slid = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"])
+print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard overlaps: {ov}   (mux-slid: {slid - ov})")
 sys.exit(0 if (c and ov == 0) else 1)
 PY
   [[ $? -eq 0 ]] && ok "timeline complete, no overlapping lines" || bad "narration timeline has overlaps or is empty"
