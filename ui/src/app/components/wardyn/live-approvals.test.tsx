@@ -59,14 +59,84 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
-  it("only shows egress_domain approvals — a pending credential/tool_call for this run stays out of the egress strip", async () => {
+  it("a pending credential for this run stays out of the strip (its blast-radius card lives on the Approvals screen)", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "cred", kind: "credential", requested_scope: { host: "api.example", secret_name: "x" } }),
-      pending({ id: "tool", kind: "tool_call", requested_scope: { cmd: "rm -rf /" } }),
     ]);
     render(<LiveApprovals runId="r1" />);
     expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
     expect(screen.queryByTestId("live-approvals")).not.toBeInTheDocument();
+  });
+
+  // The toolgate is tool_call's first producer: a `hold` run parks the agent on
+  // every mutating tool call, and this strip is where that run is decided.
+  describe("tool_call rows", () => {
+    const LONG_CMD = "npm install ".repeat(12).trim();
+
+    function toolRow(over: Partial<ApprovalRequest> = {}) {
+      return pending({
+        id: "t1",
+        kind: "tool_call",
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+        ...over,
+      });
+    }
+
+    it("renders tool + cmd, clipped for the strip with the full string on the title", async () => {
+      listApprovalsMock.mockResolvedValue([toolRow({ requested_scope: { tool: "Bash", cmd: LONG_CMD } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const full = `Bash: ${LONG_CMD}`;
+      const line = within(panel).getByTitle(full);
+      expect(line.textContent).toBe(full.slice(0, 71) + "…");
+      expect(line.textContent!.length).toBeLessThan(full.length);
+    });
+
+    // decide rule 4 (approvals.go): ANY explicit decision_scope on a non-egress
+    // approval is a 400 — so a tool row must offer no scope to pick, and must
+    // decide with the BODYLESS default (a literal 2-argument api call).
+    it("renders NO scope caret and approves with a bodyless decision", async () => {
+      listApprovalsMock.mockResolvedValue([toolRow()]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).queryAllByRole("button", { name: /more options/i })).toHaveLength(0);
+
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(within(panel).getByRole("button", { name: /approve/i }));
+      expect(approveMock).toHaveBeenCalledWith("t1", expect.any(String));
+    });
+
+    it("keeps the caret on an egress row in the same strip", async () => {
+      listApprovalsMock.mockResolvedValue([toolRow(), pending({ id: "e1", requested_scope: { host: "unlisted.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      // Two carets total: approve + deny, from the egress row alone.
+      expect(within(panel).getAllByRole("button", { name: /more options/i })).toHaveLength(2);
+    });
+
+    it("denies through the confirm dialog, with tool copy — not the egress host sentence", async () => {
+      listApprovalsMock.mockResolvedValue([toolRow()]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+      await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+      expect(denyMock).not.toHaveBeenCalled();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/refuses this tool call/i)).toBeInTheDocument();
+      expect(within(dialog).queryByText(/blocks this host/i)).not.toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: /^deny$/i }));
+      expect(denyMock).toHaveBeenCalledWith("t1", expect.any(String));
+    });
+
+    it("never claims off-policy egress over a tool-only strip", async () => {
+      listApprovalsMock.mockResolvedValue([toolRow()]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).queryByText(/off-policy egress/i)).not.toBeInTheDocument();
+      expect(within(panel).getByText(/the agent is waiting on you/i)).toBeInTheDocument();
+    });
   });
 
   it("approves inline via the API", async () => {

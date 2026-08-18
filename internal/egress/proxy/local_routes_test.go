@@ -403,3 +403,120 @@ func TestLocalRouteRejectsBadPathSegment(t *testing.T) {
 		})
 	}
 }
+
+// TestLocalToolApprovalCreateForwardsSanitizedScope covers the sandbox-facing
+// tool-hold raise: the run token is injected (the sandbox is tokenless), the
+// smuggled Authorization is stripped, and the persisted requested_scope is the
+// {tool, cmd, env} shape the approvals screen renders — with cmd clamped and
+// env reduced to NAMES.
+func TestLocalToolApprovalCreateForwardsSanitizedScope(t *testing.T) {
+	apID := uuid.New()
+	longCmd := strings.Repeat("x", maxToolCmd+500)
+
+	var gotAuth, gotPath, gotBody string
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"id":"`+apID.String()+`","state":"PENDING"}`)
+	}))
+	defer cp.Close()
+
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"kind": "tool_call",
+		"payload": map[string]any{
+			"tool": "Bash",
+			"cmd":  longCmd,
+			"env":  []string{"AWS_PROFILE", "HOME"},
+		},
+	})
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, routeApprovalsCreate, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	if gotAuth != "Bearer RUNTOK" {
+		t.Fatalf("control plane Authorization = %q, want the injected run token", gotAuth)
+	}
+	if gotPath != "/api/v1/internal/approvals" {
+		t.Fatalf("forwarded path = %q", gotPath)
+	}
+	var fwd struct {
+		Kind           string `json:"kind"`
+		RequestedScope struct {
+			Tool string `json:"tool"`
+			Cmd  string `json:"cmd"`
+			Env  string `json:"env"`
+		} `json:"requested_scope"`
+	}
+	if err := json.Unmarshal([]byte(gotBody), &fwd); err != nil {
+		t.Fatalf("decode forwarded body: %v (%q)", err, gotBody)
+	}
+	if fwd.Kind != "tool_call" || fwd.RequestedScope.Tool != "Bash" {
+		t.Fatalf("forwarded = %+v", fwd)
+	}
+	// Clamped, and the truncation is VISIBLE — a human must never decide on a
+	// silently shortened command.
+	if want := strings.Repeat("x", maxToolCmd) + "… (truncated)"; fwd.RequestedScope.Cmd != want {
+		t.Fatalf("cmd = %d bytes (%q…), want the clamped+marked form", len(fwd.RequestedScope.Cmd), fwd.RequestedScope.Cmd[:20])
+	}
+	if fwd.RequestedScope.Env != "AWS_PROFILE, HOME" {
+		t.Fatalf("env = %q, want the joined NAME list", fwd.RequestedScope.Env)
+	}
+	// The created id rides the decision log so audit can join raise -> approval.
+	d := lastDecision(t, buf)
+	if d.RuleSource != ruleSourceApprovals || d.Decision != egress.Allow {
+		t.Fatalf("decision = %+v", d)
+	}
+	if d.ApprovalID == nil || *d.ApprovalID != apID {
+		t.Fatalf("decision approval_id = %v, want %v", d.ApprovalID, apID)
+	}
+}
+
+// TestLocalToolApprovalCreateRejects pins the trust boundary: the sandbox may
+// raise a tool hold and NOTHING else, and env values are unrepresentable on the
+// wire (an object-shaped env is a 400, never a stored secret). Every rejection
+// must fail BEFORE the control plane is contacted with the run token.
+func TestLocalToolApprovalCreateRejects(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"egress kind", `{"kind":"egress_domain","payload":{"cmd":"curl evil.example"}}`},
+		{"credential kind", `{"kind":"credential","payload":{"cmd":"x"}}`},
+		{"missing kind", `{"payload":{"cmd":"x"}}`},
+		{"env carries values", `{"kind":"tool_call","payload":{"cmd":"x","env":{"AWS_SECRET_ACCESS_KEY":"s3cr3t"}}}`},
+		{"nothing to decide", `{"kind":"tool_call","payload":{"tool":"  ","cmd":""}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var contacted bool
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				contacted = true
+				w.WriteHeader(http.StatusCreated)
+			}))
+			defer cp.Close()
+
+			p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, routeApprovalsCreate, strings.NewReader(tc.body)))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+			if contacted {
+				t.Fatal("control plane was contacted with the run token for a rejected raise")
+			}
+			if strings.Contains(rec.Body.String(), "s3cr3t") {
+				t.Fatal("an env value was echoed back to the sandbox")
+			}
+		})
+	}
+}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Brokered LOCAL routes served by the proxy listener itself (origin-form only;
@@ -31,10 +32,14 @@ import (
 const (
 	localRoutePrefix = "/wardyn/"
 
-	routeMint           = "/wardyn/v1/credentials/mint"
-	routeApprovals      = "/wardyn/v1/approvals/"
-	routeRecordings     = "/wardyn/v1/recordings/"
-	routeScanResults    = "/wardyn/v1/scan-results/"
+	routeMint = "/wardyn/v1/credentials/mint"
+	// routeApprovalsCreate (POST, exact path) raises a tool_call hold from the
+	// sandbox; routeApprovals (GET, {id} suffix) polls one. Same control-plane
+	// endpoint pair, same token injection.
+	routeApprovalsCreate = "/wardyn/v1/approvals"
+	routeApprovals       = "/wardyn/v1/approvals/"
+	routeRecordings      = "/wardyn/v1/recordings/"
+	routeScanResults     = "/wardyn/v1/scan-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
 	// scan/verify result uploads.
@@ -52,12 +57,12 @@ const (
 	maxBlindHosts = 64
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
-	ruleSourceMint           = "brokered:mint"
-	ruleSourceApprovals      = "brokered:approvals"
-	ruleSourceRecordings     = "brokered:recording"
-	ruleSourceScanResults    = "brokered:scan-result"
-	ruleSourceSSOToken       = "brokered:sso-token"
-	ruleSourceLLM            = "brokered:llm"
+	ruleSourceMint        = "brokered:mint"
+	ruleSourceApprovals   = "brokered:approvals"
+	ruleSourceRecordings  = "brokered:recording"
+	ruleSourceScanResults = "brokered:scan-result"
+	ruleSourceSSOToken    = "brokered:sso-token"
+	ruleSourceLLM         = "brokered:llm"
 	// ruleSourceLLMBlocked marks an LLM request refused by content inspection;
 	// ruleSourceLLMBlind marks an opaque CONNECT to an LLM host that inspection
 	// could not see into (honest coverage signal).
@@ -80,6 +85,14 @@ const (
 	// maxScanResultBody caps scan-result uploads. ScanFacts is bounded by the
 	// scanner's manifest-count + per-file caps, so this is a generous DoS ceiling.
 	maxScanResultBody = 8 << 20
+	// Bounds for a sandbox-raised tool_call approval. The body cap is a DoS
+	// ceiling; the field caps bound what is PERSISTED and shown to a human — a
+	// megabyte of agent-supplied text in an approval card is a decision nobody
+	// can actually read.
+	maxToolApprovalBody = 64 << 10
+	maxToolCmd          = 4 << 10
+	maxToolName         = 128
+	maxToolEnvNames     = 32
 )
 
 // maxLLMScanBody bounds how much of an LLM request body the proxy will buffer in
@@ -96,6 +109,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && path == routeMint:
 		p.handleBrokerMint(w, r)
+	case r.Method == http.MethodPost && path == routeApprovalsCreate:
+		p.handleBrokerCreateApproval(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, routeApprovals):
 		p.handleBrokerApproval(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeRecordings):
@@ -183,6 +198,121 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSourceApprovals, nil)
 	passThrough(w, resp, respBody)
+}
+
+// toolApprovalRequest is the SANDBOX-facing body for POST /wardyn/v1/approvals.
+// Payload is the shape the approvals UI already renders for a tool_call
+// (screens/approvals.tsx: {tool, cmd, env}).
+//
+// Env is a list of variable NAMES, and it is a name list BY TYPE: the wire
+// cannot carry a value, so no code path exists that could persist one. A client
+// that sends {"env":{"AWS_SECRET":"…"}} gets a 400, not a stored secret.
+type toolApprovalRequest struct {
+	Kind    string `json:"kind"`
+	Payload struct {
+		Tool string   `json:"tool"`
+		Cmd  string   `json:"cmd"`
+		Env  []string `json:"env,omitempty"`
+	} `json:"payload"`
+}
+
+// toolCallScope is the requested_scope persisted for a tool_call approval:
+// {tool, cmd, env} exactly, because that is what the approvals screen reads
+// (deriveTitle/deriveBanner in screens/approvals.tsx). env is the joined name
+// list — a display string, never values.
+type toolCallScope struct {
+	Tool string `json:"tool"`
+	Cmd  string `json:"cmd"`
+	Env  string `json:"env,omitempty"`
+}
+
+// handleBrokerCreateApproval forwards POST /wardyn/v1/approvals to the control
+// plane's internal approval endpoint with the run token injected — the
+// sandbox-facing alias the tool-approval gate uses to park a tool call for a
+// human decision.
+//
+// The RUN IDENTITY IS NEVER SANDBOX INPUT: it rides the run token this proxy
+// holds (forwardToControlPlane), which the control plane binds from its
+// verified claims — the same derivation the approvals GET and the recording PUT
+// use, and the reason the sandbox itself stays tokenless.
+//
+// Only kind "tool_call" is accepted. Egress holds are raised by the PROXY
+// (approvals.go raise()), the component that can actually park the connection;
+// letting the sandbox mint an egress_domain approval would let it open a hold
+// for a host it was never allowed to reach — and, approved, teach the workspace
+// an allow-list entry nothing ever asked for.
+func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Request) {
+	var body toolApprovalRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxToolApprovalBody)).Decode(&body); err != nil {
+		http.Error(w, "invalid tool approval request", http.StatusBadRequest)
+		return
+	}
+	if body.Kind != string(types.ApprovalToolCall) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
+		http.Error(w, `wardyn: this route raises kind "tool_call" only; egress holds are raised proxy-side`,
+			http.StatusBadRequest)
+		return
+	}
+	scope := toolCallScope{
+		Tool: clampToolField(body.Payload.Tool, maxToolName),
+		Cmd:  clampToolField(body.Payload.Cmd, maxToolCmd),
+		Env:  envNames(body.Payload.Env),
+	}
+	// An approval that names neither a tool nor a command asks a human to decide
+	// about nothing. Refuse it here rather than persisting an undecidable card.
+	if scope.Tool == "" && scope.Cmd == "" {
+		http.Error(w, "tool approval needs a tool or a cmd", http.StatusBadRequest)
+		return
+	}
+	fwd, err := json.Marshal(struct {
+		Kind           string        `json:"kind"`
+		RequestedScope toolCallScope `json:"requested_scope"`
+	}{Kind: string(types.ApprovalToolCall), RequestedScope: scope})
+	if err != nil {
+		p.httpError(w, "encode tool approval", err, http.StatusInternalServerError)
+		return
+	}
+	resp, err := p.forwardToControlPlane(r.Context(), http.MethodPost,
+		"/api/v1/internal/approvals", fwd, "application/json")
+	if err != nil {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
+		p.httpError(w, "control plane error", err, http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
+	// The created row's id rides the decision log so audit can join "the sandbox
+	// raised this hold" to the approval it raised, without parsing the response.
+	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSourceApprovals, extractApprovalID(respBody))
+	passThrough(w, resp, respBody)
+}
+
+// clampToolField bounds a sandbox-supplied string for storage and marks any
+// truncation honestly — a human decides on what this renders, so a silently
+// shortened command would be a decision made on a half-true string.
+// ToValidUTF8 drops the partial rune a byte-slice cut can leave behind.
+func clampToolField(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return strings.ToValidUTF8(s[:max], "") + "… (truncated)"
+}
+
+// envNames renders the sandbox-supplied env variable NAMES for display, bounded
+// in count and length. Values never reach here (see toolApprovalRequest.Env).
+func envNames(names []string) string {
+	if len(names) > maxToolEnvNames {
+		names = names[:maxToolEnvNames]
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n = clampToolField(n, maxToolName); n != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // handleBrokerRecording forwards PUT /wardyn/v1/recordings/{runID} to the
@@ -817,13 +947,21 @@ func decisionForStatus(status int) egress.Decision {
 	return egress.Deny
 }
 
-// extractApprovalID pulls "approval_id" out of a control-plane 409 body, if
-// present and parseable. Best-effort: a malformed body yields nil.
+// extractApprovalID pulls the approval id out of a control-plane body: the
+// "approval_id" a 409 pending carries, or the "id" of a row the approvals POST
+// just created. Best-effort: a malformed body yields nil.
 func extractApprovalID(body []byte) *uuid.UUID {
 	var m struct {
 		ApprovalID string `json:"approval_id"`
+		ID         string `json:"id"`
 	}
-	if err := json.Unmarshal(body, &m); err != nil || m.ApprovalID == "" {
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil
+	}
+	if m.ApprovalID == "" {
+		m.ApprovalID = m.ID
+	}
+	if m.ApprovalID == "" {
 		return nil
 	}
 	id, err := uuid.Parse(m.ApprovalID)

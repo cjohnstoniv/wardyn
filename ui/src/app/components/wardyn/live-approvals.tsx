@@ -13,6 +13,10 @@
 // connection is parked live waiting for this decision, so approving it lets the
 // request through transparently. A passive deny_with_review pending is shown too,
 // but without the "waiting" urgency.
+//
+// It also carries the run's tool_call holds (a `tool_approvals: hold` run parks
+// the agent on every mutating tool call), which is why some rows here have no
+// scope caret — see decide().
 import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
@@ -72,11 +76,28 @@ export function isHeld(a: ApprovalRequest): boolean {
   return String((a.requested_scope?.mode as string) ?? "") === "wait_for_review";
 }
 
+// rowLabel is the row's identity line: the host for an egress hold, the tool
+// and its command for a tool hold. The full string is the Mono title; clip()
+// keeps the strip one line tall (the Approvals screen renders the whole scope).
+function rowLabel(a: ApprovalRequest): string {
+  if (a.kind !== "tool_call") return String((a.requested_scope?.host as string) ?? "unknown host");
+  const parts = [a.requested_scope?.tool, a.requested_scope?.cmd]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean);
+  return parts.join(": ") || "a tool call";
+}
+
+const STRIP_LABEL_MAX = 72;
+
+function clip(s: string): string {
+  return s.length > STRIP_LABEL_MAX ? s.slice(0, STRIP_LABEL_MAX - 1) + "…" : s;
+}
+
 export function LiveApprovals({
   runId,
   reasonApprove = "approved live",
   reasonDeny = "rejected live",
-  idleHint = "Watching for off-policy egress — anything the agent tries that isn't allow-listed surfaces here to approve or deny, live.",
+  idleHint = "Watching for off-policy egress and held tool calls — anything the agent tries that isn't allow-listed surfaces here to approve or deny, live.",
   // Whether THIS run resolves to an onboarded workspace — Always persists
   // there, so it's greyed out without one. Default false so a caller that
   // forgets to pass it shows the option disabled rather than offering a click
@@ -107,11 +128,18 @@ export function LiveApprovals({
   const refresh = React.useCallback(async () => {
     try {
       const all = await api.listApprovals("PENDING");
-      // Scoped to egress_domain only: the header/host/deny copy below is
-      // egress-specific. credential and tool_call approvals for this run
-      // still surface via the run detail's "Waiting for your confirmation"
-      // banner, which routes to the full Approvals screen's kind-aware UI.
-      setPending(all.filter((a) => a.run_id === runId && a.kind === "egress_domain"));
+      // egress_domain + tool_call: both park the run live, so both belong on the
+      // surface the human is already watching. tool_call gained its first
+      // producer with the toolgate (a `hold` run raises one per mutating tool
+      // call) and this strip is that run's primary decision surface.
+      //
+      // credential stays OUT: a mint approval is raised once at dispatch, before
+      // anyone is watching a terminal, and its blast-radius banner (the git_pat
+      // "the agent's process can read this" nuance, the broker's TTL) is the
+      // whole point of deciding it — none of which fits a one-line strip. It
+      // surfaces via the run detail's "Waiting for your confirmation" banner,
+      // which routes to the Approvals screen's kind-aware card.
+      setPending(all.filter((a) => a.run_id === runId && (a.kind === "egress_domain" || a.kind === "tool_call")));
     } catch {
       /* transient poll error — keep the last snapshot */
     }
@@ -127,6 +155,10 @@ export function LiveApprovals({
   // this feature. decisionArgs omits the trailing options arg entirely for
   // "run" so this stays a literal 2-argument api call for the default path
   // (vitest's toHaveBeenCalledWith matches arity exactly).
+  //
+  // A tool_call row can only ever take that default path: decide rule 4
+  // (approvals.go) 400s ANY explicit decision_scope on a non-egress approval,
+  // so the caret is not rendered for those rows and nothing can hand one in.
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -166,6 +198,13 @@ export function LiveApprovals({
   }
 
   const anyHeld = pending.some(isHeld);
+  // Never claim "egress" over a set that holds a tool call, and never claim
+  // "held" over one nothing is waiting on.
+  const heading = anyHeld
+    ? "Sandbox is waiting — approve to let it through"
+    : pending.every((a) => a.kind === "egress_domain")
+      ? "Approval needed — off-policy egress"
+      : "Approval needed — the agent is waiting on you";
 
   return (
     <div
@@ -173,15 +212,15 @@ export function LiveApprovals({
       data-testid="live-approvals"
     >
       <div className="flex items-center gap-2">
-        <SectionLabel>
-          {anyHeld ? "Sandbox is waiting — approve to let it through" : "Approval needed — off-policy egress"}
-        </SectionLabel>
+        <SectionLabel>{heading}</SectionLabel>
         {/* Named once for the whole panel, not per row. */}
         {!operator && <OperatorOnlyHint />}
       </div>
       {pending.map((a) => {
-        const host = String((a.requested_scope?.host as string) ?? "unknown host");
+        const label = rowLabel(a);
         const held = isHeld(a);
+        // Only egress decisions carry a scope (decide rule 4) — see decide().
+        const scoped = a.kind === "egress_domain";
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
             {held ? (
@@ -189,7 +228,9 @@ export function LiveApprovals({
             ) : (
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
-            <Mono className="flex-1 text-foreground">{host}</Mono>
+            <Mono className="flex-1 text-foreground" title={label}>
+              {clip(label)}
+            </Mono>
             {held && <span className="text-[0.625rem] uppercase tracking-wide text-warning">waiting</span>}
             {/* Split button: the bare click is "This run" (scope's default,
                 unchanged from before this feature existed) — the caret opens
@@ -206,7 +247,7 @@ export function LiveApprovals({
             >
               <Check className="size-3.5" /> Approve
             </Button>
-            {operator && (
+            {operator && scoped && (
               <ScopeMenu
                 verb="approve"
                 hasWorkspace={hasWorkspace}
@@ -224,7 +265,7 @@ export function LiveApprovals({
             >
               <X className="size-3.5" /> Deny
             </Button>
-            {operator && (
+            {operator && scoped && (
               <ScopeMenu
                 verb="deny"
                 hasWorkspace={hasWorkspace}
@@ -240,11 +281,7 @@ export function LiveApprovals({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Deny{" "}
-              <Mono>
-                {denyTarget ? String((denyTarget.request.requested_scope?.host as string) ?? "unknown host") : ""}
-              </Mono>
-              ?
+              Deny <Mono>{denyTarget ? clip(rowLabel(denyTarget.request)) : ""}</Mono>?
             </AlertDialogTitle>
             {/* Scope-dependent (Phase 0 §3) — replaces a sentence that was
                 false for two of the four scopes: `once` re-raises on the next
@@ -252,7 +289,14 @@ export function LiveApprovals({
                 in the workspace's egress settings, neither of which "no undo
                 and no re-raise" allowed for. */}
             <AlertDialogDescription>
-              {denyDialogCopy(denyTarget?.scope ?? "run", { until: denyTarget?.until })}
+              {/* denyDialogCopy is egress-shaped ("blocks this host…") and every
+                  one of its four scopes is false for a tool hold, which has no
+                  host and no scope at all: a deny refuses THIS call, the agent
+                  is told no, and the run carries on. One string, one use — it
+                  stays here rather than in copy.ts. */}
+              {denyTarget?.request.kind === "tool_call"
+                ? "Denying refuses this tool call. The agent is told no and carries on — its next one asks again."
+                : denyDialogCopy(denyTarget?.scope ?? "run", { until: denyTarget?.until })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -338,6 +338,34 @@ func TestInternalApprovalRequestBindsRunFromToken(t *testing.T) {
 	}
 }
 
+// TestInternalApprovalRequestAcceptsToolCall pins the control-plane half of the
+// tool-approval gate. The brokered POST /wardyn/v1/approvals (the sandbox's
+// tokenless alias, local_routes.go) forwards EXACTLY this body, and the
+// approvals screen reads exactly this scope — so a kind quietly dropped from
+// the switch above would park every `tool_approvals: hold` run forever.
+func TestInternalApprovalRequestAcceptsToolCall(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	tok := h.mintRunToken(t, runID)
+	scope := `{"tool":"Bash","cmd":"rm -rf build","env":"AWS_PROFILE"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", tok,
+		`{"kind":"tool_call","requested_scope":`+scope+`}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("tool_call approval code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if len(h.approvals.requested) != 1 {
+		t.Fatalf("approvals requested = %d, want 1", len(h.approvals.requested))
+	}
+	got := h.approvals.requested[0]
+	if got.Kind != types.ApprovalToolCall || got.RunID != runID {
+		t.Fatalf("stored approval = %s for run %s, want tool_call for %s", got.Kind, got.RunID, runID)
+	}
+	// Stored verbatim: the UI renders {tool, cmd, env} straight off this field.
+	if string(got.RequestedScope) != scope {
+		t.Fatalf("requested_scope = %s, want %s", got.RequestedScope, scope)
+	}
+}
+
 func TestInternalApprovalRequestRejectsCredentialKind(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintRunToken(t, uuid.New())
