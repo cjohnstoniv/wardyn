@@ -77,10 +77,29 @@ before step 3.
    commit** before tagging.
 2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
    `git commit -s -m "release: X.Y.Z"`.
-3. **Tag** the release commit: `git tag vX.Y.Z` (tags are `v`-prefixed —
-   `v0.1.0` … `v0.4.3`).
-4. **Push** the commit and the tag: `git push origin main && git push origin vX.Y.Z`.
-5. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
+3. **Cut (or reuse) the release branch.** Starting with 0.5, every minor
+   release lives on a `release/X.Y` branch cut from the release commit:
+   `git checkout -b release/X.Y`. The branch is where that minor's patch
+   releases come from — fixes land on `main` (or the feature branch) first and
+   are cherry-picked onto `release/X.Y`; the branch never takes new features.
+4. **Tag** on the release branch: `git tag vX.Y.Z` (tags are `v`-prefixed —
+   `v0.1.0` … `v0.4.3`). For a patch release, compute the next patch number
+   from the branch's own tags rather than by hand — auto-increment, so two
+   people cutting patches never collide:
+
+   ```sh
+   git checkout release/X.Y
+   LAST=$(git tag -l "vX.Y.*" --sort=-v:refname | head -1)   # e.g. vX.Y.3
+   NEXT="vX.Y.$(( ${LAST##*.} + 1 ))"                        # -> vX.Y.4
+   git tag "$NEXT"
+   ```
+
+   (Bump `internal/version/version.go` + the CHANGELOG section on the release
+   branch in the same stroke — `make release-check` holds there too.)
+5. **Push** the branch and the tag:
+   `git push origin release/X.Y && git push origin vX.Y.Z`
+   (and `git push origin main` if step 2's commit landed there).
+6. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
    as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
    pre-alpha.
 
