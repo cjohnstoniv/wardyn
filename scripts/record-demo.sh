@@ -232,8 +232,13 @@ DEMO_OUT_DIR="${REPO_ROOT}/ui/test-results/demo-video${VIDEO:+-${VIDEO}}"
 mkdir -p "${DEMO_OUT_DIR}"
 export WARDYN_DEMO_WORK_DIR="${DEMO_OUT_DIR}"
 
-if [[ -z "${DEMO_CDP:-}" && -z "${DISPLAY:-}" ]]; then
-  die "no DISPLAY — the driver needs a headed browser. Under WSL that means WSLg; or set DEMO_CDP to attach to a Chrome with remote debugging."
+# DISPLAY gates only the SCREEN-GRAB lanes (--with-terminal / --terminal-script,
+# which gdigrab a desktop rectangle). The browser lane records itself HEADLESS
+# now — the old headed capture could never be pixel-clean here, because WSLg
+# clamps any window taller than the screen and every take wore a gray
+# letterbox for it.
+if [[ ( "${DO_TERMINAL}" == 1 || -n "${TERMINAL_SCRIPT}" ) && -z "${DISPLAY:-}" ]]; then
+  die "no DISPLAY — the terminal lane grabs the desktop. Under WSL that means WSLg."
 fi
 
 # gdigrab is a Windows capture device, so the encoder has to be the Windows

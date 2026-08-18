@@ -134,7 +134,17 @@ async function placeWindowInFrame(): Promise<void> {
   const session = await page.context().newCDPSession(page).catch(() => null);
   if (!session) return;
   try {
-    const { windowId } = (await session.send("Browser.getWindowForTarget")) as { windowId: number };
+    // Headless (the demo project's default now): there is no OS window to
+    // place, getWindowForTarget either errors or answers with virtual bounds.
+    // Either way placement is meaningless — the recording is the viewport by
+    // construction — so bail rather than fail a take over a window that does
+    // not exist. A headed run (DEMO_CDP with a real browser) still gets the
+    // full check below.
+    const win = (await session.send("Browser.getWindowForTarget").catch(() => null)) as {
+      windowId: number;
+    } | null;
+    if (!win) return;
+    const { windowId } = win;
     // Size the WINDOW to the viewport PLUS the browser's own chrome. Setting
     // the window to 1920x1080 while the viewport is also 1920x1080 leaves the
     // page squeezed into whatever is left after the tab strip and address bar

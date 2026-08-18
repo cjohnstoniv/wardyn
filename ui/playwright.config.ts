@@ -57,8 +57,15 @@ export default defineConfig({
       // the REAL compose stack on :8080 — a live runner, real sandboxes, a
       // connected model. The hermetic `-runner none` backend the chromium gate
       // uses cannot start a demo sandbox, so this project deliberately does not
-      // share its base URL. Headed, because something has to be on screen to
-      // film. Driven by scripts/record-demo.sh (`make record-demo`); the spec
+      // share its base URL. HEADLESS, deliberately: the browser records
+      // ITSELF (recordVideo), so nothing needs to be on screen — and headed
+      // recording could never be pixel-clean on this box: the screencast
+      // captures the window's VISIBLE content area, WSLg clamps any window
+      // taller than the screen, so the page could never reach a true 1080
+      // and every take shipped a ~90px gray letterbox at the bottom.
+      // Headless frames are exactly the viewport. The cost is honest: there
+      // is no live window to watch a take in progress — the published cut is
+      // the first viewing. Driven by scripts/record-demo.sh; the spec
       // self-skips without WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a
       // browser at a developer's live stack and start clicking Launch.
       //
@@ -81,7 +88,7 @@ export default defineConfig({
         // (a fake UA, its own viewport, touch flags) are all things this
         // project sets — or wants unset — itself.
         baseURL: process.env.WARDYN_DEMO_BASE_URL || "http://localhost:8080",
-        headless: false,
+        headless: true,
         viewport: { width: 1920, height: 1080 },
         // The browser records ITSELF. A desktop grab of this window is at the
         // mercy of whatever else is on that monitor: WSLg presents these as
@@ -99,9 +106,9 @@ export default defineConfig({
         // Generous, because these clicks land on a real, busy console.
         actionTimeout: 45_000,
         trace: "off",
-        launchOptions: {
-          args: ["--window-position=0,0", "--window-size=1920,1080", "--hide-crash-restore-bubble"],
-        },
+        // No window args: headless has no window to position, and the old
+        // --window-size request was moot anyway (WSLg clamped it).
+        launchOptions: {},
       },
     },
   ],
