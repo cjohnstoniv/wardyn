@@ -32,11 +32,27 @@
  * host the whole series agrees means "not on any list" — only as the UNSEEN
  * host in the confined replay.
  *
+ * PACING. Four stretches of this video are nothing but waiting on a container
+ * or on a server-side reconcile: the recorded session's spin-up, its capture
+ * settling after Done recording, the confined replay's spin-up, and that
+ * replay's own capture. Each is wrapped in overlay.ts's ffwdStart/ffwdEnd and
+ * squeezed 12x by scripts/demo-ffwd.py after assembly. NOTHING MAY SPEAK inside
+ * a span — a line spoken over frames the encoder throws away lands 12x early
+ * and drags every later cue with it — and each ffwdStart is preceded by a
+ * beat(200) that DRAINS the previous line's audio, because caption() only
+ * schedules speech (the double-speak bug V05's take-6 verifier caught). Each
+ * ffwdEnd fires the instant the awaited state lands, BEFORE the next caption,
+ * so every beat the viewer is meant to watch plays at human speed.
+ *
  * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
  * filename and names the take wardyn-06-record-a-run-<stamp>.mp4 (docs/README.md
  * already links that asset). Do not rename the file. It self-skips without
  * WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a headed browser at a
  * developer's live stack and start recording sessions in it.
+ *
+ * The demo project records HEADLESS (playwright.config.ts): the browser records
+ * ITSELF, there is no OS window during a take, and nothing here may depend on
+ * window geometry. Nothing does — every locator is a role/testid on the page.
  *
  * Selectors are getByRole + accessible name, matching the rest of the suite.
  * Every literal targeted here was read out of ui/src at authoring time:
@@ -47,7 +63,7 @@
 
 import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { act, beat, caption, PACE, spotlight, typeInTerminal } from "./overlay";
+import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
@@ -101,6 +117,20 @@ const RECORDED_HOSTS = ["pypi.org", "files.pythonhosted.org"] as const;
 const UNSEEN_HOST = "example.com";
 
 /**
+ * The two chips a confined replay can END on (STAGE_CHIP_META, record-pane.tsx).
+ *
+ * Load-bearing for B5/B6: SessionCard renders the attached terminal, the
+ * LiveApprovals strip and the Done button ONLY while sessionStage() is
+ * "replaying" (session-helpers.ts). The moment the server flips that capture to
+ * recorded/record_failed, the whole branch UNMOUNTS and ConfinedReviewCard
+ * takes its place — so every wait aimed at the live half is racing a target
+ * that can stop existing. Racing against these two chips turns "poll five
+ * minutes for a row that can no longer appear" into an immediate, named
+ * failure. (V05 lost a take to exactly this shape, on the run-detail strip.)
+ */
+const REPLAY_OVER = /^(Replayed confined|Replay failed)$/;
+
+/**
  * The credential-shaped file write, and it has to be credential-shaped.
  * groundtruth/sensitive.go records ONLY writes to credential-shaped paths, so a
  * NOTES.md write never reaches the File-writes list at all and B4's "file
@@ -134,6 +164,15 @@ const CAPTURE_SETTLES = 240_000;
  *     default). On WSL2 host-mode NAT the sandbox cannot call the control plane
  *     back, the capture lands EMPTY, and the review card renders the
  *     reachability warning instead of a recording.
+ *
+ *  3. REHEARSE ONCE with `--no-record` before burning a take. The one thing no
+ *     preflight can settle is whether the CONTROL-PLANE HOST lands in the
+ *     approvable set: the client excludes it by comparing observed hosts to
+ *     window.location.hostname ("localhost"), while the sandbox reaches it at
+ *     WARDYN_CONTROL_PLANE_URL's host ("wardynd" on compose). If those two
+ *     disagree AND the session made a brokered call, the button reads "Approve
+ *     3 observed hosts" and this video cannot claim "exactly as wide as the
+ *     work". B3 fails on it by name within ~2 minutes — see its assertion.
  *
  * The rest — a fresh marker-less directory, a deleted-and-recreated workspace —
  * is code, immediately below.
@@ -181,11 +220,20 @@ test.beforeAll(async () => {
 
   // (2) DELETE AND RE-ADD THE WORKSPACE — the per-take hygiene rule.
   //
-  // approved_egress PERSISTS. A second take against the same workspace finds
-  // pypi.org and files.pythonhosted.org already approved, so egressPromotionDiff
-  // buckets them as alreadyApproved, the "Approve 2 observed hosts" button never
+  // THE APPROVAL PERSISTS, and not where the obvious reading says. B5's click
+  // does NOT write approved_egress: handlePromoteRecordEgress (record.go, "One
+  // contract, one place") writes `egress:<host>` REQUIREMENT rows on the
+  // workspace overlay and leaves the legacy ApprovedEgress lane read-only —
+  // and learnVerifyEgress (approvals.go) writes the same row shape when an
+  // approval is decided inside a replay. Both lanes feed
+  // egressPromotionDiff()'s `already` set (session-helpers.ts folds
+  // effectiveWorkspaceRequirements), so a second take against the same
+  // workspace finds pypi.org and files.pythonhosted.org already covered, they
+  // bucket as alreadyApproved, the "Approve 2 observed hosts" button never
   // renders, and B5 has no beat. (The confined half never clears on re-record
-  // either.) Deleting the row is the only thing that resets it.
+  // either.) Those rows live on the WORKSPACE row, not on the shared source
+  // library entry the path belongs to, so deleting the workspace really is the
+  // whole reset — recreating it against the same directory inherits nothing.
   const body = await apiGet<{ items?: Ws[]; workspaces?: Ws[] } | Ws[]>("/api/v1/workspaces");
   const items: Ws[] = Array.isArray(body) ? body : (body.items ?? body.workspaces ?? []);
   for (const w of items) {
@@ -273,6 +321,15 @@ test("cold open + B1 — the card that learns", async () => {
 
   // The ring goes on the card HEADER (h2 + its subtitle), not the whole card —
   // the subtitle is the half that says a policy gets learned here.
+  //
+  // KEYLESS, AND DELIBERATELY UNREAD: this take runs with no model connected,
+  // so RecordPane's warning ("No model provider is configured, so an agent
+  // won't reach a model in a session…") sits inside this same card, below the
+  // ring, for the whole beat. Nothing here asserts on it in either direction —
+  // its absence is not required and its presence is not narrated. modelReady
+  // gates nothing but that note: Start recording stays enabled either way
+  // (record-pane.tsx's NewSessionForm disables only on an in-flight session or
+  // a 503 no-runner), which is what makes a keyless recording legal at all.
   const cardHeader = page.getByRole("heading", { name: "Recorded sessions", level: 2 }).locator("xpath=..");
   await spotlight(page, cardHeader);
   await caption(page, "Open the workspace. Recorded sessions is where a policy gets learned, not guessed.");
@@ -300,13 +357,35 @@ test("B2 — start a recorded session", async () => {
   await spotlight(page, null);
   await beat(page, PACE.read);
 
-  await act(page, page.getByRole("button", { name: "Start recording" }));
+  // A DISABLED button is indistinguishable from a hung app on camera: act()
+  // would simply park the ring on it for the full action timeout. The two
+  // things that disable it are both real and both name themselves here.
+  const start = page.getByRole("button", { name: "Start recording" });
+  await expect(
+    start,
+    "Start recording is disabled — this stack has no runner (-runner none), or another session for this workspace is still running",
+  ).toBeEnabled({ timeout: 30_000 });
+  // SPRINT: no line between the click and the wait. Nothing is spoken from here
+  // until the sandbox is up, because everything from here IS the wait.
+  await act(page, start);
+
+  // FAST-FORWARD. POST /workspaces/{id}/record dispatches SYNCHRONOUSLY
+  // (runs_dispatch.go: "dispatch is invoked synchronously from the create-run
+  // handler"), so doRecord's await does not return — and the session card does
+  // not render at all — until the container is provisioned and the run is
+  // RUNNING. That is 30s-3min of a spinner nobody needs to sit through, which
+  // is also why all three waits below carry SANDBOX_UP and not a minute: the
+  // card is the SLOW one here, not the terminal inside it.
+  await beat(page, 200);
+  await ffwdStart(page);
 
   const card = page.getByTestId(`session-${SESSION_KEY}`);
-  await expect(card).toBeVisible({ timeout: 60_000 });
-  await expect(card.getByText("Recording…")).toBeVisible({ timeout: 60_000 });
-  // A real container comes up here — minutes, not seconds.
+  await expect(card).toBeVisible({ timeout: SANDBOX_UP });
+  await expect(card.getByText("Recording…")).toBeVisible({ timeout: SANDBOX_UP });
   await expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+
+  // The sandbox is up: real time resumes here, before a word is spoken.
+  await ffwdEnd(page);
 
   // The Fence banner is the honest half of "nothing is denied while recording":
   // an open-egress session on a shared kernel is the widest window this product
@@ -329,6 +408,11 @@ test("B3 — honest small work", async () => {
   const card = page.getByTestId(`session-${SESSION_KEY}`);
   const screen = card.locator(".xterm-screen").first();
 
+  // .xterm-screen went visible in B2 when AttachTerminal MOUNTED; the PTY
+  // websocket lands a moment later, and a keystroke sent before it is dropped
+  // outright (attach-terminal.tsx only sends on readyState OPEN). B2's own
+  // banner beat has already spent that moment — this line is here so a future
+  // edit that shortens B2 knows what it is spending.
   await caption(page, "Real work: a git identity, then the two hosts this build actually needs.");
   await beat(page, PACE.read);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
@@ -357,25 +441,69 @@ test("B3 — honest small work", async () => {
     "Done recording. Wardyn captures on termination, from the audit trail, not the sandbox.",
   );
 
-  // The capture is reconciled server-side after the run dies, and the page
-  // polls for it — so this is the product, not pacing.
-  await expect(card.getByText("Recorded", { exact: true })).toBeVisible({ timeout: CAPTURE_SETTLES });
-  await expect(card.getByTestId("record-review")).toBeVisible({ timeout: CAPTURE_SETTLES });
+  // FAST-FORWARD. The run has to die, and only THEN does the server reconcile
+  // its capture out of the audit trail; the page polls for it (workspace-detail
+  // polls while isRecording(ws)). Minutes of a "Recording…" chip nobody needs
+  // to watch stop pulsing.
+  await beat(page, 200);
+  await ffwdStart(page);
 
   // AN EMPTY CAPTURE IS A FAILED TAKE, and it looks exactly like a good one
-  // until someone reads the card: record-pane renders the reachability warning
-  // where the review should be, every later beat degrades, and the narration
-  // keeps claiming a policy was learned. Fail here instead.
-  await expect(card.getByTestId("record-empty-capture")).toHaveCount(0);
+  // until someone reads the card: RecordReviewCard swaps the whole review for
+  // the reachability warning (record-empty-capture), every later beat degrades,
+  // and the narration keeps claiming a policy was learned. So RACE the two
+  // outcomes rather than waiting four minutes for the good one and then
+  // discovering the bad one had been on screen the whole time — the two are
+  // mutually exclusive branches of the same component, so whichever resolves
+  // first IS the verdict.
+  const review = card.getByTestId("record-review");
+  const emptyCapture = card.getByTestId("record-empty-capture");
+  const captured = await Promise.race([
+    review.waitFor({ state: "visible", timeout: CAPTURE_SETTLES }).then(
+      () => "recorded" as const,
+      () => "timeout" as const,
+    ),
+    emptyCapture.waitFor({ state: "visible", timeout: CAPTURE_SETTLES }).then(
+      () => "empty" as const,
+      () => "timeout" as const,
+    ),
+  ]);
+  // Real time resumes the instant the verdict lands, before anything is said.
+  await ffwdEnd(page);
+  expect(
+    captured,
+    captured === "empty"
+      ? `the recording captured NO egress — "${await emptyCapture.innerText().catch(() => "")}". ` +
+        `On WSL2 host-mode NAT the sandbox cannot call the control plane back and every capture lands empty: ` +
+        `shoot this video in CONTAINERIZED mode (WARDYN_SETUP_MODE=container, record-demo.sh's own default).`
+      : `the session never settled into a review card within ${CAPTURE_SETTLES / 1000}s of Done recording`,
+  ).toBe("recorded");
+  await expect(card.getByText("Recorded", { exact: true })).toBeVisible({ timeout: 30_000 });
+
   const newHosts = card.getByTestId("record-new-hosts");
   await expect(newHosts).toContainText(RECORDED_HOSTS[0]);
   await expect(newHosts).toContainText(RECORDED_HOSTS[1]);
   // EXACTLY TWO, asserted HERE rather than only at B5's "Approve 2 observed
   // hosts" button: this list IS that button's count (both read
-  // egressPromotionDiff().approvable), and a third row means the workspace dir
-  // was not marker-free. Failing on the list fails two beats and ~2 minutes of
-  // shooting earlier, and names the extra host instead of a regex that missed.
-  await expect(newHosts.locator("li")).toHaveCount(2);
+  // egressPromotionDiff().approvable). Asserted on the host NAMES rather than a
+  // count, because the count alone cannot say which of the two causes it is:
+  //
+  //  - the workspace directory was not marker-free, so a scan folded an
+  //    ecosystem registry into profile.egress_domains; or
+  //  - the CONTROL-PLANE HOST leaked into the approvable bucket. Every capture
+  //    contains one (the sandbox's brokered uploads emit a real egress.allow
+  //    whose host is WARDYN_CONTROL_PLANE_URL's — "wardynd" on the compose
+  //    stack). The server excludes it by name; the CLIENT excludes it by
+  //    comparing against window.location.hostname, which on a published-port
+  //    install is "localhost". Those two disagree, and when they do this list
+  //    grows a third row nobody can honestly approve on camera.
+  //
+  // Failing here fails two beats and ~2 minutes of shooting earlier than B5's
+  // button regex would, and it NAMES the extra host instead of a count.
+  expect(
+    (await newHosts.locator("li").allTextContents()).map((s) => s.trim()).sort(),
+    "the approvable set is not exactly the canon pair — see the two causes above",
+  ).toEqual([...RECORDED_HOSTS].sort());
   await beat(page, PACE.read + 900);
 });
 
@@ -471,8 +599,10 @@ test("B4 — evidence becomes policy", async () => {
   await expect(sheetTitle).toBeHidden({ timeout: 15_000 });
 
   // "Save as policy" is a claim about a WRITE. Ask the control plane.
-  const policies = await apiGet<{ items?: { name?: string }[] } | { name?: string }[]>("/api/v1/policies");
-  const named = (Array.isArray(policies) ? policies : (policies.items ?? [])).some((p) => p?.name === POLICY_NAME);
+  // A bare array, same as beforeAll reads it: servePage writeJSONs the slice
+  // itself, with no envelope (internal/api/runs_policy.go).
+  const policies = await apiGet<{ name?: string }[]>("/api/v1/policies");
+  const named = policies.some((p) => p?.name === POLICY_NAME);
   expect(named, `the policy "${POLICY_NAME}" is not on the control plane — the save failed on camera`).toBe(true);
 });
 
@@ -485,10 +615,10 @@ test("B5 — replay confined", async () => {
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
 
-  // EXACTLY TWO. The count is the take's own smoke alarm: a third approvable
-  // host means the workspace directory was not marker-free (its ecosystem hosts
-  // got folded in), and "exactly as wide as the work" stops being true three
-  // beats before anyone notices.
+  // EXACTLY TWO. The count is the take's own smoke alarm — see B3, which
+  // already failed on the same list by NAME two beats ago if it were wrong.
+  // "exactly as wide as the work" is the claim the whole video rests on, so
+  // this stays a literal 2 and never a \d+.
   const approveObserved = card.getByRole("button", { name: /^Approve 2 observed hosts$/ });
   await expect(approveObserved).toBeVisible({ timeout: 30_000 });
   await act(page, approveObserved, "Approve the observed hosts, then replay the same session confined.");
@@ -507,10 +637,43 @@ test("B5 — replay confined", async () => {
   await expect(card.getByText("Promoted", { exact: true })).toBeVisible({ timeout: 60_000 });
   await beat(page, PACE.read);
 
+  // SPRINT: nothing spoken between the click and the wait — the click launches
+  // a second real sandbox, and everything from here to the terminal IS the wait.
   await act(page, card.getByRole("button", { name: "Replay confined" }));
-  await expect(card.getByText("Replaying confined…")).toBeVisible({ timeout: 120_000 });
+
+  // FAST-FORWARD, for B2's reason: this POST dispatches synchronously too, so
+  // the card does not flip to "Replaying confined…" until the confined sandbox
+  // is up.
+  await beat(page, 200);
+  await ffwdStart(page);
+
   const screen = card.locator(".xterm-screen").first();
-  await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
+  // RACED against the two chips that mean the replay is already OVER. A replay
+  // that never came up (image gone, sandbox died on start) settles straight to
+  // replay_failed, SessionCard renders ConfinedReviewCard instead of the
+  // terminal, and a bare wait on .xterm-screen would poll three minutes for a
+  // node that can no longer exist. Same shape B6's held-row wait uses.
+  const live = await Promise.race([
+    screen.waitFor({ state: "visible", timeout: SANDBOX_UP }).then(
+      () => "replaying" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByText(REPLAY_OVER)
+      .waitFor({ state: "visible", timeout: SANDBOX_UP })
+      .then(
+        () => "over" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  // The terminal is on screen: real time resumes before a word is spoken.
+  await ffwdEnd(page);
+  expect(
+    live,
+    "the confined replay never came up as a live session — it settled (or failed) before B5 could type into it; " +
+      "check the workspace's base image and the runner, then re-run the take",
+  ).toBe("replaying");
+
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up — typing here eats the first characters and the shell reports
   // "command not found" on camera.
@@ -548,9 +711,34 @@ test("B6 — the unseen host", async () => {
   // connection parks at the proxy while the strip waits on a person. The header
   // is what proves it is a hold rather than a fast denial — the difference the
   // next line is entirely about.
-  await expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
-    timeout: APPROVAL_APPEARS,
-  });
+  //
+  // RACED against the replay ending, because the strip unmounts with it: the
+  // LiveApprovals panel lives inside SessionCard's `replaying` branch only, so
+  // a replay that goes terminal for any reason (a dead sandbox, an auto-stop,
+  // a stray kill) takes the row, the terminal and the Done button with it. The
+  // on-camera decision IS this video; the honest outcome then is a fast loud
+  // failure naming that, not five minutes polling for a header that can no
+  // longer render (the exact way a V05 take died on the run-detail strip).
+  const heldHeader = card.getByText("Sandbox is waiting — approve to let it through");
+  const held = await Promise.race([
+    heldHeader.waitFor({ state: "visible", timeout: APPROVAL_APPEARS }).then(
+      () => "held" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByText(REPLAY_OVER)
+      .waitFor({ state: "visible", timeout: APPROVAL_APPEARS })
+      .then(
+        () => "over" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  expect(
+    held,
+    `${UNSEEN_HOST} never surfaced as a held request while the replay was still live — ` +
+      `the replay ended (or the wait timed out) before the on-camera decision. ` +
+      `The whole video is that decision; re-run the take.`,
+  ).toBe("held");
 
   // Decide it on camera and QUICKLY. The hold expires after 30s
   // (defaultHoldTimeout); decide() speaks one line and clicks inside ~6s, which
@@ -561,8 +749,32 @@ test("B6 — the unseen host", async () => {
 
   await act(page, card.getByRole("button", { name: "Done", exact: true }));
 
+  // FAST-FORWARD, for B3's reason: the confined run has to die and its capture
+  // has to be reconciled server-side before the containment review exists.
+  await beat(page, 200);
+  await ffwdStart(page);
   const review = card.getByTestId("verify-session-review");
-  await expect(review).toBeVisible({ timeout: CAPTURE_SETTLES });
+  const reviewOrFailed = await Promise.race([
+    review.waitFor({ state: "visible", timeout: CAPTURE_SETTLES }).then(
+      () => "review" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByTestId("verify-session-failed")
+      .waitFor({ state: "visible", timeout: CAPTURE_SETTLES })
+      .then(
+        () => "failed" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  // The review is on screen: real time resumes before the closing lines.
+  await ffwdEnd(page);
+  expect(
+    reviewOrFailed,
+    "the confined replay captured no egress decisions — the containment proof the closing line names does not exist. " +
+      "Same cause as B3's empty capture: shoot in containerized mode.",
+  ).toBe("review");
+
   // The two halves the closing line claims. The allowed count is a floor, not
   // an equality: the control plane's own host is legitimately reachable from a
   // confined replay and is counted here (it is only excluded from what an
