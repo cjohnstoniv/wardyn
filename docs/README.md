@@ -21,61 +21,6 @@ wizard and `/demos` are the first-run path. Everything here is the next question
 | Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |
 | See what is shipped vs. planned | [../ROADMAP.md](../ROADMAP.md), [../CHANGELOG.md](../CHANGELOG.md) |
 
-## The video series
-
-Ten short videos, in order — the whole product in about half an hour. *Links go
-live with the v0.5.0 release assets.*
-
-#### V01 — Getting started
-
-From nothing to a governed host, guardrails proved on camera. ~9:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-01-getting-started.mp4)
-
-#### V02 — Add a workspace
-
-The one directory a run may touch, and secrets nobody can read back. ~4:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-02-add-a-workspace.mp4)
-
-#### V03 — Your first run
-
-A governed command, run in the background, receipts read after. ~2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-03-your-first-run.mp4)
-
-#### V04 — Interactive runs
-
-Drive an agent by hand — and see the key it never holds. ~3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-04-interactive-runs.mp4)
-
-#### V05 — Autonomous agent
-
-A real agent does real work inside the boundary. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-05-autonomous-agent.mp4)
-
-#### V06 — Record a run
-
-Watch it once, enforce it forever. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-06-record-a-run.mp4)
-
-#### V07 — Approvals & egress
-
-Once, this run, until, always. 2:30–3:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-07-approvals-and-egress.mp4)
-
-#### V08 — Policies & confinement
-
-Fence, Wall, Vault, one reusable policy. 1:30–2:00 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-08-policies-and-confinement.mp4)
-
-#### V09 — CI & headless
-
-One governed run, no human, an exit code. 2:00–2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-09-ci-and-headless.mp4)
-
-#### V10 — Audit & attach
-
-Who did what, and watching live from two places. 2:00–2:30 ·
-[watch](https://github.com/cjohnstoniv/wardyn/releases/download/v0.5.0/wardyn-10-audit-and-attach.mp4)
-
 ## Field reports
 
 [adoption/](adoption/) is different in kind: point-in-time field reports from real
