@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Wardyn agent ~/.bashrc — sourced by the interactive `wardyn attach` shell
-# (tmux→bash / bash -i). Its ONE job: never drop the operator into a workspace
-# that isn't ready yet.
+# (tmux→bash / bash -i), and by the fallback shell a seeded run's boot pane execs
+# once its seed finishes (agent-run --boot-seed). Its ONE job: never drop the
+# operator into a workspace that isn't ready yet.
 #
 # An interactive/record run's main process (`agent-run --idle`) clones the repo
 # THEN idles, but the attach shell becomes available the instant the container is
@@ -48,9 +49,26 @@ fi
 # never sources this file again; the marker covers the shells tmux spawns
 # itself.
 #
-# The command is resolved from a fixed list against PATH, never from the
-# request: each image ships exactly one of these, so there is no path by which
-# client-supplied text reaches a shell here.
+# The command is still resolved from a fixed list against PATH, never from the
+# request: each image ships exactly one of these, so no client-supplied text is
+# parsed by THIS file.
+#
+# What this comment used to promise, and no longer can: that no client text
+# reached a shell in this container AT ALL. A run may now carry a SEED (its task
+# text, per interactive_start) — an initial prompt for the agent, or a startup
+# command. That path deliberately does not run here: `agent-run --idle` starts it
+# at boot inside the `wardyn` tmux session and pre-writes the agent-started
+# marker, so the guard below skips and the human's attach JOINS that live session
+# rather than launching a second agent over it.
+#
+# The seed stays bounded on the far side of that door: it reaches only the run
+# creator's own sandbox, as the agent user, inside the same confinement and
+# default-deny egress envelope; it rides the env (WARDYN_INTERACTIVE_SEED), never
+# a command string; the agent form is a single quoted argv with no shell parse;
+# the shell form is a deliberate parse of the operator's own startup command,
+# granting nothing they don't already have the moment they attach and type; and
+# server-launched reserved tasks are excluded control-plane-side. The full
+# invariant lives at the --boot-seed branch in each image's agent-run.
 if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; then
   mkdir -p "$HOME/.wardyn" 2>/dev/null
   : > "$HOME/.wardyn/agent-started" 2>/dev/null

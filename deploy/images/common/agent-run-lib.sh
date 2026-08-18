@@ -439,6 +439,52 @@ maybe_exec_task_mode() {
     fi
 }
 
+# ── boot-seed session recording wrap ─────────────────────────────────────────
+# boot_seed_rec_wrap fills the global WARDYN_REC_WRAP array with the wardyn-rec
+# prefix a boot-seed pane runs its seed under, or leaves it EMPTY when this
+# sandbox has no recording configured.  Callers always expand
+# "${WARDYN_REC_WRAP[@]}" ahead of the real argv, so the empty case simply runs
+# the seed bare.  Shared because both agent images' --boot-seed branches need
+# byte-identical behaviour here; a drifting copy is how one of them would start
+# silently eating seeds.
+#
+# Two guards, both load-bearing:
+#
+#  1. IS RECORDING CONFIGURED?  Nothing in the sandbox env says so — recording is
+#     a control-plane decision (docker Config.Record).  Its ONLY in-sandbox trace
+#     is the one-shot ROOT exec the driver runs right after container start,
+#     gated on that flag, which creates and chmod 0777's the cast dir
+#     (prepareRecordingDirs / recordingChmodDirs in the docker driver).  No agent
+#     image ever creates /var/log/wardyn itself, so "that directory exists" IS
+#     the signal.  Absent — recording off, or a substrate that prepares no such
+#     dir — we emit NO wrap: the seed runs unrecorded rather than not at all.
+#
+#  2. A CAST DIR THE AGENT CAN ACTUALLY WRITE.  wardyn-rec hard-errors BEFORE
+#     running its argv if it cannot create -cast-dir, and /var/log/wardyn is only
+#     agent-writable in case (1) above.  So we pin ~/.wardyn/cast — agent-owned by
+#     construction — and never inherit wardyn-rec's default.  In a DETACHED tmux
+#     pane that failure would be invisible: the seed would simply never run.
+#
+# Delivery is the brokered upload through wardyn-proxy (the run token is injected
+# proxy-side, masking happens control-plane-side), never the unmasked shared
+# mount.  It lands under the bare-runID cast key; per-attach recordings use
+# composite runID:sessionID keys, so the boot cast collides with nothing.  The
+# cast uploads when the seed process exits — a force-killed session loses the
+# pre-attach span, the same window an autonomous run already has, and the
+# attached span is covered again by the per-attach-session recorder.
+boot_seed_rec_wrap() {  # $1 = recording-signal dir (default /var/log/wardyn; a parameter only so this is drivable both ways from a test)
+    WARDYN_REC_WRAP=()
+    [[ -d "${1:-/var/log/wardyn}" ]] || return 0
+    [[ -n "${WARDYN_RUN_ID:-}" ]] || return 0
+    command -v wardyn-rec >/dev/null 2>&1 || return 0
+    local cast="${HOME}/.wardyn/cast"
+    mkdir -p "$cast" 2>/dev/null || return 0
+    WARDYN_REC_WRAP=(wardyn-rec \
+        -cast-dir "$cast" \
+        -upload-url "${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}/wardyn/v1/recordings/${WARDYN_RUN_ID}" \
+        -run "$WARDYN_RUN_ID" --)
+}
+
 # ── selftest blocks ───────────────────────────────────────────────────────────
 # selftest_check_bins <image-bin>... — the required-binary loop every image's
 # --selftest runs, with <image-bin>... the image's own tools (claude / codex /

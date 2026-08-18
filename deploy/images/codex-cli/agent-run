@@ -95,8 +95,128 @@ if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$HOME/.wardyn"
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
+    # BOOT SESSION: a seeded interactive run starts its agent (or startup command)
+    # HERE, at boot, instead of on first attach.  Create the persistent `wardyn`
+    # tmux session detached, running `agent-run --boot-seed`.  The attach chain is
+    # `tmux new-session -A -s wardyn` (attach-OR-create, same uid), so the human's
+    # attach JOINS this very session — same pane, same scrollback, work already in
+    # progress.
+    #
+    # The agent-started marker is written FIRST, before the session can exist, so
+    # ~/.bashrc's first-shell block (attach-bashrc.sh) can never bare-launch a
+    # SECOND agent over this one.  If tmux is missing or refuses, the seed is
+    # simply not started — an interactive run must still come up attachable.
+    #
+    # No client text is in the command string: --boot-seed reads the seed from
+    # WARDYN_INTERACTIVE_SEED in the env the tmux server inherits from THIS
+    # process.  That inheritance also carries WARDYN_GIT_HELPER_SECRET into the
+    # boot pane (and so into the session the human joins), which the caller-auth
+    # gate's header note above deliberately does not promise: a convenience delta,
+    # not a boundary one — the 0400 secret file is readable by the agent uid either
+    # way.
+    #
+    # `exec sleep infinity` below is UNCHANGED: tmux daemonizes its server, so the
+    # container's held-open PID is the same idle process it has always been.
+    if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
+        if command -v tmux >/dev/null 2>&1; then
+            : > "$HOME/.wardyn/agent-started"
+            if tmux new-session -d -s wardyn "agent-run --boot-seed"; then
+                echo "agent-run: idle mode — boot session started for the run's seed (attach joins it)" >&2
+            else
+                echo "agent-run: WARNING could not create the boot tmux session; the seed will not run (attach still works)" >&2
+            fi
+        else
+            echo "agent-run: WARNING no tmux in this image; the run's seed cannot start at boot (attach still works)" >&2
+        fi
+    fi
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
     exec sleep infinity
+fi
+
+# ── boot-seed mode (INTERACTIVE runs that carry a seed) ───────────────────────
+# Runs INSIDE the `wardyn` tmux session --idle just created: one pane, same agent
+# uid, same confinement and default-deny egress envelope as every other process
+# here.  Its whole job is to start the run's seed — the operator's initial prompt
+# (interactive_start=agent) or their startup command (shell) — so the human
+# attaches to work already under way instead of a cold prompt.
+#
+# SECURITY INVARIANT.  attach-bashrc.sh used to be able to promise that no
+# client-supplied text reached a shell in this container; this branch is the
+# bounded path that changes it, so state the bound exactly:
+#   - The seed reaches ONLY the run creator's own sandbox, as the agent user,
+#     inside that same envelope.  It crosses no trust boundary the creator is not
+#     already on both sides of.
+#   - It rides the ENV (WARDYN_INTERACTIVE_SEED), never the tmux command string,
+#     so nothing parses it on the way in.
+#   - The AGENT form is a SINGLE QUOTED ARGV — `codex "$seed"`, one argument to
+#     one binary.  No shell parse, no word splitting, no metacharacters.
+#   - The SHELL form is a deliberate shell parse, because a startup command is
+#     one; it grants nothing the same operator does not already have the moment
+#     they attach and type.
+#   - Reserved server tasks (workspace record/verify, harness login) are excluded
+#     control-plane-side in applyDispatchModeEnv, so a server-launched
+#     interactive run can never seed over its own flow.
+#
+# Tool use is SUPERVISED by default: `codex "<prompt>"` opens the TUI on that
+# prompt under codex's own default approval policy, so it parks its approval
+# prompt in this pane until the human joins.  WARDYN_SEED_AUTO_TOOLS=1 is the
+# explicit per-run opt-out.  No anthropic-style auth wiring exists for codex (the
+# proxy injects the OpenAI key), so there is none to do here.
+if [[ "${1:-}" == "--boot-seed" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    seed="${WARDYN_INTERACTIVE_SEED:-}"
+    if [[ -z "$seed" ]]; then
+        echo "agent-run: boot-seed mode with no WARDYN_INTERACTIVE_SEED — nothing to start" >&2
+        exec bash
+    fi
+    # Land where --idle prepared the workspace (it wrote the resolved dir last);
+    # ~/work is the fallback, the same one resolve_workdir falls back to.
+    workdir="$(cat "$HOME/.wardyn/workdir" 2>/dev/null || true)"
+    [[ -n "$workdir" && -d "$workdir" ]] || workdir="${HOME}/work"
+    cd "$workdir" || cd "$HOME"
+
+    # Record this pane when the sandbox has recording configured, run bare when it
+    # does not — the wrap must never be what kills the seed.  See boot_seed_rec_wrap
+    # in agent-run-lib.sh for the signal and the pinned agent-writable cast dir.
+    WARDYN_REC_WRAP=()
+    boot_seed_rec_wrap
+
+    if [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]]; then
+        echo "agent-run: boot seed — starting codex on the run's prompt" >&2
+        seed_argv=(codex)
+        if [[ "${WARDYN_SEED_AUTO_TOOLS:-}" == "1" ]]; then
+            # VERIFIED against the codex in this image (codex-cli 0.147.0, npm
+            # @openai/codex, unpinned at build time): there is NO --full-auto flag;
+            # the auto-approval flags this build accepts are
+            # --dangerously-bypass-approvals-and-sandbox and
+            # `-a never -s <mode>`.  We take the former — it is the exact analogue
+            # of claude's --dangerously-skip-permissions, and its own help says it
+            # is "intended solely for running in environments that are externally
+            # sandboxed", which is precisely what Wardyn is.  Re-verify with
+            # `codex --help` if the image's codex is ever bumped.
+            seed_argv+=(--dangerously-bypass-approvals-and-sandbox)
+        fi
+        seed_argv+=("$seed")
+    else
+        # interactive_start is shell (or unset): the seed is a STARTUP COMMAND, so
+        # handing it to a shell is the whole point rather than an accident.
+        # ponytail: `-l` per the approved plan; ceiling = a login shell re-sources
+        # /etc/profile, which reassembles PATH from scratch and can drop a BYOI /
+        # devcontainer image's own Dockerfile ENV toolchain (the exact reason
+        # maybe_exec_task_mode refuses -l).  Drop the `l` if a startup command ever
+        # comes up "command not found" on such an image.
+        echo "agent-run: boot seed — running the run's startup command in $workdir" >&2
+        seed_argv=(bash -lc "$seed")
+    fi
+
+    # `|| true`: a failed seed must leave the human a live pane to fix it in, never
+    # a dead session.  Then hand the pane over as a plain shell — NEVER `sleep`
+    # here: holding the container open is --idle's job, this pane's job is to be
+    # usable.  bash is interactive here, so it sources ~/.bashrc, which finds
+    # prep-done already written and the agent-started marker already set: it cd's
+    # into the workspace and starts nothing.
+    "${WARDYN_REC_WRAP[@]}" "${seed_argv[@]}" || true
+    exec bash
 fi
 
 # ── normal task mode ─────────────────────────────────────────────────────────
