@@ -470,13 +470,140 @@ PYEOF
 fi
 }
 
+# --- video 08: policies & confinement -------------------------------------------
+# The take authors ONE policy (`nightly-triage`) by PASTING a prepared CC1 spec
+# over the editor's CC2-floored starter, then launches a shell run BY REFERENCE
+# to it. Three ways that goes green while filming a lie, and each gets a check:
+#   - the paste silently failed and the STARTER spec was saved (CC2, one host),
+#     so the narrator describes a policy that is not the one on screen;
+#   - the run shipped `inline_policy` instead of `policy_id` (the radio-vs-
+#     payload bug this campaign fixed), so the Identity widget's Policy row is
+#     someone else's id — or absent;
+#   - the run never actually ran, so "every run after it, already governed" is
+#     narrated over a sandbox that failed to start.
+# Deliberately NOT checked here: which barrier the run got. That is the host's
+# answer, not the video's claim (the policy floors at CC1 and the wizard picks
+# the strongest tier available), and the spec asserts it against /healthz.
+check_video_08_policies() {
+head_ "Video 08 · the policy"
+V08_API="http://localhost:${WARDYN_UP_PORT:-8080}"
+V08_POLICY="${WARDYN_DEMO_V08_POLICY:-nightly-triage}"
+V08_TITLE="${WARDYN_DEMO_V08_TITLE:-Nightly triage, governed by policy}"
+V08_POLJ=$(curl -fsS "${V08_API}/api/v1/policies" 2>/dev/null || echo '[]')
+# A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
+# would increment counters that vanish — the bug class this script exists for.
+python3 - "$V08_POLJ" "$V08_POLICY" <<'PYEOF' > /tmp/_demo_v08.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+pols = d if isinstance(d, list) else d.get("items") or d.get("policies") or []
+name = sys.argv[2]
+p = next((x for x in pols if (x or {}).get("name") == name), None)
+print("V08_POL_EXISTS", bool(p))
+print("V08_POL_ID", (p or {}).get("id") or "-")
+spec = (p or {}).get("spec") or {}
+# The four fields the narrator says out loud, in the order the SAY lines say
+# them. allowed_domains is compared as a SET: the server is free to sort it.
+print("V08_POL_HOSTS", sorted(spec.get("allowed_domains") or []) == ["github.com", "npmjs.org"])
+print("V08_POL_HOLD", (spec.get("first_use_approval") or "") == "wait_for_review")
+# The STARTER_SPEC trap (policies.tsx): its floor is CC2 and it allows exactly
+# one host. A CC2 here means the paste never replaced the prefilled editor.
+print("V08_POL_FLOOR", (spec.get("min_confinement_class") or ""))
+# -1, not 0, when there is no policy at all: an absent row must never read as
+# "no grants" and score a PASS on a take that never created anything.
+print("V08_POL_GRANTS", len(spec.get("eligible_grants") or []) if p else -1)
+PYEOF
+V08_POL_ID="-"
+while read -r k v; do
+  case "$k" in
+    V08_POL_EXISTS) [[ "$v" == True ]] && ok "policy '${V08_POLICY}' exists" || bad "no '${V08_POLICY}' policy — beat 2's Create never landed" ;;
+    V08_POL_ID)     V08_POL_ID="$v" ;;
+    V08_POL_HOSTS)  [[ "$v" == True ]] && ok "two allowed hosts (github.com, npmjs.org)" || bad "allowed_domains is not the pasted pair — the spec on camera is not the spec that saved" ;;
+    V08_POL_HOLD)   [[ "$v" == True ]] && ok "first_use_approval=wait_for_review (unlisted hosts are HELD)" || bad "first_use_approval is not wait_for_review — 'held for your approval' is false" ;;
+    V08_POL_FLOOR)  [[ "$v" == CC1 ]] && ok "barrier floor CC1 (Fence) — the pasted spec, not the CC2 starter" || bad "min_confinement_class=${v}, want CC1 — the CC2 STARTER_SPEC was saved instead of the paste" ;;
+    V08_POL_GRANTS) case "$v" in
+                      0)  ok "no credential grants" ;;
+                      -1) bad "no policy to read grants from" ;;
+                      *)  bad "the policy carries ${v} grant(s) — the take authored more than it described" ;;
+                    esac ;;
+  esac
+done < /tmp/_demo_v08.$$
+rm -f /tmp/_demo_v08.$$
+
+head_ "Video 08 · the run that referenced it"
+V08_RUNS=$(curl -fsS "${V08_API}/api/v1/runs" 2>/dev/null || echo '[]')
+python3 - "$V08_RUNS" "$V08_TITLE" "$V08_POL_ID" <<'PYEOF' > /tmp/_demo_v08b.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+rs = d if isinstance(d, list) else d.get("items") or d.get("runs") or []
+title, pol = sys.argv[2], sys.argv[3]
+m = [r for r in rs if (r.get("title") or "").strip() == title]
+r = m[0] if m else None
+print("V08_RUN_ID", (r or {}).get("id") or "-")
+# policy_id is omitempty on the wire (types.go AgentRun) — absent means the run
+# shipped an inline_policy instead, which is the radio-vs-payload bug in the
+# direction that matters: the video claims it launched BY REFERENCE.
+print("V08_RUN_POLICY", ((r or {}).get("policy_id") or "-") == pol and pol != "-")
+print("V08_RUN_POLICY_SAW", (r or {}).get("policy_id") or "(none)")
+print("V08_RUN_STATE", (r or {}).get("state") or "MISSING")
+PYEOF
+V08_RUN="-"
+while read -r k v; do
+  case "$k" in
+    V08_RUN_ID)         V08_RUN="$v"
+                        [[ "$v" == "-" ]] && bad "no run titled '${V08_TITLE}' — beat 4 never launched" || ok "run ${v}" ;;
+    V08_RUN_POLICY)     [[ "$v" == True ]] && ok "the run carries policy_id=${V08_POL_ID}" || bad "the run's policy_id is not '${V08_POLICY}' — it did not launch by reference" ;;
+    V08_RUN_POLICY_SAW) printf '    run.policy_id: %s (policy row: %s)\n' "$v" "${V08_POL_ID}" ;;
+    V08_RUN_STATE)      case "$v" in
+                          COMPLETED)                    ok "run COMPLETED" ;;
+                          STOPPED|ARCHIVED|FAILED|KILLED) bad "run reached ${v}, not COMPLETED — the take narrates a governed run that worked" ;;
+                          *)                            bad "run state=${v} — it never reached a terminal state on camera" ;;
+                        esac ;;
+  esac
+done < /tmp/_demo_v08b.$$
+rm -f /tmp/_demo_v08b.$$
+
+head_ "Video 08 · the run's own audit trail"
+if [[ "${V08_RUN}" == "-" ]]; then
+  printf '    (no run to audit)\n'
+else
+  V08_AUD=$(curl -fsS "${V08_API}/api/v1/audit?run_id=${V08_RUN}&limit=1000" 2>/dev/null || echo '[]')
+  python3 - "$V08_AUD" <<'PYEOF' > /tmp/_demo_v08c.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+acts = [e.get("action") for e in ev]
+# The two rows every governed launch writes (runs.go handleCreateRun,
+# runs_dispatch.go). A run row with no audit behind it would mean the trail the
+# whole product sells did not record the one launch this video is about.
+print("V08_AUD_CREATE", "run.create" in acts)
+print("V08_AUD_DISPATCH", "run.dispatch" in acts)
+# No spaces in the payload: the reader below is `read -r k v`, which would
+# otherwise keep only the first word of a multi-element list.
+print("V08_AUD_FAILED", json.dumps(sorted({
+    e.get("action") for e in ev if e.get("outcome") == "failure"}), separators=(",", ":")))
+PYEOF
+  while read -r k v; do
+    case "$k" in
+      V08_AUD_CREATE)   [[ "$v" == True ]] && ok "run.create is on the audit trail" || bad "no run.create for ${V08_RUN} — the launch left no record" ;;
+      V08_AUD_DISPATCH) [[ "$v" == True ]] && ok "run.dispatch is on the audit trail" || bad "no run.dispatch for ${V08_RUN} — the sandbox was never scheduled" ;;
+      V08_AUD_FAILED)   [[ "$v" == "[]" ]] || printf '    note: failure-outcome rows present: %s\n' "$v" ;;
+    esac
+  done < /tmp/_demo_v08c.$$
+  rm -f /tmp/_demo_v08c.$$
+fi
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
   03) check_video_03_first_run ;;
   06) check_video_06_record ;;
   07) check_video_07_approvals ;;
-  01|04|08|09|10)
+  08) check_video_08_policies ;;
+  01|04|09|10)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
