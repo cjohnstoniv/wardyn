@@ -196,6 +196,17 @@ test("V02 beat 2 — onboard the project", async () => {
 
   await caption(page, "Three sources. A repository clones with the git credential you stored during setup.");
   await beat(page, PACE.read);
+  // Owner note, verified against source (runs_scm.go's in-sandbox clone via
+  // the broker route + confineGitBrokerEgress's name-keyed GitHub denies):
+  // there is NO host-side pre-clone — the clone runs in the sandbox — but on
+  // the GitHub App lane the sandbox still cannot reach GitHub itself. Its
+  // remote points at the proxy, the proxy does the fetch, and the token never
+  // leaves proxy memory. Scoped to the App lane on purpose: PAT and SSH
+  // clones DO dial the git host from inside, as the git card's footer admits.
+  await caption(page, "With the GitHub App, the sandbox never talks to GitHub at all.");
+  await beat(page, PACE.read);
+  await caption(page, "Its git remote points at the proxy — the proxy fetches the repo, and it keeps the token.");
+  await beat(page, PACE.read);
   await caption(page, "An empty workspace is a scratchpad. Today: a directory already on this machine.");
   await beat(page, PACE.read);
 
