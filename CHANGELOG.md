@@ -10,6 +10,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **An interactive run can start on a seed, at boot.** The run's `task` —
+  previously ignored for an interactive run — is now its optional boot seed,
+  interpreted per `interactive_start`: with `"agent"` the sandbox starts the
+  agent CLI on that prompt in a persistent tmux session the moment it boots
+  (supervised: the agent reads and plans, then parks its first tool approval
+  in the pane until you attach — set `seed_auto_tools` to let it use tools
+  unsupervised before you join); with `"shell"` the seed runs as a startup
+  command before the terminal is yours. Attaching joins the live session.
+  Empty task = today's idle sandbox, unchanged. Server-launched runs
+  (record/verify/login) are excluded from seeding by construction. The seed
+  travels as env into the sandbox and is consumed at boot — **needs an image
+  rebuild** (`make agent-images-core`); an older image ignores it and comes
+  up idle. The CLI gains this with zero new flags: `wardyn run --interactive`
+  with a task now seeds.
+- **Autonomous Claude runs can park every tool action on a human:
+  `tool_approvals: "hold"`.** Instead of `--dangerously-skip-permissions`,
+  the run's claude executes under `--permission-mode manual` with an
+  in-sandbox relay (`wardyn-toolgate`, a stdio MCP permission-prompt tool)
+  that raises each gated tool use as a `tool_call` approval — the exact
+  command or edit as the decision context — and blocks until an operator
+  approves or denies it in the console (the run cockpit's approval strip now
+  shows tool holds beside egress holds). Deny and expiry both refuse the
+  action and the run continues; a relay that cannot reach the control plane
+  denies rather than proceeds. Default stays `"auto"` (the sandbox is the
+  boundary); `hold` is per-run, Claude-only (codex has no external approval
+  contract), and read-only commands the harness itself deems safe still run
+  without asking.
 - **Egress approvals carry a decision scope: `once`, `run`, `until`, or
   `always`.** `POST /approvals/{id}/approve` and `/deny` accept
   `decision_scope` (plus `decision_expires_at` for `until`) on an

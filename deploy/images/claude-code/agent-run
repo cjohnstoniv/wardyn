@@ -561,17 +561,44 @@ ANTHROPIC_MODE=""
 apply_anthropic_mode
 echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 
+# Tool-approval HOLD mode (tool_approvals=hold): instead of skipping claude's
+# per-tool approvals, every gated tool call is parked on a Wardyn approval an
+# operator decides in the console. wardyn-toolgate (in this image) is a stdio
+# MCP server claude consults via --permission-prompt-tool; it raises a
+# tool_call approval through the proxy's brokered route and blocks until the
+# decision lands — deny/expiry refuse just that action and the run continues,
+# and a gate that cannot reach its control plane denies rather than proceeds.
+#
+#   --permission-mode manual   nothing auto-approves; everything not resolved
+#     by the harness's own safe-command class falls through to the gate. NEVER
+#     combine hold with --dangerously-skip-permissions: bypass resolves calls
+#     BEFORE the prompt tool is consulted, silently un-gating the run (pinned
+#     live in the C0 spike, claude 2.1.234).
+#   CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0   a human decision can take hours; the
+#     stdio idle timer must not turn patience into a deny.
+if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
+    mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
+    printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"}}}\n' > "$HOME/.wardyn/toolgate-mcp.json"
+    echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
+    export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
+    exec claude -p "$task" --output-format text \
+        --permission-mode manual \
+        --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \
+        --permission-prompt-tool mcp__gate__approve
+fi
+
 # Run Claude Code in non-interactive single-task (print) mode.
 # Flags per public CLI conventions as of claude-code v2.x:
 #   -p "<prompt>"                   non-interactive prompt mode (no REPL)
 #   --output-format text            plain-text output (not JSON stream)
 #   --dangerously-skip-permissions  run every tool WITHOUT per-call approval —
-#     REQUIRED for autonomy: a batch run has no human to approve the agent's
-#     edit/bash tools, so without this claude stalls/exits on the first gated
-#     tool (the fence-e2e "claude exit 1" rough edge). SAFE here because Wardyn
-#     IS the boundary: default-deny egress, proxy-injected (never resident)
-#     credentials, confinement class, and an append-only audit trail govern
-#     everything the agent does. The agent runs as uid 1000 (USER agent), so the
-#     CLI's refuse-to-skip-as-root guard does not trip.
+#     the DEFAULT for autonomy (tool_approvals=auto): a batch run has no human
+#     to approve the agent's edit/bash tools, so without this claude
+#     stalls/exits on the first gated tool (the fence-e2e "claude exit 1" rough
+#     edge). SAFE here because Wardyn IS the boundary: default-deny egress,
+#     proxy-injected (never resident) credentials, confinement class, and an
+#     append-only audit trail govern everything the agent does. The agent runs
+#     as uid 1000 (USER agent), so the CLI's refuse-to-skip-as-root guard does
+#     not trip. The per-run opt-out of this posture is the hold branch above.
 # The exit code from `claude` propagates to the caller.
 exec claude -p "$task" --output-format text --dangerously-skip-permissions

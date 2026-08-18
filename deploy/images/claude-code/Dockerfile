@@ -12,6 +12,8 @@
 #     an ENTRYPOINT would wrap that, tearing the sandbox down immediately.
 #   - /usr/local/bin/agent-run "<task>": runs one agent task non-interactively.
 #   - /usr/local/bin/wardyn-rec: session recorder (exec asciinema or .log fallback).
+#   - /usr/local/bin/wardyn-toolgate: stdio MCP relay that parks claude's tool-use
+#     permission prompts on Wardyn approvals (tool_approvals=hold runs only).
 #   - /usr/local/bin/wardyn-git-helper: git credential helper for brokered tokens.
 #   - USER agent (uid 1000), home /home/agent, workspace /home/agent/work.
 #   - System gitconfig wires the credential helper GLOBALLY (all hosts).
@@ -49,7 +51,8 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan ./cmd/wardyn-scan
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan ./cmd/wardyn-scan \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
@@ -181,6 +184,8 @@ COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
 COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 # wardyn-scan: in-sandbox workspace scanner run by a governed scan run.
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
+# wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
+COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
 
 # agent-run: the thin shell wrapper used by the Wardyn driver to launch one task.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -193,6 +198,7 @@ COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bash
 RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
+           /usr/local/bin/wardyn-toolgate \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts).
