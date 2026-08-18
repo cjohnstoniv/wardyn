@@ -271,15 +271,20 @@ func (d integrationDoc) roleSecret(role string) string {
 	return ""
 }
 
-// TestIntegrations_ListAdoptAndPutBack drives the integrations surface over
+// TestIntegrations_ListAndPutBack drives the integrations surface over
 // raw HTTP (no SDK coverage): a present anthropic-api-key secret derives a
 // LEGACY row with no write path of its own; GET /integrations lists it (the
 // "detail" a client reads — there is no separate GET /integrations/{id}
 // route, so a client's detail view is one entry picked out of the list);
-// adopt persists it verbatim (source flips legacy -> stored, and adopting
-// twice 409s); PUT then proves the newly-stored row is actually editable — a
-// full-replacement round-trip of its own fields plus one real change.
-func TestIntegrations_ListAdoptAndPutBack(t *testing.T) {
+// PUT is a full replacement that persists the row (source flips legacy ->
+// stored) and proves it editable in the same stroke.
+//
+// This used to also drive POST /integrations/{id}/adopt (adopt-then-edit,
+// re-adopt 409) — that route was deliberately removed with the integrations
+// collapse (the Settings cards absorbed the surface; PUT alone stores a
+// row now), and the test's adopt beats went stale unnoticed because this
+// suite only runs under WARDYN_TEST_PG, the lane local gates skip.
+func TestIntegrations_ListAndPutBack(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
 	ctx := context.Background()
 	base := h.srv.URL + "/api/v1/integrations"
@@ -312,33 +317,15 @@ func TestIntegrations_ListAdoptAndPutBack(t *testing.T) {
 		t.Fatalf("anthropic_api_key legacy row = %+v", legacy)
 	}
 
-	status, raw = doAdmin(t, http.MethodPost, base+"/"+legacy.ID+"/adopt", nil)
-	if status != http.StatusOK {
-		t.Fatalf("POST /integrations/{id}/adopt status = %d, want 200 (body=%s)", status, raw)
-	}
-	var adopted integrationDoc
-	if err := json.Unmarshal(raw, &adopted); err != nil {
-		t.Fatalf("decode adopted integration: %v (body=%s)", err, raw)
-	}
-	if adopted.Source != "stored" {
-		t.Fatalf("adopted integration source = %q, want stored", adopted.Source)
-	}
 	t.Cleanup(func() { doAdmin(t, http.MethodDelete, base+"/"+legacy.ID, nil) })
 
-	// Adopting again 409s: it is already stored.
-	status, _ = doAdmin(t, http.MethodPost, base+"/"+legacy.ID+"/adopt", nil)
-	if status != http.StatusConflict {
-		t.Errorf("re-adopt status = %d, want 409", status)
-	}
-
-	// PUT-back: the documented contract is a full replacement, so round-trip
-	// the stored row's own fields plus one real change, proving a row reached
-	// only through adopt is actually editable (integrations.go's PUT used to
-	// reject every colon-qualified id; this one has none, so it is unaffected
-	// either way — see the sibling review row on that).
+	// PUT: the documented contract is a full replacement — it is also the ONE
+	// write path a legacy row has (adopt is gone), so this single call both
+	// stores the row and proves it editable. Round-trip the legacy row's own
+	// fields plus one real change.
 	const newDocs = "https://docs.anthropic.com/apie2e-test"
 	putBody, _ := json.Marshal(map[string]any{
-		"name": adopted.Name, "kind": adopted.Kind,
+		"name": legacy.Name, "kind": legacy.Kind,
 		"secrets": []map[string]any{{"role": "api_key", "secret_name": secretName,
 			"delivery": map[string]string{"mode": "proxy_header", "header": "x-api-key", "format": "%s"}}},
 		"docs": newDocs,
