@@ -66,9 +66,20 @@ let buffer = "";
 const waiting: Array<(r: Record<string, unknown>) => void> = [];
 const cues: Cue[] = [];
 
-/** Start narration's clock. Called by installOverlay; safe to call twice. */
+/**
+ * Start the take's clock. Called by installOverlay; safe to call twice.
+ *
+ * Deliberately NOT gated on WARDYN_DEMO_VOICE: overlay.ts's fast-forward spans
+ * are measured from this same zero and a --silent take still fast-forwards, so
+ * the clock has to run even when nothing will ever be spoken.
+ */
 export function narrationZero(): void {
-  if (on() && zero === 0) zero = Date.now();
+  if (zero === 0) zero = Date.now();
+}
+
+/** The instant every timeline in this take is measured from. 0 before install. */
+export function narrationZeroMs(): number {
+  return zero;
 }
 
 function ensureProc(): ChildProcessWithoutNullStreams | undefined {

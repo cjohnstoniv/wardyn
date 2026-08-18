@@ -19,8 +19,10 @@
  * setup" is a real navigation in some flows).
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
-import { narrationZero, speak } from "./narrator";
+import { NARRATION_DIR, narrationZero, narrationZeroMs, speak } from "./narrator";
 
 const MOUNT = "__wardyn_demo_overlay";
 
@@ -150,6 +152,53 @@ export async function caption(page: Page, text: string): Promise<void> {
   // +300ms so the next visual does not start on the last syllable.
   const durMs = await speak(text);
   if (durMs > 0) speechUntil = Date.now() + durMs + 300;
+}
+
+/*
+ * Fast-forward: mark a stretch the viewer should not have to sit through.
+ *
+ * Nothing is compressed here — the browser records in real time and cannot do
+ * otherwise. ffwdStart/ffwdEnd just record the span, and scripts/demo-ffwd.py
+ * squeezes those seconds out of the finished mp4 afterwards (and slides every
+ * later narration cue up by exactly the time it removed).
+ *
+ * TIME BASIS: the same zero narration.json's cues use, because demo-ffwd.py has
+ * to re-time both against one clock. That zero is set by installOverlay, a few
+ * tens of ms after the context — and so recordVideo — starts, so both the cues
+ * and these spans sit that same constant behind true video time. The narration
+ * mux has always assumed that skew away; a span held for minutes cares even
+ * less than a caption held for seconds.
+ *
+ * SILENT ON PURPOSE: the chip goes on screen through the raw caption DOM call,
+ * never through caption(), because caption() speaks. A line spoken inside a
+ * span is a line played over frames the encoder is about to throw away — the
+ * voice would land 12x early and every cue after it would be wrong.
+ */
+const SPEEDUPS = path.join(NARRATION_DIR, "speedups.json");
+const spans: Array<{ startMs: number; endMs: number }> = [];
+let ffwdFrom = -1;
+
+/** Begin a fast-forwarded span. Say nothing until ffwdEnd. */
+export async function ffwdStart(page: Page): Promise<void> {
+  narrationZero(); // a --silent take never calls speak(), so the clock may not be running yet
+  ffwdFrom = Date.now() - narrationZeroMs();
+  await call(page, "caption", "▸▸ fast-forward — the agent is working");
+}
+
+/** End the span and persist it beside narration.json for the encoder. */
+export async function ffwdEnd(page: Page): Promise<void> {
+  await call(page, "caption", "");
+  if (ffwdFrom < 0) return; // ffwdEnd without a start — nothing to compress
+  spans.push({ startMs: ffwdFrom, endMs: Date.now() - narrationZeroMs() });
+  ffwdFrom = -1;
+  try {
+    // Rewritten after every span, for narrator.flush()'s reason: a take that
+    // dies late should still leave the encoder the spans it did finish.
+    mkdirSync(NARRATION_DIR, { recursive: true });
+    writeFileSync(SPEEDUPS, JSON.stringify({ zero: narrationZeroMs(), spans }, null, 2));
+  } catch {
+    /* the take matters more than the fast-forward */
+  }
 }
 
 /** Full-screen act divider. */

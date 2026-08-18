@@ -52,6 +52,11 @@
 # are also SPOKEN, by a local neural TTS (scripts/narrate-server.py, Kokoro-82M,
 # offline); --silent turns that off.
 #
+# The stretches that are only the agent working are marked by the spec
+# (overlay.ts's ffwdStart/ffwdEnd) and compressed 12x on the way out, with
+# every later narration cue slid up to match — WARDYN_DEMO_FFWD_FACTOR
+# overrides the 12. Browser-only takes; see scripts/demo-ffwd.py.
+#
 # Prereqs, checked before anything destructive happens:
 #   winget.exe install Gyan.FFmpeg          (from WSL it needs the .exe)
 #   claude setup-token > ~/.wardyn-demo-token
@@ -469,6 +474,11 @@ fi
 # this host that cannot be ruined by another window sitting on top of the frame.
 stop_capture
 
+# A stale span file from an earlier take would compress tonight's picture at
+# yesterday's offsets — narration.json's problem below, exactly, so it gets
+# narration.json's fix. Unconditional: --silent takes fast-forward too.
+rm -f "${DEMO_OUT_DIR}/speedups.json"
+
 # Warm the narration cache first: an unrendered line otherwise renders INLINE
 # during the take, leaving the caption on screen in silence for ~1.5s — dead air
 # in the finished video, once per line.
@@ -570,13 +580,48 @@ elif [[ "${DO_RECORD}" == 1 && "${HAVE_TERMINAL}" == 1 && -s "${OUT}" ]]; then
   FINAL="${OUT}"
 fi
 
+# --- fast-forward the dead air ----------------------------------------------
+#
+# overlay.ts's ffwdStart/ffwdEnd mark the stretches that are just the agent
+# working — minutes of a spinner nobody watches. Squeeze them here, between the
+# assembly encode and the mux: the picture is still silent (so the cues can be
+# re-timed rather than pitch-shifted along with it), and it is the same encode
+# settings, so this costs a generation the take was going to spend anyway.
+#
+# BROWSER-ONLY takes. With a terminal segment on the front, the spans are in
+# browser-recording time while the picture starts OFFSET earlier, and the merge
+# below re-times the browser cues a second time. Two clocks, two shifts — out of
+# scope, so those takes publish in real time.
+FFWD_TIMELINE=""
+if [[ -s "${DEMO_OUT_DIR}/speedups.json" && -n "${FINAL}" && -s "${FINAL}" && "${RUN_DRIVER}" == 1 ]]; then
+  if [[ "${HAVE_TERMINAL}" == 1 || "${JOINED}" == 1 ]]; then
+    log "fast-forward spans recorded, but this take has a terminal segment — publishing in real time"
+  else
+    step "Fast-forwarding the agent's working time"
+    FFWD="${FINAL%.mp4}-ffwd.mp4"
+    SHIFTED="${DEMO_OUT_DIR}/narration-ffwd.json"
+    if python3 "${REPO_ROOT}/scripts/demo-ffwd.py" --ffmpeg "${FFMPEG}" \
+        --video "${FINAL}" --spans "${DEMO_OUT_DIR}/speedups.json" \
+        --timeline "${DEMO_OUT_DIR}/narration.json" --timeline-out "${SHIFTED}" \
+        --out "${FFWD}" --factor "${WARDYN_DEMO_FFWD_FACTOR:-12}"; then
+      FINAL="${FFWD}"
+      # Only when it really landed: a --silent take has no timeline to shift.
+      [[ -s "${SHIFTED}" ]] && FFWD_TIMELINE="${SHIFTED}"
+    else
+      log "ffwd failed — publishing real-time take"
+    fi
+  fi
+fi
+
 # --- narration ---------------------------------------------------------------
 #
 # Runs LAST and on the finished mp4, for two reasons: the raw console recording
 # is VP8, which cannot be stream-copied into an mp4 container; and muxing here
 # means the picture is encoded exactly once, so narration cannot soften the text.
-TIMELINE="${DEMO_OUT_DIR}/narration.json"
+# The cues are the fast-forwarded ones when the picture was fast-forwarded.
+TIMELINE="${FFWD_TIMELINE:-${DEMO_OUT_DIR}/narration.json}"
 [[ "${RUN_DRIVER}" == 1 && -s "${TIMELINE}" ]] || TIMELINE=""
+
 if [[ "${DO_VOICE}" == 1 && -n "${FINAL}" && -s "${FINAL}" ]] \
    && [[ -n "${TIMELINE}" || -s "${TERM_TIMELINE}" ]]; then
   step "Adding narration"
