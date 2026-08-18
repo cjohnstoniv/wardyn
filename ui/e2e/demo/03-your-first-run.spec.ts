@@ -112,6 +112,27 @@ async function preflight(page: Page): Promise<void> {
       `Shoot 02 first (scripts/record-demo.sh --video 02), or restage it off camera.`,
   ).toBe(true);
   fs.rmSync(path.join(WORKSPACE_PATH, ARTIFACT), { force: true });
+
+  // Clear any PENDING approval an earlier video deliberately left undecided —
+  // video 01's "once, or for good" demo ends on a fresh re-raise it never
+  // answers, and that row keeps a "1" badge on the Approvals nav item for
+  // every later video's sidebar. Denied off camera, with a reason that says
+  // why, so this take's chrome is quiet. (Its own run is long dead; denying
+  // is a no-op beyond the bookkeeping.)
+  const pending = await page.request.get("/api/v1/approvals?state=PENDING", { headers: apiHeaders() });
+  if (pending.ok()) {
+    const rows: { id?: string }[] = (await pending.json().catch(() => [])) ?? [];
+    for (const ap of Array.isArray(rows) ? rows : []) {
+      if (ap?.id) {
+        await page.request
+          .post(`/api/v1/approvals/${ap.id}/deny`, {
+            headers: apiHeaders(),
+            data: { reason: "stale demo approval from an earlier take — cleared off camera" },
+          })
+          .catch(() => {});
+      }
+    }
+  }
 }
 
 test.beforeAll(async () => {
@@ -214,17 +235,36 @@ test("V03 beat 3 — launch, walk away", async () => {
 
   // The cockpit opens on the new run.
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
-  await caption(page, "Launched. This run is unattended — there is nothing to type and nothing to babysit.");
+  await caption(page, "Launched. Unattended doesn't mean invisible — this page can watch its terminal the whole way.");
   await beat(page, PACE.read);
 
-  // RUNNING first (a real sandbox boots), then COMPLETED. Both chips are the
-  // run header's own state; asserting the sequence keeps the narration honest.
-  await expect(page.getByText(/Running/i).first()).toBeVisible({ timeout: SANDBOX_UP });
-  await caption(page, "A sandbox boots, the command runs, and we could close this tab and come back.");
-  await beat(page, PACE.read);
-
+  // Running OR Completed — never Running alone. Take 1 died here: a
+  // five-command script finishes in ~7 seconds, faster than the first poll of
+  // a Running-only assertion, so the header said Completed while the driver
+  // waited three minutes for a state the run had already left. The narration
+  // is written to be true at either speed.
+  await expect(page.getByText(/Running|Completed/).first()).toBeVisible({ timeout: SANDBOX_UP });
   await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: RUN_FINISHES });
-  await caption(page, "Done. Now the part that outlives the sandbox: the receipts.");
+  await caption(page, "And this one is already done — a five-line script barely outlives its own sandbox.");
+  await beat(page, PACE.read);
+
+  // THE LOGS, on camera, at speed (owner note from take 1: the run must not
+  // just sit there completed — show the work). The Overview's hero pane for a
+  // finished background run IS the session replay; play it at 2× so the video
+  // never waits on real time. Both clicks are the real product controls the
+  // viewer has: the speed radio TerminalPlayer just grew, and asciinema's own
+  // start overlay.
+  const pane = page.getByText("run finished · replay").locator("..").locator("..");
+  await pane.scrollIntoViewIfNeeded().catch(() => {});
+  await act(page, page.getByRole("radio", { name: "2x speed" }), "Here is everything it did — the run records its own terminal.");
+  const player = page.locator(".ap-player, .ap-wrapper, .ap-terminal").first();
+  await expect(player).toBeVisible({ timeout: 60_000 });
+  await player.click().catch(() => {});
+  await caption(page, "Replayed at double speed: the listing, the line counts, the inventory being written.");
+  // Hold for the cast itself (~7s at 1×, ~4s at 2×) plus a breath — the
+  // whole point of the beat is that the WORK is on screen.
+  await beat(page, PACE.read + 5000);
+  await caption(page, "You could watch this live during a long run. After it, the replay is the log.");
   await beat(page, PACE.read + 400);
 });
 
@@ -236,32 +276,28 @@ test("V03 beat 4 — the receipts", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  // 1. The exit code, on the run's own header.
+  // 1. The exit code, on the run's own header. Required, not best-effort:
+  // take 1 proved the chip renders ("agent exit 0") and it is the headline
+  // receipt of a background run.
   const exitChip = page.getByText(/exit 0/i).first();
-  if (await exitChip.isVisible().catch(() => false)) {
-    await spotlight(page, exitChip);
-    await caption(page, "Exit zero — the command's own verdict, promoted to the run's headline.");
-    await beat(page, PACE.read);
-    await spotlight(page, null);
-  }
-
-  // 2. Files changed: the inventory file, and ONLY the inventory file.
-  const files = page.getByRole("heading", { name: "Files changed" }).first();
-  await files.scrollIntoViewIfNeeded().catch(() => {});
-  await spotlight(page, files);
-  await caption(page, "Files changed lists exactly what it touched: one new file, the inventory.");
+  await expect(exitChip).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, exitChip);
+  await caption(page, "Exit zero — the command's own verdict, promoted to the run's headline.");
   await beat(page, PACE.read);
-  await expect(page.getByText(ARTIFACT).first()).toBeVisible({ timeout: 30_000 });
   await spotlight(page, null);
 
-  // ...and the file is REALLY on the host — the writable grant from video 02
-  // doing its job. Asserted, not narrated: a take where the write silently
-  // failed must die here, not ship.
+  // 2. ...and the file is REALLY on the host — the writable grant from video
+  // 02 doing its job. Asserted against the disk, not narrated over a widget:
+  // a take where the write silently failed must die here, not ship. (The
+  // replay itself already played in beat 3, in the Overview's hero pane —
+  // the Files-changed widget stays out of this video: a 7-second sandbox is
+  // torn down before it ever polls, so it is honestly empty here, and its
+  // moment is video 05 where an agent works long enough to watch live.)
   expect(
     fs.existsSync(path.join(WORKSPACE_PATH, ARTIFACT)),
     `the run's ${ARTIFACT} never landed in ${WORKSPACE_PATH} — was the workspace onboarded writable?`,
   ).toBe(true);
-  await caption(page, "And it is really on this machine's disk — the write grant from last video, doing its job.");
+  await caption(page, "And the inventory file is really on this machine's disk — the write grant from last video, doing its job.");
   await beat(page, PACE.read);
 
   // 3. The audit trail: create → dispatch → complete, nobody watching.

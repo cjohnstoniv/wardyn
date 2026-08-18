@@ -16,8 +16,14 @@ import type { Recording } from "../../lib/types";
 // instead of literal garbage text — a plain <pre> dump cannot interpret them.
 // The raw asciicast text is fed verbatim so playback is byte-faithful, and
 // play / pause / seek / speed controls come for free.
+// The replay speeds on offer. 1× is fidelity; 2×/4× exist because a replay is
+// usually watched to find out WHAT happened, not to relive it in real time —
+// a long agent session at 1× is minutes of watching text arrive.
+const SPEEDS = [1, 2, 4] as const;
+
 export function TerminalPlayer({ recording }: { recording: Recording }) {
   const ref = React.useRef<HTMLDivElement>(null);
+  const [speed, setSpeed] = React.useState<(typeof SPEEDS)[number]>(1);
 
   React.useEffect(() => {
     const el = ref.current;
@@ -37,6 +43,7 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
       idleTimeLimit: 2, // compress long gaps of inactivity
       controls: true,
       autoPlay: false,
+      speed,
     });
 
     return () => {
@@ -46,7 +53,10 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         /* already torn down */
       }
     };
-  }, [recording.run_id, recording.cast, recording.header.width, recording.header.height]);
+    // speed is a creation-time option in asciinema-player v3, so changing it
+    // rebuilds the player — acceptable: the rebuild is instant and seeking
+    // back to where you were is what the progress bar is for.
+  }, [recording.run_id, recording.cast, recording.header.width, recording.header.height, speed]);
 
   // Hand the operator the .cast itself — the console could only replay it, so
   // taking a session off-box meant curling the API by hand. Served from the
@@ -77,6 +87,25 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         <span className="ml-auto font-mono text-[0.6875rem] text-white/60">
           {recording.events.length} events
         </span>
+        <div role="radiogroup" aria-label="Playback speed" className="ml-2 flex items-center gap-0.5">
+          {SPEEDS.map((x) => (
+            <button
+              key={x}
+              type="button"
+              role="radio"
+              aria-checked={speed === x}
+              aria-label={`${x}x speed`}
+              onClick={() => setSpeed(x)}
+              className={
+                speed === x
+                  ? "rounded px-1.5 py-0.5 font-mono text-[0.6875rem] bg-white/15 text-white"
+                  : "rounded px-1.5 py-0.5 font-mono text-[0.6875rem] text-white/50 hover:text-white"
+              }
+            >
+              {x}×
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           onClick={download}

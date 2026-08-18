@@ -203,9 +203,58 @@ fi
 # they do get today is every SHARED check below, which is already enough to
 # catch a take that recorded nothing, recorded silently, or recorded at the
 # wrong size.
+# --- video 02: add a workspace ------------------------------------------------
+# The take onboards the slugify workspace WRITABLE and stores one write-only
+# secret with a canary value. Checks are against the API and the audit trail,
+# never the driver's exit code.
+check_video_02_workspace() {
+head_ "Video 02 · the workspace"
+WS_JSON=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/workspaces" 2>/dev/null || echo '[]')
+python3 - "$WS_JSON" <<'PYEOF'
+import sys, json
+d = json.loads(sys.argv[1]); items = d if isinstance(d, list) else d.get("items", d.get("workspaces", []))
+ws = next((w for w in items if w.get("name") == "slugify"), None)
+assert ws, "no slugify workspace — beat 2 never landed"
+mounts = ws.get("mounts") or ws.get("workspace_mounts") or []
+sys.exit(0)
+PYEOF
+[[ $? -eq 0 ]] && ok "slugify workspace exists" || bad "slugify workspace missing — beat 2 never landed"
+
+head_ "Video 02 · the secret"
+NAMES=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/secrets" 2>/dev/null | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin).get("names",[])))' 2>/dev/null)
+grep -qx "deploy-webhook-token" <<<"${NAMES}" && ok "deploy-webhook-token stored" || bad "secret missing — beat 4 never saved"
+# The canary must not appear in the audit trail (a write-only store that logs
+# the value would be the leak the video denies).
+AUD=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/audit?limit=500" 2>/dev/null || true)
+grep -q "WARDYN-V02-CANARY" <<<"${AUD}" && bad "the canary VALUE appears in the audit trail" || ok "canary value nowhere in the audit trail"
+}
+
+# --- video 03: your first run ---------------------------------------------------
+# One background shell run, COMPLETED, whose inventory file really landed in
+# the writable workspace.
+check_video_03_first_run() {
+head_ "Video 03 · the run"
+V03_TITLE="${WARDYN_DEMO_V03_TITLE:-Take inventory — first governed run}"
+RUNS=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/runs" 2>/dev/null || echo '[]')
+STATE=$(python3 - "$RUNS" "$V03_TITLE" <<'PYEOF'
+import sys, json
+d = json.loads(sys.argv[1]); rs = d if isinstance(d, list) else d.get("items", d.get("runs", []))
+m = [r for r in rs if r.get("title") == sys.argv[2]]
+print(m[0]["state"] if m else "MISSING")
+PYEOF
+)
+[[ "${STATE}" == "COMPLETED" ]] && ok "run '${V03_TITLE}' COMPLETED" || bad "run state=${STATE} (want COMPLETED)"
+
+head_ "Video 03 · the artifact on disk"
+INV="${WARDYN_DEMO_WORKSPACE:-${HOME}/wardyn-demo/slugify}/NOTES-INVENTORY.txt"
+[[ -s "${INV}" ]] && ok "inventory file landed: ${INV}" || bad "no ${INV} — the write never reached the host"
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
-  ""|02) check_video_02 ;;
-  01|03|04|05|06|07|08|09|10)
+  ""|05) check_video_02 ;;
+  02) check_video_02_workspace ;;
+  03) check_video_03_first_run ;;
+  01|04|06|07|08|09|10)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
@@ -216,7 +265,7 @@ esac
 # --- shared: every take, every video -----------------------------------------
 
 head_ "Narration"
-TL="${REPO_ROOT}/ui/test-results/demo-video/narration.json"
+TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video}/narration.json"
 if [[ -s "${TL}" ]]; then
   python3 - "${TL}" <<'PY'
 import json, sys
