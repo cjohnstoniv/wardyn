@@ -450,14 +450,15 @@ maybe_exec_task_mode() {
 #
 # Two guards, both load-bearing:
 #
-#  1. IS RECORDING CONFIGURED?  Nothing in the sandbox env says so — recording is
-#     a control-plane decision (docker Config.Record).  Its ONLY in-sandbox trace
-#     is the one-shot ROOT exec the driver runs right after container start,
-#     gated on that flag, which creates and chmod 0777's the cast dir
-#     (prepareRecordingDirs / recordingChmodDirs in the docker driver).  No agent
-#     image ever creates /var/log/wardyn itself, so "that directory exists" IS
-#     the signal.  Absent — recording off, or a substrate that prepares no such
-#     dir — we emit NO wrap: the seed runs unrecorded rather than not at all.
+#  1. IS RECORDING CONFIGURED?  WARDYN_RECORDING=1, stamped into the container
+#     env by the docker driver when its Config.Record is on — env because it is
+#     race-free.  The earlier signal ("the one-shot root exec's /var/log/wardyn
+#     dir exists") LOST a race on this very path: that exec lands after
+#     container start, and an ephemeral workspace's --idle prep reaches this
+#     helper first, so the wrap silently sat out a recorded deployment's boot
+#     seed.  k8s sets no such flag (its driver has no Record config) and an
+#     older driver predates it — both degrade the same way: the seed runs
+#     unrecorded rather than not at all.
 #
 #  2. A CAST DIR THE AGENT CAN ACTUALLY WRITE.  wardyn-rec hard-errors BEFORE
 #     running its argv if it cannot create -cast-dir, and /var/log/wardyn is only
@@ -472,9 +473,9 @@ maybe_exec_task_mode() {
 # cast uploads when the seed process exits — a force-killed session loses the
 # pre-attach span, the same window an autonomous run already has, and the
 # attached span is covered again by the per-attach-session recorder.
-boot_seed_rec_wrap() {  # $1 = recording-signal dir (default /var/log/wardyn; a parameter only so this is drivable both ways from a test)
+boot_seed_rec_wrap() {
     WARDYN_REC_WRAP=()
-    [[ -d "${1:-/var/log/wardyn}" ]] || return 0
+    [[ "${WARDYN_RECORDING:-}" == "1" ]] || return 0
     [[ -n "${WARDYN_RUN_ID:-}" ]] || return 0
     command -v wardyn-rec >/dev/null 2>&1 || return 0
     local cast="${HOME}/.wardyn/cast"

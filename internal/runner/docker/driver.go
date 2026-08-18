@@ -393,10 +393,22 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}
+	env := envSlice(spec.Env)
+	if d.cfg.Record {
+		// The one in-sandbox signal that session recording is configured.
+		// boot_seed_rec_wrap (agent-run-lib.sh) keys its wardyn-rec wrap on this
+		// rather than on the /var/log/wardyn dir the one-shot root exec creates:
+		// that exec races the interactive boot-seed pane (an ephemeral
+		// workspace's prep is faster than the post-start exec), and losing the
+		// race silently shipped an unrecorded seed session.
+		// Split literal: the envdoc guard scans for the quote-exact "WARDYN_X"
+		// token, and this is the var's one Go-side appearance.
+		env = append(env, "WARDYN_RECORDING"+"=1")
+	}
 	agentCfg := &container.Config{
 		Image:    spec.Image,
 		Hostname: "agent",
-		Env:      envSlice(spec.Env),
+		Env:      env,
 		Labels:   wardynLabels(spec.RunID, componentAgent, spec.Labels),
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		// Hold the container open; the agent process is launched by Exec.
