@@ -445,25 +445,21 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // change that starts offering a terminal here — breaks the take instead of
   // leaving the narration claiming something the frame contradicts.
   await expect(hero).toContainText("autonomous — the agent drives");
+  // SPRINT FROM HERE TO THE STRIP. The curl is the task's FIRST step, and on a
+  // fast model day the ENTIRE run can finish in under two minutes — a take died
+  // exactly this way (2026-08-18): a minute of leisurely narration here meant
+  // the run COMPLETED before beat 8 ever attached, LiveApprovals unmounted with
+  // it (it only renders while RUNNING), and the spec sat 15 minutes waiting for
+  // a row that could no longer exist. These three lines are all B7 keeps; the
+  // "watch the tape" promise moved into the post-approval tour, where the run's
+  // pace no longer races the narration.
   await caption(page, "Launch. Headless by design — no terminal exists. You read this run; you don't type into it.");
   await beat(page, PACE.read + 600);
   await caption(page, "Only policy can interrupt it: an egress hold, a secret to approve.");
   await beat(page, PACE.read);
   await caption(page, "If a job needs more of you than that, it's an interactive run, not this.");
-  await beat(page, PACE.read);
-
-  // The pane offers exactly one action, and it is the one this video ends on.
-  // Point at it now so beat 9b is a promise kept rather than a surprise tab.
-  await spotlight(page, page.getByRole("button", { name: /Watch the captured session/ }));
-  await caption(page, "And everything it does is captured — we'll watch the tape when it's done.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
-
-  // The script's dead-air allowance for sandbox spin-up (~12 s measured). This
-  // is pacing, not a wait on the app — the lines above already cover most of
-  // it, and the held host is now the task's FIRST step (task.ts), so beat 8's
-  // wait below is what carries the rest of the minute.
-  await beat(page, 12_000);
+  // No trailing beat and no dead-air allowance: beat 8's own wait carries the
+  // spin-up, with the strip already under the camera's eye.
 
   // --- B8 Held at the boundary --------------------------------------------
   //
@@ -480,10 +476,31 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // roughly a minute after launch instead of after the coding stretch. The
   // generous timeout stays — it costs nothing on a fast take and it is the only
   // thing standing between a slow sandbox pull and a failed quota-burning run.
+  //
+  // RACED against the run's own terminal state, because the strip unmounts the
+  // moment the run stops RUNNING: an agent quick enough to burn through its
+  // retries before this beat decides has already made the take invalid — the
+  // on-camera decision IS the video — and the honest outcome is a fast loud
+  // failure naming that, not fifteen minutes polling for a row that can no
+  // longer exist (the exact way the 2026-08-18 take died).
   const heldRow = page.getByTestId("live-approval-row").filter({ hasText: HELD_HOST }).first();
-  await expect(heldRow, `${HELD_HOST} never surfaced as a held request`).toContainText("waiting", {
-    timeout: RUN_FINISHES,
-  });
+  const doneBadge = page.getByText(/^(Completed|Failed|Stopped|Killed)$/).first();
+  const b8 = await Promise.race([
+    heldRow.getByText("waiting").waitFor({ state: "visible", timeout: RUN_FINISHES }).then(
+      () => "held" as const,
+      () => "timeout" as const,
+    ),
+    doneBadge.waitFor({ state: "visible", timeout: RUN_FINISHES }).then(
+      () => "finished" as const,
+      () => "timeout" as const,
+    ),
+  ]);
+  expect(
+    b8,
+    `${HELD_HOST} never surfaced as a held "waiting" row while the run was still RUNNING — ` +
+      `the run finished (or the wait timed out) before the on-camera decision. ` +
+      `The whole video is that decision; re-run the take.`,
+  ).toBe("held");
 
   await caption(page, `The agent just reached for ${HELD_HOST}. It's not on the list.`);
   await beat(page, PACE.read);
@@ -533,6 +550,16 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await spotlight(page, filesCard);
   await caption(page, "Files change on the right as the agent works — no terminal needed to supervise.");
   await beat(page, PACE.read + 900);
+
+  // The "watch the tape" promise, moved here from B7 (where its leisure once
+  // cost a take — see the sprint comment above): with the decision already
+  // made, the run's pace no longer races the narration. Beat 9b keeps it.
+  // Spotlight the hero pane itself rather than its button: a fast run may
+  // already have flipped the pane from the notice to the in-place replay,
+  // and the pane is the stable frame both states share.
+  await spotlight(page, page.getByTestId("run-terminal-pane"));
+  await caption(page, "And everything it does is captured — we'll watch the tape when it's done.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
   // --- B9 Files changed ---------------------------------------------------
