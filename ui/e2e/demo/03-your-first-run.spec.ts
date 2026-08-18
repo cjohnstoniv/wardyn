@@ -208,8 +208,21 @@ test("V03 beat 2 — the envelope", async () => {
   // camera rather than narrating a default it did not choose.
   await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined means default-deny: nothing reaches the network unless we allow it.");
   await act(page, page.getByRole("radio", { name: /^None/ }), "These presets are the tuning knob — and this command needs no internet, so: none.");
-  await caption(page, "Anything it reaches for anyway would stop and ask a human. Nothing slips out quietly.");
+
+  // The unlisted-hosts rule — the OTHER half of the envelope (owner note:
+  // whether requests are even expected must be controllable, with always-deny
+  // as the fallback). The three modes are the card's own Seg now, and this
+  // run picks the strictest one on camera because it is the honest choice: a
+  // command that expects zero requests should not park approvals on a human.
+  const rules = page.getByRole("radiogroup", { name: "Unlisted hosts" });
+  await rules.scrollIntoViewIfNeeded().catch(() => {});
+  await spotlight(page, rules);
+  await caption(page, "And you decide what happens if it reaches for anything anyway.");
   await beat(page, PACE.read);
+  await caption(page, "Hold it for a live decision, deny but raise it for review — or deny silently.");
+  await beat(page, PACE.read);
+  await act(page, rules.getByRole("radio", { name: "Deny silently" }), "This run expects no requests at all, so nothing should even ask. Deny, silently.");
+  await spotlight(page, null);
 
   // The rail is the contract, and with zero hosts it is one sentence long.
   // "0 hosts allowed" is the rail's own line (new-run-screen.tsx's

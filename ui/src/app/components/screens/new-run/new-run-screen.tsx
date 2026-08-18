@@ -689,10 +689,28 @@ export function NewRunScreen() {
                   </Button>
                 </div>
 
+                {/* The unlisted-hosts rule, ON the card face — not only inside
+                    the dialog. What happens to everything you did NOT list is
+                    as much a part of the envelope as the list itself, and
+                    burying the choice behind "Edit hosts…" made it read as
+                    fixed: an operator who wants approvals never raised at all
+                    ("Deny silently" — always_deny as the fallback) had no way
+                    to see the choice existed without opening a dialog about a
+                    different question. Same state the dialog edits, so the two
+                    surfaces cannot disagree. */}
                 {!state.allowAllEgress && (
-                  <p className="text-[0.75rem] text-muted-foreground">
-                    Unlisted hosts: <span className="text-foreground">{ruleTitle}</span>
-                  </p>
+                  <div className="space-y-1.5 border-t border-border pt-3">
+                    <p className="text-[0.75rem] text-muted-foreground">Unlisted hosts:</p>
+                    <Seg
+                      label="Unlisted hosts"
+                      value={state.firstUseApproval}
+                      onChange={(id) => patch({ firstUseApproval: id as (typeof UNLISTED_RULES)[number]["id"] })}
+                      options={UNLISTED_RULES.map((r) => ({ id: r.id, label: r.title }))}
+                    />
+                    <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                      {UNLISTED_RULES.find((r) => r.id === state.firstUseApproval)?.body}
+                    </p>
+                  </div>
                 )}
               </div>
             )}
