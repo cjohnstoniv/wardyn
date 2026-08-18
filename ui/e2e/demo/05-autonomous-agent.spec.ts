@@ -10,7 +10,15 @@
  * Getting Started funnel and onboarded a workspace; nothing has yet RUN inside
  * the boundary. This film is that: one real agent run, named, confined to a
  * single host, held once at the proxy on camera, finishing with a diff of the
- * files it actually touched.
+ * files it actually touched — and then replaying its own terminal, because a
+ * headless run's only window onto what it did is the tape it kept.
+ *
+ * PACING IS A FEATURE HERE. task.ts puts the held host FIRST, so the decision
+ * lands about a minute in; everything after it is the agent coding, which the
+ * viewer should not sit through. That stretch is wrapped in overlay.ts's
+ * ffwdStart/ffwdEnd and compressed 12x by scripts/record-demo.sh after
+ * assembly. NOTHING MAY SPEAK inside that span — a line spoken over frames the
+ * encoder throws away lands early and drags every later cue with it.
  *
  * It is an extraction of walkthrough.spec.ts's act 5 (~339-588), and where it
  * covers the same ground the code was MOVED, not rewritten — the seeded-chip
@@ -54,7 +62,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { test, expect } from "@playwright/test";
 import { DEMO_TASK, HELD_HOST, MODEL_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, PACE, spotlight } from "./overlay";
+import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
@@ -303,11 +311,21 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
     "Autonomous: it works unattended, and I appear only when policy stops it.",
   );
 
+  // The truth about an autonomous run, said where the viewer is choosing it.
+  // agent-run execs `claude -p "$task"` ONCE (deploy/images/claude-code/agent-run)
+  // — there is no second turn, no follow-up, no way to add a sentence later.
+  // Everything the agent will ever know about the job is in the box below.
+  await caption(page, "The task is the whole briefing — the only prompt this agent will ever get.");
+  await beat(page, PACE.read);
+
   const taskBox = page.getByLabel("Task");
   await spotlight(page, taskBox);
   await taskBox.fill(DEMO_TASK);
   await spotlight(page, null);
-  await caption(page, "In plain English: add slugify, add a test, reach two hosts.");
+  // Reads the task in ITS ORDER (task.ts): the host first, then the code. A
+  // line that still promised "two hosts" would be describing the task this
+  // video used to run — the metadata probe is V01's lesson now.
+  await caption(page, "In plain English: reach a host, add slugify with a test, write it down.");
   await beat(page, PACE.read + 1400);
 
   // --- B3 Workspace -------------------------------------------------------
@@ -422,11 +440,29 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // the next line false.
   const hero = page.getByTestId("run-terminal-pane");
   await expect(hero).toContainText("Output", { timeout: 60_000 });
-  await caption(page, "Launch. This run is unattended, so there's no terminal to type into.");
-  await beat(page, PACE.read + 1200);
-  await caption(page, "The right rail is live: sandbox metering, egress, files as they change.");
+  // The pane's own chip (RUN_COCKPIT.autonomous) is the phrase the next three
+  // lines paraphrase. Pinned so a copy change that softens it — or a cockpit
+  // change that starts offering a terminal here — breaks the take instead of
+  // leaving the narration claiming something the frame contradicts.
+  await expect(hero).toContainText("autonomous — the agent drives");
+  await caption(page, "Launch. Headless by design — no terminal exists. You read this run; you don't type into it.");
+  await beat(page, PACE.read + 600);
+  await caption(page, "Only policy can interrupt it: an egress hold, a secret to approve.");
+  await beat(page, PACE.read);
+  await caption(page, "If a job needs more of you than that, it's an interactive run, not this.");
+  await beat(page, PACE.read);
+
+  // The pane offers exactly one action, and it is the one this video ends on.
+  // Point at it now so beat 9b is a promise kept rather than a surprise tab.
+  await spotlight(page, page.getByRole("button", { name: /Watch the captured session/ }));
+  await caption(page, "And everything it does is captured — we'll watch the tape when it's done.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
   // The script's dead-air allowance for sandbox spin-up (~12 s measured). This
-  // is pacing, not a wait on the app.
+  // is pacing, not a wait on the app — the lines above already cover most of
+  // it, and the held host is now the task's FIRST step (task.ts), so beat 8's
+  // wait below is what carries the rest of the minute.
   await beat(page, 12_000);
 
   // --- B8 Held at the boundary --------------------------------------------
@@ -439,6 +475,11 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // proxy, waiting on me", and a deny_with_review fast-fail (which is what a
   // MEMBER session would get) looks almost identical on camera while making
   // both of those lines false.
+  //
+  // TIMING: the curl is the task's FIRST step now (task.ts), so this row lands
+  // roughly a minute after launch instead of after the coding stretch. The
+  // generous timeout stays — it costs nothing on a fast take and it is the only
+  // thing standing between a slow sandbox pull and a failed quota-burning run.
   const heldRow = page.getByTestId("live-approval-row").filter({ hasText: HELD_HOST }).first();
   await expect(heldRow, `${HELD_HOST} never surfaced as a held request`).toContainText("waiting", {
     timeout: RUN_FINISHES,
@@ -470,8 +511,39 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   );
   await beat(page, PACE.read + 900);
 
+  // --- B8b The rail, while it works ---------------------------------------
+  //
+  // The decision is made and the agent is now coding — the part of the run the
+  // viewer must not sit through. Before compressing it, spend ~30 s on the two
+  // widgets that are actually MOVING, so the transition into the fast-forward
+  // is a tour rather than a freeze.
+  //
+  // Both are placed by the LIVE preset too (widget-registry.ts: egress x8/y0,
+  // files x8/y4), so this needs no layout change — and the same two locators
+  // carry into beat 9 after the canvas swaps itself to "finished".
+  // Each is the widget's own <section> (WidgetCard), reached from its heading
+  // rather than by picking a section off the page — an ancestor-scoped hop
+  // cannot accidentally resolve to a wrapper that happens to sort first.
+  const egressCard = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
+  const filesCard = page.getByRole("heading", { name: "Files changed" }).locator("xpath=ancestor::section[1]");
+
+  await spotlight(page, egressCard);
+  await caption(page, "Receipts arrive as it works: every call to the model, allowed and logged.");
+  await beat(page, PACE.read + 900);
+  await spotlight(page, filesCard);
+  await caption(page, "Files change on the right as the agent works — no terminal needed to supervise.");
+  await beat(page, PACE.read + 900);
+  await spotlight(page, null);
+
   // --- B9 Files changed ---------------------------------------------------
   //
+  // FAST-FORWARD FROM HERE. Everything between ffwdStart and ffwdEnd is
+  // compressed 12x by scripts/demo-ffwd.py after assembly, so this block SAYS
+  // NOTHING: caption() speaks, and a line spoken over discarded frames lands
+  // early and shifts every cue after it. Asserts are silent; that is the whole
+  // reason the terminal-state wait is what sits inside the span.
+  await ffwdStart(page);
+
   // Terminal state first, whichever it is, so a failed run fails HERE with the
   // badge on screen instead of timing out fifteen minutes later against a
   // "Completed"-only matcher. RunStateBadge renders TITLE CASE labels from
@@ -482,6 +554,10 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
     "Completed",
   );
 
+  // The badge is on screen: real time resumes here, and the chip comes down
+  // before the next line is spoken.
+  await ffwdEnd(page);
+
   // The canvas swaps to the "finished" preset on its own the moment the run
   // terminates (canvas.tsx: `ctx.finished ? "finished" : "live"`), promoting
   // Files changed to the top-right. DO NOT RELOAD to get there: the widget
@@ -489,37 +565,33 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // against a torn-down sandbox answers 409 and renders "This run has finished
   // — its sandbox is gone." Left alone, polling has already stopped (usePoll is
   // paused once live=false) and the last-good rows stay on screen.
-  // The widget's own <section> (WidgetCard), reached from its heading rather
-  // than by picking a section off the page — an ancestor-scoped hop cannot
-  // accidentally resolve to a wrapper that happens to sort first.
-  const files = page.getByRole("heading", { name: "Files changed" }).locator("xpath=ancestor::section[1]");
-  await spotlight(page, files);
+  await spotlight(page, filesCard);
   await caption(page, "Done. Files changed lists exactly what it touched: source, test, and notes.");
 
   // ASSERT THE PAYOFF. The narration names three files; if the workspace mounted
   // read-only, or the agent stopped after the curl, the widget shows "No files
   // changed yet." and this line is a lie told over an empty box. All three are
-  // guaranteed by DEMO_TASK (steps 1 and 4) against the demo-node fixture, which
-  // ships src/slug.js and test/slug.test.js for the agent to MODIFY.
-  await expect(files).toContainText("src/slug.js", { timeout: 60_000 });
-  await expect(files).toContainText("test/slug.test.js");
-  await expect(files).toContainText("NOTES.md");
+  // guaranteed by DEMO_TASK (steps 2 and 3 — NOTES.md is written by steps 1 and
+  // 3 both) against the demo-node fixture, which ships src/slug.js and
+  // test/slug.test.js for the agent to MODIFY.
+  await expect(filesCard).toContainText("src/slug.js", { timeout: 60_000 });
+  await expect(filesCard).toContainText("test/slug.test.js");
+  await expect(filesCard).toContainText("NOTES.md");
   // …and the diffstat itself: "+N" proves real counted edits rather than a row
   // that rendered with absent counts.
-  await expect(files).toContainText(/\+\d+/);
+  await expect(filesCard).toContainText(/\+\d+/);
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 
   // "every boundary crossing left a receipt" — the Egress widget is where that
   // receipt is read, and example.com is the specific crossing this video just
   // decided on camera.
-  const egress = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
-  await spotlight(page, egress);
+  await spotlight(page, egressCard);
   await caption(page, "Real edits on my disk — and every boundary crossing left a receipt.");
 
   // ASSERTED FROM THE TRAIL, NOT FROM THE TILE. EgressWidget renders only the 8
   // NEWEST decisions (widgets/egress.tsx's MAX_ROWS) and a real Claude Code run
-  // makes a fresh api.anthropic.com CONNECT on every turn — by the time step 4
+  // makes a fresh api.anthropic.com CONNECT on every turn — by the time step 3
   // finishes writing NOTES.md, the example.com rows have almost certainly rolled
   // out of that window. Asserting the widget's text would burn a twenty-minute
   // quota take on a cosmetic cap. The claim the line makes is that the crossing
@@ -536,6 +608,97 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 
+});
+
+// ---------------------------------------------------------------------------
+// Beat 9b — the run kept its own tape.
+//
+// The payoff of "headless by design": the pane that spent the whole run saying
+// "Output" is now a player. run-detail.tsx's TerminalPane branch 2 swaps the
+// hero to the replay IN PLACE the moment the run goes terminal — no tab, no
+// reload — and the cast is fetched lazily for exactly that (the wantsRecording
+// effect covers `tab === "overview" && terminal`).
+//
+// WHAT COULD MAKE THIS BEAT LIE: a stack with the recording store disabled, or
+// a cast that never uploaded, renders a NOTICE in the same frame — same border,
+// same title bar — and the narration would be describing a player that is not
+// there. So this asserts the player and fails loudly. A V05 take without the
+// tape is the wrong take, not a shorter one.
+//
+// Its own test() rather than a tail on beats 7-9: ~45 s of playback plus a
+// generous upload poll deserves its own timeout and its own failure line.
+// stage() hands back the same page, so nothing is reset between them.
+// ---------------------------------------------------------------------------
+
+test("beat 9b — the run kept its own tape", async () => {
+  test.setTimeout(600_000);
+  const page = stage();
+  const headers = process.env.WARDYN_DEMO_TOKEN
+    ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
+    : undefined;
+  const runId = page.url().split("/runs/")[1]?.split(/[?#]/)[0] ?? "";
+
+  // THE RACE, AND WHY IT IS HANDLED OFF CAMERA. wardyn-rec PUTs the cast when
+  // the AGENT PROCESS exits; the run only goes terminal when the CONTAINER
+  // does, which is later — so the cast is normally stored well before the badge
+  // this spec just asserted. Nothing ORDERS the two, though, and the pane's
+  // fetch is ONE SHOT (run-detail.tsx bails unless recState === "idle"): lose
+  // that race and the pane says "no recording" for the rest of the take, with
+  // no retry of its own. Wait for the cast at the API — invisible, no reload —
+  // and only then ask whether the pane already has it.
+  await expect
+    .poll(
+      async () =>
+        (await page.request.get(`/api/v1/runs/${runId}/recording/${runId}`, { headers })).status(),
+      { timeout: 120_000, intervals: [2_000] },
+    )
+    .toBe(200);
+
+  // The player's speed control is the honest proof it MOUNTED: TerminalPlayer
+  // renders it (terminal-player.tsx) only once the cast is fetched and parsed.
+  const speeds = page.getByRole("radiogroup", { name: "Playback speed" });
+  // The cast exists now, so a missing player means the pane's single fetch ran
+  // before the upload landed — a reload is the only thing that re-arms it. It
+  // costs the Files-changed widget its rows (a fresh mount execs git in a
+  // torn-down sandbox and 409s), which is why it is a FALLBACK and not the
+  // path: beat 9 has already been filmed by the time we get here.
+  if (!(await speeds.isVisible())) await page.reload();
+  await expect(
+    speeds,
+    "the finished run's pane never became a player — no cast reached the store, or recording is disabled on this stack",
+  ).toBeVisible({ timeout: 60_000 });
+
+  const hero = page.getByTestId("run-terminal-pane");
+  await spotlight(page, hero);
+  await caption(page, "The run kept its own tape. This is the agent's actual terminal — every keystroke, replayable.");
+  await beat(page, PACE.read + 600);
+
+  // SPEED FIRST, THEN PLAY. `speed` is a creation-time option in
+  // asciinema-player v3, so TerminalPlayer rebuilds the player whenever it
+  // changes (terminal-player.tsx's effect deps) — picking 4x after pressing
+  // play would throw away the playback the viewer just watched start.
+  await act(
+    page,
+    speeds.getByRole("radio", { name: "4x speed" }),
+    "Four-times speed, and the idle gaps are already squeezed out.",
+  );
+
+  // autoPlay is false, so the player parks behind its own start overlay
+  // (asciinema-player's .ap-overlay-start) — clicking that is what starts it.
+  // By class and not by role because the overlay is a bare <div>, and the
+  // control-bar alternative (.ap-playback-button) carries no accessible name
+  // either: the vendor's markup gives nothing better to aim at.
+  await act(page, page.locator(".ap-overlay-start"));
+
+  // ~45 s of watching it play. Real time on purpose: the player's own
+  // idleTimeLimit: 2 plus 4x is the compression, and it is the PRODUCT doing
+  // it — wrapping this in a fast-forward span would be the recorder taking
+  // credit for a feature the viewer is supposed to see working.
+  await beat(page, 20_000);
+  await caption(page, "Real work, watched after the fact — supervision without the sitting around.");
+  await beat(page, 25_000);
+  await spotlight(page, null);
+  await caption(page, "");
 });
 
 // ---------------------------------------------------------------------------
@@ -628,7 +791,16 @@ test("V05 beat 10 — borrowed, never held", async () => {
   await beat(page, PACE.read + 600);
 
   // --- OUTRO --------------------------------------------------------------
-  await caption(page, "That's a first agent run: confined, held once, finished with a diff — and secrets only ever borrowed.");
+  //
+  // A RECAP, not a sign-off. The old single line named the beats; three lines
+  // name what the viewer now knows, in the order they watched it happen —
+  // handover, decision, evidence. Each half of each line is something this
+  // take asserted on camera, so the summary cannot outrun the footage.
+  await caption(page, "One governed run, end to end: a task handed over in plain English, a sandbox it never left.");
+  await beat(page, PACE.read + 400);
+  await caption(page, "One host held at the door — you decided, on the record.");
+  await beat(page, PACE.read + 400);
+  await caption(page, "A diff on your disk, receipts in the audit trail, and the whole session on tape.");
   await beat(page, PACE.read + 600);
   await caption(page, "Next: stop writing the policy at all — record a run, and let it write itself.");
   await beat(page, PACE.chapter);

@@ -36,25 +36,35 @@ export const PROOF_RUN_TITLE = "Same host, no approval this time";
 /**
  * The run's task. Numbered so the agent's path stays tight enough to film.
  *
- * Step 2's --max-time 90 is load-bearing: it has to outlast the 30s
+ * ORDER IS CHOREOGRAPHY. The curl is step 1 because the held host is the beat
+ * the video is built around: front-loaded, it surfaces ~a minute after launch
+ * instead of after the whole coding stretch, so the decision happens early and
+ * the long unwatchable part lands AFTER it — where the recorder's fast-forward
+ * span (overlay.ts's ffwdStart/ffwdEnd) can compress it.
+ *
+ * Step 1's --max-time 90 is load-bearing: it has to outlast the 30s
  * wait_for_review hold (defaultHoldTimeout, internal/egress/proxy/approvals.go)
  * so the operator's on-camera approval lands while the request is still open
  * and the SAME curl completes.
+ *
+ * There is deliberately NO 169.254.169.254 metadata probe here any more. V01
+ * teaches the line-that-cannot-be-crossed on the keyless funnel, in seconds;
+ * paying a minute of a quota-bound agent run to re-teach it is the trade this
+ * reorder refuses.
  */
 export const DEMO_TASK = [
-  "1. Add a slugify(s) function to src/slug.js that lower-cases the input, replaces every run of non-alphanumeric characters with a single hyphen, and trims leading and trailing hyphens. Add a matching test to test/slug.test.js, then run `node --test` and make sure every test passes.",
   // The retry is load-bearing, not padding. The operator ceiling clamps this
   // run's first_use_approval down to deny_with_review, so an off-policy host is
   // REFUSED outright (403 at the CONNECT, curl reports 000) and raises an
   // approval — and it is the RETRY after approval that succeeds. Without this
   // sentence the agent reads the 403, writes it down and moves on, and the
   // demo's whole payoff (approve → it goes through) never happens on camera.
-  "2. Run: curl -sS --max-time 90 -o /dev/null -w '%{http_code}' https://example.com/ — if it is refused (status 000, or a 403 from the proxy), wait 20 seconds and run the exact same command once more, because an operator may be approving the host while you wait. Repeat that retry up to 3 times, then write the final status code into NOTES.md.",
-  "3. Run: curl -sS --max-time 5 http://169.254.169.254/latest/meta-data/ — and write what happened, the output or the error, into NOTES.md.",
-  "4. Finish NOTES.md with one short paragraph explaining which of those two hosts you reached and which you did not.",
+  "1. Run: curl -sS --max-time 90 -o /dev/null -w '%{http_code}' https://example.com/ — if it is refused (status 000, or a 403 from the proxy), wait 20 seconds and run the exact same command once more, because an operator may be approving the host while you wait. Repeat that retry up to 3 times, then write the final status code into NOTES.md.",
+  "2. Add a slugify(s) function to src/slug.js that lower-cases the input, replaces every run of non-alphanumeric characters with a single hyphen, and trims leading and trailing hyphens. Add a matching test to test/slug.test.js, then run `node --test` and make sure every test passes.",
+  "3. Finish NOTES.md with one short paragraph: the final status code you got for example.com, and what you built in step 2.",
 ].join("\n");
 
-/** The host step 2 reaches for — off the allowlist, so it gets held. */
+/** The host step 1 reaches for — off the allowlist, so it gets held. */
 export const HELD_HOST = "example.com";
 
 /** Allow-listed outright: without it the subscription credential is refused. */
