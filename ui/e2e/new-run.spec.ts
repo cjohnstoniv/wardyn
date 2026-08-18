@@ -102,7 +102,9 @@ test.describe("New run — one page", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     // The card stops asserting a preset the run no longer uses.
     await expect(page.getByText(/Edited — this run uses your host list/)).toBeVisible();
-    await expect(page.getByText(/Unlisted hosts:/)).toContainText("Deny silently");
+    await expect(
+      page.getByRole("radiogroup", { name: "Unlisted hosts" }).getByRole("radio", { name: "Deny silently" }),
+    ).toBeChecked();
   });
 
   test("Cancel in the dialog changes nothing", async ({ page }) => {
