@@ -459,7 +459,14 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await beat(page, PACE.read);
   await caption(page, "If a job needs more of you than that, it's an interactive run, not this.");
   // No trailing beat and no dead-air allowance: beat 8's own wait carries the
-  // spin-up, with the strip already under the camera's eye.
+  // spin-up, with the strip already under the camera's eye — and FAST-FORWARDED
+  // (owner, 2026-08-18): the ~30-50s of sandbox boot + the agent reaching its
+  // first host is real time nobody needs to sit through in the published cut.
+  // The span ends the moment the held row lands, so the hold itself — and the
+  // decision, the entire point of the video — plays at human speed. Nothing is
+  // narrated inside the span (a spoken cue inside compressed footage desyncs
+  // the whole timeline).
+  await ffwdStart(page);
 
   // --- B8 Held at the boundary --------------------------------------------
   //
@@ -501,6 +508,9 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
       `the run finished (or the wait timed out) before the on-camera decision. ` +
       `The whole video is that decision; re-run the take.`,
   ).toBe("held");
+  // The row is on screen: end the launch-wait span HERE, before a word is
+  // spoken, so the hold and the decision play at human speed in the final cut.
+  await ffwdEnd(page);
 
   await caption(page, `The agent just reached for ${HELD_HOST}. It's not on the list.`);
   await beat(page, PACE.read);
