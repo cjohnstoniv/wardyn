@@ -71,7 +71,12 @@ _TYPIST_REPO="$(cd "${_TYPIST_HERE}/.." && pwd)"
 # third would be the sync problem this pipeline keeps refusing to create.
 _TYPIST_PY="${WARDYN_NARRATE_PY:-${PY_NARRATE:-${HOME}/.cache/wardyn-narrate/venv/bin/python}}"
 _TYPIST_SERVER="${_TYPIST_HERE}/narrate-server.py"
-_TYPIST_TIMELINE="${WARDYN_DEMO_TERMINAL_TIMELINE:-${_TYPIST_REPO}/ui/test-results/demo-video/narration-terminal.json}"
+# WARDYN_DEMO_WORK_DIR is the per-video scratch dir record-demo.sh exports and
+# READS THE TIMELINE BACK FROM (${DEMO_OUT_DIR}/narration-terminal.json). The
+# old fixed demo-video/ default silently split the two on any --video take:
+# the typist wrote one path, the merge read another, and the terminal half of
+# the video shipped VOICELESS with every step exiting 0.
+_TYPIST_TIMELINE="${WARDYN_DEMO_TERMINAL_TIMELINE:-${WARDYN_DEMO_WORK_DIR:-${_TYPIST_REPO}/ui/test-results/demo-video}/narration-terminal.json}"
 
 # Pacing. The numbers are overlay.ts's PACE, verbatim: 45ms per keystroke (its
 # page.keyboard.type delay), 2200ms to read a caption, 2600ms of chapter card,

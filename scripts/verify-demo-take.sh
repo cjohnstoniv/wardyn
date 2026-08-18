@@ -596,6 +596,113 @@ PYEOF
 fi
 }
 
+# Video 09 · the CI take. THE ARTIFACTS ARE THE EVIDENCE, NOT THE STACK. Every
+# other check in this file interrogates the live :8080 console, because that
+# stack is still up when a take finishes. Video 09's is not: beats 1-4 stand up
+# a SEPARATE compose project (wardyn-ci-demo on :8099) with WARDYN_CI_KEEP=1 —
+# kept only long enough for beats 5-6 to film it — and the take's own staging
+# tells the operator to tear it down right after beat 6. Verification frequently
+# runs after that, and on a retake the :8099 stack answering may well be the NEXT
+# take's. So what is checked is ci-artifacts/, which is (a) durable, (b) exactly
+# what beat 4 puts on camera and calls "the receipts", and (c) the same file the
+# browser spec reads to learn which run it is filming. The live stack is probed
+# last and best-effort: present and correct is a bonus, absent is a note.
+check_video_09() {
+head_ "Video 09 · the pipeline's receipts"
+V09_OUT="${WARDYN_CI_OUT:-${REPO_ROOT}/ci-artifacts}"
+V09_TASK="${WARDYN_CI_TASK:-echo hello from a governed sandbox}"
+for f in run.json run.log audit.json; do
+  [[ -s "${V09_OUT}/${f}" ]] && ok "ci-artifacts/${f}" \
+    || bad "no ${V09_OUT}/${f} — beat 4 films three files and narrates them as the receipts"
+done
+
+# waitForRun's own verdict, in the CLI's words (cmd/wardyn/commands.go:434 —
+# `run %s finished: state %s, agent exit code %d`). run.log is that command's
+# STDERR, tee'd live by ci-run.sh; the agent's own stdout never lands here, it
+# goes to the run's log/recording. So this line, not the task's echo, is what
+# run.log has to prove — and it happens to carry both numbers the video films.
+if [[ -s "${V09_OUT}/run.log" ]]; then
+  grep -qE 'finished: state COMPLETED, agent exit code 0$' "${V09_OUT}/run.log" \
+    && ok "run.log carries 'finished: state COMPLETED, agent exit code 0'" \
+    || bad "run.log has no COMPLETED/exit-0 verdict from --wait — beat 3 films that number as zero"
+fi
+
+# A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
+# would increment counters that vanish (see check_video_08_policies).
+python3 - "${V09_OUT}/run.json" "${V09_OUT}/audit.json" "${V09_TASK}" <<'PYEOF' > /tmp/_demo_v09.$$ 2>/dev/null
+import sys, json
+def load(p):
+    try:
+        with open(p) as f: return json.load(f)
+    except Exception: return None
+run = load(sys.argv[1]) or {}
+aud = load(sys.argv[2])
+print("V09_RUN_ID", run.get("id") or "-")
+print("V09_RUN_STATE", run.get("state") or "MISSING")
+# The board card's headline is runHeadline(run) = title || task, and a CLI run
+# carries no title — so the browser half locates its card by this exact string.
+# A drifted WARDYN_CI_TASK means beats 5-6 filmed a card nobody can find again.
+print("V09_RUN_TASK", "MATCH" if (run.get("task") or "") == sys.argv[3] else "DRIFT")
+ev = aud if isinstance(aud, list) else (aud or {}).get("events") or []
+print("V09_AUD_COUNT", len(ev))
+acts = {e.get("action") for e in ev}
+print("V09_AUD_CREATE", "run.create" in acts)
+print("V09_AUD_COMPLETE", "run.complete" in acts)
+# The ONE field the video films twice: beat 3 as the shell's `echo $?`, beat 6
+# as the console's "agent exit 0" chip (exitCodeFromAudit reads run.complete's
+# data.exit_code, and so does the CLI's own --wait). Two surfaces, one number —
+# which is the whole point of filming both.
+codes = [(e.get("data") or {}).get("exit_code") for e in ev if e.get("action") == "run.complete"]
+codes = [c for c in codes if c is not None]
+print("V09_AUD_EXIT", codes[-1] if codes else "MISSING")
+PYEOF
+V09_RUN="-"
+while read -r k v; do
+  case "$k" in
+    V09_RUN_ID)       V09_RUN="$v"
+                      [[ "$v" == "-" ]] && bad "run.json carries no run id — the pipeline never finished collecting" || ok "run ${v}" ;;
+    V09_RUN_STATE)    case "$v" in
+                        COMPLETED) ok "run.json state=COMPLETED" ;;
+                        MISSING)   bad "run.json has no state — beat 4's 'jq .state' filmed nothing" ;;
+                        *)         bad "run.json state=${v}, not COMPLETED — beats 4-5 narrate 'completed' over a run that did not" ;;
+                      esac ;;
+    V09_RUN_TASK)     [[ "$v" == MATCH ]] && ok "run task is the filmed one ('${V09_TASK}')" \
+                        || bad "run.json's task is not '${V09_TASK}' — the board card beats 5-6 clicked is not the one this take launched" ;;
+    V09_AUD_COUNT)    [[ "$v" -gt 0 ]] && ok "audit.json carries ${v} events" || bad "audit.json is empty — beat 6 narrates 'the whole audit trail'" ;;
+    V09_AUD_CREATE)   [[ "$v" == True ]] && ok "run.create on the trail" || bad "no run.create — beat 6 narrates 'create through complete'" ;;
+    V09_AUD_COMPLETE) [[ "$v" == True ]] && ok "run.complete on the trail" || bad "no run.complete — beat 6 narrates 'create through complete'" ;;
+    V09_AUD_EXIT)     case "$v" in
+                        0)       ok "run.complete's exit_code is 0 — the same 0 beat 3 echoes and beat 6 chips" ;;
+                        MISSING) bad "run.complete carries no exit_code — the 'agent exit 0' chip has nothing to render" ;;
+                        *)       bad "run.complete's exit_code is ${v} — beat 6 films a chip that says 'agent exit 0'" ;;
+                      esac ;;
+  esac
+done < /tmp/_demo_v09.$$
+rm -f /tmp/_demo_v09.$$
+
+# The terminal lane's cues. Checked HERE and not with the shared narration block
+# below, which only knows the browser lane's narration.json: V09 is a hybrid, and
+# a missing terminal timeline ships beats 1-4 SILENT under a fully narrated
+# browser half with every step of the recorder still exiting 0.
+V09_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-09}/narration-terminal.json"
+[[ -s "${V09_TL}" ]] && ok "terminal narration timeline present" \
+  || bad "no ${V09_TL} — beats 1-4 are silent (demo-typist.sh's default path vs record-demo.sh's per-video dir)"
+
+head_ "Video 09 · the stack beats 5-6 filmed (best-effort)"
+V09_URL="http://127.0.0.1:${WARDYN_UP_PORT:-8099}"
+V09_LIST=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${WARDYN_ADMIN_TOKEN:-demo-admin-token}" \
+  "${V09_URL}/api/v1/runs" 2>/dev/null || true)
+if [[ -z "${V09_LIST}" ]]; then
+  printf '    (nothing answering at %s — the KEEPed stack is torn down, which the staging asks for after beat 6; the artifacts above are the durable evidence)\n' "${V09_URL}"
+elif [[ "${V09_RUN}" == "-" ]]; then
+  printf '    (%s is up, but there is no run id to look for)\n' "${V09_URL}"
+elif [[ "${V09_LIST}" == *"${V09_RUN}"* ]]; then
+  ok "run ${V09_RUN} is listed at ${V09_URL} — KEEP held and the browser half had the right board"
+else
+  bad "${V09_URL} answers but does not list ${V09_RUN} — beats 5-6 filmed a DIFFERENT stack"
+fi
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
@@ -603,7 +710,8 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   06) check_video_06_record ;;
   07) check_video_07_approvals ;;
   08) check_video_08_policies ;;
-  01|04|09|10)
+  09) check_video_09 ;;
+  01|04|10)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
