@@ -62,22 +62,27 @@ export default defineConfig({
       // self-skips without WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a
       // browser at a developer's live stack and start clicking Launch.
       //
-      // viewport:null hands sizing to the real window (--window-size below), so
-      // the captured frame is the browser, not a letterboxed page inside it.
+      // Fixed 1920x1080 viewport, matching video.size EXACTLY. viewport:null
+      // ("let the window decide") shipped a gray bar on the bottom of every
+      // take: the page's content area is the window MINUS Chrome's own UI
+      // (~90px of tab strip + toolbar), so the real page was ~1920x990 and
+      // Playwright letterboxed it into the 1080-tall recording with gray.
+      // A forced viewport is recorded pixel-for-pixel regardless of what the
+      // window chrome eats; the only cost is that the LIVE on-screen window
+      // clips the bottom ~90px (the recording does not — it captures the
+      // page, not the window).
       // No retries: a retry would restart the recording halfway through.
       name: "demo",
       testMatch: "demo/**/*.spec.ts",
       retries: 0,
       timeout: 30 * 60_000,
       use: {
-        // Deliberately NOT ...devices["Desktop Chrome"]: that preset carries
-        // deviceScaleFactor, which Playwright refuses to combine with a null
-        // viewport ("deviceScaleFactor is not supported with null viewport").
-        // The preset's other fields (a fake UA, a fixed viewport, touch flags)
-        // are all things this project wants the real window to decide anyway.
+        // Deliberately NOT ...devices["Desktop Chrome"]: the preset's fields
+        // (a fake UA, its own viewport, touch flags) are all things this
+        // project sets — or wants unset — itself.
         baseURL: process.env.WARDYN_DEMO_BASE_URL || "http://localhost:8080",
         headless: false,
-        viewport: null,
+        viewport: { width: 1920, height: 1080 },
         // The browser records ITSELF. A desktop grab of this window is at the
         // mercy of whatever else is on that monitor: WSLg presents these as
         // RAIL windows, so from Linux we can neither raise them reliably nor

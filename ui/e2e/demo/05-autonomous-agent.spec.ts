@@ -101,8 +101,10 @@ const RUN_DESCRIPTION = "First governed run of the series — real code, one hos
 // NOT a requirement on slugify: applyRequiredSecretGrant binds any required
 // secret to the run agent's LLM-provider host, so wiring one onto slugify
 // would hand THIS VIDEO'S AGENT RUN the canary as its Anthropic key and 401
-// the model call. The proof run makes no traffic, so the dormant binding is
-// harmless there.
+// the model call. The proof run runs task_mode=exec for the same reason — an
+// agent-harness proof run 401'd on its own canary exactly as predicted (the
+// take-6 failure); exec makes no model call at all, and the mint it exists to
+// film happens identically (probed live, 2026-08-18).
 const PROOF_WS_NAME = "secrets-proof";
 const PROOF_WS_PATH = process.env.WARDYN_DEMO_PROOF_WS || `${process.env.HOME}/wardyn-demo/secrets-proof`;
 const PROOF_TITLE = "Borrowed by name — never held";
@@ -465,7 +467,11 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // The span ends the moment the held row lands, so the hold itself — and the
   // decision, the entire point of the video — plays at human speed. Nothing is
   // narrated inside the span (a spoken cue inside compressed footage desyncs
-  // the whole timeline).
+  // the whole timeline). The beat(0) first DRAINS the last line's audio —
+  // ffwdStart during a still-speaking caption puts the tail of its speech
+  // inside compressed footage, and every cue after it lands early (the one
+  // overlap the take-6 verifier caught).
+  await beat(page, 200);
   await ffwdStart(page);
 
   // --- B8 Held at the boundary --------------------------------------------
@@ -759,12 +765,23 @@ test("V05 beat 10 — borrowed, never held", async () => {
 
   // Launched via the API — the form was this series' videos three and five;
   // what this beat teaches is the WIRING, not the clicks.
+  //
+  // task_mode "exec" IS THE BEAT'S HONESTY (take-6 postmortem): as a harness
+  // run this launched a real claude, whose first model call authenticated with
+  // the injected requirement secret — the CANARY — and 401'd; today's agent
+  // image fails fast on that, so the badge read FAILED before this beat's
+  // matcher ever attached. The wiring being taught (the grant minted at
+  // startup, by name, through the workspace) is proven identical on the exec
+  // lane — probed live 2026-08-18: the grant row is created for an exec run
+  // too — and an echo has no model to 401 against, so the run COMPLETES and
+  // the frame under the narration is green.
   const mk = await page.request.post("/api/v1/runs", {
     headers,
     data: {
       agent: "claude-code",
       title: PROOF_TITLE,
       task: "echo wired by name, minted by the broker, never handed over",
+      task_mode: "exec",
       workspace_id: (await (async () => {
         const body = await (await page.request.get("/api/v1/workspaces", { headers })).json();
         const items: { id?: string; name?: string }[] = Array.isArray(body) ? body : (body?.items ?? []);
