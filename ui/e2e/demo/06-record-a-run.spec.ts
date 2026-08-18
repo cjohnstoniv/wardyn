@@ -279,17 +279,14 @@ test.beforeAll(async () => {
   // A freshly-booted stack takes a moment to publish its first heartbeat, hence
   // the poll rather than a single read. ("idle" is fine here: nothing has run
   // yet, so zero observed events is the truth.)
-  await expect
-    .poll(
-      async () => (await apiGet<{ ebpf_groundtruth?: { state?: string } }>("/healthz")).ebpf_groundtruth?.state ?? "unavailable",
-      {
-        timeout: 60_000,
-        message:
-          "no eBPF ground-truth sensor on this stack — bring it up with `--profile groundtruth`, " +
-          "or B4 films three boxes reading “None observed.” while the narration calls them kernel ground truth",
-      },
-    )
-    .not.toBe("unavailable");
+  // INFORMATIONAL ONLY (2026-08-18): B4 no longer narrates the kernel groups,
+  // so a quiet sensor no longer blocks the take. The pipeline on this host has
+  // a real defect past the sensor — tetragon exports events, the ingest posts
+  // batches, the control-plane counter stays frozen — filed for 0.6; until it
+  // lands, the series' one on-camera ground-truth mention stays V10's honest
+  // "Ground truth · unavailable — that sensor is opt-in."
+  const gt = (await apiGet<{ ebpf_groundtruth?: { state?: string } }>("/healthz")).ebpf_groundtruth?.state ?? "unavailable";
+  console.log(`[v06] ebpf_groundtruth state: ${gt} (informational — the kernel groups are not narrated)`);
 });
 
 // ---------------------------------------------------------------------------
@@ -545,15 +542,17 @@ test("B4 — evidence becomes policy", async () => {
   await caption(page, "Egress domains: what it connected to, and how often.");
   await beat(page, PACE.read + 900);
 
-  // The kernel's half. If the sensor were absent this is the assertion that
-  // fails — and it fails on the ONE observation the beat actually names.
-  // (/\.gitconfig/ rather than the full path: git rewrites the file through
-  // .gitconfig.lock, and either shape is the credential-shaped write the
-  // narration is pointing at.)
-  const gitconfig = observations.getByText(/\.gitconfig/).first();
-  await spotlight(page, gitconfig);
-  await caption(page, "Executed, and file writes: kernel ground truth, raised as warnings, never as policy.");
-  await beat(page, PACE.read + 900);
+  // The kernel groups (Executed / File writes / Connects) are deliberately NOT
+  // narrated: the ground-truth ingest pipeline on this host posts events the
+  // control plane never counts (filed for 0.6 with the full evidence trail),
+  // so those boxes read "None observed." — and a beat that calls an empty box
+  // "kernel ground truth" is the exact honesty gap this video must not walk
+  // into. The evidence narrated here is the audit-side kind, which populates
+  // regardless: every connection, counted; every mint, counted. When the 0.6
+  // fix lands, the credential-shaped ~/.gitconfig write from B3 is already in
+  // the session, waiting to be pointed at.
+  await caption(page, "Every line here is evidence from the run itself — nothing typed, nothing guessed.");
+  await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
   // "no grants" is a real, asserted fact, not a turn of phrase: the session
