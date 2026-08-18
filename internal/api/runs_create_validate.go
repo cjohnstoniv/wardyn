@@ -139,6 +139,23 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", "", false
 	}
 
+	// tool_approvals gates whether an AUTONOMOUS (non-interactive) Claude Code
+	// run's own tool calls route to a Wardyn approval instead of running
+	// unsupervised — same closed-enum treatment as task_mode/interactive_start
+	// above.
+	if req.ToolApprovals != "" && req.ToolApprovals != "auto" && req.ToolApprovals != "hold" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown tool_approvals %q (want auto or hold)", req.ToolApprovals))
+		return req, "", "", false
+	}
+	// codex-cli has no external tool-approval contract (Part C's spike verified
+	// that only as far as codex's own docs go) — refuse the request outright
+	// rather than silently falling back to today's unsupervised skip-permissions,
+	// which would contradict the "hold" the caller explicitly asked for.
+	if req.ToolApprovals == "hold" && req.Agent == "codex-cli" {
+		writeError(w, http.StatusBadRequest, "tool_approvals=hold is not supported for codex-cli (no external tool-approval contract)")
+		return req, "", "", false
+	}
+
 	// Title/description are free text bound for a TEXT column and every run row
 	// in the console — cap them at the door rather than discovering a 40KB
 	// "title" in the list view. Generous enough that no real name is refused.

@@ -175,7 +175,13 @@ func (e *APIError) envelopeMessage() string {
 type CreateRunRequest struct {
 	Agent string `json:"agent"`
 	Repo  string `json:"repo"`
-	Task  string `json:"task,omitempty"`
+	// Task is the agent's prompt for a non-interactive run. For an interactive
+	// run it is instead the OPTIONAL boot seed: interpreted per
+	// InteractiveStart (an initial prompt for "agent", a startup command for
+	// "shell") and fired once, at sandbox boot, in the same persistent session
+	// the human later attaches to — never re-run on attach. Empty is today's
+	// pure-idle behavior, unchanged.
+	Task string `json:"task,omitempty"`
 	// Title is a short human NAME for the run. Runs that share a title are
 	// grouped in the console's run list. OPTIONAL on the wire even though the
 	// console requires it: the site-config probe, harness login and workspace
@@ -190,10 +196,11 @@ type CreateRunRequest struct {
 	// ("CC1"/"CC2"/"CC3"). Empty inherits the policy minimum; an unknown
 	// non-empty value is rejected by the server with 400.
 	ConfinementClass string `json:"confinement_class,omitempty"`
-	// Interactive requests an interactive run: the sandbox comes up idle (no
-	// agent task is exec'd) so a human can attach to it (wardyn attach <id>).
-	// Pair with a never-reap policy (AutoStopAfterSec < 0) or the idle reaper
-	// will stop the idle sandbox. Task is ignored for an interactive run.
+	// Interactive requests an interactive run: the sandbox comes up idle — or,
+	// with a non-empty Task, runs that boot seed in a persistent session — so a
+	// human can attach to it (wardyn attach <id>) either way. Pair with a
+	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
+	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
@@ -238,6 +245,26 @@ type CreateRunRequest struct {
 	// carried to the sandbox as WARDYN_INTERACTIVE_START and consumed by the
 	// image's attach ~/.bashrc. Ignored for a non-interactive run.
 	InteractiveStart string `json:"interactive_start,omitempty"`
+	// SeedAutoTools, when true, lets an interactive run's boot SEED (Task,
+	// interpreted per InteractiveStart — see Task's own doc) use tools before a
+	// human attaches, equivalent to --dangerously-skip-permissions for that
+	// pre-attach span only. Default false: the seed is supervised, so an
+	// unattended agent-started seed parks at its first tool-approval prompt
+	// until someone joins. Meaningful only for an agent-started seed with
+	// non-empty Task; request-scoped like InteractiveStart — never persisted on
+	// the run row, carried to the sandbox as WARDYN_SEED_AUTO_TOOLS.
+	SeedAutoTools bool `json:"seed_auto_tools,omitempty"`
+	// ToolApprovals governs an AUTONOMOUS (non-interactive) Claude Code run's
+	// own tool calls: "" / "auto" (default) is today's behavior — the sandbox
+	// and egress policy are the only boundary, same as
+	// --dangerously-skip-permissions; "hold" routes every tool call through
+	// Wardyn's approval FSM instead, so an operator decides each one before it
+	// runs. Rejected for codex-cli (no external tool-approval contract) and
+	// structurally inert for an interactive run (that run's own supervised-seed
+	// posture is SeedAutoTools's job, not this field's). Request-scoped like
+	// TaskMode — never persisted on the run row, carried to the sandbox as
+	// WARDYN_TOOL_APPROVALS.
+	ToolApprovals string `json:"tool_approvals,omitempty"`
 	// Workspaces carries PER-WORKSPACE options — which of a workspace's
 	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
 	// this run enables, and a read-only narrowing — for the workspaces this run

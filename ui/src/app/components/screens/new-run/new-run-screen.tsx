@@ -31,6 +31,7 @@ import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getErrorMessage } from "../../../lib/format";
 import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
@@ -489,45 +490,128 @@ export function NewRunScreen() {
               )}
 
               {isInteractive ? (
-                // No task: the server ignores one for an interactive run, so
-                // asking for a prompt nothing will read is a lie the old screen
-                // told. What an interactive run actually configures is what
-                // greets you when you attach.
-                <Field
-                  label="Start with"
-                  hint="The workspace is prepared before you land in it. Same barrier, same recording either way."
-                >
-                  <Seg
+                // What an interactive run actually configures is what greets you
+                // when you attach — plus, now, an OPTIONAL boot seed (Part A1):
+                // the same task text a batch run would use as a prompt, fired
+                // once at sandbox boot instead of discarded. Left blank, it's
+                // exactly today's idle-until-attach run.
+                <>
+                  <Field
                     label="Start with"
-                    value={state.interactiveStart}
-                    onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
-                    options={[
-                      { id: "agent", label: `${agentName} — launch it in the workspace` },
-                      { id: "shell", label: "Terminal — a shell in the workspace dir" },
-                    ]}
-                  />
-                </Field>
+                    hint="The workspace is prepared before you land in it. Same barrier, same recording either way."
+                  >
+                    <Seg
+                      label="Start with"
+                      value={state.interactiveStart}
+                      onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
+                      options={[
+                        { id: "agent", label: `${agentName} — launch it in the workspace` },
+                        { id: "shell", label: "Terminal — a shell in the workspace dir" },
+                      ]}
+                    />
+                  </Field>
+                  {state.interactiveStart === "agent" ? (
+                    <Field
+                      label="Initial prompt (optional)"
+                      htmlFor="nr-seed"
+                      hint={`Starts ${agentName} on this at boot, in the same session you attach to. Leave it blank to come up idle instead.`}
+                    >
+                      <Textarea
+                        id="nr-seed"
+                        rows={3}
+                        placeholder="Start by reviewing the failing tests in payments/"
+                        value={state.task}
+                        onChange={(e) => patch({ task: e.target.value })}
+                      />
+                    </Field>
+                  ) : (
+                    <Field
+                      label="Startup command (optional)"
+                      htmlFor="nr-seed"
+                      hint="Runs at boot, before you attach. Leave it blank to come up idle instead."
+                    >
+                      <Textarea
+                        id="nr-seed"
+                        rows={2}
+                        className="font-mono"
+                        placeholder="npm ci && npm run dev"
+                        value={state.task}
+                        onChange={(e) => patch({ task: e.target.value })}
+                      />
+                    </Field>
+                  )}
+                  {/* Only an agent-started seed has a tool-approval prompt to
+                      auto-approve; a bare shell command has none, and an empty
+                      seed has nothing to run unsupervised in the first place. */}
+                  {state.interactiveStart === "agent" && state.task.trim() && (
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="nr-seed-auto-tools"
+                        className="flex items-center gap-2 text-xs text-foreground"
+                      >
+                        <Checkbox
+                          id="nr-seed-auto-tools"
+                          checked={state.seedAutoTools}
+                          onCheckedChange={(v) => patch({ seedAutoTools: v === true })}
+                        />
+                        Let it use tools before I attach
+                      </label>
+                      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                        Auto-approves the agent&apos;s own tool use until you join. The sandbox and
+                        egress policy still apply.
+                      </p>
+                    </div>
+                  )}
+                </>
               ) : (
-                <Field
-                  label={isAgent ? "Task" : "Command"}
-                  htmlFor="nr-task"
-                  required
-                  hint={
-                    isAgent
-                      ? "Described in plain English. The agent decides how to do it."
-                      : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
-                  }
-                >
-                  <Textarea
-                    id="nr-task"
-                    rows={4}
+                <>
+                  <Field
+                    label={isAgent ? "Task" : "Command"}
+                    htmlFor="nr-task"
                     required
-                    className={isAgent ? undefined : "font-mono"}
-                    placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
-                    value={state.task}
-                    onChange={(e) => patch({ task: e.target.value })}
-                  />
-                </Field>
+                    hint={
+                      isAgent
+                        ? "Described in plain English. The agent decides how to do it."
+                        : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
+                    }
+                  >
+                    <Textarea
+                      id="nr-task"
+                      rows={4}
+                      required
+                      className={isAgent ? undefined : "font-mono"}
+                      placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
+                      value={state.task}
+                      onChange={(e) => patch({ task: e.target.value })}
+                    />
+                  </Field>
+                  {/* Autonomous agent runs only — a shell command has no tool
+                      calls to approve, and codex has no external approval
+                      contract to route them through (disabled below, honestly). */}
+                  {isAgent && (
+                    <div className="space-y-1.5">
+                      <Seg
+                        label="Tool approvals"
+                        value={state.toolApprovals}
+                        onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
+                        options={[
+                          { id: "auto", label: "Auto — the sandbox is the boundary" },
+                          {
+                            id: "hold",
+                            label: "Hold in Wardyn — every tool call parks as an approval",
+                            disabled: state.agent === "codex-cli",
+                          },
+                        ]}
+                      />
+                      {state.agent === "codex-cli" && (
+                        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                          Codex CLI has no external tool-approval contract — this run always keeps the
+                          sandbox as its only boundary.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </SectionCard>
@@ -820,13 +904,22 @@ export function NewRunScreen() {
             <RailSection title="Startup">
               <p className="text-[0.75rem] text-muted-foreground">
                 {isInteractive
-                  ? state.interactiveStart === "agent"
-                    ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
-                    : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
+                  ? state.task.trim()
+                    ? state.interactiveStart === "agent"
+                      ? `Starts ${agentName} on your prompt at boot — attach to watch and take over.`
+                      : "Runs your startup command at boot, then a terminal is ready."
+                    : state.interactiveStart === "agent"
+                      ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
+                      : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
                   : isAgent
                     ? `${agentName} runs the task unattended, then the run stops.`
                     : "The command runs unattended in the sandbox, then the run stops."}
               </p>
+              {!isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold" && (
+                <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
+                  Tool use parks as approvals — an operator decides each one.
+                </p>
+              )}
             </RailSection>
 
             <RailSection title="Recording">

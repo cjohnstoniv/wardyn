@@ -117,8 +117,12 @@ describe("NewRunScreen — the rail counts hosts the way the policy does", () =>
 });
 
 // The form's fields FOLLOW the run mode. This screen used to show one Task box
-// for every run, including interactive ones — where the server ignores task
-// entirely, so the operator typed a prompt nothing would ever read.
+// for every run, including interactive ones — where the server used to ignore
+// task entirely, so the operator typed a prompt nothing would ever read. Task
+// now rides as an interactive run's optional boot seed (Part A1), but it is
+// still never the field literally labeled "Task" — that label stays batch-only,
+// and an interactive run gets its own "Initial prompt" / "Startup command"
+// field instead (new-run-screen.tsx's isInteractive branch).
 describe("NewRunScreen — the form matches the run mode", () => {
   it("asks an interactive run what to start with, not for a task", async () => {
     renderScreen();

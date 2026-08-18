@@ -132,11 +132,19 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 // TestCreateRun_Interactive_SkipsExec is the PIECE 2 contract test: an
 // interactive create dispatches the sandbox (CreateSandbox + RUNNING) but does
 // NOT call Runner.Exec and leaves the run RUNNING (idle, awaiting attach).
+//
+// Part A1: the request's task is no longer a discarded field for an
+// interactive run — it is the optional boot seed, riding the sandbox env as
+// WARDYN_INTERACTIVE_SEED for agent-run's (not-yet-built) --boot-seed branch
+// to pick up. The contract this test pins is unchanged either way: Exec is
+// NEVER called for an interactive run, seed or no seed — the seed fires
+// image-side, inside the persistent idle session, not via a control-plane Exec.
 func TestCreateRun_Interactive_SkipsExec(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _ := pgHarnessWithRunner(t, fr)
 
-	body := `{"agent":"claude-code","repo":"acme/widgets","task":"ignored when interactive","interactive":true}`
+	const seed = "review the failing tests in payments/"
+	body := `{"agent":"claude-code","repo":"acme/widgets","task":"` + seed + `","interactive":true}`
 	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create interactive run: code = %d, want 201; body=%s", w.Code, w.Body.String())
@@ -154,6 +162,9 @@ func TestCreateRun_Interactive_SkipsExec(t *testing.T) {
 	}
 	if got := fr.execCount(); got != 0 {
 		t.Errorf("Runner.Exec calls = %d, want 0 (interactive must NOT exec the agent task)", got)
+	}
+	if got := fr.lastSpec.Env["WARDYN_INTERACTIVE_SEED"]; got != seed {
+		t.Errorf("Env[WARDYN_INTERACTIVE_SEED] = %q, want the sent task %q", got, seed)
 	}
 }
 

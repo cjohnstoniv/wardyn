@@ -164,14 +164,28 @@ export interface WizardState {
   workspaces: RunWorkspaceSelection[];
   mode: RunMode;
   // The agent's PROMPT for a batch run, or the shell command for a "command"
-  // run. An INTERACTIVE run has no task at all — the server ignores it for one,
-  // so the screen hides the field and buildSpec sends "" (see interactiveStart,
-  // which is what an interactive run configures instead).
+  // run. For an INTERACTIVE run this is instead the OPTIONAL boot seed —
+  // interpreted per interactiveStart (an initial prompt for "agent", a startup
+  // command for "shell") and fired once, at sandbox boot, in the persistent
+  // session the human's attach later joins. Empty stays today's pure-idle
+  // behavior.
   task: string;
   // What an INTERACTIVE run's attach shell opens with: the image's agent CLI in
   // the prepared workspace, or a bare terminal there. Ignored for every other
   // run mode. Defaults to "agent": you picked "Agent task" and named an agent.
   interactiveStart: "shell" | "agent";
+  // Opt-in for an agent-started boot seed (interactiveStart==="agent" with a
+  // non-empty task): lets the seed use tools before a human attaches, instead
+  // of parking at its first tool-approval prompt until someone joins. Default
+  // false = supervised. Meaningless (and never emitted) without a seed.
+  seedAutoTools: boolean;
+  // Tool-approval posture for an AUTONOMOUS (batch) agent run: "auto" (default)
+  // is today's behavior — the sandbox and egress policy are the only boundary;
+  // "hold" routes every tool call through a Wardyn approval instead. Only
+  // meaningful for runType==="agent" && mode==="batch" && agent==="claude-code"
+  // (codex-cli has no external tool-approval contract) — buildSpec never emits
+  // it otherwise.
+  toolApprovals: "auto" | "hold";
   // The Basics "start from" picker's current value — either a recorded profile's
   // key or a saved policy's id. When set, that source has populated steps 2-4 and
   // the wizard offers "Review Now" to fast-track straight to Review. Cleared when
@@ -264,6 +278,8 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     // agent, not a prompt you then have to type its name at. Opt out for a
     // plain terminal in the same prepared workspace.
     interactiveStart: "agent",
+    seedAutoTools: false,
+    toolApprovals: "auto",
 
     githubEnabled: false,
     githubRepos: "",

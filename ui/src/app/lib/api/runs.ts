@@ -137,6 +137,11 @@ export const runs = {
     if ("interactive_start" in input && input.interactive_start) {
       body.interactive_start = input.interactive_start;
     }
+    // The boot-seed opt-in and the autonomous tool-approval posture — same
+    // hand-built-whitelist trap as everything else on this list: an unlisted
+    // field is silently discarded between the form and the wire.
+    if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
+    if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
     // Composition-model pass-through. This whitelist has dropped a wizard field
     // on the floor once before (image/task_mode, above) — a selection the
     // operator made, silently discarded between the form and the wire. These

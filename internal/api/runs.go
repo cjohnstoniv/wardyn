@@ -242,6 +242,19 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// into the agent CLI rather than a bare shell.
 		createAuditData["interactive_start"] = req.InteractiveStart
 	}
+	if req.Interactive && req.SeedAutoTools {
+		// SeedAutoTools is request-scoped like interactive_start above; only
+		// meaningful alongside a non-empty Task (the boot seed) — recorded
+		// whenever requested regardless, since dispatch's own `interactive &&`
+		// gate is what makes it structurally inert otherwise.
+		createAuditData["seed_auto_tools"] = req.SeedAutoTools
+	}
+	if req.ToolApprovals != "" {
+		// Request-scoped like task_mode: this is the only record that an
+		// autonomous run's tool calls were routed to Wardyn approvals instead of
+		// running unsupervised.
+		createAuditData["tool_approvals"] = req.ToolApprovals
+	}
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createAuditData)))
 
@@ -297,6 +310,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Interactive:        req.Interactive,
 			TaskMode:           req.TaskMode,
 			InteractiveStart:   req.InteractiveStart,
+			SeedAutoTools:      req.SeedAutoTools,
+			ToolApprovals:      req.ToolApprovals,
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
 			Toolchains:         runToolchainNeeds(wsRefs),

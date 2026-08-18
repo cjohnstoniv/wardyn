@@ -181,17 +181,18 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 }
 
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
-// (scan-only / exec task mode) plus the non-secret grant-id maps
-// (WARDYN_GITHUB_GRANT_ID / WARDYN_GIT_PAT_GRANTS / WARDYN_SSH_GRANTS) that let
-// the in-sandbox helpers mint the credentials they're eligible for, plus
-// WARDYN_GIT_BROKER_REPOS (which of those are served by the git broker instead).
-// Every branch here only decides which keys land in sandboxEnv, none of them
-// change dispatchRun's own control flow.
+// (scan-only / exec task mode / interactive-start / boot-seed / tool-approval
+// posture) plus the non-secret grant-id maps (WARDYN_GITHUB_GRANT_ID /
+// WARDYN_GIT_PAT_GRANTS / WARDYN_SSH_GRANTS) that let the in-sandbox helpers
+// mint the credentials they're eligible for, plus WARDYN_GIT_BROKER_REPOS
+// (which of those are served by the git broker instead). Every branch here
+// only decides which keys land in sandboxEnv, none of them change
+// dispatchRun's own control flow.
 //
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, seedAutoTools bool, toolApprovals string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
@@ -216,6 +217,37 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// the request said.
 	if interactive && interactiveStart == "agent" {
 		sandboxEnv["WARDYN_INTERACTIVE_START"] = "agent"
+	}
+	// Boot seed (Part A1): an interactive run's Task, when non-empty, is no
+	// longer discarded — it fires once at sandbox boot, in the same persistent
+	// session the human's attach later joins (interactiveStart above decides
+	// whether it reads as an initial prompt or a startup command; that
+	// interpretation lives entirely image-side, in agent-run's --boot-seed
+	// branch — nothing here needs to know which). The reservedRunTasks
+	// exclusion is load-bearing, not defensive: server-launched record/verify/
+	// login runs (runs_create_validate.go, same package) are INTERACTIVE runs
+	// that carry a non-empty, server-set Task ("workspace record", etc.) —
+	// without this guard they would boot-seed `claude "workspace record"` into
+	// what is supposed to be a plain record-mode sandbox, and the login box
+	// would boot-seed over its own login flow.
+	if interactive && !reservedRunTasks[run.Task] {
+		if seed := strings.TrimSpace(run.Task); seed != "" {
+			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
+			if seedAutoTools {
+				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
+			}
+		}
+	}
+	// Tool-approval posture (Part C1/C2): "hold" routes an AUTONOMOUS run's own
+	// tool calls to a Wardyn approval instead of running unsupervised —
+	// consumed by agent-run's autonomous branch (its hold branch runs claude
+	// under --permission-mode manual with wardyn-toolgate as the permission
+	// prompt tool). Gated on `!interactive` for the same structural reason
+	// InteractiveStart above is gated on `interactive`: an interactive run's
+	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
+	// matter what the request said.
+	if !interactive && toolApprovals == "hold" {
+		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 	}
 	if firstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()

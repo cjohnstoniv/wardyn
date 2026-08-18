@@ -195,10 +195,10 @@ export function isTerminalRunState(state: RunState): boolean {
 // is named (the board, the table, the run-detail h1, audit, recording).
 //
 // It has to be shared because NEITHER field is sufficient alone: an interactive
-// run carries no task at all (the server ignores task for one, so the console
-// stops sending it), and every run created before titles existed — plus every
-// system run — carries no title. A site that reads one field directly renders a
-// bare "—" for half the runs on the board.
+// run may carry no task at all (an idle run with no boot seed — see
+// CreateRunInput.interactive_start), and every run created before titles
+// existed — plus every system run — carries no title. A site that reads one
+// field directly renders a bare "—" for half the runs on the board.
 export function runHeadline(run: Pick<AgentRun, "title" | "task">): string {
   return (run.title ?? "").trim() || run.task || "—";
 }
@@ -245,6 +245,16 @@ export interface CreateRunInput {
   // first attach; "shell" / omitted is a bare terminal there. Ignored for a
   // non-interactive run (the server drops it structurally).
   interactive_start?: "shell" | "agent";
+  // Opt-in for an interactive run's agent-started boot seed (`task`,
+  // interpreted per interactive_start above): true lets the seed use tools
+  // before a human attaches, instead of parking at its first tool-approval
+  // prompt until someone joins. Omitted/false = supervised (default).
+  seed_auto_tools?: boolean;
+  // Tool-approval posture for an AUTONOMOUS (non-interactive) Claude Code run:
+  // "hold" routes every tool call through a Wardyn approval instead of running
+  // unsupervised. Omitted (wire default "auto") is today's behavior. Rejected
+  // by the server for codex-cli and structurally inert for an interactive run.
+  tool_approvals?: "auto" | "hold";
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory

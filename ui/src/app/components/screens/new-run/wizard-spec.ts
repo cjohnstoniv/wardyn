@@ -102,21 +102,26 @@ export function buildSpec(
   inline_policy: RunPolicySpec;
 } {
   // A SHELL COMMAND is unattended by definition, so it forces batch here rather
-  // than trusting state.mode. This is not cosmetic: the server ignores task for
-  // an interactive run, so an "interactive shell command" used to launch a
-  // sandbox that never ran the command the operator typed — silently. Deriving
-  // it at the composer means no stale state.mode can resurrect that.
+  // than trusting state.mode. This is not cosmetic: task_mode=exec (below) is a
+  // BATCH-only concept — no agent, no model, no attach — so a stale
+  // state.mode==="interactive" surviving a runType toggle would launch the
+  // command into an ordinary interactive shell session instead of the governed
+  // exec lane the operator actually picked. Deriving it at the composer means
+  // no stale state.mode can resurrect that.
   const interactive = state.runType === "agent" && state.mode === "interactive";
 
   // --- run scalars ---
   const run: CreateRunInputWithComposition = {
     agent: state.agent as Agent,
     repo: "",
-    // An interactive run has NO task field on the screen and the backend ignores
-    // task for one anyway. Send "" rather than whatever was typed before a mode
-    // toggle: run.task is the run's headline everywhere, and a headline claiming
-    // work the run never did is worse than an empty one.
-    task: interactive ? "" : state.task.trim(),
+    // An interactive run's task IS its optional boot seed now (Part A1):
+    // interpreted per interactive_start below (an initial prompt for "agent", a
+    // startup command for "shell") and fired once, at sandbox boot, in the same
+    // persistent session the human's attach later joins. Empty is today's
+    // pure-idle behavior, unchanged — so a mode toggle that leaves stray batch
+    // text behind still needs the operator to have typed it INTO an interactive
+    // seed field to ship it, never a leftover from before the toggle.
+    task: state.task.trim(),
     confinement_class: state.confinementClass,
     interactive,
   };
@@ -126,6 +131,22 @@ export function buildSpec(
   // Interactive only, and only the non-default: "shell" IS the long-standing
   // behavior, so it never needs to go on the wire.
   if (interactive && state.interactiveStart === "agent") run.interactive_start = "agent";
+  // The boot-seed opt-in: only meaningful (and only ever true) for an
+  // agent-started seed that actually has text — an empty seed has nothing to
+  // auto-approve tool use FOR, and a shell startup command has no tool-approval
+  // prompt to begin with. Default false (supervised) is the wire default too,
+  // so there is nothing to omit-vs-send here; only `true` ever goes on the wire.
+  if (interactive && state.interactiveStart === "agent" && state.task.trim() && state.seedAutoTools) {
+    run.seed_auto_tools = true;
+  }
+  // Tool-approval posture: AUTONOMOUS claude-code only (codex-cli has no
+  // external tool-approval contract — the form disables the choice, but
+  // buildSpec re-asserts it structurally rather than trusting the UI alone).
+  // "auto" is the wire default, so it's never sent — only the non-default
+  // "hold" goes on the wire, same shape as interactive_start above.
+  if (!interactive && state.runType === "agent" && state.agent === "claude-code" && state.toolApprovals === "hold") {
+    run.tool_approvals = "hold";
+  }
   // BYOI: a user-supplied base image the backend wraps with the runner tools.
   if (state.image.trim()) {
     run.image = state.image.trim();

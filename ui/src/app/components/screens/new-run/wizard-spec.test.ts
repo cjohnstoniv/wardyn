@@ -661,19 +661,27 @@ describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
 // What the run's MODE puts on the wire. Each of these was, at some point, a
 // field silently ignored or silently dropped between the form and the sandbox.
 describe("buildSpec — the run mode decides what ships", () => {
-  it("an interactive run sends no task, and its startup choice", () => {
+  it("an interactive run's task rides as its optional boot seed, and its startup choice", () => {
     const { run } = buildSpec({
       ...initialWizardState(),
       mode: "interactive",
-      // Text typed before the operator toggled the mode. The server ignores
-      // task for an interactive run, and run.task is the run's HEADLINE
-      // everywhere — shipping this would caption the run with work it never did.
-      task: "left over from batch mode",
+      // Part A1: the task now IS the boot seed — it ships verbatim, trimmed,
+      // exactly like a batch run's prompt. Unlike the old "server ignores task
+      // for interactive" behavior, there is no separate "leftover from batch
+      // mode" case to guard: whatever is in the box when Launch is pressed is
+      // what the operator wants seeded.
+      task: "  review the failing tests in payments/  ",
       interactiveStart: "agent",
     });
     expect(run.interactive).toBe(true);
-    expect(run.task).toBe("");
+    expect(run.task).toBe("review the failing tests in payments/");
     expect(run.interactive_start).toBe("agent");
+  });
+
+  it("an interactive run with no seed sends an empty task (today's idle behavior, unchanged)", () => {
+    const { run } = buildSpec({ ...initialWizardState(), mode: "interactive", task: "" });
+    expect(run.interactive).toBe(true);
+    expect(run.task).toBe("");
   });
 
   it("omits interactive_start for the default shell start", () => {
@@ -714,5 +722,123 @@ describe("buildSpec — the run mode decides what ships", () => {
     expect(run.title).toBe("Refund flow");
     expect(run.description).toBe("ticket 4412");
     expect(buildSpec({ ...initialWizardState(), title: "x" }).run.description).toBeUndefined();
+  });
+});
+
+// A1's seed opt-in and C1's tool-approval posture — both new CreateRunInput
+// fields riding this ONE form increment. Both follow the SAME shape as
+// interactive_start above: the wire default is never sent, only the
+// non-default explicit choice goes out — so a stale/leftover state field can
+// never silently widen what a run is allowed to do.
+describe("buildSpec — the boot-seed opt-in and tool-approval posture", () => {
+  it("emits seed_auto_tools only for an agent-started seed with the toggle on", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "interactive",
+      interactiveStart: "agent",
+      task: "review the failing tests",
+      seedAutoTools: true,
+    });
+    expect(run.seed_auto_tools).toBe(true);
+  });
+
+  it("omits seed_auto_tools when the toggle is off (the wire default)", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "interactive",
+      interactiveStart: "agent",
+      task: "review the failing tests",
+      seedAutoTools: false,
+    });
+    expect(run.seed_auto_tools).toBeUndefined();
+  });
+
+  it("omits seed_auto_tools with no seed text, even with the toggle on", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "interactive",
+      interactiveStart: "agent",
+      task: "",
+      seedAutoTools: true,
+    });
+    expect(run.seed_auto_tools).toBeUndefined();
+  });
+
+  it("omits seed_auto_tools for a shell startup command, even with the toggle on", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "interactive",
+      interactiveStart: "shell",
+      task: "npm ci && npm run dev",
+      seedAutoTools: true,
+    });
+    expect(run.seed_auto_tools).toBeUndefined();
+  });
+
+  it("omits seed_auto_tools for a batch run (structurally can't ride one)", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      mode: "batch",
+      task: "review the failing tests",
+      seedAutoTools: true,
+    });
+    expect(run.seed_auto_tools).toBeUndefined();
+  });
+
+  it("emits tool_approvals: hold for an autonomous claude-code run", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "agent",
+      mode: "batch",
+      agent: "claude-code",
+      task: "fix the flaky test",
+      toolApprovals: "hold",
+    });
+    expect(run.tool_approvals).toBe("hold");
+  });
+
+  it("never emits tool_approvals: auto — the wire default is omitted, not sent", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "agent",
+      mode: "batch",
+      task: "fix the flaky test",
+      toolApprovals: "auto",
+    });
+    expect(run.tool_approvals).toBeUndefined();
+  });
+
+  it("omits tool_approvals for codex-cli, even with hold selected (buildSpec re-asserts the server's own rejection)", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "agent",
+      mode: "batch",
+      agent: "codex-cli",
+      task: "fix the flaky test",
+      toolApprovals: "hold",
+    });
+    expect(run.tool_approvals).toBeUndefined();
+  });
+
+  it("omits tool_approvals for a shell command", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "command",
+      mode: "batch",
+      task: "make test",
+      toolApprovals: "hold",
+    });
+    expect(run.tool_approvals).toBeUndefined();
+  });
+
+  it("omits tool_approvals for an interactive run (out of scope structurally)", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      runType: "agent",
+      mode: "interactive",
+      agent: "claude-code",
+      toolApprovals: "hold",
+    });
+    expect(run.tool_approvals).toBeUndefined();
   });
 });
