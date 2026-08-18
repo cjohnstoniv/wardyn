@@ -37,18 +37,46 @@
  * grant silently disarm the other's hold beat. Nothing here types
  * example.com — not even the example.com pill the demo card offers.
  *
+ * PACING. Three stretches of this video are nothing but waiting on a container:
+ * the demo sandbox's spin-up and the two real-workspace runs' launches. Each is
+ * wrapped in overlay.ts's ffwdStart/ffwdEnd and squeezed 12x by
+ * scripts/demo-ffwd.py after assembly. NOTHING MAY SPEAK inside a span — a line
+ * spoken over frames the encoder throws away lands 12x early and drags every
+ * later cue with it — and each ffwdStart is preceded by a beat(200) that DRAINS
+ * the previous line's audio, because caption() only SCHEDULES speech. Each
+ * ffwdEnd fires the instant the awaited state lands (in a `finally`, so a failed
+ * take still closes its span), BEFORE the next caption. Nothing else is spanned:
+ * a hold is raised in about a second, and a span under ~1s is dropped by the
+ * encoder anyway.
+ *
+ * WHAT CAN STOP EXISTING MID-WAIT. Every decision surface in this video renders
+ * only while its run is RUNNING — see WAIT_UNLESS_GONE below. Waits are raced
+ * against that, always.
+ *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
  * product is broken. It runs against the REAL compose stack on :8080 with real
  * sandboxes — the hermetic `-runner none` e2e backend cannot start one at all.
  *
+ * Driven by `scripts/record-demo.sh --video 07`, which globs this exact filename
+ * and names the take wardyn-07-approvals-and-egress-<stamp>.mp4 — so this
+ * FILENAME IS LOAD-BEARING. It self-skips without WARDYN_DEMO=1 so a bare
+ * `pnpm e2e` can never point a browser at a developer's live stack and start
+ * deleting workspaces.
+ *
+ * The demo project records HEADLESS (playwright.config.ts): the browser records
+ * ITSELF, there is no OS window during a take, and nothing here may depend on
+ * window geometry. Nothing does — every locator is a role/testid on the page.
+ *
  * Selectors are getByRole + accessible name, matching the rest of the suite:
- * every literal below exists in ui/src today.
+ * every literal below exists in ui/src today (re-read 2026-08-18 against
+ * demo-screen.tsx, live-approvals.tsx + copy.ts, new-run-screen.tsx and
+ * allowed-hosts-card.tsx).
  */
 
-import { mkdirSync } from "node:fs";
-import { test, expect } from "@playwright/test";
-import { act, beat, caption, PACE, spotlight, typeInTerminal } from "./overlay";
+import { mkdirSync, rmSync } from "node:fs";
+import { test, expect, type Locator } from "@playwright/test";
+import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
@@ -109,6 +137,64 @@ const SANDBOX_UP = 180_000;
 const RESPONDED = /HTTP\/[\d.]+ [23]\d\d/;
 
 // ---------------------------------------------------------------------------
+// WAIT_UNLESS_GONE — the one shape every wait in this video is written in.
+//
+// THIS VIDEO IS ALL APPROVALS, and every approval surface it uses renders only
+// while its run is RUNNING:
+//   - the /demos card's terminal, LiveApprovals strip and audit panel are the
+//     `running` branch of DemoRunControls (demo-screen.tsx); the moment the demo
+//     run goes terminal the whole branch UNMOUNTS and demo-terminated (or
+//     demo-failed) takes its place;
+//   - the cockpit's strip is gated on `run.state === "RUNNING"`
+//     (run-detail.tsx's terminalPane).
+// So a sandbox that dies — a failed start, an auto-stop, a stray kill — takes
+// the row, the terminal and the panel with it, and a bare wait then polls for
+// minutes against a node that can no longer appear. V05 lost a take to exactly
+// that shape. Racing the two mutually-exclusive outcomes turns it into an
+// immediate, NAMED failure instead.
+// ---------------------------------------------------------------------------
+
+/** The demo card's two "this run is over" branches (demo-screen.tsx). */
+const demoOver = (card: Locator): Locator =>
+  card.getByTestId("demo-terminated").or(card.getByTestId("demo-failed"));
+
+/** RunStateBadge's terminal labels — TITLE CASE, from runStateMeta (primitives.tsx). */
+const RUN_OVER = /^(Completed|Failed|Stopped|Killed)$/;
+
+/**
+ * Await `want`, unless `gone` lands first — then fail loudly, saying which.
+ *
+ * `want` is any Playwright wait already in flight (an `expect(…)` assertion or a
+ * `locator.waitFor`), so this covers both toBeVisible and toContainText without
+ * a second helper. The losing promise keeps polling in the background until its
+ * own timeout; both branches carry a rejection handler, so that is a dangling
+ * poll and never an unhandled rejection (same shape 05/06 inline).
+ */
+async function waitUnlessGone(
+  want: Promise<unknown>,
+  gone: Locator,
+  timeout: number,
+  why: string,
+): Promise<void> {
+  const outcome = await Promise.race([
+    want.then(
+      () => "ok" as const,
+      () => "failed" as const,
+    ),
+    gone.waitFor({ state: "visible", timeout }).then(
+      () => "gone" as const,
+      () => "timeout" as const,
+    ),
+  ]);
+  expect(
+    outcome,
+    outcome === "gone"
+      ? `${why} — the run ENDED before this beat could land.`
+      : `${why} — the wait timed out (${timeout / 1000}s) with the run still live.`,
+  ).toBe("ok");
+}
+
+// ---------------------------------------------------------------------------
 // Staging — the part that must not be prose.
 //
 // OFF-CAMERA PRECONDITIONS THE OPERATOR STILL OWNS (nothing below can encode
@@ -149,6 +235,13 @@ async function restageWorkspace(): Promise<void> {
   const page = stage();
   const headers = apiHeaders();
 
+  // EMPTY, not merely present. Onboarding scans the directory and seeds an
+  // `egress:<host>` requirement row per detected ecosystem registry
+  // (source_scan.go's scan_seeded rows) — and AllowedHostsCard counts those
+  // alongside approved_egress. One stray package.json in here and beat 7's
+  // "Allowed hosts · 1" is "· 2", with the receipt naming a host nobody
+  // decided on camera. Same reset video 06 does for its own workspace dir.
+  rmSync(WORKSPACE_PATH, { recursive: true, force: true });
   mkdirSync(WORKSPACE_PATH, { recursive: true });
 
   const res = await page.request.get("/api/v1/workspaces", { headers });
@@ -184,6 +277,14 @@ async function restageWorkspace(): Promise<void> {
   const fresh = await created.json();
   expect(fresh.approved_egress ?? [], "a fresh egress-lab must allow no hosts").toEqual([]);
   expect(fresh.denied_egress ?? [], "a fresh egress-lab must deny no hosts").toEqual([]);
+  // The third lane, and the one the rm above exists for: a scan-seeded
+  // `egress:<host>` requirement counts on the Allowed hosts card exactly like
+  // an approved host does. Caught HERE, off camera, rather than at beat 7's
+  // "· 1" three minutes into the take.
+  const seeded = Object.keys(fresh.effective_requirements ?? fresh.requirements ?? {}).filter((k: string) =>
+    k.startsWith("egress:"),
+  );
+  expect(seeded, `a fresh egress-lab must require no hosts — ${WORKSPACE_PATH} is not empty`).toEqual([]);
 }
 
 // Registered AFTER stage.ts's own beforeAll (import order), so stage() is
@@ -236,13 +337,33 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await expect(startDemo, "the demo Start button is disabled — this stack has no ready barrier").toBeEnabled(
     { timeout: 60_000 },
   );
+  // SPRINT: nothing is spoken between the click and the wait, because
+  // everything from here IS the wait.
   await act(page, startDemo, "Wardyn stops it at the proxy and asks. Every answer carries a scope.");
 
-  // Sandbox spin-up is ~12s of real dead air; the cold open above plays over it.
-  await expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+  // FAST-FORWARD. Sandbox spin-up is 30s-3min of a spinner nobody needs to sit
+  // through (a cold first take also pulls the image). act() above already held
+  // for its own line; the beat(200) drains any residue, because opening a span
+  // over a still-speaking caption puts that speech inside compressed footage
+  // and lands every later cue early.
+  await beat(page, 200);
+  await ffwdStart(page);
+  try {
+    await waitUnlessGone(
+      expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP }),
+      demoOver(card),
+      SANDBOX_UP,
+      "the demo sandbox never came up as a live terminal",
+    );
+  } finally {
+    // Real time resumes the instant the terminal is on screen — and even on a
+    // failed take, so the span the encoder gets is one this run actually spent.
+    await ffwdEnd(page);
+  }
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up — typing here eats the first characters and the shell reports
-  // "command not found" on camera.
+  // "command not found" on camera. Deliberately OUTSIDE the span: this pause is
+  // for the product, and the viewer never sees it either way.
   await beat(page, PACE.read);
 
   // ---- B1 · Held ----------------------------------------------------------
@@ -253,9 +374,19 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // is the entire difference between this demo and "Fail, then approve". If it
   // says "Approval needed — off-policy egress" instead, the sandbox is NOT
   // holding anything and the narration above is a lie.
-  await expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
-    timeout: APPROVAL_APPEARS,
-  });
+  //
+  // RACED (see waitUnlessGone): the strip lives inside the card's `running`
+  // branch, so a demo that dies here takes the header with it.
+  await waitUnlessGone(
+    expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
+      timeout: APPROVAL_APPEARS,
+    }),
+    demoOver(card),
+    APPROVAL_APPEARS,
+    `${HELD_HOST} never surfaced as a HELD request`,
+  );
+  // No race below: the header only renders when the strip has a pending row
+  // (LiveApprovals returns the idle hint otherwise), so this resolves at once.
   const heldRow = card.getByTestId("live-approval-row").filter({ hasText: HELD_HOST });
   await expect(heldRow).toBeVisible({ timeout: APPROVAL_APPEARS });
   await expect(heldRow).toContainText("waiting");
@@ -278,8 +409,16 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
 
   // THE PAYOFF. The narration claims the same in-flight request finishes with
   // no retry; without this assertion a take stays green while narrating success
-  // over a terminal showing a 403 and a fresh pending row.
-  await expect(card.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 });
+  // over a terminal showing a 403 and a fresh pending row. NOT fast-forwarded:
+  // this is the frame the whole beat exists for, and the approve-to-response
+  // gap is about a second anyway.
+  await waitUnlessGone(
+    expect(card.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
+    demoOver(card),
+    60_000,
+    `the held ${HELD_HOST} request never completed with a 2xx/3xx — the proxy's ~30s hold ` +
+      `(defaultHoldTimeout) expired before the approval landed, so the curl had already 403'd`,
+  );
   await caption(page, "The same in-flight command completes. No retry — it was never refused.");
   await beat(page, PACE.read + 600);
 
@@ -287,7 +426,12 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await typeInTerminal(page, REACH_TELEMETRY, card);
   await caption(page, "A second host: the agent's own telemetry. Nobody asked for it.");
   const telemetryRow = card.getByTestId("live-approval-row").filter({ hasText: TELEMETRY_HOST });
-  await expect(telemetryRow).toBeVisible({ timeout: APPROVAL_APPEARS });
+  await waitUnlessGone(
+    expect(telemetryRow).toBeVisible({ timeout: APPROVAL_APPEARS }),
+    demoOver(card),
+    APPROVAL_APPEARS,
+    `${TELEMETRY_HOST} never raised an approval row — the ladder beat has nothing to open`,
+  );
   await beat(page, PACE.read);
 
   // ---- B4 · The scope ladder ----------------------------------------------
@@ -355,19 +499,41 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // confirms, whatever the scope), and asserts the row is GONE afterwards.
   await decide(card, "Deny", "Telemetry gets nothing. Deny always confirms first.", TELEMETRY_HOST);
 
+  // THE RETRY, and it is load-bearing rather than decoration.
+  //
+  // The audit panel projects egress.allow/deny/pending ONLY (egressFromAudit,
+  // lib/api/audit.ts) — an approval.decide is not in it. And the deny above
+  // almost certainly landed AFTER the proxy's ~30s hold expired (the ladder
+  // walk is six spoken lines), by which point the held connection had already
+  // been released as `pending` and curl was gone. Nothing re-evaluates the host
+  // on its own, so with no second attempt the panel shows a PENDING chip while
+  // the narrator says "Denied … lands in the audit trail" — the exact class of
+  // dishonest frame this driver exists to refuse.
+  //
+  // Typing the same command again is what makes the line true: the deny is
+  // scoped to this run, so the proxy refuses it from cache with no human in the
+  // loop (no new row is raised — approvals.go's cached apDenied), the terminal
+  // shows an instant refusal instead of a 60-second hang, and THAT is the
+  // egress.deny the panel is about.
+  await typeInTerminal(page, REACH_TELEMETRY, card);
   await caption(page, "Denied. Who decided, and at what scope, lands in the audit trail.");
   const auditPanel = card.getByTestId("demo-audit-panel");
   await spotlight(page, auditPanel);
   // The claim, asserted: a deny row for THIS host, not merely the pending row
   // that was already there. The panel polls every 2s.
-  await expect(
-    auditPanel
-      .getByTestId("demo-audit-rows")
-      .locator("li")
-      .filter({ hasText: TELEMETRY_HOST })
-      .filter({ hasText: "deny" })
-      .first(),
-  ).toBeVisible({ timeout: 60_000 });
+  await waitUnlessGone(
+    expect(
+      auditPanel
+        .getByTestId("demo-audit-rows")
+        .locator("li")
+        .filter({ hasText: TELEMETRY_HOST })
+        .filter({ hasText: "deny" })
+        .first(),
+    ).toBeVisible({ timeout: 60_000 }),
+    demoOver(card),
+    60_000,
+    `no egress.deny for ${TELEMETRY_HOST} reached the demo's audit panel`,
+  );
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -397,10 +563,19 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await spotlight(page, null);
 
   // Terminal, not the agent: this video is keyless, and a shell is all a curl
-  // needs. The wizard's own default is an INTERACTIVE agent run, so the "Start
+  // needs. The wizard's own default is an INTERACTIVE agent run
+  // (initialWizardState: runType "agent", mode "interactive"), so the "Start
   // with" segment is already on screen — this click only swaps which of its two
-  // options is chosen. (Real radios: role=radio buttons inside a radiogroup,
-  // accessible name = the full option label, so prefix-match it.)
+  // options is chosen ("Terminal — a shell in the workspace dir"). Real radios:
+  // Seg renders role=radio buttons inside a radiogroup and the accessible name
+  // is the FULL option label, so prefix-match it. Nothing else on this page has
+  // a radio whose name starts with "Terminal".
+  //
+  // The startup field the segment reveals ("Startup command (optional)") is
+  // deliberately LEFT BLANK: the run comes up idle with a shell, which is
+  // exactly what beats 6 and 8 type into. It is also why Title is the only
+  // required field here (new-run-screen's `problem`: needsTask is false for an
+  // interactive agent run), so Launch is live the moment the title is in.
   //
   // Deliberately UNNARRATED, along with the launch and the boot below: this
   // beat's two spoken lines both describe the refusal, and the script's silence
@@ -416,14 +591,45 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
 
   // EVERYTHING ELSE IS LEFT ALONE, and that is the beat: Confined, the model
-  // host allow-listed, unlisted hosts on "Deny, but ask" (deny_with_review) —
-  // the shipped defaults. So crates.io fails FAST here rather than hanging,
-  // which is a visible difference from the demo sandbox above and exactly what
-  // the narration says ("Refused — and it raised an approval").
-  await act(page, page.getByRole("button", { name: "Launch run" }));
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
+  // host allow-listed (allowedDomains: ["api.anthropic.com"]), unlisted hosts on
+  // "Deny, but ask" (deny_with_review) — the shipped defaults. So crates.io
+  // fails FAST here rather than hanging, which is a visible difference from the
+  // demo sandbox above and exactly what the narration says ("Refused — and it
+  // raised an approval").
+  //
+  // The unlisted-hosts rule now sits ON THE CARD FACE (new-run-screen's
+  // "Unlisted hosts" Seg, not buried in "Edit hosts…"), so it is in frame while
+  // the narrator calls it "the default ask policy" — asserted rather than
+  // assumed, because a changed default would make that line false while the
+  // take still went green.
+  await expect(
+    page.getByRole("radio", { name: "Deny, but ask" }),
+    "the default unlisted-hosts rule is no longer deny_with_review — beat 6's narration says it is",
+  ).toHaveAttribute("aria-checked", "true");
 
-  await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+  await act(page, page.getByRole("button", { name: "Launch run" }));
+
+  // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go:
+  // "dispatch is invoked synchronously from the create-run handler"), so the
+  // navigate to /runs/<id> does not happen until the container is provisioned:
+  // the URL change and the terminal mount are ONE stretch of dead air, and the
+  // URL wait therefore carries SANDBOX_UP, not a minute. Nothing is spoken
+  // inside the span — this whole beat is deliberately unnarrated until the
+  // refusal, and the script's silence ledger pays for it.
+  await beat(page, 200);
+  await ffwdStart(page);
+  try {
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: SANDBOX_UP });
+    await waitUnlessGone(
+      expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP }),
+      page.getByText(RUN_OVER).first(),
+      SANDBOX_UP,
+      "the run never came up as an attached terminal",
+    );
+  } finally {
+    await ffwdEnd(page);
+  }
+  // The PTY websocket lands a moment after AttachTerminal mounts — see B0.
   await beat(page, PACE.read);
   await typeInTerminal(page, REACH_HELD);
 
@@ -431,9 +637,18 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // deny-but-ask, so nothing is parked waiting. Asserting the exact header is
   // what makes the narration's "Refused" honest: the held flavour would mean
   // the request is still open, which is a different sentence entirely.
-  await expect(page.getByText("Approval needed — off-policy egress")).toBeVisible({
-    timeout: APPROVAL_APPEARS,
-  });
+  //
+  // RACED against the run's own terminal state: the cockpit mounts the strip
+  // only while RUNNING, so a sandbox that dies here takes the header, the row
+  // and the entire `always` beat with it.
+  await waitUnlessGone(
+    expect(page.getByText("Approval needed — off-policy egress")).toBeVisible({
+      timeout: APPROVAL_APPEARS,
+    }),
+    page.getByText(RUN_OVER).first(),
+    APPROVAL_APPEARS,
+    `${HELD_HOST} never raised an approval on the real-workspace run`,
+  );
   await caption(page, "Real workspace now, and the default ask policy. Refused — and it raised an approval.");
   await beat(page, PACE.read);
 
@@ -453,8 +668,11 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await beat(page, PACE.read + 600);
 
   // ---- B7 · Receipt -------------------------------------------------------
+  // The sidebar is reachable from the cockpit: focus mode (app-shell.tsx) is
+  // opt-in and off unless the canvas's own button turns it on, which nothing
+  // here clicks.
   await act(page, page.getByRole("link", { name: "Workspaces" }));
-  await act(page, page.getByRole("row", { name: new RegExp(WORKSPACE, "i") }));
+  await act(page, page.getByRole("row", { name: new RegExp(WORKSPACE, "i") }).first());
   await expect(page.getByRole("heading", { name: WORKSPACE, level: 1 })).toBeVisible({ timeout: 30_000 });
 
   // THE PAYOFF, and the reason beforeAll deletes this workspace: the count is
@@ -494,11 +712,24 @@ test("beat 8 — a new run, and nothing to click", async () => {
 
   // Network is DELIBERATELY untouched — that omission IS the beat. The
   // workspace's approved_egress is unioned into this run's allowlist
-  // server-side (unionWorkspaceEgress), so there is nothing to configure.
+  // server-side (unionWorkspaceEgress, runs_create.go), so there is nothing to
+  // configure.
   await act(page, page.getByRole("button", { name: "Launch run" }));
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
 
-  await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+  // FAST-FORWARD, for beat 6's reason: this create dispatches synchronously too.
+  await beat(page, 200);
+  await ffwdStart(page);
+  try {
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: SANDBOX_UP });
+    await waitUnlessGone(
+      expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP }),
+      page.getByText(RUN_OVER).first(),
+      SANDBOX_UP,
+      "the proof run never came up as an attached terminal",
+    );
+  } finally {
+    await ffwdEnd(page);
+  }
   await beat(page, PACE.read);
   await typeInTerminal(page, REACH_HELD);
   await caption(page, "New run, same workspace, same command. Nothing to click.");
@@ -507,8 +738,16 @@ test("beat 8 — a new run, and nothing to click", async () => {
   // the idle hint proves nothing was raised to decide — a pending row here
   // would mean the permanent grant never reached this run's policy, and the
   // outro's "the decision outlived the run that raised it" would be false.
-  await expect(page.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 });
-  await expect(page.getByTestId("live-approvals-idle")).toBeVisible();
+  await waitUnlessGone(
+    expect(page.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
+    page.getByText(RUN_OVER).first(),
+    60_000,
+    `${HELD_HOST} did not answer on the proof run — the workspace grant never reached this run's allowlist`,
+  );
+  await expect(
+    page.getByTestId("live-approvals-idle"),
+    "the proof run RAISED an approval — the permanent grant did not carry into it",
+  ).toBeVisible({ timeout: 15_000 });
   await beat(page, PACE.read + 600);
   await caption(page, "Governance that remembers: the decision outlived the run that raised it.");
   await beat(page, PACE.read + 900);

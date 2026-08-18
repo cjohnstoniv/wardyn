@@ -250,11 +250,233 @@ INV="${WARDYN_DEMO_WORKSPACE:-${HOME}/wardyn-demo/slugify}/NOTES-INVENTORY.txt"
 [[ -s "${INV}" ]] && ok "inventory file landed: ${INV}" || bad "no ${INV} — the write never reached the host"
 }
 
+# --- video 06: record a run -----------------------------------------------------
+# The take records ONE session on its OWN workspace (`record-demo`), saves the
+# synthesized policy under the derived name, promotes the two observed hosts,
+# then replays the same session CONFINED and denies a host the recording never
+# saw. Every claim below is read from the control plane, because a take that
+# promoted nothing, saved nothing, or replayed unconfined exits 0 all the same.
+check_video_06_record() {
+head_ "Video 06 · the recorded session"
+V06_API="http://localhost:${WARDYN_UP_PORT:-8080}"
+V06_WS="${WARDYN_DEMO_RECORD_WS_NAME:-record-demo}"
+V06_KEY="build-test"                  # sessionKeyOf("build & test"), session-helpers.ts
+V06_POLICY="record-demo-build-test"   # policyNameFor(workspace, session) — the spec asserts this pre-fill
+V06_WSJ=$(curl -fsS "${V06_API}/api/v1/workspaces" 2>/dev/null || echo '[]')
+V06_POLJ=$(curl -fsS "${V06_API}/api/v1/policies" 2>/dev/null || echo '[]')
+# A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
+# would increment counters that vanish — the bug class this script exists for.
+python3 - "$V06_WSJ" "$V06_POLJ" "$V06_WS" "$V06_KEY" "$V06_POLICY" <<'PYEOF' > /tmp/_demo_v06.$$ 2>/dev/null
+import sys, json
+def items(raw):
+    try: d = json.loads(raw)
+    except Exception: return []
+    if isinstance(d, list): return d
+    return d.get("items") or d.get("workspaces") or d.get("policies") or []
+ws_all, pol_all = items(sys.argv[1]), items(sys.argv[2])
+name, key, policy = sys.argv[3], sys.argv[4], sys.argv[5]
+ws = next((w for w in ws_all if w.get("name") == name), None)
+print("V06_WS_EXISTS", bool(ws))
+rr = (ws or {}).get("record_results") or {}
+opened = rr.get(key) or {}
+# A confined replay lands under its OWN key (recordVerifyKeyPrefix, record.go)
+# so it never clobbers the open capture it replays.
+confined = rr.get("verify:" + key) or {}
+print("V06_RECORDED", opened.get("status") == "recorded")
+print("V06_PROMOTED", bool(opened.get("egress_promoted")))
+print("V06_REPLAY_RUN", confined.get("run_id") or "-")
+# Promotion writes egress: REQUIREMENT rows on the workspace overlay
+# (handlePromoteRecordEgress) and leaves the legacy approved_egress lane
+# read-only — accept either, since a host either grants egress or it does not.
+reqs = (ws or {}).get("effective_requirements") or (ws or {}).get("requirements") or {}
+appr = set((ws or {}).get("approved_egress") or [])
+def granted(h):
+    return h in appr or (reqs.get("egress:" + h) or {}).get("level") == "required"
+missing = [h for h in ("pypi.org", "files.pythonhosted.org") if not granted(h)]
+print("V06_HOSTS", not missing, ",".join(missing) or "-")
+print("V06_POLICY", any((p or {}).get("name") == policy for p in pol_all))
+PYEOF
+V06_REPLAY="-"
+while read -r k v extra; do
+  case "$k" in
+    V06_WS_EXISTS)  [[ "$v" == True ]] && ok "workspace ${V06_WS} exists" || bad "no ${V06_WS} workspace — the take never staged" ;;
+    V06_RECORDED)   [[ "$v" == True ]] && ok "session '${V06_KEY}' status=recorded" || bad "no recorded session '${V06_KEY}' — the capture never settled (empty capture = shoot in containerized mode)" ;;
+    V06_PROMOTED)   [[ "$v" == True ]] && ok "observed hosts promoted onto the workspace" || bad "egress_promoted is not set — beat 5's 'Approve 2 observed hosts' never landed" ;;
+    V06_HOSTS)      [[ "$v" == True ]] && ok "pypi.org + files.pythonhosted.org granted on ${V06_WS}" || bad "canon hosts missing from ${V06_WS}: ${extra}" ;;
+    V06_POLICY)     [[ "$v" == True ]] && ok "policy '${V06_POLICY}' saved" || bad "no '${V06_POLICY}' policy — beat 4's save failed on camera" ;;
+    V06_REPLAY_RUN) V06_REPLAY="$v" ;;
+  esac
+done < /tmp/_demo_v06.$$
+rm -f /tmp/_demo_v06.$$
+
+head_ "Video 06 · the confined replay"
+if [[ "${V06_REPLAY}" == "-" ]]; then
+  bad "no confined replay on ${V06_WS} — beats 5/6 never ran"
+else
+  ok "replay run ${V06_REPLAY}"
+  V06_AUD=$(curl -fsS "${V06_API}/api/v1/audit?run_id=${V06_REPLAY}&limit=1000" 2>/dev/null || echo '[]')
+  python3 - "$V06_AUD" <<'PYEOF' > /tmp/_demo_v06b.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+def hits(host, *actions):
+    out = []
+    for e in ev:
+        dd = e.get("data") or {}
+        if (dd.get("host") or e.get("target") or "").split(":")[0] != host: continue
+        if e.get("action") in actions: out.append(e)
+    return out
+# The unseen host was HELD and DENIED on camera. Either lane proves it: the
+# decision itself (approval.decide/DENIED) or the refusal the proxy logged.
+denied = [e for e in hits("example.com", "approval.decide") if ((e.get("data") or {}).get("decision") == "DENIED")]
+print("V06_UNSEEN_DENIED", bool(denied) or bool(hits("example.com", "egress.deny")))
+print("V06_UNSEEN_ALLOWED", bool(hits("example.com", "egress.allow")))
+# "Default-deny now. Same commands, same two hosts, and nothing to approve."
+both = all(hits(h, "egress.allow") for h in ("pypi.org", "files.pythonhosted.org"))
+asked = any(hits(h, "approval.decide") for h in ("pypi.org", "files.pythonhosted.org"))
+print("V06_CONFINED_OK", both and not asked)
+PYEOF
+  while read -r k v; do
+    case "$k" in
+      V06_UNSEEN_DENIED)  [[ "$v" == True ]] && ok "example.com denied in the confined replay" || bad "no deny for example.com — beat 6's on-camera refusal is not on the record" ;;
+      V06_UNSEEN_ALLOWED) [[ "$v" == False ]] && ok "example.com never allowed" || bad "EXAMPLE.COM WAS ALLOWED in a replay the video calls confined" ;;
+      V06_CONFINED_OK)    [[ "$v" == True ]] && ok "both recorded hosts reached with nothing to approve" || bad "the replay did not reach both canon hosts silently — the promotion never reached its policy" ;;
+    esac
+  done < /tmp/_demo_v06b.$$
+  rm -f /tmp/_demo_v06b.$$
+fi
+}
+
+# --- video 07: approvals & egress scopes ----------------------------------------
+# The take decides FOUR things on camera: crates.io approved at the default
+# scope inside a demo sandbox, ingest.sentry.io denied there, crates.io approved
+# with `always` on the real `egress-lab` workspace, and then a fresh run that
+# reaches the same host with nothing to click. The two hosts are this video's
+# alone (DA5), so a stack-wide approval.decide query is unambiguous.
+check_video_07_approvals() {
+head_ "Video 07 · the decisions"
+V07_API="http://localhost:${WARDYN_UP_PORT:-8080}"
+V07_WS="${WARDYN_DEMO_EGRESS_WS_NAME:-egress-lab}"
+V07_HELD="crates.io"
+V07_TELE="ingest.sentry.io"
+V07_PROOF_TITLE="${WARDYN_DEMO_V07_PROOF_TITLE:-Same host, no approval}"
+V07_DEC=$(curl -fsS "${V07_API}/api/v1/audit?action=approval.decide&limit=1000" 2>/dev/null || echo '[]')
+python3 - "$V07_DEC" "$V07_HELD" "$V07_TELE" <<'PYEOF' > /tmp/_demo_v07.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+held, tele = sys.argv[2], sys.argv[3]
+# approval.decide carries the host at the TOP level of data (approval.go lifts it
+# out of requested_scope) plus the raw decision_scope: "" means "no scope
+# recorded", which Normalize() reads as today's default, run.
+dec = []
+for e in ev:
+    dd = e.get("data") or {}
+    dec.append((dd.get("host") or "", dd.get("decision") or "", dd.get("decision_scope") or ""))
+def any_(host, state, scopes): return any(h == host and s == state and sc in scopes for h, s, sc in dec)
+# Beat 2: the bare split-button Approve — today's default scope, this run.
+print("V07_HELD_RUN", any_(held, "APPROVED", ("", "run")))
+# Beat 6: the whole point of the video.
+print("V07_HELD_ALWAYS", any_(held, "APPROVED", ("always",)))
+# Beat 5: the host nobody asked for.
+print("V07_TELE_DENIED", any_(tele, "DENIED", ("", "run", "once", "until", "always")))
+# The .first() trap, in the direction that matters for THIS video: the telemetry
+# host must never have been approved at any scope, on camera or otherwise.
+print("V07_TELE_APPROVED", any_(tele, "APPROVED", ("", "run", "once", "until", "always")))
+print("V07_SCOPES", json.dumps([(h, s, sc) for h, s, sc in dec if h in (held, tele)]))
+PYEOF
+while read -r k v; do
+  case "$k" in
+    V07_HELD_RUN)      [[ "$v" == True ]] && ok "${V07_HELD} approved at the default (this run) scope" || bad "no default-scope approve for ${V07_HELD} — beat 2 never happened" ;;
+    V07_HELD_ALWAYS)   [[ "$v" == True ]] && ok "${V07_HELD} approved with scope=always" || bad "no always decision for ${V07_HELD} — beat 6, the point of the video, never landed" ;;
+    V07_TELE_DENIED)   [[ "$v" == True ]] && ok "${V07_TELE} denied on camera" || bad "${V07_TELE} was never denied — beat 5 never happened" ;;
+    V07_TELE_APPROVED) [[ "$v" == False ]] && ok "${V07_TELE} never approved (the wrong-host trap)" || bad "THE TELEMETRY HOST WAS APPROVED — the wrong row was decided on camera" ;;
+    V07_SCOPES)        printf '    decisions: %s\n' "$v" ;;
+  esac
+done < /tmp/_demo_v07.$$
+rm -f /tmp/_demo_v07.$$
+
+head_ "Video 07 · the receipt on ${V07_WS}"
+V07_WSJ=$(curl -fsS "${V07_API}/api/v1/workspaces" 2>/dev/null || echo '[]')
+python3 - "$V07_WSJ" "$V07_WS" "$V07_HELD" "$V07_TELE" <<'PYEOF' > /tmp/_demo_v07b.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ws_all = d if isinstance(d, list) else d.get("items") or d.get("workspaces") or []
+name, held, tele = sys.argv[2], sys.argv[3], sys.argv[4]
+ws = next((w for w in ws_all if w.get("name") == name), None)
+print("V07_WS_EXISTS", bool(ws))
+appr = set((ws or {}).get("approved_egress") or [])
+reqs = (ws or {}).get("effective_requirements") or (ws or {}).get("requirements") or {}
+def granted(h):
+    # approve-always writes approved_egress (persistWorkspaceEgressDecision);
+    # the requirements lane is read too so the check survives a lane change.
+    return h in appr or (reqs.get("egress:" + h) or {}).get("level") == "required"
+print("V07_HELD_GRANTED", granted(held))
+print("V07_TELE_GRANTED", granted(tele))
+print("V07_ALLOWED", json.dumps(sorted(appr)))
+PYEOF
+while read -r k v; do
+  case "$k" in
+    V07_WS_EXISTS)    [[ "$v" == True ]] && ok "workspace ${V07_WS} exists" || bad "no ${V07_WS} workspace — beforeAll never staged it" ;;
+    V07_HELD_GRANTED) [[ "$v" == True ]] && ok "${V07_HELD} is permanently allowed on ${V07_WS}" || bad "${V07_HELD} is NOT on ${V07_WS} — beat 7's 'Allowed hosts · 1' receipt is not real" ;;
+    V07_TELE_GRANTED) [[ "$v" == False ]] && ok "${V07_TELE} is not permanently allowed" || bad "${V07_TELE} IS PERMANENTLY ALLOWED — a denied host was granted for good" ;;
+    V07_ALLOWED)      printf '    approved_egress: %s\n' "$v" ;;
+  esac
+done < /tmp/_demo_v07b.$$
+rm -f /tmp/_demo_v07b.$$
+
+head_ "Video 07 · the run that never had to ask"
+V07_RUNS=$(curl -fsS "${V07_API}/api/v1/runs" 2>/dev/null || echo '[]')
+V07_PROOF=$(python3 - "$V07_RUNS" "$V07_PROOF_TITLE" <<'PYEOF'
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+rs = d if isinstance(d, list) else d.get("items") or d.get("runs") or []
+m = [r for r in rs if (r.get("title") or "").strip() == sys.argv[2]]
+print(m[0]["id"] if m else "-")
+PYEOF
+)
+if [[ "${V07_PROOF}" == "-" || -z "${V07_PROOF}" ]]; then
+  bad "no run titled '${V07_PROOF_TITLE}' — beat 8 never launched"
+else
+  ok "proof run ${V07_PROOF}"
+  V07_AUD=$(curl -fsS "${V07_API}/api/v1/audit?run_id=${V07_PROOF}&limit=1000" 2>/dev/null || echo '[]')
+  python3 - "$V07_AUD" "$V07_HELD" <<'PYEOF' > /tmp/_demo_v07c.$$ 2>/dev/null
+import sys, json
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+host = sys.argv[2]
+def acts(*names):
+    return [e for e in ev
+            if e.get("action") in names
+            and ((e.get("data") or {}).get("host") or e.get("target") or "").split(":")[0] == host]
+print("V07_PROOF_ALLOWED", bool(acts("egress.allow")))
+# The whole beat is that NOTHING was raised: a pending decision (or a fresh
+# approval) here means the permanent grant never reached this run's allowlist,
+# and the outro's "the decision outlived the run that raised it" is false.
+print("V07_PROOF_SILENT", not acts("egress.pending", "approval.decide"))
+PYEOF
+  while read -r k v; do
+    case "$k" in
+      V07_PROOF_ALLOWED) [[ "$v" == True ]] && ok "${V07_HELD} allowed on the proof run" || bad "no egress.allow for ${V07_HELD} — beat 8's command never got through" ;;
+      V07_PROOF_SILENT)  [[ "$v" == True ]] && ok "no approval raised on the proof run" || bad "the proof run RAISED an approval for ${V07_HELD} — 'nothing to click' is false" ;;
+    esac
+  done < /tmp/_demo_v07c.$$
+  rm -f /tmp/_demo_v07c.$$
+fi
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
   03) check_video_03_first_run ;;
-  01|04|06|07|08|09|10)
+  06) check_video_06_record ;;
+  07) check_video_07_approvals ;;
+  01|04|08|09|10)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;

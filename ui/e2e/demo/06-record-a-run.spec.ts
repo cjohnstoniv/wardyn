@@ -28,7 +28,7 @@
  * WHAT IT OWNS. Its own workspace (`record-demo`), its own hosts (the canon
  * pair pypi.org + files.pythonhosted.org) and its own policy name
  * (`record-demo-build-test`). It never touches slugify (V01/V02), secrets-lab
- * (V04) or egress-lab (V05), and it deliberately reuses example.com — the one
+ * (V04) or egress-lab (V07), and it deliberately reuses example.com — the one
  * host the whole series agrees means "not on any list" — only as the UNSEEN
  * host in the confined replay.
  *
