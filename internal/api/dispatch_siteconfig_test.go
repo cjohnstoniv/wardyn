@@ -162,16 +162,25 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
 		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want http://proxy.corp:3128", spec.ProxyConfig.UpstreamProxyURL)
 	}
+	// PORT-QUALIFIED, not bare: 4d8f48e1 (W13-S1-5) made planArtifactRedirect
+	// author net.JoinHostPort(host, redirectPort(r.To)), so the proxy's MITM dial
+	// lands on the port the operator configured instead of assuming 443. The
+	// redirect above has no explicit port, so 443 is the derived one. The proxy
+	// splits the suffix back off (parseMITMHostPort, proxy.go) and scopes the
+	// entry to that port, so this is the correct wire shape — this expectation
+	// predates the change (test last touched d3c1f103) and was stale, not the
+	// code. TestRedirectPort (artifact_redirect_test.go) is the producer-side half.
+	const wantMITM = "artifactory.corp:443"
 	foundMITM := false
 	for _, h := range spec.ProxyConfig.MITMHosts {
-		if h == "artifactory.corp" {
+		if h == wantMITM {
 			foundMITM = true
 		} else {
 			t.Errorf("ProxyConfig.MITMHosts contains unexpected host %q (want ONLY the configured artifact host)", h)
 		}
 	}
 	if !foundMITM {
-		t.Errorf("ProxyConfig.MITMHosts = %v, want artifactory.corp present", spec.ProxyConfig.MITMHosts)
+		t.Errorf("ProxyConfig.MITMHosts = %v, want %s present", spec.ProxyConfig.MITMHosts, wantMITM)
 	}
 
 	// 4. Token injection: an Authorization/Bearer rule for artifactory.corp,

@@ -687,8 +687,10 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 //
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution) — this used to
-// resolve them itself. Extracted verbatim from handleCreateRun.
-func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace) {
+// resolve them itself. legacyRepo is the request's single `repo` field, which
+// the declaresRepo gate below needs and grantWiring cannot supply. Extracted
+// verbatim from handleCreateRun.
+func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
@@ -714,9 +716,22 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 	// only when this run actually declares a repo (GAP-EGRESS-3): a sealed
 	// local-dir-only analysis run must not inherit an unauthenticated HTTPS lane to
 	// every internal SCM host the operator declared for GHES clone runs. A repo is
-	// declared via spec.WorkspaceRepos or any git-clone grant lane (the legacy
-	// run.Repo already folded into gw.gitGrants by augmentGitBrokerGrants).
-	declaresRepo := len(spec.WorkspaceRepos) > 0 || gw.firstGitHubGrantID != nil ||
+	// declared via spec.WorkspaceRepos, the legacy single `repo` field, or any
+	// git-clone grant lane.
+	//
+	// legacyRepo is checked DIRECTLY (eca43861 gated on gw.gitGrants instead, on
+	// the comment's claim that "the legacy run.Repo already folded into
+	// gw.gitGrants by augmentGitBrokerGrants" — which is false: that fold is a
+	// no-op when gw.firstGitHubGrantID == nil, i.e. whenever the run has no
+	// github grant). The hole is user-visible: repoCloneURL (runs_scm.go) accepts
+	// a full https:// URL, so `--repo https://ghes.corp.example/team/app` is an
+	// ordinary credential-free HTTPS clone whose ONLY egress source is this
+	// union — with no grant minted, declaresRepo went false and the proxy denied
+	// the clone. That is the same GAP-EGRESS-1 class eca43861 fixed for
+	// workspaces one hunk above. The gate's actual intent (a sealed
+	// local-dir-only run inherits no SCM lane) is unchanged: no repo, no union.
+	declaresRepo := len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" ||
+		gw.firstGitHubGrantID != nil ||
 		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
 	if declaresRepo {
 		if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {

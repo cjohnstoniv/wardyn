@@ -274,7 +274,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo)
 
 	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
