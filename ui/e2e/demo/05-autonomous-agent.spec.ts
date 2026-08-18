@@ -51,7 +51,7 @@
  * exact asset name, so this FILENAME IS LOAD-BEARING).
  */
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { test, expect } from "@playwright/test";
 import { DEMO_TASK, HELD_HOST, MODEL_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
 import { act, beat, caption, PACE, spotlight } from "./overlay";
@@ -86,6 +86,22 @@ const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "V05 — slugify, one held ho
 
 /** Filled on camera in beat 1. Short: the field renders two rows. */
 const RUN_DESCRIPTION = "First governed run of the series — real code, one host held at the door.";
+
+// --- Beat 10's nouns: the borrowed-secret proof (owner fold, 2026-08-17) ---
+//
+// A SEPARATE keyless proof run, on its OWN throwaway workspace — deliberately
+// NOT a requirement on slugify: applyRequiredSecretGrant binds any required
+// secret to the run agent's LLM-provider host, so wiring one onto slugify
+// would hand THIS VIDEO'S AGENT RUN the canary as its Anthropic key and 401
+// the model call. The proof run makes no traffic, so the dormant binding is
+// harmless there.
+const PROOF_WS_NAME = "secrets-proof";
+const PROOF_WS_PATH = process.env.WARDYN_DEMO_PROOF_WS || `${process.env.HOME}/wardyn-demo/secrets-proof`;
+const PROOF_TITLE = "Borrowed by name — never held";
+/** Video 02's secret and canary. If 02 was never shot on this stack the
+ *  beforeAll stores the secret itself, so this video stands alone. */
+const PROOF_SECRET = "deploy-webhook-token";
+const PROOF_CANARY = "WARDYN-V02-CANARY-9K2QN";
 
 /** Where the workspace lands inside the sandbox (add-workspace-dialog.tsx's DEFAULT_TARGET). */
 const MOUNT_TARGET = "/home/agent/work";
@@ -167,6 +183,37 @@ test.beforeAll(async () => {
     "approved_egress is not empty — a leftover Always grant means example.com is never held, and beat 8 does not happen",
   ).toEqual([]);
   expect(ws.denied_egress ?? [], "denied_egress is not empty — a leftover deny would refuse the host outright").toEqual([]);
+
+  // (c) Beat 10's staging: the throwaway proof workspace and its secret.
+  // Delete any leftover proof workspace, make sure the secret EXISTS (video 02
+  // creates it on camera; storing it here keeps this video standalone), then
+  // recreate the workspace with the one requirement the beat is about.
+  {
+    mkdirSync(PROOF_WS_PATH, { recursive: true });
+    const wsList = await page.request.get("/api/v1/workspaces", { headers });
+    const items: { id?: string; name?: string }[] = wsList.ok()
+      ? ((await wsList.json())?.items ?? (await wsList.json().catch(() => null)) ?? [])
+      : [];
+    for (const w of Array.isArray(items) ? items : []) {
+      if (w?.id && w.name === PROOF_WS_NAME) await page.request.delete(`/api/v1/workspaces/${w.id}`, { headers });
+    }
+    const names: string[] = (await (await page.request.get("/api/v1/secrets", { headers })).json().catch(() => ({})))?.names ?? [];
+    if (!names.includes(PROOF_SECRET)) {
+      await page.request.put(`/api/v1/secrets/${PROOF_SECRET}`, { headers, data: { value: PROOF_CANARY } });
+    }
+    const mk = await page.request.post("/api/v1/workspaces", {
+      headers,
+      data: { name: PROOF_WS_NAME, sources: [{ type: "local_dir", path: PROOF_WS_PATH, target: MOUNT_TARGET, writable: false }] },
+    });
+    expect(mk.ok(), `could not create ${PROOF_WS_NAME} (${mk.status()})`).toBe(true);
+    const proofWsId = (await mk.json())?.id as string;
+    const reqRes = await page.request.put(`/api/v1/workspaces/${proofWsId}/requirements`, {
+      headers,
+      data: { requirements: { [`secret:${PROOF_SECRET}`]: { level: "required", provenance: "operator_set" } } },
+    });
+    expect(reqRes.ok(), `could not seed the ${PROOF_SECRET} requirement (${reqRes.status()})`).toBe(true);
+  }
+
 });
 
 // ---------------------------------------------------------------------------
@@ -489,8 +536,99 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 
+});
+
+// ---------------------------------------------------------------------------
+// Beat 10 — borrowed by name, never held (owner fold, 2026-08-17)
+//
+// Closes the loop video 02 opened: a secret a run BORROWS but never holds.
+// The carrier is a small keyless background run, launched off camera against
+// its own throwaway workspace whose one requirement names video 02's token —
+// see the nouns block for why this must not ride the agent run above.
+// ---------------------------------------------------------------------------
+
+test("V05 beat 10 — borrowed, never held", async () => {
+  test.setTimeout(300_000);
+  const page = stage();
+  const headers = process.env.WARDYN_DEMO_TOKEN
+    ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
+    : undefined;
+
+  await caption(page, "One more claim from video two to close out: a secret a run borrows, but never holds.");
+  await beat(page, PACE.read);
+
+  // Launched via the API — the form was this series' videos three and five;
+  // what this beat teaches is the WIRING, not the clicks.
+  const mk = await page.request.post("/api/v1/runs", {
+    headers,
+    data: {
+      agent: "claude-code",
+      title: PROOF_TITLE,
+      task: "echo wired by name, minted by the broker, never handed over",
+      workspace_id: (await (async () => {
+        const body = await (await page.request.get("/api/v1/workspaces", { headers })).json();
+        const items: { id?: string; name?: string }[] = Array.isArray(body) ? body : (body?.items ?? []);
+        return items.find((w) => w.name === PROOF_WS_NAME)?.id ?? "";
+      })()),
+      inline_policy: {
+        allowed_domains: [],
+        denied_domains: [],
+        allow_all_egress: false,
+        first_use_approval: "always_deny",
+        allowed_methods: [],
+        min_confinement_class: "CC1",
+        eligible_grants: [],
+      },
+    },
+  });
+  expect(mk.ok(), `proof-run create failed (${mk.status()}): ${await mk.text().catch(() => "")}`).toBe(true);
+  const proofRunId = ((await mk.json())?.id as string) ?? "";
+  expect(proofRunId.length > 0, "proof-run create returned no id").toBe(true);
+
+  await page.goto(`/runs/${proofRunId}`);
+  await caption(page, "A background run, wired off camera to that token — by name, through its workspace.");
+  await beat(page, PACE.read);
+  await expect(page.getByText(/Running|Completed/).first()).toBeVisible({ timeout: 180_000 });
+
+  // The Credentials widget: minted at sandbox startup, never on traffic — so
+  // even this instantly-finished run earns its count.
+  const credHeading = page.getByRole("heading", { name: "Credentials" }).first();
+  await credHeading.scrollIntoViewIfNeeded().catch(() => {});
+  await spotlight(page, credHeading);
+  await expect(page.getByText(/1 eligible · 1 minted/).first()).toBeVisible({ timeout: 120_000 });
+  await caption(page, "One credential eligible, one minted — a short-lived stand-in, made by the broker at start.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByText(/never sees your real keys/).first());
+  await caption(page, "The widget says it plainly: the agent never sees your real keys.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // Both halves on the record (the retired workspaces-and-secrets spec's own
+  // verified event pair): the workspace granted it, Wardyn read it.
+  const reqEvents = await (
+    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.workspace.requirement.secret`, { headers })
+  ).text();
+  expect(
+    reqEvents.includes(PROOF_SECRET),
+    `no run.workspace.requirement.secret event for ${PROOF_SECRET} on ${proofRunId}`,
+  ).toBe(true);
+  await caption(page, "Both halves are on the record: the workspace granted it, and Wardyn read it —");
+  await beat(page, PACE.read);
+  await caption(page, "read by the run's identity, at start. The value crossed no screen and no shell.");
+  await beat(page, PACE.read);
+
+  // The deterministic negative: video two's canary value — the secret's actual
+  // content — appears NOWHERE. Not on this page, not in the run's audit trail.
+  await expect(page.locator("body")).not.toContainText(PROOF_CANARY);
+  const fullTrail = await (
+    await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}`, { headers })
+  ).text();
+  expect(fullTrail.includes(PROOF_CANARY), "the canary VALUE leaked into the audit trail").toBe(false);
+  await caption(page, "And the value itself — video two's canary — appears nowhere. That is the whole design.");
+  await beat(page, PACE.read + 600);
+
   // --- OUTRO --------------------------------------------------------------
-  await caption(page, "That's a first run: named, confined, held once, finished with a diff.");
+  await caption(page, "That's a first agent run: confined, held once, finished with a diff — and secrets only ever borrowed.");
   await beat(page, PACE.read + 600);
   await caption(page, "Next: stop writing the policy at all — record a run, and let it write itself.");
   await beat(page, PACE.chapter);
