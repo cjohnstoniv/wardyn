@@ -349,13 +349,13 @@ test("B1 — barrier honesty", async () => {
   // (app-shell.tsx:543); the "No sandbox barrier" variant is impossible after
   // beforeAll's assertion.
   await act(page, page.getByRole("link", { name: "Sandbox barrier — open Settings" }));
-  await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Host", level: 3, exact: true })).toBeVisible({ timeout: 30_000 });
 
   const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
   await expect(matrix).toBeVisible({ timeout: 30_000 });
 
   await caption(page, "This card names the barriers this machine can actually build.");
-  await spotlight(page, page.getByRole("heading", { name: "Host", level: 3 }));
+  await spotlight(page, page.getByRole("heading", { name: "Host", level: 3, exact: true }));
   await beat(page, PACE.read);
   await spotlight(page, null);
 
