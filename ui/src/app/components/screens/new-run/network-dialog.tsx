@@ -121,8 +121,19 @@ export function NetworkDialog({
   const [customDraft, setCustomDraft] = React.useState("");
   const [denyDraft, setDenyDraft] = React.useState("");
 
-  // Re-seed from the run's current selection each time the dialog opens, so a
+  // Re-seed from the run's current selection each time the dialog OPENS, so a
   // cancelled edit never leaks into the next one.
+  //
+  // `open` is deliberately the ONLY dependency. `value` is rebuilt as a fresh
+  // object literal on every parent render (new-run-screen's netValue), so with
+  // it in the deps this effect re-fired on every poll the parent runs — the
+  // health probe, the workspace list, the title datalist — and each firing
+  // WIPED THE DRAFT MID-EDIT back to the committed state. That is the race
+  // that filmed as "the Hold it for approval pick didn't stick": click the
+  // rule, a poll lands, the draft resets, Save saves the reset. A dialog's
+  // draft belongs to the dialog for as long as it is open.
+  //
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: re-seed on open only
   React.useEffect(() => {
     if (!open) return;
     setAllowAll(value.allowAllEgress);
@@ -131,7 +142,7 @@ export function NetworkDialog({
     setRule(value.firstUseApproval);
     setCustomDraft("");
     setDenyDraft("");
-  }, [open, value]);
+  }, [open]);
 
   const presetHosts = React.useMemo(() => HOST_GROUPS.flatMap((g) => g.hosts), []);
   // Anything allowed that isn't a known preset is the operator's own — shown in

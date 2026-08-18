@@ -140,3 +140,31 @@ describe("NetworkDialog — it is a transaction", () => {
     expect(screen.getByText(/Any public host allowed · private and internal ranges blocked/i)).toBeInTheDocument();
   });
 });
+
+describe("NetworkDialog — the draft survives parent re-renders", () => {
+  // The 2026-08-18 take-killer: new-run-screen rebuilds `value` as a fresh
+  // object literal on every render, and its polls (health, workspaces, titles)
+  // render constantly — so a re-seed effect keyed on `value` wiped the draft
+  // between the operator's click and Save. "Hold it for approval" was picked
+  // on camera and deny_with_review launched. The dialog's draft belongs to the
+  // dialog while it is open; only OPENING may re-seed it.
+  it("keeps a mid-edit rule pick when the parent re-renders with a fresh value object", async () => {
+    const start: NetworkSelection = { ...base, firstUseApproval: "deny_with_review" };
+    const view = render(
+      <NetworkDialog open value={start} onSave={(onSave = vi.fn())} onOpenChange={(onOpenChange = vi.fn())} />,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /^Hold it for approval/ }));
+
+    // The parent polls and re-renders: same CONTENT, new object identity —
+    // exactly what new-run-screen hands down every render.
+    view.rerender(
+      <NetworkDialog open value={{ ...start }} onSave={onSave} onOpenChange={onOpenChange} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save hosts" }));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ firstUseApproval: "wait_for_review" }),
+    );
+  });
+});
