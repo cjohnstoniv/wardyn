@@ -401,8 +401,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// that exec races the interactive boot-seed pane (an ephemeral
 		// workspace's prep is faster than the post-start exec), and losing the
 		// race silently shipped an unrecorded seed session.
-		// Split literal: the envdoc guard scans for the quote-exact "WARDYN_X"
-		// token, and this is the var's one Go-side appearance.
+		// Split literal: the envdoc guard scans raw file bytes for the
+		// quote-delimited var name alone, and this is its one Go-side appearance.
 		env = append(env, "WARDYN_RECORDING"+"=1")
 	}
 	agentCfg := &container.Config{
