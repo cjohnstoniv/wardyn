@@ -212,8 +212,12 @@ preflight() {
   # a false line, four minutes into a take nothing else would fail.
   local gt
   gt="$(jq -r '.ebpf_groundtruth.state // "unavailable"' <<<"${health}")"
-  [[ "${gt}" == "unavailable" ]] \
-    || die "the kernel sensor is up (ebpf_groundtruth.state=${gt}) — beat 5 says 'unavailable, because that sensor is opt-in' and the browser lane asserts that word. Bring the stack up WITHOUT the groundtruth compose profile"
+  # "unavailable" (never opted in) and "degraded" (ran once, gone quiet — the
+  # heartbeat is persisted, so a host that ever ran the sensor stays degraded)
+  # both mean no sensor feeds this stack; the narration says "dark", true for
+  # either. A LIVE sensor (healthy/partial/idle) makes the line false on camera.
+  [[ "${gt}" == "unavailable" || "${gt}" == "degraded" ]] \
+    || die "the kernel sensor is LIVE (ebpf_groundtruth.state=${gt}) — beat 5 says the sensor is dark and the browser lane asserts it. Stop the groundtruth compose profile (tetragon + wardyn-tetragon-ingest) before this take"
 
   PRINCIPAL="$(api "${WARDYN_URL}/api/v1/me" | jq -r '.principal // ""')"
   [[ -n "${PRINCIPAL}" ]] || die "GET /api/v1/me returned no principal"

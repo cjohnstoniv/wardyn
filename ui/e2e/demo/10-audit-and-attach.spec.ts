@@ -223,15 +223,19 @@ test("beat 5 — name the streams", async () => {
   await spotlight(page, live);
   await beat(page, PACE.read + 600);
 
-  await caption(page, "Kernel ground truth is the third — unavailable, because that sensor is opt-in.");
+  await caption(page, "Kernel ground truth is the third — dark here, because that sensor is opt-in.");
   // GroundTruthChip renders `Ground truth · {state}` off /healthz's
-  // ebpf_groundtruth. "unavailable" is the default for every install that has
-  // not opted into the sensor's compose profile — and the narration says that
-  // word out loud, so assert it rather than filming "healthy" under it.
-  const groundTruth = page.getByText("Ground truth · unavailable");
+  // ebpf_groundtruth. Two states mean "no sensor feeding this stack":
+  // "unavailable" (never opted into the compose profile) and "degraded" (it
+  // ran once and went quiet — the heartbeat is PERSISTED, so a host that ever
+  // ran the sensor keeps saying degraded even after a wardynd bounce; this
+  // box ran it earlier today). The narration says "dark", true for both;
+  // "healthy"/"partial" under that line would be false on camera, so those
+  // still fail the take.
+  const groundTruth = page.getByText(/Ground truth · (unavailable|degraded)/);
   await expect(
     groundTruth,
-    "the ground-truth chip does not read 'unavailable' — this take is on a stack with the eBPF sensor profile up, and the line about an opt-in sensor is false on camera",
+    "the ground-truth chip reads neither 'unavailable' nor 'degraded' — this take is on a stack with the eBPF sensor LIVE, and the line about an opt-in sensor gone dark is false on camera",
   ).toBeVisible({ timeout: AUDIT_SETTLES });
   await spotlight(page, groundTruth);
   // The "opt-in sensor" hint lives in the chip's native `title` tooltip, which
