@@ -579,7 +579,7 @@ acts = [e.get("action") for e in ev]
 # runs_dispatch.go). A run row with no audit behind it would mean the trail the
 # whole product sells did not record the one launch this video is about.
 print("V08_AUD_CREATE", "run.create" in acts)
-print("V08_AUD_DISPATCH", "run.dispatch" in acts)
+print("V08_AUD_DISPATCH", "run.exec" in acts)
 # No spaces in the payload: the reader below is `read -r k v`, which would
 # otherwise keep only the first word of a multi-element list.
 print("V08_AUD_FAILED", json.dumps(sorted({
@@ -588,7 +588,7 @@ PYEOF
   while read -r k v; do
     case "$k" in
       V08_AUD_CREATE)   [[ "$v" == True ]] && ok "run.create is on the audit trail" || bad "no run.create for ${V08_RUN} — the launch left no record" ;;
-      V08_AUD_DISPATCH) [[ "$v" == True ]] && ok "run.dispatch is on the audit trail" || bad "no run.dispatch for ${V08_RUN} — the sandbox was never scheduled" ;;
+      V08_AUD_DISPATCH) [[ "$v" == True ]] && ok "run.exec is on the audit trail" || bad "no run.exec for ${V08_RUN} — the sandbox was never scheduled" ;;
       V08_AUD_FAILED)   [[ "$v" == "[]" ]] || printf '    note: failure-outcome rows present: %s\n' "$v" ;;
     esac
   done < /tmp/_demo_v08c.$$
