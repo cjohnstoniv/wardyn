@@ -703,6 +703,126 @@ else
 fi
 }
 
+# Video 10 · the finale. Same artifact-first shape as 09 — start from the file
+# the two lanes agreed on, not from "the newest run" — but the evidence lives on
+# the LIVE stack, not on disk: beats 1-3 are three real ssh sessions whose whole
+# durable trace is ssh.auth / session.attach / session.detach / session.recording
+# on :8080, and unlike 09's KEEPed stack this one is still up when a take ends.
+#
+# The run's STATE is deliberately not asserted. An interactive run outlives the
+# beats by design, but auto_stop, a reaper or an operator tidying up between the
+# take and the check may all have ended it — none of which makes the filmed
+# footage dishonest. What must still be true is who OWNED it: sshAuth is a plain
+# `run.CreatedBy == key.Principal`, so a run created by `admin-token` would have
+# refused the owner's own key and beat 1 could not have happened at all.
+check_video_10() {
+head_ "Video 10 · the run the terminals attacked"
+V10_API="http://localhost:${WARDYN_UP_PORT:-8080}"
+# The handoff the beat script writes and the browser spec reads (both resolve
+# this one fixed path) — the same "two lanes agree via the file the take wrote"
+# rule 09's ci-artifacts/run.json follows.
+V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+V10_RUN="${WARDYN_DEMO_RUN_ID:-}"
+[[ -z "${V10_RUN}" && -s "${V10_HANDOFF}" ]] && V10_RUN="$(tr -d '[:space:]' <"${V10_HANDOFF}")"
+if [[ -z "${V10_RUN}" ]]; then
+  bad "no run id at ${V10_HANDOFF} — the terminal lane never got past preflight, so there is nothing this video could have filmed"
+else
+ok "run ${V10_RUN} (from the handoff both lanes read)"
+V10_RUNJ=$(curl -fsS "${V10_API}/api/v1/runs/${V10_RUN}" 2>/dev/null || echo '{}')
+V10_ME=$(curl -fsS "${V10_API}/api/v1/me" 2>/dev/null || echo '{}')
+V10_AUD=$(curl -fsS "${V10_API}/api/v1/audit?run_id=${V10_RUN}&limit=1000" 2>/dev/null || echo '[]')
+
+# A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
+# would increment counters that vanish — the bug class this script exists for.
+python3 - "$V10_RUNJ" "$V10_ME" "$V10_AUD" "$V10_RUN" <<'PYEOF' > /tmp/_demo_v10.$$ 2>/dev/null
+import sys, json
+def load(s):
+    try: return json.loads(s)
+    except Exception: return {}
+run, me = load(sys.argv[1]), load(sys.argv[2])
+d = load(sys.argv[3]); run_id = sys.argv[4]
+ev = d if isinstance(d, list) else (d or {}).get("events") or (d or {}).get("items") or []
+owner = run.get("created_by") or "-"
+print("V10_OWNER", owner)
+print("V10_OWNER_ME", me.get("principal") or "-")
+# admin-token is the ONE value that makes the whole video impossible; matching
+# the caller's own principal is the positive form of the same fact.
+print("V10_OWNER_OK", owner not in ("-", "admin-token") and owner == (me.get("principal") or ""))
+print("V10_STATE", run.get("state") or "MISSING")
+
+def data(e): return e.get("data") or {}
+auth = [e for e in ev if e.get("action") == "ssh.auth"]
+okfp = {e.get("target") for e in auth if e.get("outcome") == "success" and e.get("target")}
+# The registered-but-foreign branch (sshgateway.go:246). A key that was never
+# registered logs "unregistered key" with actor "unknown" instead, and the
+# finale's money row would then be about the wrong refusal (SV13).
+refused = [e for e in auth
+           if e.get("outcome") == "failure" and data(e).get("reason") == "not the run owner"]
+print("V10_AUTH_OK_FPS", len(okfp))
+# Every success attributed to the run's owner: two keys, ONE principal (DA1).
+print("V10_AUTH_OK_ACTOR", all((e.get("actor") or "") == owner
+                               for e in auth if e.get("outcome") == "success") and bool(okfp))
+print("V10_AUTH_FAIL", len(refused))
+# FOREIGN, not merely refused: a fingerprint none of the successes used, under a
+# principal that is not the run's owner. Both halves are what beat 3 narrates.
+print("V10_AUTH_FAIL_FOREIGN", bool(refused) and all(
+    e.get("target") not in okfp and (e.get("actor") or "") not in ("", "unknown", owner)
+    for e in refused))
+print("V10_AUTH_FAIL_FP", (refused[0].get("target") or "-") if refused else "-")
+
+def transport_ssh(e): return data(e).get("transport") == "ssh"
+print("V10_ATTACH_SSH", sum(1 for e in ev if e.get("action") == "session.attach"
+                            and e.get("outcome") == "success" and transport_ssh(e)))
+# The observer's detach. read_only rides the detach row (sshgateway_channels.go
+# :508) and is the only place the trail records which client was DRIVING.
+print("V10_DETACH_RO", sum(1 for e in ev if e.get("action") == "session.detach"
+                           and transport_ssh(e) and data(e).get("read_only") is True))
+# recording.CastKey(run, "ssh-<uuid>") — the composite key beat 6's Session
+# picker lists and its player replays. Written at DETACH, so its absence also
+# means an ssh client was still connected when the browser half filmed.
+print("V10_REC_SSH", sum(1 for e in ev if e.get("action") == "session.recording"
+                         and e.get("outcome") == "success"
+                         and (e.get("target") or "").startswith(run_id + "~ssh-")))
+PYEOF
+while read -r k v; do
+  case "$k" in
+    V10_OWNER)        printf '    run.created_by: %s\n' "$v" ;;
+    V10_OWNER_ME)     printf '    this caller:    %s\n' "$v" ;;
+    V10_OWNER_OK)     [[ "$v" == True ]] && ok "the run is owned by the signed-in human, not admin-token" \
+                        || bad "the run's created_by is not this caller's principal — sshAuth is owner-only, so beat 1 could not have attached (see the two lines above)" ;;
+    V10_STATE)        printf '    run state:      %s (not asserted — an interactive run may be stopped by verify time)\n' "$v" ;;
+    V10_AUTH_OK_FPS)  [[ "$v" -ge 2 ]] && ok "${v} distinct fingerprints authenticated over ssh — the holder and the observer" \
+                        || bad "only ${v} distinct ssh.auth success fingerprint(s) — beats 1-2 film TWO keys of one person" ;;
+    V10_AUTH_OK_ACTOR)[[ "$v" == True ]] && ok "both successes are attributed to the run's owner (two keys, one principal)" \
+                        || bad "an ssh.auth success is attributed to someone other than the run's owner — 'same person' is false" ;;
+    V10_AUTH_FAIL)    case "$v" in
+                        0) bad "no ssh.auth failure with reason 'not the run owner' — beat 3's refusal never happened, or the key was UNREGISTERED and logged 'unregistered key' (the wrong branch, SV13)" ;;
+                        1) ok "exactly one refusal, reason 'not the run owner'" ;;
+                        *) ok "${v} refusals with reason 'not the run owner' (>1 = earlier takes; audit is append-only and reset-all belongs to V01)" ;;
+                      esac ;;
+    V10_AUTH_FAIL_FOREIGN) [[ "$v" == True ]] && ok "the refused key is genuinely foreign — a fingerprint no success used, under another principal" \
+                        || bad "the refusal is not attributable to a second identity — the psql INSERT did not land under a distinct principal (SV19), so beat 3 filmed the owner refusing themself" ;;
+    V10_AUTH_FAIL_FP) printf '    refused key:    %s\n' "$v" ;;
+    V10_ATTACH_SSH)   [[ "$v" -ge 2 ]] && ok "${v} session.attach rows with transport=ssh" \
+                        || bad "only ${v} successful session.attach with transport=ssh — the video shows two ssh clients in the same session" ;;
+    V10_DETACH_RO)    [[ "$v" -ge 1 ]] && ok "an ssh detach recorded read_only=true — the observer really was one" \
+                        || bad "no read_only ssh session.detach — nothing in the trail says the second client was an observer, which is beat 2's whole claim" ;;
+    V10_REC_SSH)      [[ "$v" -ge 1 ]] && ok "${v} session recording(s) keyed ${V10_RUN}~ssh-* — beat 6 has a tape to play" \
+                        || bad "no session.recording keyed ${V10_RUN}~ssh-* — beat 6's Session picker had no ssh session, or a client never detached" ;;
+  esac
+done < /tmp/_demo_v10.$$
+rm -f /tmp/_demo_v10.$$
+fi
+
+# The terminal lane's cues, for the same reason 09 checks its own: the shared
+# narration block below only knows narration.json (the browser lane), and a
+# missing terminal timeline ships beats 1-3 SILENT under a fully narrated
+# browser half with every step of the recorder still exiting 0.
+V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-10}/narration-terminal.json"
+[[ -s "${V10_TL}" ]] && ok "terminal narration timeline present" \
+  || bad "no ${V10_TL} — beats 1-3 are silent (the driver runs inside tmux; WARDYN_DEMO_WORK_DIR has to reach it)"
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
@@ -711,7 +831,8 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   07) check_video_07_approvals ;;
   08) check_video_08_policies ;;
   09) check_video_09 ;;
-  01|04|10)
+  10) check_video_10 ;;
+  01|04)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;

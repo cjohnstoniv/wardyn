@@ -69,12 +69,34 @@
 #  6. Both ssh clients DETACH before the browser half runs. session.recording is
 #     written at detach (attach.go's finishRecording, which the ssh bridge calls
 #     too), so a client left connected means an empty Session picker at beat 6.
+#  7. The KERNEL SENSOR IS OFF. Beat 5 (browser lane) says "unavailable, because
+#     that sensor is opt-in" over the audit page's Ground-truth chip, which
+#     renders /healthz's ebpf_groundtruth.state verbatim. A stack brought up with
+#     the tetragon compose profile reports "healthy" and the line is false on
+#     camera — checked here because preflight is the only thing that runs before
+#     the camera does.
+#  8. THE OPERATOR HAS TO BE IN THE ROOM (09's lesson, same lane). This segment
+#     is a gdigrab of a fixed rectangle (WARDYN_DEMO_CAPTURE, default
+#     1920x1080+0+0) of the REAL DESKTOP. Nothing here can see inside that
+#     rectangle, so nothing here can fail a take that filmed a notification or a
+#     stray window. Before rolling: clear the top-left 1920x1080, put ONE
+#     terminal there filling it (the three "terminals" are this script's tmux
+#     panes and they split the window's width 50/25/25 — left widest, as the
+#     script calls for — so a small window makes all three unreadable),
+#     silence notifications, and stay and watch. There is no
+#     fast-forward on this lane — record-demo.sh's ffwd is browser-only and is
+#     skipped outright whenever a terminal segment exists — so the whole take
+#     ships in real time, and the spec files no ffwd spans at all.
 #
 # The three keys live in three throwaway HOMEs under /tmp, one key each. That is
 # what lets all three panes type the BYTE-IDENTICAL command off the run page's
 # card (`ssh <run-id>@127.0.0.1 -p 2222`) and still offer three different keys.
 # It also isolates known_hosts, so the owner's pane gets the first-connect
-# fingerprint prompt on camera while the other two do not stop to ask.
+# fingerprint prompt on camera while the other two do not stop to ask — and it
+# is why DA15's `ssh-keygen -R` remedy has nothing to do here: no pane ever
+# reads the operator's own ~/.ssh/known_hosts, so a mid-series host-key
+# regeneration can never surface as HOST-IDENTIFICATION-CHANGED on camera. It
+# surfaces as the fingerprint mismatch preflight dies on instead.
 #
 # SAFETY. This script only ever ATTACHES to the run — it never launches, kills
 # or reconfigures one — and it leaves with the ssh escape (`~.`) rather than
@@ -119,7 +141,8 @@ note() { printf '[v10] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 V10_DOCKER_HOST=""
 resolve_docker_host() {
   local cand
-  for cand in "${DOCKER_HOST:-}" "unix:///var/run/wardyn-docker.sock" "unix:///var/run/docker.sock"; do
+  for cand in "${DOCKER_HOST:-}" "unix:///run/wardyn-docker.sock" \
+              "unix:///var/run/wardyn-docker.sock" "unix:///var/run/docker.sock"; do
     [[ -n "${cand}" ]] || continue
     if DOCKER_HOST="${cand}" docker inspect "${PG_CONTAINER}" >/dev/null 2>&1; then
       V10_DOCKER_HOST="${cand}"
@@ -183,6 +206,15 @@ preflight() {
   SSH_HOST="${ADVERTISE%:*}"
   SSH_PORT="${ADVERTISE##*:}"
 
+  # Beat 5 narrates the ground-truth chip as "unavailable" and the browser lane
+  # ASSERTS that word (audit.tsx's GroundTruthChip renders this field verbatim).
+  # A stack up with the tetragon profile answers "healthy" — a true screen under
+  # a false line, four minutes into a take nothing else would fail.
+  local gt
+  gt="$(jq -r '.ebpf_groundtruth.state // "unavailable"' <<<"${health}")"
+  [[ "${gt}" == "unavailable" ]] \
+    || die "the kernel sensor is up (ebpf_groundtruth.state=${gt}) — beat 5 says 'unavailable, because that sensor is opt-in' and the browser lane asserts that word. Bring the stack up WITHOUT the groundtruth compose profile"
+
   PRINCIPAL="$(api "${WARDYN_URL}/api/v1/me" | jq -r '.principal // ""')"
   [[ -n "${PRINCIPAL}" ]] || die "GET /api/v1/me returned no principal"
   [[ "${PRINCIPAL}" != "admin-token" ]] \
@@ -205,6 +237,16 @@ preflight() {
   owner="$(jq -r '.created_by // ""' <<<"${run}")"
   [[ "${owner}" == "${PRINCIPAL}" ]] \
     || die "run ${RUN_ID} was created by '${owner}', not by you ('${PRINCIPAL}'). sshAuth is owner-only, so beat 1 would film a denial — launch the run from the signed-in console"
+  # INTERACTIVE, the other half of check 3b. An AUTONOMOUS run is RUNNING too,
+  # and its shared session is the AGENT's — so beat 1's `hostname && whoami`
+  # lands in Claude's prompt exactly as interactive_start=agent would, the
+  # observer still echoes it, and every assertion below still passes. It also
+  # ends by itself the moment the agent finishes, mid-take. An interactive run
+  # with an EMPTY task comes up idle and stays up, which is what this video
+  # wants; leave the boot seed blank (dispatch's seed is interactive + agent +
+  # non-empty-task only, so an empty one is structurally inert anyway).
+  [[ "$(jq -r '.interactive // false' <<<"${run}")" == "true" ]] \
+    || die "run ${RUN_ID} is not INTERACTIVE — its session belongs to the agent, so beats 1-2 would type into the agent's prompt and still pass, and the run would end by itself mid-take. Launch an interactive run (New run → Interactive, task left blank)"
 
   # THE ATTACH SESSION MUST OPEN ON A SHELL. The New Run wizard's "Start with"
   # DEFAULTS to the agent (ui/.../new-run/wizard-types.ts), and with
@@ -414,10 +456,12 @@ drive() {
   beat 900
 
   # The command is the run page's own, byte for byte: the "Attach from your
-  # terminal" card renders `ssh <run.id>@<host> -p <port>` (run-detail-ssh.tsx —
-  # note SSH.md and ENV.md still call that card "Connect via SSH"; the card's
-  # real title is what the narration means). All three panes type THIS string;
-  # only the key behind it differs.
+  # terminal" card renders `ssh <run.id>@<host> -p <port>` off the SAME
+  # /healthz advertise_addr preflight split above (run-detail-ssh.tsx:82). The
+  # script's old note that SSH.md/ENV.md miscall the card "Connect via SSH" is
+  # STALE — both docs use the real title today; only a comment in
+  # ui/src/app/lib/api/health.ts still carries the old name. All three panes
+  # type THIS string; only the key behind it differs.
   local cmd="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
 
   # --- B1 · the owner attaches --------------------------------------------
@@ -546,6 +590,15 @@ tmux kill-session -t "${SESSION}" 2>/dev/null
 # PRINCIPAL / SSH_HOST / SSH_PORT have no env-var form — preflight is the only
 # thing that can resolve them, and the driver must not re-resolve them and
 # possibly land on a different run.
+#
+# WARDYN_DEMO_WORK_DIR is in that list for the SAME reason and is the one that
+# bites silently: demo-typist.sh writes its narration timeline to
+# ${WARDYN_DEMO_WORK_DIR}/narration-terminal.json and record-demo.sh merges it
+# back from ui/test-results/demo-video-10/. The typist is sourced INSIDE this
+# tmux session, so without the pass-through the driver falls back to the
+# pre---video path, the mux reads an empty per-video file, and beats 1-3 ship
+# VOICELESS under a fully narrated browser half with every step exiting 0.
+# Empty when run standalone, which `:-` collapses back to the typist's default.
 tmux new-session -d -s "${SESSION}" \
   -e "WARDYN_V10_DRIVE=1" \
   -e "WARDYN_URL=${WARDYN_URL}" \
@@ -554,6 +607,7 @@ tmux new-session -d -s "${SESSION}" \
   -e "WARDYN_V10_FOREIGN_PRINCIPAL=${FOREIGN_PRINCIPAL}" \
   -e "WARDYN_DEMO_CAPTURE_ZERO=${WARDYN_DEMO_CAPTURE_ZERO:-}" \
   -e "WARDYN_DEMO_VOICE=${WARDYN_DEMO_VOICE:-1}" \
+  -e "WARDYN_DEMO_WORK_DIR=${WARDYN_DEMO_WORK_DIR:-}" \
   -e "RUN_ID=${RUN_ID}" \
   -e "PRINCIPAL=${PRINCIPAL}" \
   -e "SSH_HOST=${SSH_HOST}" \
