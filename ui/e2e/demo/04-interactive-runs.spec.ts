@@ -265,6 +265,24 @@ test("V04 beat 3 — the decoy", async () => {
   await spotlightTerminalRow(page, "sk-ant-oat01-wardyn-inert-sentinel");
   await caption(page, "The token names itself an inert sentinel: the shape a harness demands, carrying nothing.");
   await beat(page, PACE.read + 1400);
+
+  // The attacker framing (owner note): the decoy's value is what it makes
+  // WORTHLESS. Verified before scripting it — the proxy terminates the
+  // sandbox's TLS, so the sentinel is all that ever travels on the sandbox
+  // side; the live token exists only in proxy memory and on the proxy's own
+  // leg to Anthropic. The honest ceiling is stated as the barrier, exactly as
+  // video one taught it: nothing IN the box can read the key, so getting it
+  // means getting OUT of the box.
+  await caption(page, "So play the attacker. Compromise this container, find the credential, exfiltrate it.");
+  await beat(page, PACE.read);
+  await caption(page, "You have stolen a decoy. Anthropic has never heard of it.");
+  await beat(page, PACE.read);
+  await caption(page, "The live token exists only in the proxy, outside the box — even this shell's own traffic carries the decoy.");
+  await beat(page, PACE.read);
+  await caption(page, "Reaching the real one means breaking out of the sandbox itself.");
+  await beat(page, PACE.read);
+  await caption(page, "And that is exactly the wall you sized in video one — Fence, Wall, or Vault.");
+  await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
   // The injection is ALREADY on the record — it fired at sandbox startup,
