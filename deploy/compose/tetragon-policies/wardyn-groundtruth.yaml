@@ -1,5 +1,14 @@
 # Wardyn eBPF ground-truth TracingPolicy.
 #
+# THE ONLY FILE ALLOWED IN THIS DIRECTORY IS POLICY YAML. Tetragon loads
+# every file in --tracing-policy-dir as a TracingPolicy and FATALS on
+# anything else — a README.md that used to live beside this file killed the
+# sensor at boot (Exited(1): "failed loading tracing policy file ...
+# README.md"), which read from the outside as "groundtruth tier up, zero
+# kernel events, every observation group None observed." Its prose lives in
+# this header now; deploy/compose/README.md's "eBPF ground-truth tier"
+# section covers the stream itself.
+#
 # This narrows what the kernel sensor REPORTS so the JSON export the ingest
 # sidecar tails carries only the events Wardyn's ground-truth stream maps:
 #   - tcp_connect       -> kernel.network.connect
