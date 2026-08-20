@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 03 of the 0.5 series — "Your first run".
+ * Video 04 of the series — "Your first run".
  *
  * WHAT THIS FILMS. The simplest governed thing Wardyn can do: a plain shell
  * command, run unattended in the background, against the workspace video 02
@@ -26,7 +26,7 @@
  *
  * STATE IT INHERITS. Video 02's finished stack: the slugify workspace exists,
  * onboarded WRITABLE on camera (the write grant is what lets this run's file
- * reach the host). record-demo.sh --video 03 does not reset. If the workspace
+ * reach the host). record-demo.sh --video 04 does not reset. If the workspace
  * is missing (a fresh stack, or 02 was never shot here) the beforeAll fails
  * loudly with the staging instruction instead of filming a broken form.
  *
@@ -40,7 +40,7 @@
  * product is broken. It runs against the REAL compose stack on :8080 with a
  * real sandbox.
  *
- * Driven by `scripts/record-demo.sh --video 03`, which globs this exact
+ * Driven by `scripts/record-demo.sh --video 04`, which globs this exact
  * filename and names the take wardyn-03-your-first-run-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
@@ -112,7 +112,7 @@ async function preflight(page: Page): Promise<void> {
   expect(
     items.some((w) => w.name === WORKSPACE_NAME),
     `no "${WORKSPACE_NAME}" workspace on this stack — video 03 runs against the one video 02 onboards. ` +
-      `Shoot 02 first (scripts/record-demo.sh --video 02), or restage it off camera.`,
+      `Shoot 03 first (scripts/record-demo.sh --video 03), or restage it off camera.`,
   ).toBe(true);
   fs.rmSync(path.join(WORKSPACE_PATH, ARTIFACT), { force: true });
 
@@ -242,7 +242,7 @@ test("V03 beat 2 — the envelope", async () => {
   // wording deliberately tier-agnostic so it stays true at whichever barrier
   // this host defaults to at take time (series ruling S4).
   await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
-  await caption(page, "The barrier row rides along from video one — any tier, exactly the same governance.");
+  await caption(page, "The barrier row rides along from video two — any tier, exactly the same governance.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -383,7 +383,7 @@ test("V03 beat 4 — the receipts", async () => {
   // VERIFY at rehearsal: kernel.sensor.blind must actually read true for the
   // barrier this take's run used — reword or drop the line if it doesn't
   // (series ruling S4: don't outrun what the screen shows).
-  await caption(page, "kernel.sensor.blind is Wardyn noting its kernel eye can't see this barrier — video ten's subject.");
+  await caption(page, "kernel.sensor.blind is Wardyn noting its kernel eye can't see this barrier — video twelve's subject.");
   await beat(page, PACE.read);
 });
 
@@ -402,10 +402,10 @@ test("V03 conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "Everything else in this series is the same shape with more inside the envelope.");
   await beat(page, PACE.read + 400);
-  await caption(page, "Next: put an agent in the box, and drive it yourself.");
+  await caption(page, "Next: before an agent gets a real job — watch this boundary stop things, on purpose.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 04: Interactive runs");
+  await silentCard(page, "Next — 05: What it stops");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

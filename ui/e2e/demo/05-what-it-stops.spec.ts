@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 05 of the 0.5 series — "What it stops".
+ * Video 05 of the series — "What it stops".
  *
  * INTERIM FILENAME. This file is "05a-what-it-stops.spec.ts", not
  * "05-what-it-stops.spec.ts": the current 05-autonomous-agent.spec.ts still
@@ -464,5 +464,5 @@ test("V05a act 3 — conclusion", async () => {
   await caption(page, "Next: hand one of these boxes a real job, and watch it live, interactively.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 04: Interactive runs");
+  await silentCard(page, "Next — 06: Interactive runs");
 });

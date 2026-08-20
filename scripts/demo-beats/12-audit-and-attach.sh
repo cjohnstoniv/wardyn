@@ -557,7 +557,7 @@ drive() {
   # live token), so this proof can only run from the driver's own host shell —
   # never from inside one of the three panes above. VERIFIED LIVE: this
   # endpoint answers a bad bearer with 401.
-  say "Video four's stolen decoy, tried for real, from outside the boundary."
+  say "Video six's stolen decoy, tried for real, from outside the boundary."
   type_cmd "curl -s -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/models -H 'authorization: Bearer sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token'"
   say "Four-oh-one. Anthropic has never heard of it — that is the whole design."
 

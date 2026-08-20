@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 8 of the 0.5 series — Policies & confinement tiers.
+ * Video 08 of the series — Policies & confinement tiers.
  *
  * WHAT THIS FILMS. Two halves of one idea. First the HONESTY of the barrier
  * picker: Settings' Host card names, per tier, whether this machine can build
@@ -522,7 +522,7 @@ test("B2 — create a policy", async () => {
 
   await caption(page, "Two hosts allowed. Anything unlisted is held for your approval.");
   await beat(page, PACE.read);
-  await caption(page, "wait_for_review is the hold from video seven — and the CCs are Fence, Wall, Vault, by number.");
+  await caption(page, "wait_for_review is the hold you watched in episode seven — and the CCs are Fence, Wall, Vault, by number.");
   await beat(page, PACE.read + 300);
   await caption(page, "Min confinement class is the floor — the weakest barrier this policy accepts.");
   await beat(page, PACE.read);
@@ -821,7 +821,7 @@ test("B4 — launch, effective policy", async () => {
   // The plan's outro said "Next: Record Mode" under the OLD numbering, where
   // this was V06. Under the restructure this is 08 and Record Mode already
   // shipped as 06 — 09 is ci-and-headless, so the hand-off goes there.
-  await caption(page, "Next: the same guarantees with nobody watching — Wardyn inside a CI pipeline.");
+  await caption(page, "Next: stop writing the policy at all — record a run, and let it write itself.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

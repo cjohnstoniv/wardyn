@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 04 of the 0.5 series — "Interactive runs".
+ * Video 06 of the series — "Interactive runs".
  *
  * WHAT THIS FILMS. Video 03's run needed nobody; this one is the opposite: an
  * interactive agent run you drive by hand. The take launches it through the
@@ -55,7 +55,7 @@
  * This is NOT a test. It asserts only enough to keep itself honest and to
  * know when to advance. It runs against the REAL compose stack on :8080.
  *
- * Driven by `scripts/record-demo.sh --video 04`, which globs this exact
+ * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
  * filename and names the take wardyn-04-interactive-runs-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
@@ -304,7 +304,7 @@ test("V04 beat 3 — the decoy", async () => {
   // Forward promise: the proof needs a shell OUTSIDE the sandbox (an in-box
   // curl would be upgraded by the proxy, which terminates TLS here) — video
   // ten's host-terminal lane carries it.
-  await caption(page, "Video ten steals it for real — watches Anthropic refuse it.");
+  await caption(page, "Video twelve steals it for real — watches Anthropic refuse it.");
   await beat(page, PACE.read);
   const credentialsCard = page
     .getByRole("heading", { name: "Credentials", level: 2 })
@@ -318,7 +318,7 @@ test("V04 beat 3 — the decoy", async () => {
   await beat(page, PACE.read);
   const barrierBadge = page.getByText(/^(Fence|Wall|Vault)$/).first();
   await spotlight(page, barrierBadge);
-  await caption(page, "And that is exactly the wall you sized in video one — Fence, Wall, or Vault.");
+  await caption(page, "And that is exactly the wall you sized in video two — Fence, Wall, or Vault.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -440,7 +440,7 @@ test("V04 beat 5 — on the record", async () => {
   // be falsified by whichever state this stack is in at take time.
   const groundTruthChip = page.getByText(/Ground truth · (unavailable|degraded)/);
   await spotlight(page, groundTruthChip);
-  await caption(page, "Ground truth dark is the kernel sensor being honest on this barrier — video ten's subject.");
+  await caption(page, "Ground truth dark is the kernel sensor being honest on this barrier — video twelve's subject.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 });
@@ -458,12 +458,12 @@ test("V04 conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "The box held a decoy. The proxy held the key. The model answered anyway.");
   await beat(page, PACE.read);
-  await caption(page, "So a compromised agent has nothing to steal — which was the promise from video one.");
+  await caption(page, "So a compromised agent has nothing to steal — which was the promise from video two.");
   await beat(page, PACE.read + 400);
   await caption(page, "Next: take your hands off the wheel — an autonomous agent, doing real work.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 05: Autonomous agent");
+  await silentCard(page, "Next — 07: Autonomous agent");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

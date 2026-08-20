@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 06 of the 0.5 series — RECORD MODE.
+ * Video 09 of the series — RECORD MODE.
  *
  * The moat feature, filmed end to end: record one open session, let Wardyn
  * synthesize a least-privilege policy from what the kernel and the proxy
@@ -44,8 +44,8 @@
  * ffwdEnd fires the instant the awaited state lands, BEFORE the next caption,
  * so every beat the viewer is meant to watch plays at human speed.
  *
- * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
- * filename and names the take wardyn-06-record-a-run-<stamp>.mp4 (docs/README.md
+ * Driven by `scripts/record-demo.sh --video 09`, which globs this exact
+ * filename and names the take wardyn-09-record-a-run-<stamp>.mp4 (docs/README.md
  * already links that asset). Do not rename the file. It self-skips without
  * WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a headed browser at a
  * developer's live stack and start recording sessions in it.
@@ -321,7 +321,7 @@ test("cold open + B1 — the card that learns", async () => {
   await spotlight(page, workspaceRow);
   await caption(page, "So don't. Run it once, watched, and let Wardyn write the policy.");
   await beat(page, PACE.read + 600);
-  await caption(page, "A third workspace, staged ahead — the same Add-workspace flow as video two.");
+  await caption(page, "A third workspace, staged ahead — the same Add-workspace flow as video three.");
   await beat(page, PACE.read);
 
   await act(page, workspaceRow);
@@ -831,7 +831,7 @@ test("B6 — the unseen host", async () => {
       `The whole video is that decision; re-run the take.`,
   ).toBe("held");
 
-  await caption(page, "example.com again — video five's approval was scoped to that run, and died with it.");
+  await caption(page, "example.com again — episode seven's approval was scoped to that run, and died with it.");
   await beat(page, PACE.read);
 
   // Decide it on camera and QUICKLY. The hold expires after 30s

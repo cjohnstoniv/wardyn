@@ -15,18 +15,18 @@
 #   scripts/record-demo.sh --silent      # no narration (captions still render)
 #   scripts/record-demo.sh --video 03    # record ONE video of the 0.5 series
 #                                        # (ui/e2e/demo/03-*.spec.ts)
-#   scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+#   scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 #                                        # film host-shell beats instead of (or
 #                                        # before) the browser ones
 #
 # THE SERIES. --video <nn> records a single video instead of the whole
 # walkthrough: it picks ui/e2e/demo/<nn>-*.spec.ts as the only spec to run and
-# names the output after it (wardyn-<nn>-<slug>-<stamp>.mp4). Only video 01 —
+# names the output after it (wardyn-<nn>-<slug>-<stamp>.mp4). Only video 02 —
 # and the no-flag walkthrough, which starts from nothing by definition — wipes
 # the stack first. Every other video opens on state an earlier video left
 # behind (a workspace, a run, a permanent grant), so a reset there does not
 # just cost minutes of dead air, it films the wrong thing. Pass --reset to
-# override that, --no-reset to opt 01 out. See docs/DEMO-SCRIPT.md.
+# override that, --no-reset to opt 02 out. See docs/DEMO-SCRIPT.md.
 #
 # BY DEFAULT the video is the console only, recorded by the browser ITSELF
 # (Playwright recordVideo) — no screen grab, so nothing you do on this machine
@@ -36,9 +36,9 @@
 # the front. That segment IS a screen grab of a fixed rectangle and has twice
 # captured whatever the operator was doing instead; clear the corner first.
 #
-# THE TERMINAL LANE. Two videos of the series have no page to film: V09 (CI &
+# THE TERMINAL LANE. Two videos of the series have no page to film: V11 (CI &
 # headless) is a policy file, a `scripts/ci-run.sh` invocation, its exit code and
-# its artifacts; V10 (audit & attach) is three terminals holding an ssh session
+# its artifacts; V12 (audit & attach) is three terminals holding an ssh session
 # each. --terminal-script <path> runs that script under the SAME gdigrab capture
 # Act 0 uses, with scripts/demo-typist.sh giving it say/type_cmd/beat/chapter —
 # the terminal's answer to ui/e2e/demo/overlay.ts, narration included. A video
@@ -92,7 +92,7 @@ VIDEO="${WARDYN_DEMO_VIDEO:-}"
 # browser lane alone, which is every video the series has shot so far.
 TERMINAL_SCRIPT="${WARDYN_DEMO_TERMINAL_SCRIPT:-}"
 # Whether a reset was actually ASKED for. DO_RESET's default is per-video (only
-# 01 wipes the stack, see below) and a typed flag has to beat that default in
+# 02 wipes the stack, see below) and a typed flag has to beat that default in
 # both directions — otherwise `--video 05 --reset` would silently not reset.
 RESET_EXPLICIT=0
 # A while/shift loop, not `for arg in "$@"`: --video takes a value, and the for
@@ -110,8 +110,8 @@ while [[ $# -gt 0 ]]; do
     # stack wipe nobody asked for.
     --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
     --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
-    --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
-    --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
+    --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
+    --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
     # Pattern-bounded rather than a line count: this header grows, and a stale
     # `4,39p` silently truncates --help to something that no longer mentions the
     # flag the reader came for.
@@ -121,23 +121,24 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# The clean slate belongs to video 01 alone. Every later video opens on state
-# an earlier one left behind — the workspace it onboarded, the run it launched,
-# the host it permanently granted — so wiping the stack before, say, video 03
-# does not merely cost minutes of dead air: it films a story whose first half
-# never happened. An explicit --reset/--no-reset always wins.
-if [[ -n "${VIDEO}" && "${VIDEO}" != "01" && "${RESET_EXPLICIT}" == 0 ]]; then
+# The clean slate belongs to video 02 alone (Set up the host — the series'
+# from-nothing take). Every later video opens on state an earlier one left
+# behind — the workspace it onboarded, the run it launched, the host it
+# permanently granted — so wiping the stack before, say, video 04 does not
+# merely cost minutes of dead air: it films a story whose first half never
+# happened. An explicit --reset/--no-reset always wins.
+if [[ -n "${VIDEO}" && "${VIDEO}" != "02" && "${RESET_EXPLICIT}" == 0 ]]; then
   DO_RESET=0
 fi
 
-# Video 00 (the primer) is a slides-lane take: a local HTML deck over file://,
+# Video 01 (the primer) is a slides-lane take: a local HTML deck over file://,
 # recorded like any console take but touching NO product surface. It needs no
 # stack, no workspace, no model token — and it must never gate on (or mutate)
 # whatever happens to be answering :8080, which is not necessarily the series
 # stack (a quickstart squatting the port with bearer auth killed a rehearsal
 # at the subscription-connect step for a video that never uses the model).
 STACKLESS=0
-[[ "${VIDEO}" == "00" ]] && STACKLESS=1
+[[ "${VIDEO}" == "01" ]] && STACKLESS=1
 [[ "${STACKLESS}" == 1 ]] && DO_RESET=0
 
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }
@@ -196,11 +197,11 @@ SLUG=""
 # beside it now, so an empty filter would run all eleven back to back into one
 # recording, after a reset-all wiped the state the later ones expect to inherit.
 PW_FILTER=("walkthrough.spec.ts")
-# Whether the browser lane runs at all. A terminal-only video (V09/V10 before
+# Whether the browser lane runs at all. A terminal-only video (V11/V12 before
 # their browser halves exist) has no spec to hand Playwright.
 RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
-  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..10), got: ${VIDEO}"
+  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..12), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.
@@ -445,7 +446,7 @@ if [[ "${DO_RESET}" == 1 ]] || ! curl -fsS --max-time 5 "http://localhost:${WARD
 else
   step "Act 0 · stack already up"
   log "healthz answered on :${WARDYN_UP_PORT:-8080} and no reset was asked for — reusing it"
-  log "(pass --reset to rebuild, which is what video 01 does)"
+  log "(pass --reset to rebuild, which is what video 02 does)"
 fi
 
 step "Act 0 · Model access"

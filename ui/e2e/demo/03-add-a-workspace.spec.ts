@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 02 of the 0.5 series — "Add a workspace".
+ * Video 03 of the series — "Add a workspace".
  *
  * WHAT THIS FILMS. Video one ended on a governed host with nothing to work on.
  * This video hands it something: it teaches what a workspace IS (the one
@@ -36,7 +36,7 @@
  *
  * STATE IT INHERITS. Video 01's finished stack: model connected, funnel demos
  * done, NO workspaces and NO secrets (video 01 no longer onboards anything).
- * record-demo.sh --video 02 does not reset, and re-materializes the slugify
+ * record-demo.sh --video 03 does not reset, and re-materializes the slugify
  * fixture on disk every take. resetFixtures() below deletes whatever a PRIOR
  * take of THIS video left (the slugify workspace row, the demo secret) so the
  * take always films a real creation.
@@ -54,7 +54,7 @@
  * when to advance; a failure here means the recording is wrong, not that the
  * product is broken. It runs against the REAL compose stack on :8080.
  *
- * Driven by `scripts/record-demo.sh --video 02`, which globs this exact
+ * Driven by `scripts/record-demo.sh --video 03`, which globs this exact
  * filename and names the take wardyn-02-add-a-workspace-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a
@@ -308,7 +308,7 @@ test("V02 beat 3 — what it remembers", async () => {
   // Persona round 1: this red banner owned the page for 25-90s here, unnamed
   // — every persona flagged it. Name it once, then move on to the ledger.
   await spotlight(page, page.getByText(/Open recording on Fence/).locator(".."));
-  await caption(page, "That red panel is Record Mode printing its own worst case — video six's subject.");
+  await caption(page, "That red panel is Record Mode printing its own worst case — episode nine's subject.");
   await beat(page, PACE.read);
   await caption(page, "Nothing records until you start it.");
   await beat(page, PACE.read);
@@ -434,7 +434,7 @@ test("V02 conclusion", async () => {
   await caption(page, "Next: a run, in this workspace, doing real work under those rules.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 03: Your first run");
+  await silentCard(page, "Next — 04: Your first run");
 });
 
 /**

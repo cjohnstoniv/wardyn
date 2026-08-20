@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 01 of the 0.5 series — "Getting started".
+ * Video 02 of the series — "Set up the host".
  *
  * WHAT THIS FILMS. One command has already brought a control plane up on this
  * machine; nothing has been configured and nothing has run. The take opens on
@@ -173,7 +173,7 @@ test("V01 act 1 — cold open, first light", async () => {
   await spotlight(page, null);
   await caption(page, "This series is for whoever has to sign off on that.");
   await beat(page, PACE.read);
-  await caption(page, "Video one: from nothing to a governed host, with the guardrails proved on camera.");
+  await caption(page, "Video two: from nothing to a governed host, with the guardrails proved on camera.");
   await beat(page, PACE.read);
 
   // B1 — the hero, then the LIVE host chips under it. The chips are the honest
@@ -430,5 +430,5 @@ test("V01 act 3 — conclusion", async () => {
   await caption(page, "Run anything. Keep your keys.");
   await beat(page, PACE.chapter);
   await caption(page, "");
-  await silentCard(page, "Next — 02: Add a workspace");
+  await silentCard(page, "Next — 03: Add a workspace");
 });

@@ -18,7 +18,7 @@
  * demo project and overlay as every console take — the recording is the page,
  * the caption bar is spoken by the narrator, the ring points at slide
  * elements. The compose stack is NOT touched: no run, no workspace, no model.
- * Take with the default no-reset (record-demo.sh only resets for --video 01).
+ * Take with the default no-reset (record-demo.sh only resets for --video 02).
  *
  * NUMBERING. Interim 00 — the approved 12-episode renumber lands as one
  * mechanical commit later; this spec becomes 01 there and every old spec

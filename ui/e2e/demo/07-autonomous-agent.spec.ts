@@ -6,7 +6,7 @@
 /*
  * V05 — Autonomous agent.
  *
- * The second video of the 0.5 series. V01 stood the stack up, walked the
+ * Video 07 of the series — the autonomous agent. The setup episode stood the stack up, walked the
  * Getting Started funnel and onboarded a workspace; nothing has yet RUN inside
  * the boundary. This film is that: one real agent run, named, confined to a
  * single host, held once at the proxy on camera, finishing with a diff of the
@@ -45,7 +45,7 @@
  *    because the rail renders "No model provider is connected…" and beat 6
  *    spotlights that rail on camera.
  *  - Per SV16/SV20 this take is shot after V04's interactive take (the quota window), so it
- *    is recorded with `scripts/record-demo.sh --video 05 --no-reset`. A reset
+ *    is recorded with `scripts/record-demo.sh --video 07 --no-reset`. A reset
  *    would destroy V08's reused run, the connected model lane and the SSH host
  *    key. Hygiene inside the window is DA5's workspace-scoped clearing only —
  *    which is exactly what this file's beforeAll does.
@@ -54,7 +54,7 @@
  * the rest of the suite: a copy change breaks this loudly and in one place,
  * markup churn does not break it at all.
  *
- * Driven by scripts/record-demo.sh --video 05 (it globs 05-*.spec.ts and names
+ * Driven by scripts/record-demo.sh --video 07 (it globs 07-*.spec.ts and names
  * the take wardyn-05-autonomous-agent-<stamp>.mp4 — docs/README.md links that
  * exact asset name, so this FILENAME IS LOAD-BEARING).
  */
@@ -130,7 +130,7 @@ const MOUNT_TARGET = "/home/agent/work";
 // listed here rather than in a shoot-day note because a precondition that
 // lives only in prose gets forgotten:
 //
-//   1. Record with `scripts/record-demo.sh --video 05 --no-reset` (SV20). The
+//   1. Record with `scripts/record-demo.sh --video 07 --no-reset` (SV20). The
 //      harness re-materializes ~/wardyn-demo/slugify from the fixture on EVERY
 //      invocation regardless of --no-reset, so the on-disk workspace is always
 //      virgin; what --no-reset protects is V08's run and the model lane.
@@ -620,7 +620,7 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // Five videos on screen and never once named — the run's own identity,
   // minted at start and revoked at the end, sitting quietly in the rail.
   await spotlight(page, identityCard);
-  await caption(page, "And the run's own identity — minted at start, revoked at the end. Video ten reads it back.");
+  await caption(page, "And the run's own identity — minted at start, revoked at the end. Video twelve reads it back.");
   await beat(page, PACE.read);
 
   // The "watch the tape" promise, moved here from B7 (where its leisure once
@@ -837,7 +837,7 @@ test("V05 beat 10 — borrowed, never held", async () => {
     ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
     : undefined;
 
-  await caption(page, "One more claim from video two to close out: a secret a run borrows, but never holds.");
+  await caption(page, "One more claim from video three to close out: a secret a run borrows, but never holds.");
   await beat(page, PACE.read);
 
   // Launched via the API — the form was this series' videos three and five;
@@ -939,7 +939,7 @@ test("V05 beat 10 — borrowed, never held", async () => {
   await search.click();
   await spotlight(page, null);
   await page.keyboard.type(PROOF_CANARY, { delay: 40 });
-  await caption(page, "Search the trail for the value you watched go in during video two — nothing. That is the design.");
+  await caption(page, "Search the trail for the value you watched go in during video three — nothing. That is the design.");
   await beat(page, PACE.read);
   await expect(page.getByText("No events match these filters.")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).not.toContainText(PROOF_CANARY);
@@ -968,7 +968,7 @@ test("V05 beat 10 — borrowed, never held", async () => {
   await beat(page, PACE.read + 400);
   await caption(page, "A diff on your disk, receipts in the audit trail, and the whole session on tape.");
   await beat(page, PACE.read + 600);
-  await caption(page, "Next: stop writing the policy at all — record a run, and let it write itself.");
+  await caption(page, "Next: stop configuring every run by hand — a policy, written once, that every later run inherits.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

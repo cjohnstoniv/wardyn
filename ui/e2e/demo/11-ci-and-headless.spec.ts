@@ -228,7 +228,7 @@ test("beat 6 — same trail, no human", async () => {
   const appendOnly = page.getByText(/Append-only · \d+ events? for this run/).first();
   await expect(appendOnly).toBeVisible({ timeout: 30_000 });
   await spotlight(page, appendOnly);
-  await caption(page, "Append-only, create through complete — the same rows video three's watched run left. Nobody watched this one.");
+  await caption(page, "Append-only, create through complete — the same rows video four's watched run left. Nobody watched this one.");
   await beat(page, PACE.read + 1200);
   await spotlight(page, null);
 

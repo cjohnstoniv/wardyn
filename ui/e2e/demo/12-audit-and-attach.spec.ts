@@ -8,7 +8,7 @@
  *
  * This video is a HYBRID: beats 1-3 are three real ssh terminals and live in
  * scripts/demo-beats/10-audit-and-attach.sh; beats 4-6 are this file. Both
- * lanes run under one `scripts/record-demo.sh --video 10 --terminal-script
+ * lanes run under one `scripts/record-demo.sh --video 12 --terminal-script
  * scripts/demo-beats/10-audit-and-attach.sh` invocation, and record-demo.sh
  * concatenates them TERMINAL FIRST, then the console. So this file opens on
  * state the beat script left behind and must never re-stage it:
@@ -365,7 +365,7 @@ test("beat 6 — the tape", async () => {
   await beat(page, PACE.read + 1400);
   await spotlight(page, null);
 
-  await caption(page, "And it leaves as a file — video nine's third artifact is this exact trail.");
+  await caption(page, "And it leaves as a file — video eleven's third artifact is this exact trail.");
   await beat(page, PACE.read + 800);
 
   // ----- outro (series finale) -----

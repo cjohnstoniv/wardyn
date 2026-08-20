@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 7 of the 0.5 series — Approvals & egress scopes.
+ * Video 10 of the series — Approvals & egress scopes.
  *
  * WHAT THIS FILMS. One question, answered four ways: an agent reaches for a
  * host nobody allow-listed — who decides, and for how long? The take opens on
@@ -58,7 +58,7 @@
  * product is broken. It runs against the REAL compose stack on :8080 with real
  * sandboxes — the hermetic `-runner none` e2e backend cannot start one at all.
  *
- * Driven by `scripts/record-demo.sh --video 07`, which globs this exact filename
+ * Driven by `scripts/record-demo.sh --video 10`, which globs this exact filename
  * and names the take wardyn-07-approvals-and-egress-<stamp>.mp4 — so this
  * FILENAME IS LOAD-BEARING. It self-skips without WARDYN_DEMO=1 so a bare
  * `pnpm e2e` can never point a browser at a developer's live stack and start
@@ -223,7 +223,7 @@ async function waitUnlessGone(
 //      cards' Start button is disabled without one, and this spec fails loudly
 //      on that rather than clicking a dead button for 45s.
 //   2. The stack has NOT been reset since the earlier videos (record-demo.sh
-//      --video 07 already defaults DO_RESET=0; never pass --reset here).
+//      --video 10 already defaults DO_RESET=0; never pass --reset here).
 //   3. Both hosts are reachable from this machine's egress path — crates.io's
 //      /api/v1/crates/serde must answer 200, or beat 2's payoff assertion fails.
 //   4. No model needed. This video is keyless end to end.
@@ -859,7 +859,7 @@ test("beat 8 — a new run, and nothing to click", async () => {
   // ---- Outro --------------------------------------------------------------
   await caption(page, "Once, this run, until, always. You choose the blast radius.");
   await beat(page, PACE.read + 600);
-  await caption(page, "Next: policies — deciding all of this before the agent ever starts.");
+  await caption(page, "Next: the same guarantees with nobody watching — a pipeline has no hands.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

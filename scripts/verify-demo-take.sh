@@ -14,13 +14,13 @@
 #
 # WHICH take is on the bench comes from WARDYN_DEMO_VIDEO (record-demo.sh
 # --video exports it). Unset means the legacy end-to-end walkthrough, whose
-# checks ARE video 02's — so the default path is byte-for-byte what this script
+# checks ARE the autonomous episode's (07) — so the default path is byte-for-byte what this script
 # always did. The narration and artifact checks at the bottom are SHARED: they
 # run for every take of every video, because "it recorded" and "it has a voice"
 # are claims no video gets to skip.
 #
 #   scripts/verify-demo-take.sh [video.mp4]
-#   WARDYN_DEMO_VIDEO=05 scripts/verify-demo-take.sh video.mp4
+#   WARDYN_DEMO_VIDEO=07 scripts/verify-demo-take.sh video.mp4
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +35,7 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
 
-# Video 02's own checks — the act-5 governance beats, exactly as this script has
+# The autonomous episode's checks (new 07 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
 #
 # A FUNCTION, and deliberately not a subshell or a pipeline: ok()/bad() increment
@@ -687,7 +687,7 @@ rm -f /tmp/_demo_v09.$$
 # below, which only knows the browser lane's narration.json: V09 is a hybrid, and
 # a missing terminal timeline ships beats 1-4 SILENT under a fully narrated
 # browser half with every step of the recorder still exiting 0.
-V09_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-09}/narration-terminal.json"
+V09_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-11}/narration-terminal.json"
 [[ -s "${V09_TL}" ]] && ok "terminal narration timeline present" \
   || bad "no ${V09_TL} — beats 1-4 are silent (demo-typist.sh's default path vs record-demo.sh's per-video dir)"
 
@@ -821,19 +821,19 @@ fi
 # narration block below only knows narration.json (the browser lane), and a
 # missing terminal timeline ships beats 1-3 SILENT under a fully narrated
 # browser half with every step of the recorder still exiting 0.
-V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-10}/narration-terminal.json"
+V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-12}/narration-terminal.json"
 [[ -s "${V10_TL}" ]] && ok "terminal narration timeline present" \
   || bad "no ${V10_TL} — beats 1-3 are silent (the driver runs inside tmux; WARDYN_DEMO_WORK_DIR has to reach it)"
 }
 
 case "${WARDYN_DEMO_VIDEO:-}" in
-  00)
-    head_ "Video 00 · the primer (slides lane)"
+  01)
+    head_ "Video 01 · the primer (slides lane)"
     # No product state to check — the take is a slide deck plus narration; the
     # spec itself asserts the deck rendered and the exhibit image decoded. What
     # can still break silently is the take dying mid-deck, which the cue floor
     # catches (a full read is ~28 lines; a died-early take leaves a fraction).
-    TL00="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-00}/narration.json"
+    TL00="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-01}/narration.json"
     if [[ -s "${TL00}" ]]; then
       N00=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cues",[])))' "${TL00}" 2>/dev/null || echo 0)
       [[ "${N00}" -ge 20 ]] && ok "the deck spoke ${N00} lines (floor 20)" \
@@ -842,20 +842,24 @@ case "${WARDYN_DEMO_VIDEO:-}" in
       bad "no narration timeline at ${TL00}"
     fi
     ;;
-  ""|05) check_video_02 ;;
-  02) check_video_02_workspace ;;
-  03) check_video_03_first_run ;;
-  06) check_video_06_record ;;
-  07) check_video_07_approvals ;;
+  # Final 12-episode numbering (owner-approved renumber): 02 setup (old 01),
+  # 03 workspaces (old 02), 04 first run (old 03), 05 what-it-stops (new),
+  # 06 interactive (old 04), 07 autonomous (old 05), 08 policies, 09 record
+  # (old 06), 10 scopes (old 07), 11 CI (old 09), 12 audit+attach (old 10).
+  ""|07) check_video_02 ;;
+  03) check_video_02_workspace ;;
+  04) check_video_03_first_run ;;
+  09) check_video_06_record ;;
+  10) check_video_07_approvals ;;
   08) check_video_08_policies ;;
-  09) check_video_09 ;;
-  10) check_video_10 ;;
-  01|04)
+  11) check_video_09 ;;
+  12) check_video_10 ;;
+  02|05|06)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..10, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..12, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
