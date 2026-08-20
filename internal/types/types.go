@@ -655,3 +655,71 @@ type SSHPublicKey struct {
 	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
 	CreatedAt   time.Time `json:"created_at"`
 }
+
+// CapabilitySubjectType names WHO a capability grant is written against
+// (migration 0042). Closed and complete — its DB CHECK is pinned against these
+// constants by internal/db's TestClosedEnumChecksMatchConstants.
+type CapabilitySubjectType string
+
+const (
+	// CapabilitySubjectUser is one human, named by either their lowercased OIDC
+	// "sub" or their email — a grant on EITHER matches, so an admin can write
+	// down the identity they actually know rather than the one the IdP prefers.
+	CapabilitySubjectUser CapabilitySubjectType = "user"
+	// CapabilitySubjectGroup is one entry of the login-time union of the ID
+	// token's roles+groups claims (see oidc.Session.Groups). Entra App Roles are
+	// grantable through this without any extra configuration.
+	CapabilitySubjectGroup CapabilitySubjectType = "group"
+	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
+	// that emits no usable groups claim. Subject is "" for this type.
+	CapabilitySubjectAll CapabilitySubjectType = "all"
+)
+
+// Valid reports whether t is one of the three subject types. Used to reject a
+// garbage value at the API write boundary, mirroring ApprovalScope.Valid.
+func (t CapabilitySubjectType) Valid() bool {
+	switch t {
+	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll:
+		return true
+	default:
+		return false
+	}
+}
+
+// CapabilityEffect is a grant's direction. Closed and complete; DENY BEATS
+// ALLOW at resolution time, with no user-vs-group precedence — "Bob's user
+// allow overrode the group deny" is a breach report, not a feature.
+type CapabilityEffect string
+
+const (
+	CapabilityAllow CapabilityEffect = "allow"
+	CapabilityDeny  CapabilityEffect = "deny"
+)
+
+// Valid reports whether e is allow or deny.
+func (e CapabilityEffect) Valid() bool {
+	return e == CapabilityAllow || e == CapabilityDeny
+}
+
+// CapabilityGrant is one row of the permissioning grant list (migration 0042):
+// "subject S may (or may not) use capability C at value V".
+//
+// Capability is a PLAIN STRING here, not a typed enum, and that is deliberate:
+// the closed kind set lives in exactly one Go slice in internal/api
+// (capabilityKinds) and is validated at the write boundary, so a fifth kind is
+// a constant plus a call site with no schema change. A stored kind this binary
+// does not know is inert — no resolver ever asks for it.
+//
+// Value's meaning is per kind: a host or "*.suffix" for egress_host, an exact
+// secret name / workspace uuid / image ref for the others, and "*" is the
+// per-kind wildcard everywhere.
+type CapabilityGrant struct {
+	ID          uuid.UUID             `json:"id"`
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	Capability  string                `json:"capability"`
+	Value       string                `json:"value"`
+	Effect      CapabilityEffect      `json:"effect"`
+	CreatedAt   time.Time             `json:"created_at"`
+	CreatedBy   string                `json:"created_by,omitempty"`
+}
