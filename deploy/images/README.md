@@ -220,6 +220,7 @@ it and injects it only when forwarding internal API calls.
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
 | `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in; §4/§6 exempt — no git broker) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
+| `vscode/`       | `wardyn/agent-vscode:local`  | `claude` (inherited); adds `code-server` behind the UI-sandbox relay |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
 `claude-code/` and `codex-cli/` are the two user-facing agent harnesses
@@ -244,6 +245,60 @@ opt-in image (`make agent-image-full`) built `FROM wardyn/agent-claude-code:loca
 plus real Go/Python/Rust/JDK+Maven/pnpm toolchains, for workspaces whose import
 Record/Verify setup commands need an actual toolchain rather than the
 toolchain-less core image (which dies "command not found").
+
+`vscode/` is likewise a separate, opt-in image (`make agent-image-vscode`)
+built `FROM wardyn/agent-claude-code:local` plus a pinned, sha256-verified
+`code-server` — see "UI-sandbox image (`vscode/`)" below for the launcher
+contract and BYOI table.
+
+---
+
+## UI-sandbox image (`vscode/`)
+
+`vscode/` exists for the UI-sandbox relay (`docs/UI-SANDBOXES.md`,
+`internal/api/uigateway.go`): a run whose policy declares a `ui_apps` entry
+named `"vscode"` (`RunPolicySpec.ui_apps`, see `docs/POLICIES.md`) gets that
+entry relayed to a browser over the existing exec lane — a governed,
+ticket-gated HTTP proxy to a declared sandbox loopback port, never a new
+network path out of the sandbox. `code-server --auth none --bind-addr
+127.0.0.1:8080` is safe specifically *because* nothing else can reach that
+port and every relay hop is gated by its own ticket/cookie/origin controls;
+`--auth none` would be unsafe on any port with a route in from outside the
+relay.
+
+### Launcher contract (BYOI)
+
+The relay never runs a command string from policy — it execs a *convention*
+path, `/usr/local/bin/wardyn-ui-<app-name>`, with **no arguments and no
+tty**, backgrounded by the caller once it starts listening
+(`internal/api/uigateway.go`'s `uiLauncherScript`). Any image — including a
+BYOI one — can serve a declared app by shipping a launcher at that path:
+
+| Requirement | What `vscode/`'s launcher (`deploy/images/vscode/wardyn-ui-vscode`) does |
+|---|---|
+| Path | `/usr/local/bin/wardyn-ui-vscode` (app name `vscode`, matching the policy's `ui_apps[].name`) |
+| Invocation | No args, no tty; reads nothing from stdin, discards stdout/stderr |
+| Must bind | `127.0.0.1:<declared port>` (`8080` here) within `WARDYN_UI_SANDBOX` polling window — the gateway polls up to 20s before giving up |
+| Lifetime | Foreground process; the caller backgrounds it (`&`) and it is reparented to the sandbox's PID 1 — it must not `setsid`/daemonize itself, or it outlives the poll with nothing tracking it |
+| `--help` | Exits 0 (not part of the runtime contract — kept only so the image is sanity-checkable standalone: `docker run --rm --entrypoint /usr/local/bin/wardyn-ui-vscode <image> --help`) |
+| Missing binary | Not this image's concern — the gateway's own probe exits 3 and the console shows a frozen "no UI launcher in this image" error naming the path (`docs/design/ui-sandboxes-prompt.md` §7) |
+
+A BYOI image registers under its own agent name in `WARDYN_AGENT_IMAGES` (Raw
+path, see "Bring your own image" below) and ships its own
+`/usr/local/bin/wardyn-ui-<name>` for whatever app it declares — the wrapped
+BYOI path does NOT add one for you, since the app name and port are policy
+authored per run, not fixed at wrap time.
+
+### Size delta
+
+Measured locally (`docker image inspect --format '{{.Size}}'`), your numbers
+will vary with the pinned `code-server` version and base-layer drift:
+
+| Image | Size |
+|---|---|
+| `wardyn/agent-claude-code:local` (base) | 336.6 MiB |
+| `wardyn/agent-vscode:local` | 564.8 MiB |
+| **Delta (code-server + launcher)** | **+228.3 MiB (≈239 MB)** |
 
 ---
 
