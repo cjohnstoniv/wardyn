@@ -114,7 +114,14 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Anything your shell can do, it can do.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#s2-eager"));
-  await caption(page, "Not malicious — eager, fast, unsupervised at two in the morning. And a poisoned dependency, or a prompt injection riding a page it fetched, steers those same hands.");
+  await caption(page, "Not malicious — eager, fast, unsupervised at two in the morning.");
+  await beat(page, PACE.read);
+  // The one term that is genuinely NEW with agents gets an on-screen home —
+  // spoken-only at pace, it was the single un-glossed word three round-6
+  // personas flagged (and the first word out of a security team's mouth).
+  await unhide(page, "s2-pi");
+  await spotlight(page, page.locator("#s2-pi"));
+  await caption(page, "And a poisoned dependency — or a prompt injection: instructions hidden in a page or file the agent reads — steers those same hands.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
