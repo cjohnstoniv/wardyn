@@ -418,6 +418,20 @@ the operator gets asked again, not that the host becomes forbidden from then
 on. Nothing sweeps this server-side; the proxy enforces `T`, and the console
 derives the "expired" badge client-side from the same timestamp.
 
+**Which hosts a member may decide at all is a separate gate, sitting above
+scope.** Once an admin enforces the `egress_host` capability
+([OPERATIONS.md](OPERATIONS.md) → "Capabilities: what one member, or one
+group, may do"), a member deciding an `egress_domain` approval must hold a
+grant covering the approval's **own** requested host — never a host the client
+sent — or the decision is refused with a `403` (`authorizeMemberDecision`,
+`internal/api/approvals.go`). It is checked after the approval's kind and the
+run's ownership are both proven, so it discloses nothing the member didn't
+already know, and before any of the scope rules here run. Admins, the admin
+token, and local mode are exempt, and with the kind unenforced nothing changes
+at all. The same grants bound which hosts survive on that member's own
+`inline_policy` allowlist, so the decide side and the launch side cannot
+disagree about a host.
+
 **`always` persists to the workspace and is operator-only — checked before
 the run is even confirmed to reference a workspace at all.** A member who
 owns the run may still pick `once`, `run`, or `until`, but is refused

@@ -214,6 +214,16 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		{"approvals", "decision_scope", stringSet(
 			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
 		)},
+		// 0042's two closed enums. capability_grants.capability is deliberately
+		// NOT here: it carries no CHECK at all (the kind set is one Go slice in
+		// internal/api, validated at the write boundary) — see the migration.
+		{"capability_grants", "subject_type", stringSet(
+			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
+			string(types.CapabilitySubjectAll),
+		)},
+		{"capability_grants", "effect", stringSet(
+			string(types.CapabilityAllow), string(types.CapabilityDeny),
+		)},
 		// base_images.kind has no typed Go enum (types.BaseImageEntry.Kind is a
 		// plain string — internal/types/workspace_contract.go) and is validated
 		// ad hoc in internal/api/base_images.go, so this literal list IS the

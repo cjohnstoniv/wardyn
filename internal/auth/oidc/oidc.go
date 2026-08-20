@@ -50,7 +50,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -136,6 +135,30 @@ type Session struct {
 	Email  string    `json:"email"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
+	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity: the
+	// normalized union of the ID token's "roles" and "groups" claims (see
+	// sessionGroups). It is what a `group`-subject capability grant matches
+	// against — folding Entra App Roles in for free, since those arrive on
+	// "roles" and are the claim an Entra admin can actually assign.
+	//
+	// It is a SNAPSHOT and nothing refreshes it: a group added at the IdP
+	// reaches Wardyn on the human's next login, and that ceiling is published
+	// rather than hidden (grants themselves resolve per request from the DB, so
+	// only MEMBERSHIP is stale, never the grant list).
+	//
+	// NO omitempty, deliberately. nil and empty must stay distinguishable
+	// across the cookie round trip: a PRE-0.6 cookie has no groups key at all
+	// and decodes to nil ("we never asked"), while a 0.6 login with no groups
+	// encodes `[]` and decodes to an empty non-nil slice ("we asked, there were
+	// none"). That is the ONLY signal for groups_snapshot_stale — with
+	// omitempty both cases would encode identically and a member holding a
+	// pre-upgrade cookie would be told their group grants simply do not apply.
+	// The cost is 12 bytes of cookie.
+	//
+	// decodeSession is deliberately NOT widened to require this field: a
+	// pre-0.6 cookie stays VALID and nobody is forced to re-login by an
+	// upgrade.
+	Groups []string `json:"groups"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -387,12 +410,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// (6) Create a Wardyn session.
+	// (6) Create a Wardyn session. Groups is stamped from the SAME two
+	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
+	// enough to contribute nothing to the role contributes nothing here either,
+	// and never fails the login.
 	sess := Session{
 		Sub:    idToken.Subject,
 		Email:  claims.Email,
 		Role:   role,
 		Expiry: idToken.Expiry,
+		Groups: sessionGroups(rc.Roles, gc.Groups),
 	}
 	if sess.Expiry.IsZero() {
 		// Default to 1 hour if the IdP didn't set an expiry.
@@ -470,6 +497,24 @@ func RoleFromContext(ctx context.Context) string {
 	return r
 }
 
+// GroupsFromContext returns the login-time group snapshot of the session
+// Middleware verified — the subjects a `group` capability grant matches.
+//
+// NIL AND EMPTY MEAN DIFFERENT THINGS and callers must keep them apart. Empty
+// non-nil: this session was minted by 0.6+, the IdP sent no usable group
+// identity, and group grants genuinely do not apply. Nil: either there is no
+// SSO session at all, or the human is holding a PRE-0.6 cookie that predates
+// the field — group grants cannot be evaluated for them until they log in
+// again, which is what internal/api surfaces as groups_snapshot_stale rather
+// than silently reporting "no groups".
+//
+// Same DERIVES-not-ENFORCES split as RoleFromContext: this package carries the
+// snapshot, internal/api decides what it permits.
+func GroupsFromContext(ctx context.Context) []string {
+	g, _ := ctx.Value(groupsCtxKey{}).([]string)
+	return g
+}
+
 // ─── session encoding ────────────────────────────────────────────────────────
 
 // encodeSession JSON-encodes the session, appends an HMAC-SHA256 tag, and
@@ -541,176 +586,6 @@ func sessionHMAC(key, payload []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(payload)
 	return h.Sum(nil)
-}
-
-// ─── role derivation ─────────────────────────────────────────────────────────
-
-// Wardyn roles a session can carry. See Session.Role / Config.RoleMap.
-const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
-)
-
-// ValidRole reports whether s is a recognized role value. Used to validate
-// WARDYN_OIDC_ROLE_MAP entries (ParseRoleMap) and WARDYN_OIDC_DEFAULT_ROLE
-// (cmd/wardynd, at boot) — both fail closed on a typo rather than letting a
-// garbage role value silently reach a session cookie.
-func ValidRole(s string) bool {
-	return s == RoleAdmin || s == RoleMember
-}
-
-// ParseRoleMap parses WARDYN_OIDC_ROLE_MAP: a comma-separated list of
-// "value=role" pairs, e.g.
-// "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin". value is matched
-// case-insensitively against an ID token's roles/groups claims or its email
-// (see deriveRole); role must be RoleAdmin or RoleMember. Empty/blank input
-// returns a nil map (role derivation disabled — Config.RoleMap's empty
-// behavior) and no error; non-empty input that yields no usable entry (e.g.
-// "," or a single malformed pair) is an error, never a silent nil — nil means
-// "everyone is admin" (deriveRole), which must never be an accident.
-func ParseRoleMap(csv string) (map[string]string, error) {
-	csv = strings.TrimSpace(csv)
-	if csv == "" {
-		return nil, nil
-	}
-	out := make(map[string]string)
-	for _, pair := range strings.Split(csv, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		k, v, cut := strings.Cut(pair, "=")
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if !cut || k == "" {
-			return nil, fmt.Errorf("malformed entry %q: want value=role", pair)
-		}
-		if !ValidRole(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q or %q)", pair, v, RoleAdmin, RoleMember)
-		}
-		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
-		// values before lookup (asciiOnly, the fold-escalation guard), so
-		// this would silently be a dead entry — worse, one that INVERTS
-		// intent under WARDYN_OIDC_DEFAULT_ROLE=admin, where the operator
-		// meant to name this value out for a lesser role but it can never
-		// match and every such login instead gets the default.
-		if !asciiOnly(k) {
-			return nil, fmt.Errorf("entry %q: non-ASCII value can never match (matching is ASCII-only)", pair)
-		}
-		key := strings.ToLower(k)
-		// A duplicate key silently let the LAST entry win — in the
-		// escalating direction when an earlier entry mapped to member and a
-		// later, easy-to-miss duplicate maps the same value to admin. An
-		// operator reading the file top-to-bottom would expect the first
-		// entry to hold; reject instead of guessing which one they meant.
-		if _, dup := out[key]; dup {
-			return nil, fmt.Errorf("entry %q: duplicate value %q (already mapped by an earlier entry)", pair, k)
-		}
-		out[key] = v
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("no valid entries in %q", csv)
-	}
-	return out, nil
-}
-
-// deriveRole computes the Wardyn role for a signed-in human from the ID
-// token's roles/groups claims, their email, and the derivation config
-// (Config.RoleMap / Config.LegacyAdminEmails / Config.DefaultRole). ok is
-// false only when roleMap is non-empty, nothing matched, and defaultRole is
-// empty — the caller (CallbackHandler) must then deny the login.
-//
-// Precedence:
-//  1. An empty roleMap disables claim-based derivation: the role comes from the
-//     legacy operator allowlist alone — an email on legacyAdminEmails is
-//     RoleAdmin, anyone else RoleMember (main's operator/viewer split, preserved
-//     with no role map). With NEITHER a role map nor an allowlist every human is
-//     RoleAdmin (true pre-0.5) — so adopting WARDYN_OIDC_ROLE_MAP is opt-in and
-//     upgrade-safe, and so is running on only WARDYN_OIDC_OPERATOR_EMAILS.
-//  2. Otherwise, build the case-insensitive union of rolesClaim, groupsClaim,
-//     and email, and look each value up in roleMap. ANY match resolving to
-//     RoleAdmin wins over one resolving to RoleMember, no matter which claim
-//     produced it. An email on legacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS)
-//     counts as an additional RoleAdmin match — it wins even over a
-//     RoleMember entry the same email also hits.
-//  3. If nothing matched at all: defaultRole if set, else deny.
-func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, ok bool) {
-	if len(roleMap) == 0 {
-		// No role map: claim-based derivation is disabled, but the legacy
-		// operator allowlist still splits admin from member. WARDYN_OIDC_OPERATOR_EMAILS
-		// is the mandatory-minimum SSO config (validateOperatorPosture) and a role
-		// map is opt-in on top, so honoring the list here is what keeps main's
-		// operator/viewer split working after an upgrade — without this, a 0.4.5
-		// deployment that set only the allowlist would silently promote every
-		// signed-in human to admin. Only when NEITHER is set does every human
-		// default to admin (true pre-0.5, before the operator allowlist existed).
-		if len(legacyAdminEmails) == 0 {
-			return RoleAdmin, true
-		}
-		if emailInList(email, legacyAdminEmails) {
-			return RoleAdmin, true
-		}
-		return RoleMember, true
-	}
-	admin := emailInList(email, legacyAdminEmails)
-	member := false
-	values := make([]string, 0, len(rolesClaim)+len(groupsClaim)+1)
-	values = append(values, rolesClaim...)
-	values = append(values, groupsClaim...)
-	if email != "" {
-		values = append(values, email)
-	}
-	for _, v := range values {
-		if !asciiOnly(v) {
-			continue // fail closed: see asciiOnly
-		}
-		switch roleMap[strings.ToLower(strings.TrimSpace(v))] {
-		case RoleAdmin:
-			admin = true
-		case RoleMember:
-			member = true
-		}
-	}
-	switch {
-	case admin:
-		return RoleAdmin, true
-	case member:
-		return RoleMember, true
-	case defaultRole != "":
-		return defaultRole, true
-	default:
-		return "", false
-	}
-}
-
-// emailInList reports whether email case-insensitively matches an entry in
-// list (mirrors the operator-allowlist match in internal/api's isOperator).
-// email is trimmed here too (each list entry is trimmed below, at the point
-// of comparison) — without trimming email, a padded ID-token claim would
-// silently miss legacyAdminEmails while still matching the role map, whose
-// own lookup (deriveRole's loop) already trims its values.
-func emailInList(email string, list []string) bool {
-	email = strings.TrimSpace(email)
-	if email == "" || !asciiOnly(email) {
-		return false
-	}
-	for _, e := range list {
-		if strings.EqualFold(strings.TrimSpace(e), email) {
-			return true
-		}
-	}
-	return false
-}
-
-// asciiOnly reports whether s contains no rune above ASCII. Case-insensitive
-// matching (ToLower/EqualFold) does Unicode case folding, under which e.g.
-// "roſs" (U+017F) or a KELVIN SIGN "k" (U+212A) MATCHES an ASCII string — the
-// escalating direction (same fold-escalation guard as internal/api's
-// isOperator, applied here to the RoleMap / LegacyAdminEmails match: both are
-// operator-authored ASCII allowlists — WARDYN_OIDC_ROLE_MAP and
-// WARDYN_OIDC_OPERATOR_EMAILS — that a crafted non-ASCII claim must never
-// fold onto).
-func asciiOnly(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -786,12 +661,18 @@ func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
 	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
-// contextWithPrincipal stores the verified session's sub, email, and role on
-// the context (read back via PrincipalFromContext / EmailFromContext /
-// RoleFromContext).
+// contextWithPrincipal stores the verified session's sub, email, role, and
+// group snapshot on the context (read back via PrincipalFromContext /
+// EmailFromContext / RoleFromContext / GroupsFromContext).
+//
+// Groups is stored even when nil, and that is not a wasted WithValue: a nil
+// value and an absent key both read back as nil, so this line costs nothing to
+// get right and keeps contextWithPrincipal free of a special case that would
+// only ever be re-added later.
 func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
+	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	return context.WithValue(ctx, roleCtxKey{}, sess.Role)
 }
 
@@ -815,6 +696,10 @@ type emailCtxKey struct{}
 // roleCtxKey is the context key for the session's derived role.
 // Unexported: use RoleFromContext.
 type roleCtxKey struct{}
+
+// groupsCtxKey is the context key for the session's login-time group snapshot.
+// Unexported: use GroupsFromContext.
+type groupsCtxKey struct{}
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────
 

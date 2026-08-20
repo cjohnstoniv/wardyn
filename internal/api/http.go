@@ -83,6 +83,31 @@ func oidcRoleFromContext(ctx context.Context) string {
 	return r
 }
 
+// oidcGroupsCtxKey carries the login-time group snapshot of the same verified
+// OIDC session (oidc.Session.Groups), published by humanOrAdminAuth next to the
+// principal/email/role and for the same reason those keys exist: the auth
+// middleware stays the single place that trusts the oidc package. It is what a
+// `group`-subject capability grant matches against — see capabilities.go.
+//
+// NIL AND EMPTY ARE DIFFERENT (see oidc.GroupsFromContext). Empty: the IdP sent
+// no usable group identity, and group grants genuinely do not apply. Nil:
+// either there is no SSO session at all, or the human holds a PRE-0.6 cookie
+// that predates the field. A caller that already knows a session is present
+// must read nil as "snapshot unavailable, re-login required" and surface it as
+// groups_snapshot_stale — never as "this human has no groups", which would
+// silently withhold every group grant they hold and be unexplainable from the
+// admin side.
+type oidcGroupsCtxKey struct{}
+
+func withOIDCGroups(ctx context.Context, groups []string) context.Context {
+	return context.WithValue(ctx, oidcGroupsCtxKey{}, groups)
+}
+
+func oidcGroupsFromContext(ctx context.Context) []string {
+	g, _ := ctx.Value(oidcGroupsCtxKey{}).([]string)
+	return g
+}
+
 // errorBody is the uniform JSON error envelope.
 type errorBody struct {
 	Error string `json:"error"`
@@ -272,6 +297,10 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			ctx := withOIDCHuman(r.Context(), sub)
 			ctx = withOIDCEmail(ctx, oidc.EmailFromContext(r.Context()))
 			ctx = withOIDCRole(ctx, oidc.RoleFromContext(r.Context()))
+			// The group snapshot rides along for the capability resolver. Copied
+			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
+			// empty set (see oidcGroupsCtxKey).
+			ctx = withOIDCGroups(ctx, oidc.GroupsFromContext(r.Context()))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -318,7 +347,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// only that they are not an admin.
 			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberCustomImage) —
+			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.

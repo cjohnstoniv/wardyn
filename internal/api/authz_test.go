@@ -128,6 +128,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/site-config/test-redirect":                    {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":                             {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}":                          {class: classAdmin},
+	"GET /api/v1/permissions":                                   {class: classAdmin},
+	"POST /api/v1/permissions/grants":                           {class: classAdmin},
+	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
+	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -143,6 +147,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/capabilities is the member-safe twin of GET /permissions above: it
+	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
+	// it sits on r like every other /me/* read, not operatorOnly.
+	"GET /api/v1/me/capabilities": {class: classMember},
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
@@ -823,6 +831,37 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+
+// ─── capability grants (migration 0042) ───────────────────────────────────
+//
+// authzStore is the one NON-embedding store.Store double in the tree (see this
+// type's doc comment on why it implements every method rather than embedding),
+// so widening Store lands here as six compile errors until they are stubbed.
+//
+// The stubs are honest EMPTY state, not permissive shortcuts: no grants and no
+// enforcement rows is exactly a freshly-upgraded 0.5 deployment, so every route
+// this matrix walks resolves precisely as it did before 0042 existed. That is
+// the state the back-compat proof wants under the authorization matrix; the
+// resolver's own allow/deny/precedence matrix lives in capabilities_test.go
+// with a store double that can actually hold rows.
+func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
+	return g, nil
+}
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
+	return enabled, nil
+}
 
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
 

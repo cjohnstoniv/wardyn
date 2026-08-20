@@ -352,6 +352,9 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 // approval and an OWNED non-egress approval read identically (both 404, no
 // existence oracle either way) — not audited: this is a foreign-shaped 404, not
 // a distinct reachable-surface denial (see THREAT-MODEL.md).
+//
+// Then, and only then, the 0.6 egress_host capability: which hosts a member may
+// decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
 func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
 		ap  types.ApprovalRequest
@@ -377,6 +380,36 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 			s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
 				"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
 		}
+		return ap, run, false, false
+	}
+
+	// The egress_host capability, LAST — after kind and ownership are both
+	// proven, so it can never become the existence oracle the two 404s above
+	// exist to deny: a member who reaches this line already knows the approval
+	// is theirs and which host it asks for. That is also why the refusal is a
+	// 403 rather than another byte-identical 404, exactly as resolveAlwaysTarget
+	// argues for its own operator-only refusal.
+	//
+	// The host is the approval's OWN RequestedScope — never anything the client
+	// sent — so a member cannot pick which value gets checked. An absent or
+	// malformed scope resolves to "", which no allow can cover unless the admin
+	// wrote a `*` grant: fail closed on a shape nobody should be deciding.
+	//
+	// `always` is unaffected: it stays operator-only (rule 6), so a grant here
+	// never promotes a member's decision into durable workspace config.
+	host := approvalHost(ap)
+	allowed, cerr := s.capSeamAllowed(r.Context(), capEgressHost, host)
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+		return ap, run, false, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "you are not granted egress host "+host+
+			" — an admin decides this one, or can grant it to you")
+		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", id.String(), "denied", mustJSON(map[string]any{
+				"reason": "capability_" + capEgressHost, "host": host,
+			})))
 		return ap, run, false, false
 	}
 	return ap, run, true, true

@@ -186,13 +186,15 @@ gated on the role being exactly `admin` (`requireOperator`): the managed
 harness credential, policy create/update/delete, every mutating `/workspaces`
 route (including `approved-egress`/`denied-egress`/`llm-cred`/`requirements`), `PUT
 /site-config` and its connectivity probes, secret write/delete, `GET
-/metrics`, and bringing a custom sandbox image or devcontainer repo to a run
-(`image`/`devcontainer_repo` — `denyMemberCustomImage`, `internal/api/runs_create.go`:
-a member's own onboarded-workspace base image is unaffected, since that path
-is operator-authored at onboarding time, never the member's own free-text
-choice). Launching and killing a run (`POST /runs`, `POST /runs/{id}/kill`)
-stay open to any signed-in human — using the product is a member act by
-design.
+/metrics`, the permissioning routes below, and bringing a custom devcontainer
+repo to a run (`devcontainer_repo` — `denyMemberRequest`,
+`internal/api/runs_create_validate.go`). A custom sandbox `image` is admin-only
+*by default* and is the one power a capability grant can hand a member (see
+"Capabilities" below); a member's own onboarded-workspace base image was never
+gated either way, since that path is operator-authored at onboarding time,
+never the member's own free-text choice. Launching and killing a run (`POST
+/runs`, `POST /runs/{id}/kill`) stay open to any signed-in human — using the
+product is a member act by design.
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches
 their OWN resources the same way an admin reaches any of them
@@ -260,17 +262,171 @@ the ceiling allows, and `workspace_mounts` dropped entirely — a member's
 policy can only ever get MORE restrictive than the operator's default, never
 less. An admin's own `inline_policy` is not clamped.
 
-Every member denial above that isn't a plain foreign-resource 404 is audited
-under `authz.denied` (reasons include `admin_surface`, `byoi_member`,
-`not_owner`) — a 404 on a resource that genuinely doesn't exist stays silent
-by design, matching the no-existence-oracle rule. One exception: the
-`always`-scope 403 above returns before `decide()` reaches any audit call, so
-it is a bare 403 with no audit trail at all, unlike every other denial on
-this list.
+### Capabilities: what one member, or one group, may do
 
-**What's still not built.** No custom roles beyond admin/member, no
-per-resource fine-grained permission model (owner-or-admin only — no
-"read-only share" or "co-owner" concept), no tenant/org columns, no
+The role split above is deployment-wide. A **capability grant** is per-human:
+a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or
+`deny` (`capability_grants`, migration 0042), with a per-kind **enforcement
+switch** beside it (`capability_enforcement`). One sentence is the doctrine,
+and every rule below follows from it: **a capability bounds what the MEMBER
+chose, never what the ADMIN pre-authorized.**
+
+That is why a stored policy, a workspace's own requirements, the hosts a
+workspace scan seeded, the model provider's own egress, and the grant
+`foldRunIntegration`/`applyWorkspaceRequirements` re-add at launch are all left
+untouched no matter what a member does or doesn't hold: narrowing
+admin-authored egress would brick workspace runs at scale, and a member who
+cannot be trusted with a workspace should not be granted the workspace.
+
+**The four kinds** — a closed set, written down once in Go
+(`capabilityKinds`, `internal/api/capabilities.go`) rather than as a schema
+CHECK:
+
+| Kind | Value | Direction | What it bounds, and where |
+|---|---|---|---|
+| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeMemberDecision`, `internal/api/approvals.go`), and which hosts survive on a member's own `inline_policy` allowlist (`narrowMemberInlinePolicy`, `internal/api/inline_policy.go`) |
+| `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, `internal/api/secrets.go`) |
+| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyMemberRequest`, `internal/api/runs_create_validate.go`) |
+| `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+
+`*` as a value matches everything of that kind, spelled the same way for all
+four. `egress_host` values are matched by `entryCoversAny`
+(`internal/api/artifact_redirect.go`) — the *same* matcher that already decides
+whether one allowlist entry covers a host, deliberately not a second one,
+because two host matchers that disagree is how a deny gets bypassed by a port
+suffix. Every other kind is an exact compare: a secret name, a uuid, and an
+image ref are identifiers where a near-miss must not match.
+
+`devcontainer_repo` is **not** a kind and stays unconditionally admin-only. It
+hands attacker-authored build configuration to the image builder, which is not
+a power to hand out one row at a time.
+
+**Precedence — the order is the design** (`capAllowed`, same file):
+
+1. **admin, admin token, and local mode are exempt.** A capability bounds a
+   member; the admin tier is the one writing the grants.
+2. Any matching **deny** ⇒ refused.
+3. Any matching **allow** ⇒ permitted.
+4. The kind is **not enforced** ⇒ permitted.
+5. Otherwise ⇒ refused.
+
+There is no user-over-group precedence: a deny anywhere wins, because "Bob's
+user allow overrode the group deny" is a breach report. Deny sits *above* the
+enforcement switch on purpose — that makes deny rows the adoption on-ramp: you
+can blacklist one host for one contractor without flipping the whole
+deployment fail-closed. A store error is never permission: the request answers
+`500`, not "allowed".
+
+**The widening kind reads the same rows the other way.** For `image`
+(`capGranted`), an unenforced kind is *refused*, not permitted — because 0.5
+refused it too. Both directions obey the same rule, "an upgrade with no
+configuration changes nothing", and land on opposite defaults only because the
+two start from opposite postures. So `image` needs *both* the switch on and an
+exact-ref grant; the other three need only the absence of a deny until you
+enforce them.
+
+**Default posture: an absent enforcement row is off.** A deployment upgraded
+from 0.5 with no rows written behaves byte-for-byte as it did before — this
+whole subsection is inert until an admin turns a kind on, one kind at a time.
+Turning `workspace` on with no grants written is the way to lock every member
+out of every workspace at once; write the grants (or the targeted denies)
+first, then flip the switch.
+
+**Subjects, and the group snapshot's ceiling.** A grant's `subject_type` is
+`user`, `group`, or `all`:
+
+- `user` matches **either** the lowercased OIDC `sub` **or** the email — an
+  admin writing a grant knows one or the other and shouldn't have to guess
+  which one the IdP made authoritative. It widens who an allow hits, and in
+  the direction that matters a deny on either identity also hits.
+- `group` matches the login-time union of the ID token's `roles` and `groups`
+  claims (so Entra App Roles are grantable for free), lowercased and
+  deduped.
+- `all` matches every signed-in human — the baseline for an IdP whose group
+  claims aren't usable.
+
+Group membership is a **snapshot taken at login** and carried in the session
+cookie; grants themselves are read from the database per request, so a new
+grant takes effect on the very next request but a *directory* change does not
+until the human signs in again. The snapshot is capped at 2048 bytes of
+payload (`maxSessionGroupsBytes`, `internal/auth/oidc/derive.go`) so the
+signed cookie stays under the ~4096 bytes a browser will silently drop
+entirely; groups are sorted and dropped **from the end**, so the same human
+loses the same groups on every login instead of a coin flip. That is roughly
+100 typical group names — past that, grant the user directly, or prefer Entra
+App Roles, which arrive on the much smaller `roles` claim. A pre-0.6 session
+cookie carries no groups field at all and stays valid (no forced re-login);
+that state is reported distinctly as `groups_snapshot_stale` on `GET
+/me/capabilities`, because "can't tell yet" and "holds no groups" must not
+read the same.
+
+**What a capability deliberately does not reach.** `always`-scope decisions
+stay operator-only even for a member granted the host — a grant must never
+promote a member's decision into durable workspace config. `GET /workspaces`
+is not narrowed: visibility is not capability, the launch gate is what
+refuses, and hiding the row would only make the refusal unexplainable.
+Machine lanes (`/internal/*`, ground-truth ingest, attach tickets) are
+untouched. And where the operator ceiling sets `allow_all_egress`, the
+allowlist is not the gate at all, so `egress_host` narrowing does nothing
+there — that is the operator's own posture, not a switch that failed.
+
+**Managing them** (all `operatorOnly` except the last):
+
+| Route | Does |
+|---|---|
+| `GET /permissions` | the whole grant table plus every enforcement switch, one call |
+| `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
+| `DELETE /permissions/grants/{id}` | remove one grant |
+| `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
+
+Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
+`capability.enforcement.write`. Enforcement lives in its own table rather than
+in SiteConfig precisely because `PUT /site-config` is a full replace: a stale
+client round-tripping an older document could otherwise silently disable an
+authorization control, which is a fail-open nobody would see.
+
+There is **no cache** — resolution is two indexed reads per check, so a
+grant applies immediately. A process-local cache would be the same HA blocker
+named elsewhere in this document, and a stale permission cache is a security
+bug rather than a slow page.
+
+### Every denial that isn't a 404
+
+Every member denial that isn't a plain foreign-resource 404 is audited under
+`authz.denied`, whose `reason` field is the whole vocabulary:
+
+| `reason` | Raised when | Shape |
+|---|---|---|
+| `admin_surface` | a member requested an admin-only route | `403` |
+| `not_owner` | a member reached a run/approval/recording that exists but isn't theirs | `404` (byte-identical to missing) |
+| `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | `403` |
+| `capability_workspace` | a member named a workspace they aren't granted | `403` |
+| `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | `403`, or a drop |
+| `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | drop |
+
+The three drop rows are why `POST /runs` mostly *narrows* rather than refuses:
+a member whose whole allowlist is ungranted gets a run with no member-authored
+egress, not a `403`, because the run's admin-authored egress is still there and
+is usually what the task needed. Each drop surfaces as a warning in
+preflight/Review before launch **and** as an audit event at launch — one event
+per reason, with the affected values beside it, rather than one per dropped
+host, so a policy naming twenty ungranted hosts reads as the one authorization
+outcome it is. Preflight dry-runs are not audited: Review re-resolves on every
+edit, and a stream of denials for a policy nobody launched is
+indistinguishable from denials that actually bounded a run.
+
+A 404 on a resource that genuinely doesn't exist stays silent by design,
+matching the no-existence-oracle rule. One exception remains: the
+`always`-scope 403 above returns before `decide()` reaches any audit call, so
+it is a bare 403 with no audit trail at all, unlike every other denial here.
+
+**What's still not built.** No custom roles beyond admin/member — capabilities
+narrow (or widen) what a member may reach, they do not add a third role. Only
+the four kinds above are grantable; there is no general per-resource permission
+model (a run is still owner-or-admin only — no "read-only share" or "co-owner"
+concept), no tenant/org columns, no
 separation of duty among admins — every admin (and the admin token, always)
 can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
 residual #14, still open). The SSH gateway has **no admin override** at all
@@ -281,14 +437,16 @@ member would (`docs/SSH.md`'s Bounds section; `threatmodel/THREAT-MODEL.md`
 residual #15). See [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split above, the
-approval broker, and the append-only audit log all ship in the Apache-2.0 build —
-there is no license key, no "Premium" gate, no entitlement check anywhere in the
-tree (`grep -riE 'license.key|premium|enterprise.(only|tier)|entitlement'
-internal/ cmd/` returns nothing), and the gating is completeness-tested:
-`internal/api/rbac_test.go` enumerates all 34 operator-gated routes and fails the
-build if any non-GET `/api/v1` route goes unclassified — a new mutating route
-must either join the gate or be explicitly declared viewer-safe
-(`launchARunAllowlist`). Worth stating plainly,
+capability grants, the approval broker, and the append-only audit log all ship in
+the Apache-2.0 build — there is no license key, no "Premium" gate, no entitlement
+check anywhere in the tree (`grep -riE
+'license.key|premium|enterprise.(only|tier)|entitlement' internal/ cmd/` returns
+nothing), and the gating is completeness-tested: `internal/api/authz_test.go`
+walks every route the router actually registers and fails the build if any one of
+them — all 36 admin-gated routes included — is missing from its `routeMatrix`, so
+a new route must be classified admin/member/owner/anonymous/internal before it can
+ship; `internal/api/rbac_test.go` then proves each of the 24 widest admin-gated
+writes really does 403 a member. Worth stating plainly,
 because the field Wardyn is measured against puts exactly these controls behind a
 license — Coder bundles audit logging and template RBAC into a 30-day **Premium**
 trial, Vault's namespaces and hold-then-resume are Enterprise/HCP, OpenHands gates

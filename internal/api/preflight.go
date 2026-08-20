@@ -70,11 +70,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	// Same member custom-image denial launch runs (runs_create.go's
+	// Same member request-field denial launch runs (runs_create.go's
 	// decodeAndValidateCreateRun): a preflight dry-run must refuse a member's
-	// BYOI/devcontainer_repo request with the SAME 403 create would, not preview
-	// a rosier checklist for a request that would be denied at launch.
-	if s.denyMemberCustomImage(w, r, req) {
+	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
+	// create would, not preview a rosier checklist for a request that would be
+	// denied at launch.
+	if s.denyMemberRequest(w, r, req) {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
