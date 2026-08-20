@@ -12,11 +12,67 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Permissioning: capability grants for a user, a group, or everyone.** An
+  admin can now grant — or deny — one member, one IdP group, or every signed-in
+  human a specific Wardyn capability, on four kinds: `egress_host` (which hosts
+  they may decide an `egress_domain` approval for, and which may survive on
+  their own `inline_policy` allowlist), `secret` (which stored secrets that
+  policy may reference, and which names `GET /secrets` lists back), `workspace`
+  (which onboarded workspace they may launch against), and `image` (which custom
+  sandbox image they may name at all — the one kind that *widens* what a member
+  can do; `devcontainer_repo` stays unconditionally admin-only). Rows live in
+  `capability_grants` with a per-kind enforcement switch in
+  `capability_enforcement` (migration 0042), managed through `GET /permissions`,
+  `POST /permissions/grants`, `DELETE /permissions/grants/{id}` and `PUT
+  /permissions/enforcement` (all admin-only), with `GET /me/capabilities` as the
+  member-safe read of the caller's own effective set. Resolution is deny beats
+  allow beats the switch, with admins, the admin token, and local mode exempt,
+  and no cache (a new grant applies on the next request). **Every switch ships
+  off**: a deployment upgraded from 0.5 with no rows written behaves
+  byte-for-byte as it did before. The doctrine — *a capability bounds what the
+  MEMBER chose, never what the ADMIN pre-authorized* — is why a stored policy, a
+  workspace's requirements, scan-seeded hosts, and the model provider's own
+  egress are never narrowed. See [docs/OPERATIONS.md](docs/OPERATIONS.md) →
+  "Capabilities: what one member, or one group, may do".
+- **An OIDC session now carries the group snapshot its capability grants match**
+  (`internal/auth/oidc`): the union of the ID token's `roles` and `groups`
+  claims, lowercased/deduped/sorted/printable-ASCII, capped at 2048 payload
+  bytes and dropped from the alphabetical end so the truncation is deterministic
+  and the signed cookie stays under the ~4096 bytes a browser silently discards
+  whole. Membership is a login-time snapshot; grants themselves resolve per
+  request. **No forced re-login**: a pre-0.6 cookie has no groups field, stays
+  valid, and is reported distinctly as `groups_snapshot_stale` rather than as
+  "holds no groups".
+
 ### Changed
+
+- **`image` moves from admin-only to grantable, and `workspace` becomes
+  gateable** (`denyMemberRequest`, formerly `denyMemberCustomImage`): a member
+  naming a custom image now needs the `image` kind enforced *and* an exact-ref
+  grant (unenforced still refuses, exactly as 0.5 did), while naming a workspace
+  stays allowed until an admin enforces `workspace`. A member's `inline_policy`
+  is narrowed, after the existing operator clamp, to the hosts and secrets that
+  member personally holds — dropped with a preflight/Review warning, never
+  rejected, so the run still launches on its admin-authored egress — and `GET
+  /secrets` lists a member only the names their own grants cover once `secret`
+  is enforced.
 
 ### Fixed
 
 ### Security
+
+- **A member's dropped secret pairing is now audited, not just warned about.**
+  `filterMemberGrants` drops an `inline_policy` grant that pairs a stored secret
+  with a host the operator never eligible-listed; that drop previously produced
+  a clamp warning and no audit event, so a deliberate exfil *attempt* left no
+  operator-visible trace (a gap [ROADMAP.md](ROADMAP.md) named). It now records
+  an `authz.denied` event with reason `grant_pairing_not_eligible`, aggregated
+  one event per reason with the affected values beside it — never on a preflight
+  dry-run, where a stream of denials for a policy nobody launched would be
+  indistinguishable from denials that actually bounded a run. Capability drops
+  audit the same way (`capability_egress_host`, `capability_secret`), and a
+  capability refusal at launch or at an approval decision audits as
+  `capability_workspace`, `capability_egress_host`, or `byoi_member`.
 
 ## [0.5.0] — 2026-08-18
 
