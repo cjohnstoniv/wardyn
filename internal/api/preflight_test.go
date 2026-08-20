@@ -51,6 +51,28 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 }
 
+// TestPreflight_ExecTaskModeSkipsLLMAccess is W16-S1-3: task_mode=exec runs a
+// plain shell command, not a model, so a --dry-run preflight for one must not
+// preview a false "missing model access" blocker (no secret is seeded here —
+// if llm_access were computed the same way the happy-path test asserts
+// "satisfied", it would come back "missing" instead).
+func TestPreflight_ExecTaskModeSkipsLLMAccess(t *testing.T) {
+	h := newHarness(t) // no anthropic-api-key secret seeded
+	body := `{"agent":"claude-code","repo":"ephemeral","task":"echo hi","task_mode":"exec",` +
+		`"inline_policy":{"min_confinement_class":"CC2"}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("exec preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if it, ok := findItem(resp.SetupItems, "llm_access:claude-code"); ok {
+		t.Errorf("exec run: got an llm_access row %+v, want none (exec invokes no model)", it)
+	}
+}
+
 // TestPreflight_MemberInlineClampWarningsSurfaced pins resolveRunPolicy's
 // contract (its own doc comment): a MEMBER whose inline_policy is clamped or has
 // a grant dropped must see WHY on Review, since launch itself stays silent. The
