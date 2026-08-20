@@ -640,11 +640,19 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // still launch runs normally. This only ZEROES fields on an already-computed,
 // already-200 response — it can never itself produce an error state (no
 // non-401 error is possible for a member here, by construction).
+//
+// Runner.ConfinementClasses survives redaction: it is not diagnostic detail,
+// it is the barrier-count signal ui/lib/readiness.ts's deriveReadiness reads
+// verbatim to compute barrierReady, which gates the keyless demos' Start
+// button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
+// for every member regardless of the real runner state. Only Driver and the
+// per-class ConfinementSubstrates map — genuine diagnostic detail — are
+// dropped.
 func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
-	st.Runner = SetupRunner{ConfinementClasses: []string{}}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
 	return st
 }
 
