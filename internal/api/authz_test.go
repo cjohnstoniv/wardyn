@@ -92,6 +92,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// ── anonymous ──
 	"GET /":              {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
+	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	"GET /auth/logout":   {class: classAnonymous},
@@ -512,6 +513,8 @@ func newAuthzStore() *authzStore {
 
 var _ store.Store = (*authzStore)(nil)
 var _ store.RunsByCreatorPager = (*authzStore)(nil)
+
+func (s *authzStore) Ping(_ context.Context) error { return nil }
 
 func (s *authzStore) CreateRun(_ context.Context, r types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()

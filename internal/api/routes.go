@@ -33,6 +33,10 @@ func (s *Server) routes() chi.Router {
 	r.Use(securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)
+	// Readiness: proves Postgres is reachable, not just that the process is up
+	// (see handleReadyz's doc comment). Deliberately a separate endpoint from
+	// /healthz, which liveness/startup keep using.
+	r.Get("/readyz", s.handleReadyz)
 	// Prometheus scrape surface. Admin-gated (NOT anonymous like /healthz): it
 	// reports operational volumes, and the public API fails closed without a
 	// credential — a scrape_config carries the admin token in an `authorization:`

@@ -50,6 +50,12 @@ var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 // this exact value; both names alias the one sentinel in internal/types.
 var ErrDuplicatePending = types.ErrDuplicatePendingApproval
 
+// Ping proves the pool can actually reach Postgres (a live query round-trip,
+// not just a constructed pool).
+func (s PG) Ping(ctx context.Context) error {
+	return s.Pool.Ping(ctx)
+}
+
 // ─── AgentRun ────────────────────────────────────────────────────────────────
 
 // CreateRun inserts a new run and returns the persisted row.
