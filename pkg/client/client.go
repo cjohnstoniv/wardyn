@@ -17,7 +17,8 @@
 //   - runs:        CreateRun, Preflight, GetRun, ListRuns, ListGrants, KillRun,
 //     SynthesizeProfile, GetRecording
 //   - approvals:   ListApprovals, Approve, Deny
-//   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
+//   - policies:    CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies, UpdatePolicy,
+//     DeletePolicy
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
 //     DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources:     ListSources, CreateSource, GetSource, ScanSource, DeleteSource
@@ -497,6 +498,16 @@ func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.Ru
 func (c *Client) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
 	var out types.RunPolicy
 	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id.String(), nil, &out)
+	return out, err
+}
+
+// GetDefaultPolicy fetches the control plane's configured default policy
+// spec — the ceiling every run created without a policy_id gets, and the
+// ceiling composer.Clamp bounds a member-authored inline policy against
+// (W14-S1-6: previously unexposed by UI, CLI or API).
+func (c *Client) GetDefaultPolicy(ctx context.Context) (types.RunPolicySpec, error) {
+	var out types.RunPolicySpec
+	err := c.do(ctx, http.MethodGet, "/api/v1/policies/default", nil, &out)
 	return out, err
 }
 

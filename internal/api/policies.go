@@ -4,6 +4,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -77,6 +78,16 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, redactPolicyForRead(p))
 }
 
+// handleGetDefaultPolicy returns the control plane's configured default policy
+// spec — the ceiling every run created without a policy_id gets, and (per
+// composer.Clamp / inline_policy.go) the same ceiling a member's inline policy
+// is clamped against. W14-S1-6: previously unexposed by UI, CLI or API —
+// policies.tsx's own comment said so. Member-reachable like the other policy
+// reads (routes.go), since members are the ones actually clamped by it.
+func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, redactSpecForRead(s.cfg.DefaultPolicy))
+}
+
 // redactPolicyForRead returns p with any llm_inspection.workspace_secret_values
 // replaced by a count before it is ever serialized back to a caller. Belt-and-
 // braces (W12-S1-1): validatePolicySpec already refuses a WRITE that sets a raw
@@ -88,14 +99,22 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // own LLMInspection (a fresh copy is substituted), so a caller holding the
 // original is never surprised by an in-place edit.
 func redactPolicyForRead(p types.RunPolicy) types.RunPolicy {
-	li := p.Spec.LLMInspection
+	p.Spec = redactSpecForRead(p.Spec)
+	return p
+}
+
+// redactSpecForRead is redactPolicyForRead's logic, factored out so
+// handleGetDefaultPolicy (which reads a bare spec, not a stored types.RunPolicy)
+// gets the same redaction without a fake wrapper row.
+func redactSpecForRead(spec types.RunPolicySpec) types.RunPolicySpec {
+	li := spec.LLMInspection
 	if li == nil || len(li.WorkspaceSecretValues) == 0 {
-		return p
+		return spec
 	}
 	cp := *li
 	cp.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
-	p.Spec.LLMInspection = &cp
-	return p
+	spec.LLMInspection = &cp
+	return spec
 }
 
 // redactPoliciesForRead maps redactPolicyForRead over a list read (handleListPolicies).
@@ -138,6 +157,13 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		Spec:      req.Spec,
 	}
 	created, err := s.cfg.Store.CreatePolicy(r.Context(), p)
+	if errors.Is(err, store.ErrConflict) {
+		// W20-S1-3: run_policies.name is UNIQUE — a duplicate name is a
+		// caller-fixable 409, not a raw Postgres 500 (contrast CreateApproval's
+		// existing 23505 sentinel for approvals).
+		writeError(w, http.StatusConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create policy: "+err.Error())
 		return

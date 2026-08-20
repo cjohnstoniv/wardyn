@@ -78,7 +78,7 @@ export function SummaryHeader({
   // W25-1: claim "attachable" only under the SAME owner-or-admin predicate
   // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
   // && !owned`) — otherwise a member sees this chip promise attachability and
-  // then gets a red "requires the operator role" error the instant they open
+  // then gets a red "requires the admin role" error the instant they open
   // the terminal below it (OverviewTab renders <AttachTerminal> whenever
   // `attachable`).
   const operator = useOperator();

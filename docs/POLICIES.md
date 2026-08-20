@@ -337,10 +337,14 @@ connection — the decision funnels through the same chokepoint every approval
 does (`decide`, `internal/api/approvals.go`), which — only for an
 `egress_domain` approval raised during a `workspace record` run — writes a
 required `egress:<host>` row into that workspace's own requirements contract
-(`learnVerifyEgress`). The next confined replay of the SAME workspace folds
-required `egress:` rows into its allowlist (`confinedEgressDomains`), so it
-does not hold on that host again; a plain run's hold widens only its own run
-and writes nothing durable.
+(`learnVerifyEgress`). That row is permanent and workspace-wide, and its reach
+is not the next replay alone: EVERY later run attaching the workspace — an
+ordinary `POST /runs` included — unions required `egress:` rows into its
+`AllowedDomains` (`applyWorkspaceRequirements`, `internal/api/runs_create.go`),
+and a confined replay additionally folds them into its setup allowlist
+(`confinedEgressDomains`), so neither holds on that host again. A hold
+approved during any other kind of run widens only its own run and writes
+nothing durable.
 
 Both write-backs land on the workspace's own overlay row, never a shared
 source: a source can be attached to many workspaces (see
@@ -380,7 +384,7 @@ on either is refused at write time (`decide()`, `internal/api/approvals.go`).
 | Scope | Reaches | Where it lives |
 |---|---|---|
 | `once` | One connection. The very next attempt re-raises. | The proxy's per-host cache, consumed on first use. |
-| `run` | The rest of this run — **the default**, and the only scope that existed before this table did. | Same cache, held for the run's lifetime. |
+| `run` | The rest of this run — **the default**, and the only scope that existed before this table did. **Caveat:** during a `workspace record` session an `egress_domain` approve at this scope ALSO writes a permanent, workspace-wide required `egress:<host>` row that widens every future run of the workspace (see `wait_for_review` above). | Same cache, held for the run's lifetime. |
 | `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
 | `always` | Every future run of the target workspace, not just this one. | `workspaces.approved_egress` (allow) / `denied_egress` (deny). |
 

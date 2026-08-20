@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, useFocusMode } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
+import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -28,6 +29,7 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
           method: "sso",
           operator: role === "admin",
           role,
+          sessionExpiresAt: null,
         }}
       />
     </MemoryRouter>,
@@ -37,13 +39,16 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
 // Every background poll in the console keeps its last-good data on failure, so
 // this banner is the ONLY thing separating a quiet fleet from a dead daemon —
 // and the readiness chip must not report the outage as an unfinished setup.
+// AppShell no longer polls setup/status itself (that duplicated App.tsx's own
+// poll of the same expensive endpoint) — it takes confinementClasses as a
+// prop and keeps the last value it was given when a re-render passes
+// undefined (App.tsx's convention for "no fresh data this tick").
 describe("AppShell (control plane unreachable)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function renderShell(unreachable: boolean) {
-    const fetchMock = vi.fn().mockRejectedValue(new Error("connection refused"));
-    vi.stubGlobal("fetch", fetchMock);
-    render(
+  function renderShell(unreachable: boolean, confinementClasses?: ConfinementClass[]) {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
+    return render(
       <MemoryRouter>
         <ThemeProvider>
           <AppShell
@@ -52,11 +57,11 @@ describe("AppShell (control plane unreachable)", () => {
             onSignOut={() => {}}
             unreachable={unreachable}
             lastOkAt={null}
+            confinementClasses={confinementClasses}
           />
         </ThemeProvider>
       </MemoryRouter>,
     );
-    return fetchMock;
   }
 
   it("stays silent while the daemon answers", () => {
@@ -64,17 +69,93 @@ describe("AppShell (control plane unreachable)", () => {
     expect(screen.queryByText(/Control plane unreachable/)).toBeNull();
   });
 
-  it("banners the outage and leaves the barrier chip at its last-known state", async () => {
-    const fetchMock = renderShell(true);
+  it("with nothing real to show yet, reads the same honest 'No barrier' a genuinely bare host would", () => {
+    renderShell(true);
     expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
-    // Its own status probe resolves the synthetic unreachable payload (empty
-    // confinement_classes) — the barrier chip must not repaint from that fake
-    // data; a fresh mount with nothing real to show yet reads the same honest
-    // "No barrier" a genuinely bare host would.
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/api/v1/setup/status", expect.anything()),
-    );
     expect(screen.getByText("No barrier")).toBeInTheDocument();
+  });
+
+  it("banners the outage and leaves the barrier chip at its last-known state", () => {
+    const { rerender } = renderShell(false, ["CC1"]);
+    expect(screen.queryByText("No barrier")).toBeNull();
+    // App.tsx passes confinementClasses=undefined once its own probe reports
+    // unreachable — the chip must not repaint from that absence.
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+            unreachable={true}
+            lastOkAt={null}
+            confinementClasses={undefined}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
+    expect(screen.queryByText("No barrier")).toBeNull();
+  });
+});
+
+// W31-S1-7: the SSO session dies outright at its expiry with no refresh —
+// this is the warning that never existed, pinned against /me's
+// session_expires_at (an admin-token/local session, absent here, must never
+// warn: it has nothing to expire).
+describe("AppShell — session-expiry warning (W31-S1-7)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function renderWithMe(sessionExpiresAt: string | undefined) {
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.endsWith("/healthz")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+        });
+      }
+      if (u.endsWith("/api/v1/me")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            principal: "cj@example.test",
+            method: "sso",
+            operator: true,
+            role: "admin",
+            email: "cj@example.test",
+            session_expires_at: sessionExpiresAt,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("warns and offers a re-auth link when the session is about to die", async () => {
+    renderWithMe(new Date(Date.now() + 2 * 60 * 1000).toISOString());
+    expect(await screen.findByText(/session is expiring soon/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /sign in again/i })).toHaveAttribute("href", "/auth/login");
+  });
+
+  it("stays silent while the session has plenty of time left", async () => {
+    renderWithMe(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+    await screen.findByText("No barrier"); // let /me resolve
+    expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
+  });
+
+  it("never warns for a session-less caller (admin token / local mode)", async () => {
+    renderWithMe(undefined);
+    await screen.findByText("No barrier");
+    expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
 });
 
@@ -111,56 +192,30 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
 });
 
 // Stage-1: the top bar's permanent barrier chip reads the strongest tier off
-// the SAME setup-status poll the shell already runs — never a second,
-// disagreeing derivation. The unreachable-daemon case (no confinement_classes
-// to show) is covered above ("leaves the barrier chip at its last-known
-// state"); this pins the positive case.
+// the confinementClasses prop — App.tsx's OWN setup-status poll, never a
+// second, disagreeing poll of the same expensive endpoint. The
+// unreachable-daemon case (no confinement_classes to show) is covered above
+// ("leaves the barrier chip at its last-known state"); this pins the
+// positive case.
 describe("AppShell — top bar barrier chip (stage-1)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("shows the strongest available confinement tier once setup status resolves", async () => {
-    const fetchMock = vi.fn((url: RequestInfo | URL) => {
-      const u = String(url);
-      if (u.endsWith("/healthz")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
-        });
-      }
-      if (u.endsWith("/api/v1/me")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ principal: "cj@example.test", method: "sso", operator: true, role: "admin" }),
-        });
-      }
-      if (u.endsWith("/api/v1/setup/status")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            ready: true,
-            checks: [],
-            auth: { mode: "sso", local_loopback: false },
-            runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] },
-            providers: [],
-            secrets: { present: [], github_app: false },
-            age_key: { durable: false },
-            has_runs: true,
-            platform: { os: "linux", wsl: false },
-          }),
-        });
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  it("shows the strongest available confinement tier once setup status resolves", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+            confinementClasses={["CC1", "CC2"]}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
     // CC1+CC2 available => the strongest is Wall (CC2), never the raw CC2 code.
-    expect(await screen.findByText("Wall")).toBeInTheDocument();
+    expect(screen.getByText("Wall")).toBeInTheDocument();
     expect(screen.queryByText("No barrier")).toBeNull();
   });
 });

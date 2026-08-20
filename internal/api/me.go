@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
@@ -27,7 +28,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !s.isOperator(r.Context()) {
 		role = oidc.RoleMember
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"principal": principalFromRequest(r),
 		"method":    method,
 		"role":      role,
@@ -36,5 +37,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// (isOperator, http.go) — never a second, driftable copy of the rule.
 		// Kept for the console, which already consumes it: operator == role==admin.
 		"operator": s.isOperator(r.Context()),
-	})
+	}
+	// W31-S1-7: an SSO session dies outright at this instant (no refresh) — the
+	// console polls this and warns ahead of it, rather than the human learning
+	// about it from a sudden 401 that wipes mid-work state back to the gate.
+	// Omitted (zero) for local/token auth, which has no session to expire.
+	if exp := oidcExpiryFromContext(r.Context()); !exp.IsZero() {
+		body["session_expires_at"] = exp.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, body)
 }

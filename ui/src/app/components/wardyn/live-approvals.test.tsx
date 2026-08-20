@@ -59,6 +59,30 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
+  // W19-S1-3 / W20-hold-fsm-2: the proxy's real hold times out at 30s
+  // (defaultHoldTimeout) while the approval row stays PENDING for up to 24h —
+  // isHeld must stop claiming a live hold once that window has passed.
+  it("stops flagging a wait_for_review request as held once the proxy's 30s hold has elapsed", async () => {
+    const stale = new Date(Date.now() - 31_000).toISOString();
+    listApprovalsMock.mockResolvedValue([
+      pending({ id: "stale", requested_scope: { host: "stale.example", mode: "wait_for_review" }, requested_at: stale }),
+    ]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText("stale.example")).toBeInTheDocument();
+    expect(within(panel).queryByText("waiting")).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
+  });
+
+  // W20-hold-fsm-5: a poll failure must not render the same affirmative
+  // "Watching for…" text a confirmed-empty poll gets.
+  it("shows a poll-error state instead of the idle hint when listApprovals rejects with nothing pending", async () => {
+    listApprovalsMock.mockRejectedValue(new Error("network error"));
+    render(<LiveApprovals runId="r1" />);
+    expect(await screen.findByTestId("live-approvals-poll-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("live-approvals-idle")).not.toBeInTheDocument();
+  });
+
   it("a pending credential for this run stays out of the strip (its blast-radius card lives on the Approvals screen)", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "cred", kind: "credential", requested_scope: { host: "api.example", secret_name: "x" } }),

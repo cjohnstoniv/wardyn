@@ -157,6 +157,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/run-layout":                   {class: classMember},
 	"PUT /api/v1/me/run-layout":                   {class: classMember},
 	"GET /api/v1/policies":                        {class: classMember},
+	"GET /api/v1/policies/default":                {class: classMember},
 	"GET /api/v1/policies/{id}":                   {class: classMember},
 	"GET /api/v1/runs":                            {class: classMember},
 	"GET /api/v1/secrets":                         {class: classMember},

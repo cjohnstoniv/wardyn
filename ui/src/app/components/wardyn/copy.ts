@@ -103,14 +103,14 @@ export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 // this just stops a viewer from discovering the tier as a raw 403 toast).
 // ONE reason string, reused at every disabled operator-only control so it
 // never drifts between screens.
-export const OPERATOR_ONLY_REASON = "Requires the operator role.";
+export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 
 // Said once, where a viewer would actually feel the consequence (the run's
 // own pending-approval banner) — the read/launch/kill viewer tier still means
-// their run blocks on an approval exactly like an operator's does; only the
+// their run blocks on an approval exactly like an admin's does; only the
 // deciding is out of reach.
 export const VIEWER_APPROVAL_BLOCKS_NOTE =
-  "This run is blocked until an operator decides it — you can see the requested scope below, but deciding needs the operator role.";
+  "This run is blocked until an admin decides it — you can see the requested scope below, but deciding needs the admin role.";
 
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific

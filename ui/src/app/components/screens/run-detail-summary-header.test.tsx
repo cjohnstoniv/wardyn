@@ -5,9 +5,9 @@
 
 // W25-1: SummaryHeader's "Interactive — attachable" chip must claim
 // attachability under the SAME predicate AttachTerminal itself gates on
-// (attach-terminal.tsx: `if (!operator) { ...requires the operator role }`)
+// (attach-terminal.tsx: `if (!operator) { ...requires the admin role }`)
 // — otherwise a member sees the chip promise attachability and then gets a
-// red "requires the operator role" error the instant they open the terminal
+// red "requires the admin role" error the instant they open the terminal
 // below it (OverviewTab renders <AttachTerminal> whenever `attachable`).
 import type { ReactElement } from "react";
 import { describe, it, expect } from "vitest";

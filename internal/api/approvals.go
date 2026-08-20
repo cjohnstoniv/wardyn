@@ -769,6 +769,15 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	}
 	host := strings.ToLower(strings.TrimSpace(scope.Host))
 	if host == "" || !hostrules.ValidApprovedHost(host) {
+		// W19-W19b-5: this guard used to fail silent, unlike the merge-failure
+		// path below it — an operator who approved a request whose requested_scope
+		// carried an empty or malformed host got a green UI and no durable write,
+		// with nothing in the audit trail to explain why the workspace never
+		// learned the host.
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			run.WorkspaceID.String(), "failure", mustJSON(map[string]any{
+				"source": "verify:" + ap.RunID.String(), "detail": "invalid or empty host in requested_scope",
+			})))
 		return
 	}
 	key := "egress:" + host

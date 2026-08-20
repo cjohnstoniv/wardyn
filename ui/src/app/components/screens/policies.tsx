@@ -110,6 +110,14 @@ export function PoliciesScreen() {
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
+  // W14-S1-6: the default (ceiling) policy — best-effort, never blocks the
+  // main list on failure (an old daemon without the route, a transient
+  // error). undefined = not loaded yet / unavailable, distinct from an
+  // empty-but-loaded RunPolicySpec.
+  const [defaultPolicy, setDefaultPolicy] = React.useState<RunPolicySpec | undefined>(undefined);
+  React.useEffect(() => {
+    api.getDefaultPolicy().then(setDefaultPolicy).catch(() => setDefaultPolicy(undefined));
+  }, []);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -144,15 +152,24 @@ export function PoliciesScreen() {
         }
       />
 
-      {/* Honest stand-in for the design's "built-in defaults" card: the control
-          plane DOES apply a configured default policy to runs created without a
-          policy_id (internal/api/server.go Config.DefaultPolicy), but no endpoint
-          exposes its fields — so we say the mechanism exists without fabricating
-          its contents. */}
-      <p className="mb-4 text-xs text-muted-foreground">
-        A run created without a policy_id falls back to the control plane's configured default —
-        its exact settings aren't exposed by this API, so they aren't shown here.
-      </p>
+      {/* W14-S1-6: GET /api/v1/policies/default now exposes the ceiling — a
+          run created without a policy_id falls back to it, and it's the same
+          ceiling composer.Clamp bounds a member's inline policy against.
+          Best-effort: an old daemon or a transient fetch failure just falls
+          back to the honest "not shown" line rather than blocking the page. */}
+      {defaultPolicy ? (
+        <details className="group mb-4 rounded-lg border border-border">
+          <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+            Default (ceiling) policy — applied to runs with no policy_id, and to every member's inline policy
+          </summary>
+          <YamlBlock value={defaultPolicy} className="m-2 mt-0 rounded-md border-0" />
+        </details>
+      ) : (
+        <p className="mb-4 text-xs text-muted-foreground">
+          A run created without a policy_id falls back to the control plane's configured default.
+        </p>
+      )}
 
       {/* ui-secretsPolicies-5: gated the same way secrets.tsx/workspaces.tsx
           gate their own toolbar — loading and error both fall through to

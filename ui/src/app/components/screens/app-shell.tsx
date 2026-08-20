@@ -44,8 +44,6 @@ import {
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
 import { health as api } from "../../lib/api/health";
-import { setup as setupApi } from "../../lib/api/setup";
-import { usePoll } from "../../lib/use-poll";
 import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
@@ -67,6 +65,9 @@ export interface ShellMeta {
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
   // existing operator-only gate stays exactly as it was.
   role: Role;
+  // W31-S1-7: when the SSO session dies outright (no refresh) — null for
+  // local/token auth, which has no session to expire.
+  sessionExpiresAt: Date | null;
 }
 
 function useMeta(): ShellMeta {
@@ -77,6 +78,7 @@ function useMeta(): ShellMeta {
     method: "",
     operator: true,
     role: "admin",
+    sessionExpiresAt: null,
   });
   React.useEffect(() => {
     let alive = true;
@@ -89,6 +91,7 @@ function useMeta(): ShellMeta {
         method: me?.method || "",
         operator: me?.operator ?? true,
         role: me?.role ?? "admin",
+        sessionExpiresAt: me?.session_expires_at ? new Date(me.session_expires_at) : null,
       });
     });
     return () => {
@@ -98,15 +101,34 @@ function useMeta(): ShellMeta {
   return meta;
 }
 
+// SESSION_WARN_MS — how far ahead of the session's real expiry to start
+// warning (W31-S1-7). The session itself has no refresh; this is advance
+// notice, not a renewal, so the human can save/finish before a silent 401
+// wipes the console back to the sign-in gate mid-work.
+const SESSION_WARN_MS = 5 * 60 * 1000;
+const SESSION_CHECK_MS = 15 * 1000;
+
+function useSessionExpiringSoon(expiresAt: Date | null): boolean {
+  const [soon, setSoon] = React.useState(false);
+  React.useEffect(() => {
+    if (!expiresAt) {
+      setSoon(false);
+      return;
+    }
+    const check = () => setSoon(expiresAt.getTime() - Date.now() <= SESSION_WARN_MS);
+    check();
+    const id = setInterval(check, SESSION_CHECK_MS);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+  return soon;
+}
+
 function initials(principal: string): string {
   const base = principal.split("@")[0] || principal;
   const parts = base.split(/[.\-_]/).filter(Boolean);
   const s = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "");
   return (s || base.slice(0, 2)).toUpperCase();
 }
-
-// How often the top bar's barrier chip re-checks setup status, in ms.
-const BARRIER_POLL_MS = 15000;
 
 // Flat sidebar nav — six items, no group headings (stage-1 redesign). Demos,
 // Recordings, and Settings all left the sidebar: Demos and Settings are
@@ -268,6 +290,7 @@ export function AppShell({
   onSignOut,
   unreachable,
   lastOkAt,
+  confinementClasses: confinementClassesProp,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -277,34 +300,25 @@ export function AppShell({
   // this banner is the ONLY thing that tells a quiet board from a dead one.
   unreachable?: boolean;
   lastOkAt?: Date | null;
+  // The strongest confinement tier this host can actually run, from the SAME
+  // setup-status poll App.tsx already runs for the unreachable banner — not a
+  // second, disagreeing poll of the same expensive endpoint. undefined (no
+  // fetch yet, or the daemon was unreachable) keeps the last-known barrier
+  // instead of flashing "No barrier" for a merely quiet control plane.
+  confinementClasses?: ConfinementClass[];
 }) {
   const meta = useMeta();
+  const sessionExpiringSoon = useSessionExpiringSoon(meta.sessionExpiresAt);
   const location = useLocation();
   const navigate = useNavigate();
 
-  // The top bar's permanent barrier chip — the strongest confinement tier this
-  // host can actually run, straight from the same setup-status poll the rest of
-  // the shell already uses (never a second, disagreeing derivation). Empty
-  // (no confinement classes at all) reads "No barrier" — the one honest
-  // state a fresh/broken host can be in.
+  // The top bar's permanent barrier chip. Empty (no confinement classes at
+  // all) reads "No barrier" — the one honest state a fresh/broken host can be
+  // in.
   const [confinementClasses, setConfinementClasses] = React.useState<ConfinementClass[]>([]);
-  const checkBarrier = React.useCallback(() => {
-    setupApi
-      .getSetupStatus()
-      .then((s) => {
-        // An unreachable daemon resolves to the synthetic READY_FALLBACK, whose
-        // empty confinement_classes would flash "No barrier" for a merely quiet
-        // control plane — the unreachable banner already says what happened,
-        // so keep the last-known barrier instead.
-        if (s.unreachable) return;
-        setConfinementClasses(s.runner?.confinement_classes ?? []);
-      })
-      .catch(() => {
-        /* leave the last-known barrier in place */
-      });
-  }, []);
-  React.useEffect(checkBarrier, [checkBarrier]);
-  usePoll(checkBarrier, BARRIER_POLL_MS, false);
+  React.useEffect(() => {
+    if (confinementClassesProp !== undefined) setConfinementClasses(confinementClassesProp);
+  }, [confinementClassesProp]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
@@ -354,6 +368,23 @@ export function AppShell({
         >
           <AlertTriangle className="size-4 shrink-0" />
           <span>Control plane unreachable — showing the last data received. {lastCheckedLabel(lastOkAt ?? null)}</span>
+        </div>
+      )}
+      {/* W31-S1-7: the SSO session dies outright at its expiry, with no
+          refresh — this is the warning that never existed, so it is not a
+          silent 401 that wipes the console mid-work. Re-authenticating now
+          (while the current session still works) replaces it before it dies. */}
+      {!unreachable && sessionExpiringSoon && (
+        <div
+          role="status"
+          className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+        >
+          <AlertTriangle className="size-4 shrink-0" />
+          <span>Your session is expiring soon.</span>
+          <a href="/auth/login" className="font-medium underline underline-offset-2">
+            Sign in again
+          </a>
+          <span>to avoid losing your place.</span>
         </div>
       )}
       <div className="flex min-h-0 flex-1">

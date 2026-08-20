@@ -125,7 +125,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     );
     expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
-    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 
   it("viewer: Approve and Deny are disabled and the reason is visible — the queue itself still renders", async () => {
@@ -142,7 +142,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     expect(await screen.findByText("Mint a scoped credential")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
-    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
     // Clicking a disabled button must never reach the API.
     expect(approveMock).not.toHaveBeenCalled();
     expect(denyMock).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     );
     expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
-    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 
   // Same member, but the row is credential/tool_call: stays admin-only
@@ -180,7 +180,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     );
     expect(await screen.findByRole("button", { name: /^approve$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
-    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
   });
 });
 

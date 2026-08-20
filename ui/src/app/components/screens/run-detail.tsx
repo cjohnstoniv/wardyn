@@ -35,6 +35,7 @@ import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { health } from "../../lib/api/health";
 import { usePoll } from "../../lib/use-poll";
@@ -57,7 +58,7 @@ import {
   Chip,
 } from "../wardyn/primitives";
 import { JsonBlock } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
@@ -345,7 +346,7 @@ export function RunDetailScreen() {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} />
+            <AuditTab events={audit} runId={run.id} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -709,16 +710,30 @@ function ApprovalsTab({
 // ---------------------------------------------------------------------------
 // Audit tab (this run's events)
 // ---------------------------------------------------------------------------
-function AuditTab({ events }: { events: AuditEvent[] }) {
+function AuditTab({ events, runId }: { events: AuditEvent[]; runId: string }) {
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
-        <Link to="/audit" className="ml-1 inline-flex items-center gap-1 text-primary hover:underline">
+        {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
+            member — the server scopes non-admins to ?run_id= of a run they own
+            (internal/api/audit.go handleQueryAudit) — so the unqualified link
+            dropped them on a feed that can never fill. */}
+        <Link
+          to={`/audit?run_id=${runId}`}
+          className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
+        >
           open full Audit <ArrowRight className="size-3" />
         </Link>
       </div>
+      {/* W17-S1-3: the per-run fetch (auditApi.listAudit) is capped at
+          LIST_LIMIT/auditPerRunDefaultLimit and returned OLDEST-first — a
+          chatty run's late events silently fall off the end with no cue. */}
+      <TruncatedNote count={events.length} cap={LIST_LIMIT}>
+        Showing the first {LIST_LIMIT} events for this run (truncated, oldest-first) — later events may
+        be missing.
+      </TruncatedNote>
       {events.length === 0 ? (
         <div className="rounded-xl border border-border bg-card">
           <EmptyState icon={ScrollText} title="No events yet" description="This run has not recorded any audit events." />

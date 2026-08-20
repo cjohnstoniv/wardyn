@@ -99,6 +99,12 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
 
+	// Run-secret eviction lane: drop the in-memory plaintext masking corpus of
+	// runs terminal past api.RunSecretGrace, so a long-lived daemon stops
+	// holding credentials for every run it ever dispatched. Unconditional — a
+	// no-op without a mask registry, and there is nothing to configure.
+	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
+
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
 	// — the envbuild orphan-build sweep needs only an ImageBuilder, which a

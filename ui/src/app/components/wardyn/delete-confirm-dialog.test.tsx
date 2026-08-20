@@ -48,7 +48,7 @@ describe("DeleteConfirmDialog — role-aware confirm", () => {
         />
       </OperatorProvider>,
     );
-    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
     const confirm = screen.getByRole("button", { name: /delete secret/i });
     expect(confirm).toBeDisabled();
     await user.click(confirm);

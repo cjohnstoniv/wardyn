@@ -73,8 +73,14 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	if len(memberSt.Secrets.Present) != 0 {
 		t.Errorf("member: secrets.present = %v, want empty (redacted)", memberSt.Secrets.Present)
 	}
-	if len(memberSt.Runner.ConfinementClasses) != 0 {
-		t.Errorf("member: runner.confinement_classes = %v, want empty (redacted)", memberSt.Runner.ConfinementClasses)
+	// NOT redacted: ConfinementClasses feeds barrierReady (deriveReadiness),
+	// which gates a member's own demo Start button — zeroing it disabled
+	// demos for every member (W3-S1-2).
+	if len(memberSt.Runner.ConfinementClasses) == 0 {
+		t.Errorf("member: runner.confinement_classes = %v, want the real classes (drives demo barrierReady)", memberSt.Runner.ConfinementClasses)
+	}
+	if memberSt.Runner.Driver != "" {
+		t.Errorf("member: runner.driver = %q, want empty (redacted diagnostic detail)", memberSt.Runner.Driver)
 	}
 	// NOT redacted: the answer a member's console needs to function.
 	if !memberSt.LLMReady {

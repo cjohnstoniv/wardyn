@@ -18,7 +18,11 @@
 //     -run-token (or WARDYN_RUN_TOKEN env). Used when the
 //     control plane is reachable from the agent container.
 //
-// The two modes are NOT exclusive; both may be set. If neither is set the
+// -upload-url takes precedence. The control plane's launcher (RecorderArgv,
+// internal/runner/sandbox.go) never passes both: when an upload URL is offered
+// it suppresses -out-dir, so no unmasked cast reaches a path the API serves;
+// -out-dir is only the fallback when no upload URL exists. Setting both by
+// hand is a masking bypass, not a supported mode. If neither is set the
 // recording is left in -cast-dir (the original behavior).
 //
 // Usage:

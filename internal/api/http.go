@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -106,6 +107,22 @@ func withOIDCGroups(ctx context.Context, groups []string) context.Context {
 func oidcGroupsFromContext(ctx context.Context) []string {
 	g, _ := ctx.Value(oidcGroupsCtxKey{}).([]string)
 	return g
+}
+
+// oidcExpiryCtxKey carries the same verified OIDC session's expiry, published
+// by humanOrAdminAuth next to the principal/email/role for the same reason
+// those keys exist: the auth middleware stays the single place that trusts the
+// oidc package, and /me (W31-S1-7's session-expiry warning) is unit-testable
+// without minting a signed session cookie. Zero when there is no SSO session.
+type oidcExpiryCtxKey struct{}
+
+func withOIDCExpiry(ctx context.Context, expiry time.Time) context.Context {
+	return context.WithValue(ctx, oidcExpiryCtxKey{}, expiry)
+}
+
+func oidcExpiryFromContext(ctx context.Context) time.Time {
+	t, _ := ctx.Value(oidcExpiryCtxKey{}).(time.Time)
+	return t
 }
 
 // errorBody is the uniform JSON error envelope.
@@ -301,6 +318,10 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
 			// empty set (see oidcGroupsCtxKey).
 			ctx = withOIDCGroups(ctx, oidc.GroupsFromContext(r.Context()))
+			// The session expiry rides along so /me can warn ahead of it —
+			// W31-S1-7: there is no refresh, so the alternative is a silent 401
+			// that wipes mid-work console state back to the sign-in gate.
+			ctx = withOIDCExpiry(ctx, oidc.ExpiryFromContext(r.Context()))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}

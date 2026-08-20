@@ -306,7 +306,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the reason below, before creating a terminal or a socket.
     if (!operator && !owned) {
       setConnState("error");
-      setErrorMsg("Attaching to a live sandbox requires the operator role or ownership of this run.");
+      setErrorMsg("Attaching to a live sandbox requires the admin role or ownership of this run.");
       return;
     }
 
