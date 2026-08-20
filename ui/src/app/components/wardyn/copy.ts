@@ -457,10 +457,6 @@ export const UI_APPS_LANE = {
   errorTitle: (app: string) => `Couldn't start ${app}`,
   errorLauncher: (app: string) =>
     `This image has no /usr/local/bin/wardyn-ui-${app}. Use an image that ships the launcher (deploy/images/vscode/), or add one to your own image.`,
-  // Not from the frozen table (client-side condition, no server round trip) —
-  // covers the mock's step-3 "failure in window.open" case (a blocked popup).
-  errorPopupBlocked:
-    "The browser blocked the new tab — allow pop-ups for this site and try again.",
 } as const;
 
 // Prefix of the server's verbatim missing-launcher body (docs/design/ui-

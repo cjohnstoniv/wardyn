@@ -256,7 +256,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
     healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
@@ -269,6 +269,10 @@ describe("ConnectSSHCard — UI apps lane", () => {
         "noopener",
       ),
     );
+    // "noopener" makes window.open return null even when the tab DID open, so
+    // the old `!win` branch showed the popup-blocked error on every success.
+    await screen.findByRole("button", { name: UI_APPS_LANE.cta("vscode") });
+    expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
     openSpy.mockRestore();
   });
 
@@ -285,7 +289,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
     });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
@@ -322,5 +326,22 @@ describe("ConnectSSHCard — UI apps lane", () => {
     ).toBeInTheDocument();
     // The other row's button is untouched — still its normal CTA, not busy.
     expect(screen.getByRole("button", { name: UI_APPS_LANE.cta("docs") })).toBeInTheDocument();
+  });
+
+  it("renders the UI apps lane LAST — after the ssh command, per the mock's S3 order", async () => {
+    healthMock.mockResolvedValue({
+      ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" },
+      ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" },
+    });
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" },
+    ]);
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    const uiHeading = await screen.findByText(UI_APPS_LANE.title);
+    const sshCommand = screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`);
+
+    // The lane was originally inserted right after the SSH *heading*, which put
+    // it AHEAD of the ssh command the heading introduces.
+    expect(sshCommand.compareDocumentPosition(uiHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
