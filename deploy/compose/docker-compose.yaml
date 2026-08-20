@@ -587,6 +587,22 @@ services:
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
 
+  # agent-vscode: same build-only convention as agent-claude-code/agent-codex-cli
+  # above — never started by the demo, exists so `docker compose --profile
+  # build-only build` produces the tagged image. `FROM wardyn/agent-claude-code:local`
+  # (deploy/images/vscode/Dockerfile), so it depends on that image existing
+  # locally first — same as `make agent-image-vscode` depending on
+  # `agent-images-core`. Opt-in like agent-full: register it via
+  # WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}' rather than
+  # the default map above.
+  agent-vscode:
+    build:
+      context: ../..
+      dockerfile: deploy/images/vscode/Dockerfile
+    image: wardyn/agent-vscode:local
+    profiles: ["build-only"]
+    command: ["sleep", "infinity"]
+
   # agent-aws-sso: same build-only convention as agent-claude-code/agent-codex-cli
   # above — never started by the demo, exists so `docker compose --profile
   # build-only build` produces the tagged image. Hosts an interactive
