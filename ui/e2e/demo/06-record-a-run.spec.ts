@@ -384,12 +384,12 @@ test("B2 — start a recorded session", async () => {
   // The sandbox is up: real time resumes here, before a word is spoken.
   await ffwdEnd(page);
 
-  // The Fence banner is the honest half of "nothing is denied while recording":
-  // an open-egress session on a shared kernel is the widest window this product
-  // ever opens, and the card says so. Leave it in frame; point at it if it is
-  // there (a CC2/CC3 host renders no banner and the beat still plays).
-  const cc1 = page.getByTestId("record-cc1-banner");
-  if (await cc1.isVisible().catch(() => false)) await spotlight(page, cc1);
+  // The open-egress banner is the honest half of "nothing is denied while
+  // recording": every open recording allows ALL egress while it learns, and
+  // the card says so on every tier (the weakest-barrier line is added only
+  // when the session genuinely runs under CC1). Point at it if rendered.
+  const banner = page.getByTestId("record-open-egress-banner");
+  if (await banner.isVisible().catch(() => false)) await spotlight(page, banner);
   await caption(page, "Nothing is denied while recording. Every host and command is written down.");
   await beat(page, PACE.read + 900);
   await spotlight(page, null);

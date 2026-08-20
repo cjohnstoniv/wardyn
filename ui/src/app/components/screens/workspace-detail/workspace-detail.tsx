@@ -14,7 +14,7 @@ import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import type { Workspace } from "../../../lib/types";
+import type { ConfinementClass, Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
@@ -72,6 +72,11 @@ export function WorkspaceDetailScreen() {
   const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [llmReady, setLlmReady] = React.useState(false);
+  // The runner's declared confinement classes — RecordPane keys its open-egress
+  // banner's tier line off the STRONGEST of these (what a recording actually
+  // launches under, workspace_run.go's bestClass) rather than the operator's
+  // New-Run default, which once printed "Fence" under a Vault capture.
+  const [hostClasses, setHostClasses] = React.useState<ConfinementClass[] | null>(null);
   const [rebuilding, setRebuilding] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
@@ -101,7 +106,10 @@ export function WorkspaceDetailScreen() {
   React.useEffect(() => {
     setupApi
       .getSetupStatus()
-      .then((s) => setLlmReady(hasLlmPath(s)))
+      .then((s) => {
+        setLlmReady(hasLlmPath(s));
+        setHostClasses(s.runner?.confinement_classes ?? null);
+      })
       .catch(() => setLlmReady(false));
   }, []);
 
@@ -324,6 +332,7 @@ export function WorkspaceDetailScreen() {
             launch={recordLaunch}
             busyTask={recordBusyTask}
             modelReady={llmReady}
+            hostClasses={hostClasses}
             onRecord={(name) => void doRecord(name, false)}
             onReplayConfined={(name) => void doRecord(name, true)}
             onDoneRecording={(runId) => void doneRecording(runId)}

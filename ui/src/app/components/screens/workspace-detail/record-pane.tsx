@@ -33,7 +33,7 @@ import {
   Square,
   TriangleAlert,
 } from "lucide-react";
-import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { ConfinementClass, RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { CopyButton } from "../../wardyn/copy-button";
 import {
   AlertDialog,
@@ -60,7 +60,7 @@ import {
 import { Observations } from "../profile-review";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
-import { getDefaultCc } from "../../wardyn/default-confinement";
+import { strongestAvailable } from "../../wardyn/default-confinement";
 import { CC_META } from "../../wardyn/cc-meta";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
@@ -76,6 +76,7 @@ export function RecordPane({
   launch,
   busyTask,
   modelReady,
+  hostClasses,
   onRecord,
   onReplayConfined,
   onDoneRecording,
@@ -100,6 +101,12 @@ export function RecordPane({
   // stored provider key, or a real composer backend) — a session runs the
   // agent, so without one the agent's model calls would be denied.
   modelReady: boolean;
+  // The runner's declared confinement classes (setup status). A recording
+  // launches under the STRONGEST of these (workspace_run.go's bestClass), so
+  // the banner's tier line derives from it pre-launch — never from the
+  // operator's persisted New-Run default, which is an unrelated preference
+  // and once printed "Fence" under a Vault capture, on camera.
+  hostClasses?: ConfinementClass[] | null;
   // Start (or re-start) an OPEN session by name; the server slugs it to the
   // record key.
   onRecord: (name: string) => void;
@@ -120,15 +127,13 @@ export function RecordPane({
   const operator = useOperator();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
-  // The record sandbox runs under the strongest class the host supports. Once
-  // a session has actually launched, `launch.confinementClass` is the SERVER's
-  // own verdict for that run — use it; before any launch (or if the field is
-  // absent on an older server), fall back to the operator's persisted default
-  // tier, the same proxy SecurityChip uses. CC1 (Fence) is the loud case: open
-  // egress on a shared-kernel box, so its banner always applies — every
-  // session still starts as an open recording, confined replay is a later
-  // step in the SAME lifecycle.
-  const tier = launch?.confinementClass ?? getDefaultCc() ?? "CC1";
+  // The record sandbox runs under the strongest class the host supports
+  // (workspace_run.go's bestClass — never the policy floor, never the New-Run
+  // default). Once a session has actually launched, `launch.confinementClass`
+  // is the SERVER's own verdict for that run — use it; before any launch,
+  // derive the same answer from the runner's declared classes. The bare-CC1
+  // fallback covers only an older server that reports neither.
+  const tier = launch?.confinementClass ?? strongestAvailable(hostClasses ?? []) ?? "CC1";
   // Scan-detected commands become copy-paste hints so a clueless operator
   // knows what to run in the session — guidance without a taxonomy.
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
@@ -174,7 +179,7 @@ export function RecordPane({
         </div>
       )}
 
-      {tier === "CC1" && <Cc1Banner />}
+      <OpenEgressBanner tier={tier} />
 
       {/* 503: honest no-runner path. */}
       {notice?.status === 503 && (
@@ -315,23 +320,37 @@ function NewSessionForm({
   );
 }
 
-// CC1 (Fence) danger banner — honest cc-meta wording. Open egress on a shared
-// kernel is the widest window this flow ever opens; say so plainly.
-function Cc1Banner() {
+// Open-egress warning — every open recording allows ALL egress, on every tier
+// (that is how it learns what the task uses), so the exfiltration window is
+// real regardless of barrier strength and the banner always shows. The
+// "weakest barrier" line is ADDED only when the session genuinely runs under
+// CC1 (Fence) — the shared-kernel case — per the launch's own verdict or the
+// runner's strongest class; asserting a tier the run doesn't have is worse
+// than no warning at all.
+function OpenEgressBanner({ tier }: { tier: string }) {
+  const weakest = tier === "CC1";
   const cc1 = CC_META.CC1;
   return (
     <div
-      className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
-      data-testid="record-cc1-banner"
+      className={
+        weakest
+          ? "flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
+          : "flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
+      }
+      data-testid="record-open-egress-banner"
     >
       <ShieldAlert className="mt-0.5 size-4 shrink-0" />
       <div className="space-y-1">
-        <p className="font-medium">Open recording on {cc1.label} — the weakest barrier, with egress unrestricted.</p>
+        <p className="font-medium">
+          {weakest
+            ? `Open recording on ${cc1.label} — the weakest barrier, with egress unrestricted.`
+            : "Open recording — egress unrestricted while it learns."}
+        </p>
         <p className="leading-snug">
-          To learn what a task really uses, this sandbox allows ALL egress. On this host it runs under{" "}
-          {cc1.label}: {cc1.metaphor} Combined with allow-all egress, a task that misbehaves could send
-          anything it can read out during the recording window. Only record tasks you trust — replaying
-          confined afterward re-runs them at least privilege.
+          To learn what a task really uses, this sandbox allows ALL egress — a task that misbehaves
+          could send anything it can read out during the recording window.
+          {weakest ? ` And on this host it runs under ${cc1.label}: ${cc1.metaphor}` : ""} Only record
+          tasks you trust — replaying confined afterward re-runs them at least privilege.
         </p>
       </div>
     </div>
