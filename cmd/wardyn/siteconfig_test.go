@@ -1,6 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//lint:file-ignore SA1019 TestSiteConfigApply_AcceptsLegacyArtifactOverrides reads
+// the deprecated SiteConfig.ArtifactOverrides on purpose: it proves `wardyn
+// site-config apply` still FORWARDS a legacy artifact_overrides document to the
+// server, which is the only way the server-side fold can happen at all. Same
+// reason internal/api/site_config_test.go carries this directive.
+
 package main
 
 import (
