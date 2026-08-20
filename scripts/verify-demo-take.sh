@@ -824,6 +824,21 @@ V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-10}/narr
 }
 
 case "${WARDYN_DEMO_VIDEO:-}" in
+  00)
+    head_ "Video 00 · the primer (slides lane)"
+    # No product state to check — the take is a slide deck plus narration; the
+    # spec itself asserts the deck rendered and the exhibit image decoded. What
+    # can still break silently is the take dying mid-deck, which the cue floor
+    # catches (a full read is ~28 lines; a died-early take leaves a fraction).
+    TL00="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-00}/narration.json"
+    if [[ -s "${TL00}" ]]; then
+      N00=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cues",[])))' "${TL00}" 2>/dev/null || echo 0)
+      [[ "${N00}" -ge 20 ]] && ok "the deck spoke ${N00} lines (floor 20)" \
+        || bad "only ${N00} narration cues — the deck died early (floor 20)"
+    else
+      bad "no narration timeline at ${TL00}"
+    fi
+    ;;
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
   03) check_video_03_first_run ;;
@@ -837,7 +852,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..10, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..10, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
