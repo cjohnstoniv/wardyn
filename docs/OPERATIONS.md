@@ -1277,10 +1277,12 @@ mechanism. What it adds is three corrections to the compose recipe:
   item that makes the difference between a restorable dump and a file of
   undecryptable ciphertext.
 - **The audit spool is not a backup target.** `WARDYN_AUDIT_SPOOL` renders to
-  `/tmp/audit-spool.jsonl` on the pod's own filesystem. Per-pod and derived by
-  design (`internal/api/auditspool.go`): it is the fallback for a failed
-  Postgres write and drains back into the database. Postgres remains the source
-  of truth for the audit log on both substrates.
+  `/tmp/audit-spool.jsonl` on a stock install and onto the PVC beside the
+  recordings once `persistence` is on (`templates/deployment.yaml`) — so turning
+  persistence on to capture asciicasts sweeps the spool up too, and neither
+  needs restoring. Derived by design (`internal/api/auditspool.go`): it is the
+  fallback for a failed Postgres write and drains back into the database.
+  Postgres remains the source of truth for the audit log on both substrates.
 
 ### Restore: rehearse into a scratch database first
 
