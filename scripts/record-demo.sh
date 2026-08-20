@@ -36,10 +36,11 @@
 # the front. That segment IS a screen grab of a fixed rectangle and has twice
 # captured whatever the operator was doing instead; clear the corner first.
 #
-# THE TERMINAL LANE. Two videos of the series have no page to film: V09 (CI &
+# THE TERMINAL LANE. Three videos of the series have no page to film: V09 (CI &
 # headless) is a policy file, a `scripts/ci-run.sh` invocation, its exit code and
 # its artifacts; V10 (audit & attach) is three terminals holding an ssh session
-# each. --terminal-script <path> runs that script under the SAME gdigrab capture
+# each; V11 (your terminal, our cluster) is kubectl and ssh against a kind
+# cluster. --terminal-script <path> runs that script under the SAME gdigrab capture
 # Act 0 uses, with scripts/demo-typist.sh giving it say/type_cmd/beat/chapter —
 # the terminal's answer to ui/e2e/demo/overlay.ts, narration included. A video
 # may be terminal-only (no <nn>-*.spec.ts exists), browser-only, or both; both
@@ -190,7 +191,7 @@ PW_FILTER=("walkthrough.spec.ts")
 # their browser halves exist) has no spec to hand Playwright.
 RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
-  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..10), got: ${VIDEO}"
+  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..11), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.
