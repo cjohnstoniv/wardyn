@@ -50,6 +50,7 @@ persona is the audience, not an auditor.
 
 | Video | Questions (answer from the viewing only) |
 |---|---|
+| 00 (primer) | Why would a team without AI agents still want a sandbox? What are a sandbox, egress, and a proxy, in your own words? What was the real caught-on-camera example, and what happened to it? What does "observe, then decide" replace? |
 | 01 | What is a "barrier"? What happens when a run reaches a host that isn't allowed? Where does the model key live? What did the setup actually require of you? |
 | 02 | What is a workspace? What can a run touch outside it? What happens when you try to read a secret back? |
 | 03 | What ran, and where? How did you know it finished? What happened to the host that wasn't on the list? |
