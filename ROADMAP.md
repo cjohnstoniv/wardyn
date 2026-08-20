@@ -220,8 +220,14 @@ shipped behavior; none is scheduled.
   stored secrets under a new key, and there is no `wardyn secret rotate`.
   Changing `WARDYN_AGE_KEY` strands every existing ciphertext — see
   [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "The age key has no rotation path".
-- **react-router 7 → 8 major bump.** A per-advisory pnpm-audit suppression
-  covers GHSA-qwww-vcr4-c8h2 until then — needs a UI owner.
+- **react-router 7 → 8 major bump.** No longer security-forced: GHSA-qwww-vcr4-c8h2
+  patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the
+  pnpm-audit suppression that once covered it is deleted — `make npm-audit` is
+  green with nothing ignored. What remains is the major itself, blocked twice
+  over: every stable 8.x peer-depends on React >=19.2.7 (this console is on
+  18.3.1, so v8 means a React 19 migration first), and `react-router-dom` has no
+  8.x at all — v8 is also a package rename to `react-router`. Needs a UI owner
+  and a React 19 decision, not an advisory deadline.
 - **Kata/TPROXY/io_uring composer quick-hits.** Parked since the
   composer-readiness work.
 - **A member's inline model-access grant needs an operator integration.** A
