@@ -142,6 +142,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// handler via it already proves admin (requireOperator gates it).
 	if ta, tok := ticketActorFromContext(ctx); tok {
 		if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
+			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
 			writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 			return
 		}
