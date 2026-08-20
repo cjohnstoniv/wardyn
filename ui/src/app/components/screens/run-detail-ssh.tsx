@@ -25,11 +25,13 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { KeyRound } from "lucide-react";
-import type { AgentRun, SSHPublicKey } from "../../lib/types";
+import type { AgentRun, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
+import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
+import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { usePrincipal } from "../wardyn/operator-context";
 import { SectionCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
@@ -51,11 +53,25 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   // arrives).
   const [keys, setKeys] = React.useState<SSHPublicKey[] | null>(null);
 
+  // UI apps lane (docs/design/ui-sandboxes-prompt.md): a third, independent
+  // sub-affordance under the same owner+running gate as SSH/CLI above — no
+  // second fetch effect, it rides the same healthz call.
+  const [uiSandbox, setUISandbox] = React.useState<{
+    enabled?: boolean;
+    enter_url_template?: string;
+  } | null>(null);
+  // Which declared app's ticket-mint/open is in flight, and the last failure
+  // (scoped to one app — the other rows stay untouched per the mock's S5).
+  const [openingApp, setOpeningApp] = React.useState<string | null>(null);
+  const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
+
   React.useEffect(() => {
     if (!owned || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
     healthApi.health().then((h) => {
-      if (alive) setSSH(h.ssh ?? null);
+      if (!alive) return;
+      setSSH(h.ssh ?? null);
+      setUISandbox(h.ui_sandbox ?? null);
     });
     sshKeysApi
       .listKeys()
@@ -88,6 +104,34 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
   const sshOn = !!ssh?.enabled;
+  const uiApps: UIApp[] = run.ui_apps ?? [];
+  const uiSandboxOn = !!uiSandbox?.enabled;
+
+  // Mints a single-use attach ticket (the SAME endpoint the terminal lanes
+  // use) and opens the app on the UI-sandbox origin in a new tab. Failures in
+  // either step render inline under that app's row (S5); a destination-side
+  // failure (e.g. the BYOI missing-launcher 502) happens after navigation, in
+  // the new tab itself — unobservable here across origins, so "the new tab is
+  // the feedback" for that case, exactly as the mock's step 4 says.
+  async function openApp(app: UIApp) {
+    setAppError(null);
+    setOpeningApp(app.name);
+    try {
+      const ticket = await runsApi.attachTicket(run.id);
+      const url = (uiSandbox?.enter_url_template ?? "")
+        .replace("{run}", encodeURIComponent(run.id))
+        .replace("{app}", encodeURIComponent(app.name))
+        .replace("{ticket}", encodeURIComponent(ticket));
+      const win = window.open(url, "_blank", "noopener");
+      if (!win) {
+        setAppError({ app: app.name, message: UI_APPS_LANE.errorPopupBlocked });
+      }
+    } catch (err) {
+      setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setOpeningApp(null);
+    }
+  }
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
@@ -124,6 +168,55 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
             setting <Mono className="text-foreground">WARDYN_SSH_LISTEN</Mono> and{" "}
             <Mono className="text-foreground">WARDYN_SSH_ADVERTISE</Mono> where wardynd starts.
           </p>
+        )}
+      </div>
+
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-[0.75rem] font-medium text-foreground">{UI_APPS_LANE.title}</p>
+        {!uiSandboxOn && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.off}</p>
+        )}
+        {uiSandboxOn && uiApps.length === 0 && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noApps}</p>
+        )}
+        {uiSandboxOn && uiApps.length > 0 && (
+          <>
+            <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+              {UI_APPS_LANE.intro}
+            </p>
+            {uiApps.map((app) => (
+              <div key={app.name} className="mt-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[0.75rem] font-medium text-foreground">{app.name}</p>
+                    <Mono className="text-[0.7188rem] text-muted-foreground">
+                      {UI_APPS_LANE.appSub(app.port, app.path || "/")}
+                    </Mono>
+                  </div>
+                  <Button size="sm" disabled={openingApp === app.name} onClick={() => openApp(app)}>
+                    {openingApp === app.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta(app.name)}
+                  </Button>
+                </div>
+                {appError?.app === app.name && (
+                  <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+                    <p className="text-[0.75rem] font-medium text-foreground">
+                      {UI_APPS_LANE.errorTitle(appError.app)}
+                    </p>
+                    {appError.message.startsWith(UI_APPS_LAUNCHER_MISSING_PREFIX) && (
+                      <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+                        {UI_APPS_LANE.errorLauncher(app.name)}
+                      </p>
+                    )}
+                    <p className="mt-1.5 font-mono text-[0.7188rem] leading-relaxed text-muted-foreground">
+                      {appError.message}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+            <p className="mt-3 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            <p className="mt-2 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+          </>
         )}
       </div>
 

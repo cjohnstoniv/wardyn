@@ -23,8 +23,14 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   sshKeys: { listKeys: (...a: unknown[]) => listKeysMock(...a) },
 }));
 
+const attachTicketMock = vi.fn();
+vi.mock("../../lib/api/runs", () => ({
+  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a) },
+}));
+
 import { ConnectSSHCard } from "./run-detail-ssh";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { UI_APPS_LANE } from "../wardyn/copy";
 
 const OWNER = "alice@example.com";
 const baseRun: AgentRun = {
@@ -55,6 +61,7 @@ function renderCard(run: Partial<AgentRun> = {}, principal = OWNER) {
 beforeEach(() => {
   healthMock.mockReset();
   listKeysMock.mockReset();
+  attachTicketMock.mockReset();
 });
 
 describe("ConnectSSHCard — visibility", () => {
@@ -92,7 +99,10 @@ describe("ConnectSSHCard — visibility", () => {
     expect(
       screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`)),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Off on this deployment/)).toBeInTheDocument();
+    // Both SSH and the UI-apps lane are off with an empty healthz response,
+    // so match SSH's off text specifically rather than the shared "Off on
+    // this deployment" prefix both lanes now share.
+    expect(screen.getByText(/Off on this deployment\. It gives you/)).toBeInTheDocument();
     expect(screen.getByText(/WARDYN_SSH_LISTEN/)).toBeInTheDocument();
     // The ssh command itself must NOT appear — there is no gateway to reach.
     expect(screen.queryByText(/^ssh run_1@/)).toBeNull();
@@ -179,5 +189,99 @@ describe("ConnectSSHCard — content", () => {
 
     await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1`)).toBeInTheDocument();
+  });
+});
+
+// UI apps lane (docs/design/ui-sandboxes-prompt.md) — a third, independent
+// sub-affordance under the SAME owner+running gate as SSH/CLI above.
+describe("ConnectSSHCard — UI apps lane", () => {
+  it("is hidden along with the whole card for a non-owner or a stopped run", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    const nonOwner = renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] }, "mallory@example.com");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nonOwner.container.querySelector("section")).toBeNull();
+
+    const stopped = renderCard({ state: "COMPLETED", ui_apps: [{ name: "vscode", port: 8080 }] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(stopped.container.querySelector("section")).toBeNull();
+    expect(healthMock).not.toHaveBeenCalled();
+  });
+
+  it("off-state names WARDYN_UI_SANDBOX_LISTEN, byte-matching the frozen mock string", async () => {
+    healthMock.mockResolvedValue({});
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.getByText(UI_APPS_LANE.off)).toBeInTheDocument();
+    expect(screen.getByText(/WARDYN_UI_SANDBOX_LISTEN/)).toBeInTheDocument();
+    // No CTA when the gateway is off.
+    expect(screen.queryByRole("button", { name: /^Open /i })).toBeNull();
+  });
+
+  it("names the policy field when enabled but the run declares no apps", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ ui_apps: [] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.getByText(UI_APPS_LANE.noApps)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Open /i })).toBeNull();
+  });
+
+  it("renders one row per declared app, byte-matching the frozen intro/new-tab/no-recording strings", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }, { name: "docs", port: 3000, path: "/readme" }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    expect(screen.getByText(UI_APPS_LANE.title)).toBeInTheDocument();
+    expect(screen.getByText(UI_APPS_LANE.intro)).toBeInTheDocument();
+    expect(screen.getByText("vscode")).toBeInTheDocument();
+    expect(screen.getByText("localhost:8080/")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") })).toBeInTheDocument();
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    expect(screen.getByText("localhost:3000/readme")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: UI_APPS_LANE.cta("docs") })).toBeInTheDocument();
+    expect(screen.getByText(UI_APPS_LANE.newTab)).toBeInTheDocument();
+    expect(screen.getByText(UI_APPS_LANE.noRecording)).toBeInTheDocument();
+  });
+
+  it("mints a ticket and opens the app on the UI-sandbox origin, substituting run/app/ticket", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    const openSpy = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await waitFor(() => expect(attachTicketMock).toHaveBeenCalledWith(baseRun.id));
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith(
+        `http://ui.local/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
+        "_blank",
+        "noopener",
+      ),
+    );
+    openSpy.mockRestore();
+  });
+
+  it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockRejectedValue(
+      new Error("no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found"),
+    );
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }, { name: "docs", port: 3000 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
+    expect(screen.getByText(UI_APPS_LANE.errorLauncher("vscode"))).toBeInTheDocument();
+    expect(
+      screen.getByText("no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found"),
+    ).toBeInTheDocument();
+    // The other row's button is untouched — still its normal CTA, not busy.
+    expect(screen.getByRole("button", { name: UI_APPS_LANE.cta("docs") })).toBeInTheDocument();
   });
 });
