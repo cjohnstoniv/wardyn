@@ -115,20 +115,26 @@ export function RunsScreen() {
   const [tableCap, setTableCap] = React.useState(TABLE_STEP);
 
   // Backs both the first-run checklist (barrier tiers / model provider) and the
-  // one hard blocker in the product: no sandbox barrier at all. Polled so the
-  // blocked banner clears on its own once `sudo wardyn setup fence` lands,
-  // with no manual reload — Re-check just fires it early.
+  // one hard blocker in the product: no sandbox barrier at all. Polled ONLY
+  // while that blocker is up, so the banner clears on its own once
+  // `sudo wardyn setup fence` lands, with no manual reload — Re-check just
+  // fires it early. On a host with a barrier there is nothing to watch for,
+  // and /setup/status is expensive (a full ListRuns plus a shell-out host
+  // sweep), so the poll stops rather than running forever on the landing
+  // screen of every open tab.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   const loadSetupStatus = React.useCallback(() => setupApi.getSetupStatus().then(setSetupStatus), []);
   React.useEffect(() => {
     void loadSetupStatus();
   }, [loadSetupStatus]);
-  usePoll(loadSetupStatus, SETUP_POLL_MS, false);
   const readiness = setupStatus ? deriveReadiness(setupStatus) : null;
   const confinementClasses = setupStatus?.runner?.confinement_classes ?? [];
   // A merely-unreachable daemon (READY_FALLBACK) must never read as "no
   // barrier installed" — that's a connectivity fact, not a host-config one.
   const noBarrier = !!setupStatus && !setupStatus.unreachable && confinementClasses.length === 0;
+  // Keep retrying while the daemon isn't answering either, so a blip at mount
+  // doesn't strand this screen on the synthetic READY_FALLBACK until a reload.
+  usePoll(loadSetupStatus, SETUP_POLL_MS, !noBarrier && !setupStatus?.unreachable);
 
   const fetchRuns = React.useCallback(() => {
     return api.listRuns().then((r) => {

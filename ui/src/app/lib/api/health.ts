@@ -105,6 +105,10 @@ export const health = {
   // degraded = stale heartbeat, idle = beating but blind, healthy = fresh beats
   // AND real kernel events. Absent on an older daemon.
   async health(): Promise<{
+    // "ok" iff the daemon actually answered — the {} returned below on a
+    // network error or a non-2xx has none, which is how the shell's heartbeat
+    // (App.tsx) reads "control plane unreachable".
+    status?: string;
     trust_domain?: string;
     identity_provider?: string;
     runner?: string;
