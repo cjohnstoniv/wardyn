@@ -295,7 +295,7 @@ describe("AttachTerminal — role-aware attach", () => {
         <AttachTerminal runId="run_1" />
       </OperatorProvider>,
     );
-    expect(await screen.findByText(/attaching to a live sandbox requires the operator role/i)).toBeInTheDocument();
+    expect(await screen.findByText(/attaching to a live sandbox requires the admin role/i)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
@@ -332,7 +332,7 @@ describe("AttachTerminal — role-aware attach", () => {
         <AttachTerminal runId="run_1" createdBy="bob@example.com" />
       </OperatorProvider>,
     );
-    expect(await screen.findByText(/attaching to a live sandbox requires the operator role/i)).toBeInTheDocument();
+    expect(await screen.findByText(/attaching to a live sandbox requires the admin role/i)).toBeInTheDocument();
     expect(attachTicket).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
   });

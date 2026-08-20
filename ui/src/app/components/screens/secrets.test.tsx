@@ -335,7 +335,7 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     await screen.findByText("anthropic-api-key");
     const addBtn = screen.getByRole("button", { name: /add secret/i });
     expect(addBtn).not.toBeDisabled();
-    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 
   it("viewer: Add secret is disabled and names the reason", async () => {
@@ -346,7 +346,7 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     );
     await screen.findByText("anthropic-api-key");
     expect(screen.getByRole("button", { name: /add secret/i })).toBeDisabled();
-    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
   });
 
   it("viewer: the row's Rotate and Delete actions are disabled, each naming the reason", async () => {
@@ -366,8 +366,8 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     // Radix marks disabled items aria-disabled but keeps them in the a11y tree
     // (unlike a bare `disabled` attribute) — the reason is real content, not a
     // hover-only title, so it's there either way.
-    expect(within(rotate).getByText(/requires the operator role/i)).toBeInTheDocument();
-    expect(within(del).getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(within(rotate).getByText(/requires the admin role/i)).toBeInTheDocument();
+    expect(within(del).getByText(/requires the admin role/i)).toBeInTheDocument();
   });
 
   it("viewer: AddSecretDialog's own Save stays disabled even with a valid name+value (defense in depth for every other embedding)", () => {
@@ -378,7 +378,7 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     );
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
     fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
-    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save secret/i })).toBeDisabled();
   });
 
