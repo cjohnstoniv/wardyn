@@ -573,16 +573,15 @@ npm-license: ## Fail closed on copyleft in a SHIPPED (prod) UI dependency
 # Deliberately NO --ignore-registry-errors: a registry blip must fail red, not
 # silently pass (security invariant 5, fail-closed).
 #
-# One advisory is suppressed, by id, in ui/package.json's pnpm.auditConfig
-# (pnpm's native mechanism — the same shape as .gitleaksignore's per-fingerprint
-# allowlist; package.json is JSON so the reason has to live here):
-#   GHSA-qwww-vcr4-c8h2  react-router <8.3.0 — "RSC Mode CSRF Bypass". NOT
-#     APPLICABLE: this console is a client-only SPA (ui/src/main.tsx mounts
-#     <BrowserRouter>) on react 18.3.1, and React Router's RSC mode needs React
-#     19 plus a server runtime, so the vulnerable code path cannot be reached.
-#     Only fix is the 7.x -> 8.x major bump; DELETE this entry when that lands.
-# A different advisory on the same package still fails the gate — the ignore is
-# per-id, never per-package.
+# NOTHING is suppressed: this gate runs against the real advisory set. The last
+# suppression (GHSA-qwww-vcr4-c8h2, react-router "RSC Mode CSRF Bypass") is gone
+# — it was carried on the belief that only the 7.x -> 8.x major fixed it, which
+# was never true of the 7.x line: the advisory patches at BOTH 7.18.2 and 8.3.0,
+# and we take 7.18.2. Read a GHSA's full patched-version list before suppressing;
+# a stale "no patch exists" note outlives the release that refutes it.
+# A future ignore goes in ui/package.json's pnpm.auditConfig.ignoreGhsas (pnpm's
+# native mechanism) with its reason here — per-id, never per-package, so a
+# different advisory on the same package still fails the gate.
 npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dependency
 	@echo "Auditing UI production dependencies for advisories (high+)..."
 	cd ui && pnpm audit --prod --audit-level=high
