@@ -16,6 +16,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -177,16 +179,23 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 }
 
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
-// PublicKeyCallback): registered public keys only, OWNER-ONLY authorization
-// (run.CreatedBy == the key's principal). Username = the target run's UUID
+// PublicKeyCallback): registered public keys only, OWNER-OR-ADMIN
+// authorization — run.CreatedBy == the key's principal, OR the key's own
+// stored role is oidc.RoleAdmin. Username = the target run's UUID
 // (conn.User()) — SSH has no cookie, so the run id IS the addressing the
 // client supplies, the same way `ssh host` names a machine.
 //
-// ponytail: owner-only is a single principal-equality check today; an
-// admin/operator override to reach ANOTHER human's run needs a role column
-// this table doesn't have yet (see THREAT-MODEL.md's SSH gateway residual) —
-// until then an admin uses the web terminal (GET /runs/{id}/attach) for
-// someone else's run, exactly like a viewer must.
+// The admin override reads the key's ROLE COLUMN (migration 0043), stamped at
+// REGISTRATION time by handleAddSSHKey — deliberately NOT a live role check,
+// because SSH offers no session for requireOperator to read and this stamp is
+// the only role signal that ever reaches this callback. That makes the
+// override strictly weaker than the web terminal's live gate: a DEMOTED
+// admin's already-registered key keeps its override until the key is deleted
+// (DELETE /api/v1/me/ssh-keys/{fingerprint}) or re-registered. The ceiling is
+// stated in docs/SSH.md §Bounds, OPERATIONS.md and THREAT-MODEL.md's SSH
+// gateway residual — it is the documented shape of the feature, not an
+// oversight. An override is recorded as such: the ssh.auth success event
+// carries override:true whenever the owner check did not match.
 //
 // Every REJECTION is audited under ssh.auth right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
@@ -238,11 +247,12 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
 		return nil, errors.New("ssh: unknown run")
 	}
-	if run.CreatedBy != rec.Principal {
+	override := run.CreatedBy != rec.Principal
+	if override && rec.Role != oidc.RoleAdmin {
 		// The key itself is genuine (owned by rec.Principal) — just not
-		// authorized for THIS run — so, unlike the other failures above, a
-		// real principal is known here and worth recording instead of
-		// "unknown".
+		// authorized for THIS run, and not an admin key either — so, unlike
+		// the other failures above, a real principal is known here and worth
+		// recording instead of "unknown".
 		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "not the run owner")
 		return nil, errors.New("ssh: not authorized for this run")
 	}
@@ -250,11 +260,18 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// Provisional approval ONLY — no success audit here, see the function doc:
 	// the client has not yet proven it holds the private key for this offer.
 	// sshVerifiedAuth records ssh.auth success, and only after
-	// ssh.ServerConfig has verified a real signature over this key.
-	return &ssh.Permissions{Extensions: map[string]string{
+	// ssh.ServerConfig has verified a real signature over this key. The
+	// override verdict rides along in Extensions for the same reason principal
+	// and run_id do: it was resolved from store state HERE, and the verified
+	// callback that writes the audit must not re-derive it.
+	ext := map[string]string{
 		"principal": rec.Principal,
 		"run_id":    runID.String(),
-	}}, nil
+	}
+	if override {
+		ext["override"] = "true"
+	}
+	return &ssh.Permissions{Extensions: ext}, nil
 }
 
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
@@ -286,7 +303,15 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 		// a well-formed run_id already in Extensions.
 		return nil, errors.New("ssh: internal: missing run id in verified permissions")
 	}
-	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.auth", ssh.FingerprintSHA256(key), "success", nil)
+	// override:true names the ONE case where the run's owner is not the human
+	// on the other end — an admin key reaching someone else's run (F1). Absent
+	// datum = an ordinary owner login, so the datum's presence is itself the
+	// thing an auditor greps for.
+	var data json.RawMessage
+	if perms.Extensions["override"] == "true" {
+		data = mustJSON(map[string]any{"override": true})
+	}
+	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.auth", ssh.FingerprintSHA256(key), "success", data)
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
 	return perms, nil
