@@ -12,6 +12,36 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **UI sandboxes: a governed relay from your browser to one declared port
+  inside a run's sandbox** (`docs/UI-SANDBOXES.md`). A run's policy may declare
+  `ui_apps` — a name, a loopback port and a path, operator-authored, never a
+  command string — and `wardynd` relays exactly those ports, over the same
+  exec lane (`socat` on `Runner.ExecStream`) the SSH gateway's `-L` forward
+  already uses: no pod/container-IP dial, no `NetworkPolicy` change, no new
+  network path out of the sandbox. Off by default; it exists only when
+  `WARDYN_UI_SANDBOX_LISTEN` names a **second address**, and boot refuses one
+  equal to `-listen` — what the relay serves is the sandbox's own JavaScript,
+  and the separate browser origin is what keeps it away from the console's
+  session. Access is a single-use, 30s, owner-or-admin attach ticket (the same
+  one the browser terminal mints) redeemed for a path-scoped, `HttpOnly`
+  session cookie; the listener has no other credential and never falls through
+  to the console session or admin bearer. Forwarded requests are stripped of
+  every `wardyn_*` cookie plus `Authorization` and any `?ticket`, and responses
+  are stripped of `Set-Cookie: wardyn_*`. **Nothing inside a relayed app is
+  recorded** — no keystrokes, no screen, no page content; the audit trail is
+  `ui.auth`/`ui.start`/`ui.open`/`ui.close`, deliberately distinct from
+  `session.attach` so a relay session never appears in the recording picker.
+  Deployment: `uiSandbox.*` in the Helm chart (its own port, and its own
+  hostname — the README says why), and a loopback-only compose mapping on
+  `WARDYN_UI_SANDBOX_PORT` that stays inert until the gateway is enabled.
+- **`wardyn/agent-vscode` image variant** (`make agent-image-vscode`,
+  `deploy/images/vscode/`): the claude-code image plus a pinned,
+  sha256-verified `code-server` bound to `127.0.0.1:8080` and a
+  `/usr/local/bin/wardyn-ui-vscode` launcher. The launcher path is the whole
+  BYOI contract — any image can serve a declared app by shipping one, and an
+  image without it gets a clean 502 naming the missing path, never a hang.
+  ~+228 MiB over the base image, and not part of `agent-images`.
+
 ### Changed
 
 ### Fixed
