@@ -30,9 +30,12 @@ const attachReadBuf = 32 * 1024
 
 // attachKeepaliveInterval is how often, while a human is attached, the handler
 // bumps the run's updated_at so the idle reaper (which measures idleness by
-// agent_runs.updated_at) does not stop an actively-attached session. Client
-// input ALSO bumps it immediately; the ticker covers a session that is open but
-// momentarily silent (e.g. watching long-running output).
+// agent_runs.updated_at) does not stop an actively-attached session. The ticker
+// is the ONLY input-independent signal and it is enough: it runs for the whole
+// life of the attach, so updated_at is never more than one interval stale and
+// the reaper adds exactly that much slack (lifecycle.TouchDebounce). Touching
+// per inbound PTY frame instead would put a Postgres UPDATE in front of every
+// keystroke and buy nothing the ticker does not already guarantee.
 const attachKeepaliveInterval = 30 * time.Second
 
 // attachWriteTimeout bounds a single server->client frame write so a stuck
@@ -76,8 +79,8 @@ type resizeMsg struct {
 //  4. Runner.Attach opens a fresh interactive shell inside the sandbox.
 //  5. Bidirectional pump: client binary frames -> Session.Write; Session.Read
 //     -> client binary frames; client TEXT frames -> resize control.
-//  6. Keepalive: periodically (and on client input) TouchRun so the reaper
-//     leaves an actively-attached run alone.
+//  6. Keepalive: TouchRun on open and every attachKeepaliveInterval so the
+//     reaper leaves an actively-attached run alone.
 //  7. Emit session.attach on open and session.detach on close.
 //
 // SECURITY (invariants 3 & 4):
@@ -293,7 +296,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
 	// masked PTY output for the asciicast. holder is nil for a read-only observer.
-	closeReason := s.attachPump(pumpCtx, c, sess, id, castTee, holder)
+	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
 	cancel()
 
 	// Persist the recording (best-effort) and emit session.recording when one was
@@ -369,7 +372,7 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 // from sending: the client is the one component we do not control. A read-only
 // client still learns its mode from the attach-mode control frame the handler
 // sent on open, so it can grey out its input rather than type into a void.
-func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, id uuid.UUID, castTee io.Writer, holder *attachHolder) string {
+func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, castTee io.Writer, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -423,9 +426,6 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				cancel()
 				return
 			}
-			// Any client traffic counts as activity: keep the session alive.
-			_ = s.cfg.Store.TouchRun(ctx, id)
-
 			switch typ {
 			case websocket.MessageText:
 				// Control channel: only resize is understood. An unparseable or

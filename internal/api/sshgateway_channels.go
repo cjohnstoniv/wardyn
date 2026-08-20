@@ -495,7 +495,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	_ = s.cfg.Store.TouchRun(pumpCtx, runID)
 	go s.attachKeepalive(pumpCtx, runID)
 
-	closeReason := s.sshShellPump(pumpCtx, channel, sess, runID, castTee, resizeCh, holder)
+	closeReason := s.sshShellPump(pumpCtx, channel, sess, castTee, resizeCh, holder)
 	cancel()
 
 	// Use BaseCtx (daemon-lifetime), not ctx (the connection's, cancelled the
@@ -523,7 +523,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 // terminal — tmux sizes a shared session to its smallest client). The channel
 // is still READ from while read-only, because that read is how this pump learns
 // the client hung up.
-func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, runID uuid.UUID, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
+func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reasonCh := make(chan string, 2)
@@ -561,8 +561,6 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 		for {
 			n, rerr := channel.Read(buf)
 			if n > 0 {
-				// Any client traffic counts as activity: keep the session alive.
-				_ = s.cfg.Store.TouchRun(ctx, runID)
 				if holder.canWrite() {
 					if _, werr := sess.Write(buf[:n]); werr != nil {
 						reasonCh <- "session write failed"
