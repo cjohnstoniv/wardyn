@@ -8,7 +8,9 @@ corporate-network sections below are written against
 [`deploy/compose/`](../deploy/compose/). The Helm chart (`deploy/helm/wardyn`,
 [`k8s.enabled`](../deploy/helm/wardyn/README.md)) now runs its own
 [Kubernetes runner substrate](#kubernetes-known-gaps-v05) with its own
-run/recording state to operate — see that section for what's different there.
+run/recording state to operate — see that section for what's different there,
+and [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup, restore,
+upgrade and key-persistence commands.
 "[Multi-user: who can change what](#multi-user-who-can-change-what)" and
 "[One replica, by construction](#one-replica-by-construction)" apply to both
 substrates identically: authorization and the per-process constraints live in
@@ -1172,6 +1174,247 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 Take the Postgres dump above **before** the restart; that dump is the only
 rollback you have. Agent images are built separately — `make agent-images`
 rebuilds them.
+
+## Kubernetes: day-2
+
+The four sections above — backup, restore, the age key, upgrades — are written
+against compose, and none of them transfers verbatim to the chart. This section
+is the k8s form of the same four questions. Every command below was run once
+against the throwaway cluster [`deploy/kind/quickstart.sh`](../deploy/kind/quickstart.sh)
+builds (`make kind-quickstart`), and the outputs shown are that run's; substitute
+your own release, namespace and Postgres. That cluster is demo-grade (a
+single Postgres pod with no PVC) — it is a faithful place to rehearse these
+commands, not a template for where to run them.
+
+### `helm upgrade`, and why `--wait` is not optional
+
+The migration rule is the substrate-independent one stated above: forward-only,
+applied on boot, no `down` path. wardynd on k8s runs the identical
+`internal/db` code, so **take the dump before the upgrade** — through the
+Postgres you actually run, or through `kubectl exec` if it lives in the cluster:
+
+```sh
+kubectl -n wardyn exec deploy/postgres -- \
+  pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
+```
+
+Then upgrade — and pass `--reuse-values` explicitly:
+
+```sh
+helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
+  --reuse-values --set image.tag=<new-tag> --wait --timeout 5m
+```
+
+It is not redundant, and the reason is a Helm sharp edge worth knowing before
+it bites: `helm upgrade` reuses the previous release's values *only while you
+pass no `--set`/`-f` at all*. Add a single `--set` and Helm resets everything
+else to chart defaults — which drops exactly the values a Wardyn install cannot
+run without (`auth.adminToken.*`, `k8s.proxyImage`, `serviceAccount.automount`,
+`secrets.ageKeyFromSecret`). The chart is built to catch that rather than
+render a crippled install, so the same upgrade fails at render time with a
+refusal naming the missing one:
+
+```console
+$ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn --set image.tag=<new-tag> --dry-run
+Error: UPGRADE FAILED: execution error at (wardyn/templates/secret.yaml:31:4):
+wardyn: the public API would 401 every request. Set auth.adminToken.secretRef.name
+(external Secret), auth.adminToken.value (inline demo), env.WARDYN_ADMIN_TOKEN, or
+env.WARDYN_OIDC_ISSUER for SSO — [...]
+```
+
+A refusal is the good case. `secrets.ageKeyFromSecret` has no such guard — it
+is a valid `false`, which is the shipped default — so a reset that drops it
+renders cleanly and takes the pod down at boot instead (see
+[the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
+below). `--reuse-values` is what keeps both cases from arising. Better still,
+keep the install's values in a file under version control and pass `-f` every
+time; then nothing is being reused, and what is deployed is reviewable.
+
+The new pod applies nothing, because `schema_migrations` already records every
+file — the forward-only rule at work, visible as an empty count:
+
+```console
+$ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
+NAME                      READY   STATUS    RESTARTS   AGE
+wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
+
+$ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
+0
+```
+
+**`--wait` (or `--atomic`) is the load-bearing flag, not a courtesy.** Without
+it `helm upgrade` reports on the API objects it wrote, not on whether anything
+came up: a deliberately broken upgrade on this cluster printed `STATUS:
+deployed` and exited `0` while its only pod sat in `CrashLoopBackOff`, and
+`helm history` later recorded that same revision as a clean `Upgrade complete`.
+Helm's release status is not a health signal. Re-check `/healthz` after every
+upgrade regardless — the quickstart's own probe asserts `.runner == "k8s"`
+rather than accepting any `200`, for the same reason.
+
+There is still no rollback. `helm rollback` restores the previous *manifest*,
+which is exactly the wrong half: the schema stays migrated, and the older
+wardynd it reinstates is the unsupported combination named above. Use it for a
+bad *config* change (a wrong env var, a wrong image tag within one schema
+generation). For a bad *release*, the dump is the rollback.
+
+### Backup: what `pg_dump` carries here, and what it does not
+
+The chart renders no database. `postgres.dsn` points at a Postgres you operate,
+so the backup itself is your Postgres's own backup story — Wardyn adds no
+mechanism. What it adds is three corrections to the compose recipe:
+
+- **Recordings are NOT in the dump on a stock chart install.** The chart pins
+  `WARDYN_RECORDING_STORE=fs` (`deploy/helm/wardyn/values.yaml`, the
+  `persistence` block) — the *opposite* of wardynd's own `pg` default that the
+  compose recipe above relies on to sweep asciicasts up with the database. With
+  `persistence.enabled=false` (the shipped default) `WARDYN_RECORDING_DIR`
+  renders empty and replay is off, so there is nothing to lose. Turn
+  `persistence` on and every asciicast lives on that PVC alone: `pg_dump` will
+  not carry them, and the PVC needs its own snapshot. Setting
+  `env.WARDYN_RECORDING_STORE=pg` instead puts them back in the dump — the
+  trade the `persistence` comment in `values.yaml` spells out.
+- **The age key is a Secret, not a `.env` line.** See below; it is still the
+  item that makes the difference between a restorable dump and a file of
+  undecryptable ciphertext.
+- **The audit spool is not a backup target.** `WARDYN_AUDIT_SPOOL` renders to
+  `/tmp/audit-spool.jsonl` on the pod's own filesystem. Per-pod and derived by
+  design (`internal/api/auditspool.go`): it is the fallback for a failed
+  Postgres write and drains back into the database. Postgres remains the source
+  of truth for the audit log on both substrates.
+
+### Restore: rehearse into a scratch database first
+
+Two steps are Wardyn's, and both are cheap:
+
+**1. Nothing may run against the database mid-restore.** The compose recipe's
+"start Postgres alone" becomes a scale-to-zero, which on a chart install is the
+whole control plane:
+
+```console
+$ kubectl -n wardyn scale deployment/wardyn --replicas=0
+deployment.apps/wardyn scaled
+$ kubectl -n wardyn rollout status deployment/wardyn --timeout=60s
+deployment "wardyn" successfully rolled out
+```
+
+**2. The age key must already be in place** — the same "age key FIRST" ordering
+as compose, for the same reason (see the next section for what happens when it
+is not).
+
+Then restore the way your Postgres restores, keeping `-v ON_ERROR_STOP=1` for
+the reason the compose section gives: without it `psql` walks past a failed
+statement and still exits `0`, leaving a half-loaded database that looks
+clean. Before doing that to real data, **rehearse the dump into a scratch
+database** — it proves the file actually loads, costs nothing, and touches no
+live row:
+
+```console
+$ kubectl -n wardyn exec deploy/postgres -- createdb -U wardyn wardyn_restorecheck
+$ kubectl -n wardyn exec -i deploy/postgres -- \
+    psql -U wardyn -v ON_ERROR_STOP=1 -q wardyn_restorecheck < wardyn-2026-08-20.sql
+$ echo $?
+0
+$ kubectl -n wardyn exec deploy/postgres -- psql -U wardyn -d wardyn_restorecheck \
+    -c "SELECT count(*) AS audit_events FROM audit_events;" \
+    -c "SELECT count(*) AS migrations FROM schema_migrations;" \
+    -c "SELECT name FROM secrets ORDER BY name;"
+ audit_events
+--------------
+            9
+(1 row)
+
+ migrations
+------------
+         42
+(1 row)
+
+        name
+---------------------
+ wardyn-signing-key
+ wardyn-ssh-host-key
+(2 rows)
+
+$ kubectl -n wardyn exec deploy/postgres -- dropdb -U wardyn wardyn_restorecheck
+```
+
+That last query is the one to read closely. `secrets` is where the control
+plane's own keys live — the signing key and, with `ssh.enabled`, the gateway
+host key — so those two rows returning is the difference between a restored
+database and a restored *install*.
+
+Present is not the same as decryptable, though, and no `SELECT` can tell you
+which one you have. Compose answers that by launching something that needs a
+stored secret; on k8s the control plane answers it for you the moment you scale
+back to one, because it reads its own signing key out of that table before it
+serves anything. A key that does not match the restored ciphertext is therefore
+a failed rollout, not a surprise at first use — which is the next section.
+
+### The age key is a Secret, and the default loses your secrets on boot 2
+
+Two supported wirings, and the chart refuses the confusable third
+(`deploy/helm/wardyn/templates/secret.yaml`):
+
+| `postgres.dsn` mode | age key value | What injects `WARDYN_AGE_KEY` |
+|---|---|---|
+| inline (`dsn.value`) | `secrets.ageKey` | the Secret the chart creates |
+| external (`dsn.secretRef.name`) | an `age-key` entry in **that** Secret | `secrets.ageKeyFromSecret=true` |
+| external | `secrets.ageKey` | **render fails** — it would be silently dropped |
+
+`secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so a
+stock install gets **no** stable identity: wardynd mints an ephemeral one per
+boot. That install works perfectly once. Its second boot cannot decrypt what
+its first boot wrote, and because the control plane loads its own keys during
+startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`) it fails closed there,
+before serving — a `CrashLoopBackOff`, not a degraded pod. Flipping
+`ageKeyFromSecret` off on the quickstart cluster reproduces it exactly:
+
+```console
+$ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
+NAME                     READY   STATUS             RESTARTS      AGE
+wardyn-794dcd78f-tk6jw   0/1     CrashLoopBackOff   1 (23s ago)   24s
+
+$ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
+WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
+ERROR wardynd: fatal err="load secret \"wardyn-signing-key\": pg secretstore: decrypt wardyn-signing-key: age decrypt: no identity matched any of the recipients"
+```
+
+That is the correct behaviour — `loadOrCreateSecret` fails closed on a decrypt
+error rather than minting a fresh key over the existing one, which would strand
+the old ciphertext permanently instead of loudly. But it is also unrecoverable
+from inside the cluster: there is no rotation path (see
+[The age key has no rotation path](#the-age-key-has-no-rotation-path)), so the
+fix is always "put the original Secret back", never "generate a new one". Back
+the Secret up off-cluster, wherever the DSN Secret is backed up, and treat
+deleting it as equivalent to deleting the database.
+
+### The SSH host key survives restarts — because the age key does
+
+The SSH gateway (`ssh.enabled`) does not carry a host key in the chart or in a
+volume. wardynd generates an ed25519 key on first boot and persists it into the
+secret store under `wardyn-ssh-host-key` (`loadOrCreateSSHHostKey`,
+`cmd/wardynd/main.go`), through the same `loadOrCreateSecret` path as the
+signing key. So the fingerprint a client pins is stable across pod churn with
+no operator action — the same value survived a rolling `helm upgrade` and a
+full scale-to-zero-and-back on the quickstart cluster:
+
+```console
+$ curl -s http://127.0.0.1:8080/healthz | jq -c .ssh
+{"advertise_addr":"127.0.0.1:2222","enabled":true,"host_key_fingerprint":"SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8"}
+
+$ kubectl -n wardyn logs deploy/wardyn | grep "ssh gateway listening"
+INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_key_fingerprint=SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8
+```
+
+`/healthz` is anonymous, so that fingerprint is publishable to the people who
+will connect — see [SSH.md](SSH.md).
+
+The dependency runs one way and is worth stating plainly: **the host key is
+exactly as stable as the age key.** Persist the age key and clients never see a
+fingerprint change. Lose it and the pod crash-loops on the previous section's
+error before the gateway ever listens, so what clients get is a connection
+refused, never a silently different host key — a strictly better failure than
+the man-in-the-middle warning a re-minted key would produce, and the reason
+`loadOrCreateSecret`'s fail-closed branch matters here specifically.
 
 ## One replica, by construction
 
