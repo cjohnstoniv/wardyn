@@ -123,15 +123,22 @@ What Wardyn does **not** defend against is published in full
 
 ## Status
 
-**v0.4 (pre-alpha)** is the last tagged release. **v0.5 adds the Kubernetes
+**v0.5.0 (pre-alpha)** is the last tagged release, adding the Kubernetes
 runner substrate (alpha), owner-scoped admin/member RBAC, SSH into a running
-sandbox, and signed release images — merged into `main` and CI-green,
-the tag the remaining maintainer step.** Two deployment paths, both running
-sandboxes: `deploy/compose` and the Helm chart
-[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md), not yet at Compose parity.
+sandbox, and signed release images. Two deployment lanes, both running real
+sandboxes, not one inverted into the other:
+
+- **`deploy/compose`** — the local 10-minute trial. The only lane that runs on
+  a laptop without a real cluster, and the only one with recorded demos
+  (`/demos`).
+- **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment
+  story: `make kind-quickstart` for a one-command real-cluster install, or a
+  production Helm install onto your own Kubernetes. Not yet at Compose parity
+  (see the chart README's "Known gaps").
+
 Still unbuilt: SPIRE, OpenBao, an MCP gateway, arbitrary-domain TLS
-interception, OTLP/OCSF sinks, packaged team SSO, Compose's own L1 default-deny
-— see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
+interception, OTLP/OCSF sinks, SAML/SCIM-provisioned team SSO, Compose's own
+L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License and governance
 

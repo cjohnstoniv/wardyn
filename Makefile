@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -518,6 +518,20 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
 	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false
+
+# ── kind quickstart (the k8s "one command to a real install" path) ──────────
+# What helm-install-test above proves in CI, an operator can run on their own
+# box: build wardynd/proxy/one agent image, stand up a throwaway kind cluster
+# with a NetworkPolicy-enforcing CNI, helm install with the k8s runner
+# substrate ON, and print a URL + token. Both targets are thin on purpose —
+# the cluster name, the ports and every install flag live in ONE place
+# (deploy/kind/quickstart.sh), so `kind-down` can never drift from what
+# `kind-quickstart` created.
+kind-quickstart: ## kind: build + throwaway cluster + helm install, k8s runner on (prints URL + token)
+	deploy/kind/quickstart.sh
+
+kind-down: ## Delete the kind-quickstart cluster
+	deploy/kind/quickstart.sh --down
 
 # Validate the compose files parse (does NOT need a running daemon).
 # Both invocations, since scripts/ci-run.sh runs the base + the CI overlay together.

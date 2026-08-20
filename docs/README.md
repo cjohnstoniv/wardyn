@@ -14,6 +14,8 @@ wizard and `/demos` are the first-run path. Everything here is the next question
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
 | Back up, restore, or upgrade a running deployment, or put it behind a corporate proxy | [OPERATIONS.md](OPERATIONS.md) |
 | Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
+| Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
+| Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [OPERATIONS.md](OPERATIONS.md#multi-user-who-can-change-what) + the `wardyn-k8s-setup` Claude Code skill |
 | Runnable sample workspaces, one per governance control | [../examples/](../examples/) |
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
