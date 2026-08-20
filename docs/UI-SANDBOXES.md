@@ -207,6 +207,58 @@ origin, separated by the path-scoped cookie. That is a real residual, published
 in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 — set
 `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` where wildcard DNS is available.
 
+## Native clients (exploratory)
+
+This relay puts a sandbox's UI in a **browser**. Two questions follow it
+around: what about a native IDE, and what about a desktop? Exactly one of them
+has an answer today, and this section exists so the other one is not mistaken
+for one. **Nothing in the table below is built, scheduled, or tested** —
+[ROADMAP.md](../ROADMAP.md)'s v0.6 entry calls a general native lane
+*exploratory*, and this is what that word means.
+
+**What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
+client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)). That is the whole
+native story. It needs no relay, no `ui_apps` entry and no second listener —
+it is the SSH gateway doing what SSH does.
+
+**What a further native lane would have to solve.** Each candidate is listed
+with the work it implies, not with a plan:
+
+| Candidate | What it would take | Where it stands |
+|---|---|---|
+| JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach — the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch. A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
+| RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client. That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one. X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
+| Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
+| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It is the cheapest of the four for that reason | Nothing built; the primitive it would ride is the one documented above |
+
+**Decision criteria.** Before any of these becomes work, all of the following
+have to hold — they are the same properties that made the browser relay
+shippable:
+
+1. **The two lanes that exist cannot serve the demand.** Remote-SSH covers a
+   remote-capable editor; the relay covers anything that speaks HTTP on
+   loopback. A third lane needs a use those two genuinely fail.
+2. **No new network path and no new listener.** It rides the exec lane or the
+   SSH gateway's existing forward, exactly as everything here does — no
+   pod-IP/container-IP dial, no `NetworkPolicy` delta, L0 intact.
+3. **The recording sentence stays literally true.** Content inside a relayed
+   or forwarded app is not recorded ([Recording](#recording)); a new lane must
+   get its own distinct audit actions and its own honest bound, never a quiet
+   reuse of `session.attach` that would imply a replay exists.
+4. **Image cost is opt-in and pinned.** Its own `make` target, out of the
+   default image, with the size delta published the way
+   [`deploy/images/README.md`](../deploy/images/README.md) publishes
+   `vscode`'s.
+5. **Client setup fits in one documented block.** One setting, like
+   `remote.SSH.localServerDownload`. A lane that needs per-user hand-holding
+   is a support burden, not a feature.
+6. **BYOI fails closed and says why.** A missing binary produces a clean error
+   naming the path, like `sftp-server`/`socat` do today
+   ([Image contract](#image-contract-byoi)) — never a hang.
+
+Criterion 1 is the one that has not been met, which is why this is a section
+and not a milestone.
+
 ## Internals
 
 The gateway is `internal/api/uigateway.go` plus `execconn.go` — one
