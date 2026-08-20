@@ -74,9 +74,9 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 26 direct registrations below +
+			// has gone stale before, W7-S1-1): 29 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) = 31. NOT the whole admin
+			// DEADCODE-1) = 34. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
@@ -139,6 +139,11 @@ func (s *Server) routes() chi.Router {
 
 			r.Get("/audit", s.handleQueryAudit)
 			r.Get("/me", s.handleMe)
+			// Own effective capability set — member-safe (classMember): every
+			// route AROUND this one on /permissions below is operator-only, but
+			// a member reading only their OWN grants (ListCapabilityGrantsFor,
+			// scoped to their own subjects) discloses nothing about anyone else.
+			r.Get("/me/capabilities", s.handleMeCapabilities)
 			// SSH gateway key registry (sshkeys.go): self-service, any authenticated
 			// human — scoped to their OWN principal at the store, so this is
 			// deliberately on r, not operatorOnly (see sshkeys.go's package doc).
@@ -308,6 +313,18 @@ func (s *Server) routes() chi.Router {
 			// yet. A real run remains the real test.
 			operatorOnly.Put("/integrations/{id}", s.handlePutIntegration)
 			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
+
+			// Permissioning (0.6 pillar 2, migration 0042): which of the powers a
+			// MEMBER already has may they actually use. GET returns the whole
+			// grant table + enforcement map in one call (the admin Permissions
+			// screen's entire data need); the writes are operator-only, same
+			// posture as site-config/secrets above — this bounds every member's
+			// blast radius, not a single run's. The member-safe read of a
+			// caller's OWN effective set is GET /me/capabilities above, not here.
+			operatorOnly.Get("/permissions", s.handleGetPermissions)
+			operatorOnly.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
+			operatorOnly.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
+			operatorOnly.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
 			// (item 4): recordingAuthorizer is the SAME ownership rule

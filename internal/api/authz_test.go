@@ -128,6 +128,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/site-config/test-redirect":                    {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":                             {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}":                          {class: classAdmin},
+	"GET /api/v1/permissions":                                   {class: classAdmin},
+	"POST /api/v1/permissions/grants":                           {class: classAdmin},
+	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
+	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -143,6 +147,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/capabilities is the member-safe twin of GET /permissions above: it
+	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
+	// it sits on r like every other /me/* read, not operatorOnly.
+	"GET /api/v1/me/capabilities": {class: classMember},
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
