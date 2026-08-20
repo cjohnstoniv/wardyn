@@ -1317,6 +1317,26 @@ a real limitation checked against the driver, not a guess:
   NetworkPolicy-enforced boundary (proven live by the boot-time egress
   canary) but not the independent kernel-level corroboration Compose +
   Tetragon provides.
+- **A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses
+  boot outright, with no override.** The boot-time egress canary's phase A
+  applies no NetworkPolicy of its own — it only proves the cluster is
+  reachable at all before phase B proves Wardyn's deny-all rule takes effect.
+  If the namespace already carries a default-deny policy from something else
+  (a cluster-wide baseline, another operator's), phase A's pod is blocked too,
+  and wardynd refuses to boot with an INDETERMINATE verdict indistinguishable
+  from a genuinely broken cluster — even though per-run confinement would work
+  fine once Wardyn's own allow-rules are in place
+  (`internal/runner/k8s/canary.go`). **Fix**: give `k8s.runsNamespace` a
+  namespace with no ambient default-deny, or exempt Wardyn's pods from *that
+  policy's own* `podSelector` (a `matchExpressions` entry with
+  `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`) so it stops
+  selecting them. **Do not instead add a separate allow policy for
+  `wardyn.managed=true`**: NetworkPolicy allows are additive and both the agent
+  and proxy pods carry that label, so such a policy widens every sandbox pod's
+  egress past Wardyn's per-run deny+proxy-only policy
+  (`internal/runner/k8s/sandbox.go`) and flips the canary's phase B to "CNI
+  does not enforce" — which in turn invites
+  `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 - **`replicas` stays 1 on k8s exactly as it does everywhere else** — see
   [One replica, by construction](#one-replica-by-construction) above; nothing
   about the k8s substrate changes that story (the masking registry is still

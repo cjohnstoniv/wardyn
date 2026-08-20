@@ -55,9 +55,10 @@ install.
 [Installation](#installation)) renders:
 
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all
-  capabilities dropped, `RuntimeDefault` seccomp; liveness/readiness/startup
-  probes on `/healthz`; `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from
-  Secrets.
+  capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes
+  on `/healthz`, readiness on `/readyz` (which additionally pings Postgres, so
+  a dead DB actually takes the pod out of the Service); `WARDYN_PG_DSN` and
+  `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
   [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
@@ -160,10 +161,11 @@ helm install wardyn ./deploy/helm/wardyn \
 ```
 
 (`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see
-[Database (DSN)](#database-dsn--two-modes) below. Without a stable age
-identity the chart refuses to render: the default ephemeral one is
-regenerated every boot and crash-loops the pod on its second restart, unable
-to decrypt what the first boot encrypted.)
+[Database (DSN)](#database-dsn--two-modes) below. **Nothing enforces this at
+render time**: omit it and the chart installs happily, then the pod
+crash-loops on its SECOND restart — the default age identity is ephemeral,
+regenerated every boot, and boot 2 cannot decrypt what boot 1 encrypted. This
+pairing is your job, not the chart's.)
 
 The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
 (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
@@ -206,9 +208,14 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
 ```
 
 The DSN never appears in the rendered manifests or Helm release history. The
-`age-key` entry is the secret-store identity: without `secrets.ageKeyFromSecret`
-pointing at it, the chart refuses to render (see `deploy/helm/wardyn/templates/secret.yaml`) —
-the default ephemeral identity cannot survive a restart against a real Postgres.
+`age-key` entry is the secret-store identity, and `secrets.ageKeyFromSecret=true`
+is what points wardynd at it. **This is documented-only — the chart does NOT
+fail the render when you skip it** (`templates/secret.yaml` says so in its own
+header comment: an unconditional fail there would break every render that has
+not opted in, including this chart's own `make helm-lint` assertions). Skip it
+and the install succeeds, the first boot works, and the pod crash-loops on its
+second restart: the default identity is ephemeral, so it cannot decrypt what
+the previous boot wrote to a real Postgres.
 
 **2. Inline (demo only).** Clear `secretRef.name` and pass the DSN; the chart
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
@@ -284,8 +291,18 @@ baseline, another operator's policy), phase A is blocked too, and wardynd
 refuses to boot with an INDETERMINATE verdict — indistinguishable from a
 genuinely broken cluster, even though per-run confinement would work fine
 once Wardyn's own allow-rules are in place. Use a namespace with no ambient
-default-deny for `k8s.runsNamespace`, or add an allow rule for pods labeled
-`wardyn.managed=true` to the pre-existing policy.
+default-deny for `k8s.runsNamespace`, or **exempt Wardyn's pods from the
+existing policy's own `podSelector`** — e.g. a `matchExpressions` entry with
+`key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`, so the ambient
+policy simply stops selecting them and Wardyn's per-run policies are the only
+ones that apply.
+
+**Do NOT instead add a separate allow policy for `wardyn.managed=true`.**
+NetworkPolicy allows are purely additive and every sandbox pod (agent *and*
+proxy) carries that label, so such a policy would widen every run's egress
+past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's
+phase B to "CNI does not enforce", inviting
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 
 ```bash
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
