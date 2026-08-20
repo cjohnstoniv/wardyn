@@ -23,6 +23,7 @@ vi.mock("../../lib/api/policies", () => ({
     createPolicy: (...a: unknown[]) => createPolicyMock(...a),
     updatePolicy: vi.fn(),
     deletePolicy: vi.fn(),
+    getDefaultPolicy: vi.fn().mockRejectedValue(new Error("not mocked")),
   },
 }));
 

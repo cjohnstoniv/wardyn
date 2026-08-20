@@ -196,6 +196,9 @@ func (s *Server) routes() chi.Router {
 			// (fail closed); writes are audited.
 			operatorOnly.Post("/policies", s.handleCreatePolicy)
 			r.Get("/policies", s.handleListPolicies)
+			// Static route: chi matches this before the {id} wildcard below, so
+			// "default" never reaches parseIDParam as a bogus policy UUID.
+			r.Get("/policies/default", s.handleGetDefaultPolicy)
 			r.Get("/policies/{id}", s.handleGetPolicy)
 			operatorOnly.Put("/policies/{id}", s.handleUpdatePolicy)
 			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
