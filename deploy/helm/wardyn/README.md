@@ -55,9 +55,12 @@ install.
 [Installation](#installation)) renders:
 
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all
-  capabilities dropped, `RuntimeDefault` seccomp; liveness/readiness/startup
-  probes on `/healthz`; `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from
-  Secrets.
+  capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes
+  on `/healthz`, readiness on `/readyz` (which additionally pings Postgres, so
+  a dead DB actually takes the pod out of the Service — `/readyz` is 0.6+, so an
+  older image needs `readinessProbe.path` pinned back, see
+  [Installation](#installation)); `WARDYN_PG_DSN` and
+  `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
   [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
@@ -155,8 +158,17 @@ helm install wardyn ./deploy/helm/wardyn \
   --set image.repository="$REGISTRY/wardynd" \
   --set image.tag="$TAG" \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
+
+(`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see
+[Database (DSN)](#database-dsn--two-modes) below. **The chart refuses to render
+without this pairing**, because skipping it is not a trade-off: the default age
+identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what
+boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows
+unrecoverable. `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a
+throwaway install.)
 
 The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
 (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
@@ -165,6 +177,17 @@ on one of those, add
 `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`). To use a
 different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 `/examples/policies/` (`demo.json`, ...).
+
+**`/readyz` is a 0.6-and-later endpoint, and the chart's default image is not
+yet.** The readiness probe targets `/readyz`; images at or below `0.5.0` — which
+is what an empty `image.tag` resolves to today, via `.Chart.AppVersion` — do not
+serve it, so the probe 404s forever, the pod never becomes Ready, and the
+`rollout status` below hangs with no other symptom (nothing crashes, nothing
+logs an error). On any such image, pin the probe back:
+`--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead
+Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
+CI never sees this: `helm-install-test` and the kind quickstart both build
+`wardynd` from source, so their image always has `/readyz`.
 
 The chart **refuses to render** without an admin token or an OIDC issuer: an
 install with neither brings up a pod that passes its `/healthz` probe and 401s
@@ -190,13 +213,24 @@ the chart at it (the default `postgres.dsn.secretRef.name` is `wardyn-postgres-d
 ```bash
 kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
+  --from-literal=age-key="$(docker run --rm "$REGISTRY/wardynd:$TAG" -gen-age-key)" \
   -n wardyn
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-The DSN never appears in the rendered manifests or Helm release history.
+The DSN never appears in the rendered manifests or Helm release history. The
+`age-key` entry is the secret-store identity, and `secrets.ageKeyFromSecret=true`
+is what points wardynd at it. **The chart fails the render if you skip it**
+(`templates/secret.yaml`): without it the install succeeds, the first boot
+works, and the pod crash-loops on its second restart — the default identity is
+ephemeral, so it cannot decrypt what the previous boot wrote to a real Postgres,
+and setting the key afterwards does not recover those rows. Wiring the identity
+yourself through `env.WARDYN_AGE_KEY`/`extraEnv` satisfies the check too, and
+`secrets.allowEphemeralAgeKey=true` is the deliberate opt-out for a throwaway
+install where losing every stored secret on restart is genuinely fine.
 
 **2. Inline (demo only).** Clear `secretRef.name` and pass the DSN; the chart
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
@@ -242,6 +276,7 @@ extraEnv:
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   -f rbac-values.yaml   # the snippet above
 ```
@@ -262,10 +297,33 @@ path — a completely separate confinement substrate (L1, NetworkPolicy-backed,
 proven live by a boot-time egress canary) from the Compose stack's L0
 (structural, no-default-route) one.
 
+**Boot-time canary trap: a pre-existing default-deny NetworkPolicy in
+`k8s.runsNamespace`.** The canary's phase A applies no NetworkPolicy of its
+own — it exists only to prove the cluster is reachable at all before phase B
+proves Wardyn's own deny-all rule takes effect. If the namespace already
+carries a default-deny NetworkPolicy from something else (a cluster-wide
+baseline, another operator's policy), phase A is blocked too, and wardynd
+refuses to boot with an INDETERMINATE verdict — indistinguishable from a
+genuinely broken cluster, even though per-run confinement would work fine
+once Wardyn's own allow-rules are in place. Use a namespace with no ambient
+default-deny for `k8s.runsNamespace`, or **exempt Wardyn's pods from the
+existing policy's own `podSelector`** — e.g. a `matchExpressions` entry with
+`key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`, so the ambient
+policy simply stops selecting them and Wardyn's per-run policies are the only
+ones that apply.
+
+**Do NOT instead add a separate allow policy for `wardyn.managed=true`.**
+NetworkPolicy allows are purely additive and every sandbox pod (agent *and*
+proxy) carries that label, so such a policy would widen every run's egress
+past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's
+phase B to "CNI does not enforce", inviting
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
+
 ```bash
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set serviceAccount.automount=true \
   --set k8s.enabled=true \
   --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"
@@ -500,11 +558,18 @@ See `values.yaml` for all options. Key settings:
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
-  **Set one of these against any real (non-inline) Postgres**, even for a quick
-  trial: an ephemeral key does not survive a pod restart, and wardynd's own
-  first-boot secret-store entries (e.g. its internal signing key) are written
-  under whatever key that first boot generated — the NEXT boot generates a
-  different one, can no longer decrypt them, and the pod crash-loops forever.
+  **One of these is REQUIRED against any real (non-inline) Postgres — the chart
+  refuses to render otherwise**, even for a quick trial: an ephemeral key does
+  not survive a pod restart, and wardynd's own first-boot secret-store entries
+  (e.g. its internal signing key) are written under whatever key that first boot
+  generated — the NEXT boot generates a different one, can no longer decrypt
+  them, and the pod crash-loops forever.
+- `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
+  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+- `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
+  Postgres — liveness and startup stay on `/healthz` regardless). **Only override
+  this for an image at or below `0.5.0`**, which serves no `/readyz`: see
+  [Installation](#installation) for what that failure looks like.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// storePingTimeout bounds the Postgres reachability check shared by the /readyz
+// readiness probe (handleReadyz) and the wardyn_store_up gauge below, so the two
+// cannot drift into disagreeing about whether the store is up.
+const storePingTimeout = 3 * time.Second
 
 // metrics holds the control plane's scrape counters, served as Prometheus text
 // exposition by GET /metrics (admin-gated — see routes()).
@@ -112,7 +118,36 @@ func (m *metrics) write(w io.Writer) {
 // admin token is configured (cmd/wardynd) and refuses capability disclosure on
 // the anonymous /healthz, so an open /metrics would contradict that posture. A
 // Prometheus scrape_config authenticates with two lines of `authorization:`.
-func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.write(w)
+	s.writeHealthGauges(r, w)
+}
+
+// writeHealthGauges appends the two LIVE gauges — sampled at scrape time rather
+// than counted as events happen, because both describe a standing condition, not
+// a rate.
+//
+// They exist because a store outage makes every counter above simply stop
+// moving, which a scrape cannot tell apart from a quiet cluster: wardyn_store_up
+// is the same Postgres ping /readyz makes (0 = the pod is out of the Service's
+// endpoints and runs are failing their durable writes), and
+// wardyn_audit_spool_lines is the backlog those failed writes are spooling to
+// disk. A spool that grows and never drains back to 0 is the C1 fallback doing
+// its job while the drain loop is not doing its own — invisible until now
+// outside a log line.
+func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
+	// Nil Store (tests, and only tests) matches /readyz: nothing to be down.
+	up := 1
+	if s.cfg.Store != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+		defer cancel()
+		if err := s.cfg.Store.Ping(ctx); err != nil {
+			up = 0
+		}
+	}
+	fmt.Fprintf(w, "# HELP wardyn_store_up 1 when the control-plane Postgres answers a ping, 0 when it does not (the same check /readyz makes).\n"+
+		"# TYPE wardyn_store_up gauge\nwardyn_store_up %d\n", up)
+	fmt.Fprintf(w, "# HELP wardyn_audit_spool_lines Audit events in the durable fallback spool, waiting to drain back into the store.\n"+
+		"# TYPE wardyn_audit_spool_lines gauge\nwardyn_audit_spool_lines %d\n", s.cfg.AuditSpool.Lines())
 }

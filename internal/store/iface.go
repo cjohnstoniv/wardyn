@@ -177,6 +177,11 @@ type Store interface {
 	// PutCapabilityEnforcement replaces the WHOLE map (a capability the caller
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
+
+	// Ping proves the store is actually reachable, not just constructed — the
+	// /readyz readiness probe's one call. A live TCP connect with no working
+	// query would otherwise read as healthy forever.
+	Ping(ctx context.Context) error
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the

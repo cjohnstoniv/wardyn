@@ -31,6 +31,18 @@ replicas: 1
 # accepts that.
 allowMultiReplica: false
 
+# Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
+# of the Service's endpoints; liveness and startup stay on /healthz either way.
+#
+# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6 — an image at or
+# below 0.5.0 (which is what the empty image.tag above resolves to today, via
+# .Chart.AppVersion) does not serve it, so the probe 404s forever, the pod never
+# becomes Ready, and the rollout hangs with no other symptom. Pin it back with
+# `--set readinessProbe.path=/healthz` and accept 0.5.0's ceiling: a dead
+# Postgres then reads healthy again.
+readinessProbe:
+  path: /readyz
+
 service:
   type: ClusterIP
   port: 8080
@@ -38,7 +50,12 @@ service:
 serviceAccount:
   # Create a dedicated ServiceAccount for wardynd (recommended).
   create: true
-  # Name to use; generated from the fullname when empty.
+  # Name to use; generated from the fullname when empty. With k8s.enabled=true
+  # AND create=false, this must be set explicitly — the chart refuses to
+  # render otherwise (templates/rbac.yaml): the k8s-runner RBAC binding would
+  # otherwise silently fall to the namespace's "default" ServiceAccount,
+  # handing pods/exec + secrets/networkpolicies create-delete to every other
+  # pod in the namespace that also uses it.
   name: ""
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
@@ -88,8 +105,21 @@ secrets:
   # the render rather than silently dropping it — use ageKeyFromSecret there.
   ageKey: ""
   # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
-  # "age-key" entry you want injected as WARDYN_AGE_KEY.
+  # "age-key" entry you want injected as WARDYN_AGE_KEY. REQUIRED whenever
+  # postgres.dsn.secretRef.name is set (persistent Postgres) — the chart refuses
+  # to render otherwise, because at the default (false, ephemeral key) the pod
+  # crash-loops on its SECOND restart, unable to decrypt what the first boot
+  # encrypted. Wiring the key through env/extraEnv counts too, and
+  # allowEphemeralAgeKey below is the deliberate opt-out. See README
+  # "Database (DSN)".
   ageKeyFromSecret: false
+  # Render an external-DSN install with an EPHEMERAL age identity anyway. The
+  # combination above is refused by templates/secret.yaml because it is not a
+  # trade-off, it is a scheduled outage: the pod crash-loops on its second start
+  # and the secrets the first boot wrote are unrecoverable. Same "I accept the
+  # ceiling" escape hatch as allowMultiReplica — for a throwaway install where
+  # losing every stored secret on restart is genuinely fine.
+  allowEphemeralAgeKey: false
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default

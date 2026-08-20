@@ -20,6 +20,7 @@
 //	  GET  /metrics                   (Prometheus text exposition)
 //	Anonymous:
 //	  GET  /healthz
+//	  GET  /readyz
 //	Internal (run-token bearer, identity.Provider.Verify aud="wardyn-internal"):
 //	  POST /api/v1/internal/decisions
 //	  POST /api/v1/internal/approvals ; GET /api/v1/internal/approvals/{id}
@@ -579,6 +580,28 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleReadyz is the READINESS probe: unlike /healthz (liveness — "is the
+// process up"), it proves the store is actually reachable. /healthz alone
+// reported "ok" unconditionally, so a dead/unreachable Postgres still read
+// healthy — a dead DB never took the pod out of the Service's endpoint list.
+// Deliberately anonymous like /healthz (discloses nothing beyond up/down) and
+// deliberately a SEPARATE endpoint from /healthz rather than teaching it to
+// fail: liveness/startup also point at /healthz in the chart, and a DB blip
+// must not restart-loop a pod that is otherwise fine.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	defer cancel()
+	if s.cfg.Store == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+	if err := s.cfg.Store.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error", "postgres": "unreachable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // handleHealthz reports liveness plus the identity provider name so the trust

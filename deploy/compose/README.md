@@ -148,7 +148,10 @@ default is stack-specific: `WARDYN_SUBSCRIPTION_INJECT=off`, because the
 distroless compose `wardynd` has no `claude` binary, so proxy-side OAuth
 injection would fail-lazily and crash the run's proxy; a run that mounts
 `~/.claude` uses those creds directly instead (stage them with
-`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`).
+`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`). This flag
+covers ONLY that resident-mount path — the separate Wardyn-managed lane (a
+connected managed setup-token, no `~/.claude` mount) still injects proxy-side
+and still MITMs `api.anthropic.com` regardless of this setting.
 
 **CI overlay.** [`docker-compose.ci.yaml`](docker-compose.ci.yaml) layers onto
 the base stack (`docker compose -f docker-compose.yaml -f docker-compose.ci.yaml`)

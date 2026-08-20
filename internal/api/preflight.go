@@ -210,7 +210,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// warning can never disagree. The helper clones internally: reconcileLLMAccess
 	// drops orphaned grants in place, but launch persists every grant on the resolved
 	// spec, so the checklist must keep seeing the FULL spec.
-	llmAccess := s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
+	//
+	// W16-S1-3: skipped for task_mode=exec, mirroring runNeedsModelWarning's own
+	// exec gate at create time — an exec run runs a plain shell command, invokes
+	// no model, and needs no credential, so resolving it unconditionally previewed
+	// a false "missing model access" blocker on every CI exec job's --dry-run.
+	var llmAccess *composeLLMAccess
+	if req.TaskMode != "exec" {
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
+	}
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess)
 	writeJSON(w, http.StatusOK, preflightResponse{
