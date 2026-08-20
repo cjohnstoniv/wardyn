@@ -66,7 +66,7 @@ func TestGroundtruthHeartbeatAcceptedNullRun(t *testing.T) {
 	// only called for non-NULL run ids), and recorded with forced attribution.
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil)
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code != http.StatusAccepted {
@@ -192,7 +192,7 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 	fail := &failingRecorder{err: errors.New("audit store down")}
 	h.srv.cfg.Audit = fail
 
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // kernel.* + NULL run_id => no DB needed
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil) // kernel.* + NULL run_id => no DB needed
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code/100 == 2 {
@@ -210,8 +210,8 @@ func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
 
-	future := time.Now().Add(100 * 24 * time.Hour)         // ~100 days ahead
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // kernel.* + NULL run_id => no DB needed
+	future := time.Now().Add(100 * 24 * time.Hour)            // ~100 days ahead
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil) // kernel.* + NULL run_id => no DB needed
 	hb.Time = future
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
@@ -300,13 +300,41 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 // "healthy" — "heartbeat arriving" is not "kernel ground truth arriving".
 func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 0, nil) // fresh beat, observed_total==0
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil) // fresh beat, observed_total==0
 	hb.Time = time.Now()
 	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
 
 	gt := healthzEbpf(t, h)
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle (heartbeat alive but zero kernel events observed = blind, not healthy)", gt["state"])
+	}
+	if gt["reason"] != "no kernel events observed" {
+		t.Errorf("reason = %v, want the blind-sensor reason", gt["reason"])
+	}
+}
+
+// TestHealthzEbpfIdleNamesBrokenCorrelation is the E2 visibility regression: a
+// sensor that saw kernel events but could bind NONE of them to a run (the 0.6
+// frozen-counter defect) reported the SAME idle/observed_total:0 as a sensor
+// seeing nothing at all — one is a quiet host, the other is a broken pipeline
+// no amount of waiting fixes. The gated-drop count must reach /healthz and the
+// reason must say which of the two failures this is.
+func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
+	h := newHarness(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 4812, nil) // saw 4,812, correlated none
+	hb.Time = time.Now()
+	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
+
+	gt := healthzEbpf(t, h)
+	if gt["state"] != "idle" {
+		t.Fatalf("ebpf_groundtruth.state = %v, want idle", gt["state"])
+	}
+	if got, ok := gt["dropped_unmapped"].(float64); !ok || got != 4812 {
+		t.Errorf("dropped_unmapped = %v, want 4812", gt["dropped_unmapped"])
+	}
+	reason, _ := gt["reason"].(string)
+	if !strings.Contains(reason, "none correlated") || !strings.Contains(reason, "4812") {
+		t.Errorf("reason = %q, want it to name the correlation failure and the count", reason)
 	}
 }
 
@@ -315,7 +343,7 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 // genuinely healthy.
 func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 5, nil)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 5, 0, nil)
 	hb.Time = time.Now()
 	h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
 
@@ -337,7 +365,7 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 // TestHealthzEbpfHealthyWithoutFileWrite) and so is never named here.
 func TestHealthzEbpfPartialWhenOneKindNeverArrives(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, 0, map[string]uint64{
 		groundtruth.ActionProcessExec: 9, // network.connect NEVER arrived
 	})
 	hb.Time = time.Now()
@@ -358,7 +386,7 @@ func TestHealthzEbpfPartialWhenOneKindNeverArrives(t *testing.T) {
 // genuinely healthy — not merely "some events flowed".
 func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 3, map[string]uint64{
+	hb := groundtruth.HeartbeatEventWithDropped(0, 3, 0, map[string]uint64{
 		groundtruth.ActionProcessExec:    1,
 		groundtruth.ActionNetworkConnect: 1,
 		groundtruth.ActionFileWrite:      1,
@@ -383,7 +411,7 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 // their own, with zero file.write observed.
 func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
 	h := newHarness(t)
-	hb := groundtruth.HeartbeatEventWithDropped(0, 2, map[string]uint64{
+	hb := groundtruth.HeartbeatEventWithDropped(0, 2, 0, map[string]uint64{
 		groundtruth.ActionProcessExec:    1,
 		groundtruth.ActionNetworkConnect: 1,
 		// groundtruth.ActionFileWrite deliberately absent (0/never observed).
@@ -426,7 +454,7 @@ func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 		{
 			name: "idle (fresh heartbeat, zero events)",
 			hb: func() types.AuditEvent {
-				e := groundtruth.HeartbeatEventWithDropped(0, 0, nil)
+				e := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil)
 				e.Time = time.Now()
 				return e
 			}(),
@@ -435,7 +463,7 @@ func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 		{
 			name: "partial (one kind never arrived)",
 			hb: func() types.AuditEvent {
-				e := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9})
+				e := groundtruth.HeartbeatEventWithDropped(0, 9, 0, map[string]uint64{groundtruth.ActionProcessExec: 9})
 				e.Time = time.Now()
 				return e
 			}(),
@@ -444,7 +472,7 @@ func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 		{
 			name: "healthy (every kind arrived) -> no caveat",
 			hb: func() types.AuditEvent {
-				e := groundtruth.HeartbeatEventWithDropped(0, 3, map[string]uint64{
+				e := groundtruth.HeartbeatEventWithDropped(0, 3, 0, map[string]uint64{
 					groundtruth.ActionProcessExec:    1,
 					groundtruth.ActionNetworkConnect: 1,
 					groundtruth.ActionFileWrite:      1,

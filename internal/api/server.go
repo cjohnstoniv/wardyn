@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -630,9 +631,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 // A live heartbeat alone only proves the sidecar PROCESS is alive; "healthy"
 // additionally requires observed kernel events, so the "we have eBPF ground
 // truth" overclaim is structurally impossible. last_heartbeat is the RFC3339
-// time of the most recent beat (omitted if none). dropped_total/observed_total
-// are the sensor-reported counts carried on the heartbeat's data (0 when
-// absent). When no Store is wired (tests), reports unavailable.
+// time of the most recent beat (omitted if none). dropped_total/observed_total/
+// dropped_unmapped are the sensor-reported counts carried on the heartbeat's
+// data (0 when absent); dropped_unmapped separates a blind sensor from a broken
+// correlation — see the idle branch. When no Store is wired (tests), reports
+// unavailable.
 func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	out := map[string]any{"state": "unavailable", "dropped_total": uint64(0)}
 	if s.cfg.Store == nil {
@@ -647,15 +650,17 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	// dropped_total and observed_total are published by the sensor on the
 	// heartbeat data when available; tolerate their absence.
 	var hb struct {
-		DroppedTotal   uint64            `json:"dropped_total"`
-		ObservedTotal  uint64            `json:"observed_total"`
-		ObservedByKind map[string]uint64 `json:"observed_by_kind"`
+		DroppedTotal    uint64            `json:"dropped_total"`
+		ObservedTotal   uint64            `json:"observed_total"`
+		DroppedUnmapped uint64            `json:"dropped_unmapped"`
+		ObservedByKind  map[string]uint64 `json:"observed_by_kind"`
 	}
 	if len(ev.Data) > 0 {
 		_ = json.Unmarshal(ev.Data, &hb)
 	}
 	out["dropped_total"] = hb.DroppedTotal
 	out["observed_total"] = hb.ObservedTotal
+	out["dropped_unmapped"] = hb.DroppedUnmapped
 	if len(hb.ObservedByKind) > 0 {
 		out["observed_by_kind"] = hb.ObservedByKind
 	}
@@ -668,8 +673,16 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// sensor is blind (Tetragon dead / wrong export path / no TracingPolicy)
 		// or the run is genuinely idle. Either way there is no ground truth yet,
 		// so report "idle" with a reason rather than the "healthy" overclaim.
+		//
+		// The two idle causes are NOT the same failure and must not read the
+		// same: dropped_unmapped>0 means the sensor saw kernel events and could
+		// not bind ANY of them to a run (correlation broken — the 0.6 frozen-
+		// counter defect), which no amount of waiting fixes.
 		out["state"] = "idle"
 		out["reason"] = "no kernel events observed"
+		if hb.DroppedUnmapped > 0 {
+			out["reason"] = fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped)
+		}
 	default:
 		// W20-W20-groundtruth-mapper-4: "healthy" used to be one aggregate over
 		// every kernel event kind — a sensor seeing only process.exec (a
