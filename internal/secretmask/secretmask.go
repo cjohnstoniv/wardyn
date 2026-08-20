@@ -106,17 +106,15 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 // Evict removes all per-run secrets for runID. Process-global secrets are
 // unaffected. Idempotent.
 //
-// NO production path calls this today, so a run's corpus lives as long as the
-// process — a bound worth closing, but NOT by evicting where it first looks
-// natural. Every masking site takes its Snapshot lazily, at use time, and
-// several of those uses come AFTER the run is terminal: the audit recorder
-// masks each event's Data/Target as it is recorded (cmd/wardynd's
+// The production caller is api.Server.SweepRunSecrets, and it deliberately
+// evicts LATE — a grace period after the run went terminal, never at the
+// terminal transition itself. Every masking site takes its Snapshot lazily, at
+// use time, and several of those uses come AFTER the run is terminal: the audit
+// recorder masks each event's Data/Target as it is recorded (cmd/wardynd's
 // maskingRecorder), including the finalize audit and any teardown_error a
 // failed StopSandbox attaches, and a Snapshot that returns nothing masks
 // nothing — this layer fails OPEN by design. Evicting inside finalizeRunTail
-// therefore unmasks the very events most likely to quote a credential. A
-// future eviction lane has to run after the last reader, not at the run's
-// terminal transition.
+// would therefore unmask the very events most likely to quote a credential.
 func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
@@ -124,6 +122,22 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	r.mu.Lock()
 	delete(r.perRun, runID)
 	r.mu.Unlock()
+}
+
+// RunIDs returns the run ids currently holding per-run secrets. It is the
+// eviction lane's input (see Evict): the only way to ask what the registry is
+// still holding without handing out the values themselves.
+func (r *Registry) RunIDs() []uuid.UUID {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]uuid.UUID, 0, len(r.perRun))
+	for id := range r.perRun {
+		out = append(out, id)
+	}
+	return out
 }
 
 // ─── Masker ──────────────────────────────────────────────────────────────────

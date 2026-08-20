@@ -1203,7 +1203,11 @@ rather than a preference:
   map, so a run whose secrets were registered before the restart and whose
   cast uploads after it hits the identical empty-snapshot fail-open — with
   `replicas: 1` throughout. The pin removes the *cross-replica* case; it does
-  not remove this one.
+  not remove this one. What the map no longer does is grow without bound: a
+  background sweeper evicts a run's entry once that run has been terminal for
+  an hour (`api.RunSecretGrace`) — late enough for the finalize audit and the
+  cast upload, which mask lazily at use time, to still see it. Nothing to
+  configure, and it never touches a live run.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: it is the fallback
   for a failed Postgres write, and each pod drains its own back into the

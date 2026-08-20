@@ -466,6 +466,32 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 	}
 }
 
+// runSecretSweepInterval is how often the run-secret eviction lane ticks. Well
+// under api.RunSecretGrace so a cold run's corpus is dropped promptly once it
+// qualifies, and cheap enough to leave unconfigured: one run listing per tick,
+// and none at all while the registry holds nothing.
+const runSecretSweepInterval = 15 * time.Minute
+
+// runSecretSweeper periodically evicts the plaintext masking corpus of runs
+// that have been terminal past api.RunSecretGrace, until ctx is cancelled. Same
+// goroutine shape as runApprovalSweeper; the first sweep runs after one tick.
+func runSecretSweeper(ctx context.Context, srv *api.Server, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n := srv.SweepRunSecrets(ctx); n > 0 {
+				slog.InfoContext(ctx, "wardynd: evicted masking secrets for cold terminal runs",
+					slog.Int("runs", n),
+				)
+			}
+		}
+	}
+}
+
 // recordingSweepable is satisfied structurally by BOTH recording.FSStore and
 // recording.PGStore. Sweep is deliberately NOT on recording.Store itself (see
 // the package doc on internal/recording/store.go): retention is a
