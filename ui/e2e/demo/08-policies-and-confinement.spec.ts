@@ -20,12 +20,18 @@
  * here". BOTH ARE FALSE TODAY. /healthz on this stack answers
  *   confinement_classes: ["CC1","CC2","CC3"]
  *   confinement_substrates: {CC1: oci/runc, CC2: oci/runsc, CC3: oci/kata}
- * so all three columns read "Ready", the top-bar chip is VAULT (not Fence), and
- * the New Run wizard's own resolveDefaultCc(getDefaultCc(), classes) picks the
- * STRONGEST available class — this run launches at Vault, above the policy's
- * Fence floor.
+ * so all three columns read "Ready" and the top-bar chip is VAULT (not Fence)
+ * — no tier is un-buildable here, so B4 can no longer just let the New Run
+ * wizard's resolveDefaultCc float this run up to the host's strongest class
+ * and call that "the floor holding". Instead B4 DRIVES it: picks Fence
+ * explicitly (below the policy's own Wall floor) with the policy attached,
+ * films what the app does with that contradiction, then re-attaches through
+ * the Saved-policy combobox — which cannot raise the request past the floor
+ * (new-run-screen.tsx:674-690) — so the run that actually launches is pinned
+ * at Wall, not wherever this host's default happens to sit.
  *
- * So nothing below names a tier or a status the host might contradict:
+ * So nothing below names a tier or a status the host might contradict, with
+ * one deliberate exception (next paragraph):
  *   - B1 reads the host's real answer in beforeAll and asserts exactly that
  *     many "Ready" chips (and exactly that many not-ready ones). It survives a
  *     stack where Wall gets uninstalled or Vault loses /dev/kvm, in either
@@ -36,9 +42,13 @@
  *     true on every host.
  *   - B4 reads the launched run back off the wire and asserts the header chip
  *     shows the class the CONTROL PLANE enforced, named by /healthz's own
- *     confinement_names map. No tier name is spoken.
- * The one label this file DOES hardcode is "Fence" — as the floor of the policy
- * IT AUTHORS (min_confinement_class: CC1). That is our own spec, not the host's.
+ *     confinement_names map — that ASSERTION never hardcodes a tier, even
+ *     though the floor beat right before it does say "Fence" and "Wall" out
+ *     loud (see below).
+ * The two labels this file DOES hardcode are "Fence" and "Wall": the floor of
+ * the policy IT AUTHORS (min_confinement_class: CC2), and the weaker tier B4
+ * deliberately clicks against it. Both are our own spec and our own choice of
+ * click — never a claim about what the host can build.
  *
  * KEYLESS, and by choice rather than by the plan (whose STAGING line says
  * "model pre-connected (no rail warning)"). B3 picks "Shell command", so this
@@ -127,11 +137,13 @@
  */
 
 import { test, expect, type Locator } from "@playwright/test";
-import { act, beat, caption, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
+// S6 stale-stack hygiene — see the beforeAll below.
+import { sweepStaleState } from "./sweep";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -148,33 +160,41 @@ const POLICY_NAME = "nightly-triage";
 
 /**
  * The prepared spec B2 PASTES. Four fields, matching the SAY line "The spec is
- * four fields." exactly — and min_confinement_class is CC1 ON PURPOSE: this is
- * the counter-example to policies.tsx's CC2-floored STARTER_SPEC (friction 3),
- * which is never edited in place.
+ * four fields." exactly — and min_confinement_class is CC2 ON PURPOSE: B4
+ * explicitly picks the weaker Fence (CC1) with this policy attached so the
+ * app's own refusal of that contradiction is what gets filmed, then re-attaches
+ * to launch clean (file header). It also now equals policies.tsx's CC2-floored
+ * STARTER_SPEC (friction 3) — B2's paste-proof below leans on the egress-domain
+ * count to catch a failed paste, since the floor alone no longer can.
  */
 const POLICY_SPEC = {
   allowed_domains: ["github.com", "npmjs.org"],
   first_use_approval: "wait_for_review",
-  min_confinement_class: "CC1",
+  min_confinement_class: "CC2",
   eligible_grants: [],
 } as const;
 
 /**
  * How the SAVED policy's own fields must render — OUR spec, so these are
  * host-independent and safe to hardcode (unlike anything about the host's
- * barriers). "Fence" is CC_META.CC1.label (cc-meta.ts:46); "2 domains allowed"
+ * barriers). "Wall" is CC_META.CC2.label (cc-meta.ts:58); "2 domains allowed"
  * is egressSummary()'s exact phrasing (policies.tsx:87-91).
  */
-const POLICY_FLOOR_LABEL = "Fence";
+const POLICY_FLOOR_LABEL = "Wall";
 const POLICY_EGRESS_SUMMARY = "2 domains allowed";
 
 /**
  * B3's run. A Shell command, not an Agent task — see the file header's KEYLESS
- * note. The command does nothing that could fail: this video is not about what
- * the run DOES, only about which policy governed it.
+ * note. The echo can't fail; the curl is the allowlist's own trial (Sam: "an
+ * echo doesn't test an allowlist") — npmjs.org is one of POLICY_SPEC's own
+ * allowed_domains, so the finished run's ledger carries a real allow beside
+ * the implicit wardynd one every run gets. Template literal, not a plain
+ * string: the -w format string needs the shell's own single quotes, and its
+ * \n must stay the literal two characters backslash-n (written `\\n` here) —
+ * an unescaped `\n` in a JS template literal is a real newline, not text.
  */
 const DEMO_RUN_TITLE = "Nightly triage, governed by policy";
-const DEMO_COMMAND = 'echo "nightly triage: running under the saved policy"';
+const DEMO_COMMAND = `echo "nightly triage: running under the saved policy" && curl -sS -o /dev/null -w 'npmjs.org: %{http_code}\\n' https://npmjs.org`;
 
 // Real containers, so this is minutes. A ceiling for waiting on the PRODUCT —
 // the pacing the viewer sees comes from overlay.ts, never from here.
@@ -270,14 +290,22 @@ async function waitUnlessGone(
 // ---------------------------------------------------------------------------
 
 /**
- * Delete any policy already named POLICY_NAME, and read the host's own barrier
- * truth — both off camera, before the first beat.
+ * Delete any policy already named POLICY_NAME, sweep stale approvals/runs
+ * (S6), and read the host's own barrier truth — all off camera, before the
+ * first beat.
  *
  * The delete is per-take hygiene: a stale `nightly-triage` left by a prior
  * --no-reset take makes B2's getByRole("row", …) a strict-mode violation (two
  * matches), which fails confusingly halfway through rather than here. It is
  * also what makes this video immediately re-takeable: the second take is
  * byte-identical to the first.
+ *
+ * sweepStaleState() takes no workspace filter: this video attaches no
+ * workspace of its own, and sweep.ts's own comment sanctions the unscoped
+ * call — "the demo stack's runs are all the series' own". It clears the stuck
+ * Approvals badge from an earlier take; a stale red "Run failed" card has no
+ * delete API (same file's comment) and B1's opening owns naming that one on
+ * camera instead.
  *
  * Registered AFTER stage.ts's own beforeAll (import order), so stage() is
  * assigned by the time this runs. Re-guards on WARDYN_DEMO because this hook
@@ -288,6 +316,10 @@ test.beforeAll(async () => {
   if (!process.env.WARDYN_DEMO) return;
   const page = stage();
   const headers = apiHeaders();
+
+  // S6: deny stale pending approvals and kill any run still active from an
+  // earlier take, before the board is ever on camera.
+  await sweepStaleState();
 
   const health = await page.request.get("/healthz", { headers });
   expect(health.ok(), `GET /healthz failed (${health.status()}) — is the stack up on :8080?`).toBe(true);
@@ -339,6 +371,23 @@ test("B1 — barrier honesty", async () => {
     .toBe("object");
 
   await chapter(page, "Policies & confinement", "Governance you configure once, and every later run inherits");
+
+  // S6: sweepStaleState() (beforeAll) clears pending approvals and running
+  // holdouts, but a red "Run failed" card has no delete API (sweep.ts) — the
+  // only true board wipe is V01's reset. Name it once, on camera, rather than
+  // let it sit unremarked through these opening captions (~8s, all four
+  // personas flagged the silent stretch).
+  const staleFailed = page.getByText("Run failed — review what happened").first();
+  if (await staleFailed.isVisible().catch(() => false)) {
+    await spotlight(page, staleFailed);
+    await caption(
+      page,
+      "That red card is an earlier take's failed run — this board resets once, in video one, not between videos.",
+    );
+    await beat(page, PACE.read);
+    await spotlight(page, null);
+  }
+
   await caption(page, "Every run so far, you configured by hand.");
   await beat(page, PACE.read);
   await caption(page, "A policy makes governance reusable, and reviewable.");
@@ -355,7 +404,12 @@ test("B1 — barrier honesty", async () => {
   await expect(matrix).toBeVisible({ timeout: 30_000 });
 
   await caption(page, "This card names the barriers this machine can actually build.");
-  await spotlight(page, page.getByRole("heading", { name: "Host", level: 3, exact: true }));
+  // S3: ring the card, not the heading — the same heading→ancestor fix V01
+  // already applies to its own "Doesn't stop:" row.
+  await spotlight(
+    page,
+    page.getByRole("heading", { name: "Host", level: 3, exact: true }).locator("xpath=ancestor::section[1]"),
+  );
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -392,7 +446,19 @@ test("B1 — barrier honesty", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  await caption(page, "Wardyn never claims a barrier it cannot enforce.");
+  // S2: the honesty row sits low enough in the matrix to land under the
+  // caption bar if it's rung wherever it happens to be — center it first, the
+  // same fix V01 already applies to its own copy of this row.
+  const doesntStopRow = page.getByRole("row", { name: /^Doesn't stop:/ });
+  await centerInFrame(doesntStopRow);
+  await spotlight(page, doesntStopRow);
+  await caption(page, "And what each tier doesn't stop — the same honesty row, right here on Settings.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // Same complaint as V01: rewrite to what three green "Ready" columns can
+  // actually show, not a verdict this take can't prove.
+  await caption(page, "A tier this host couldn't build would show it here, disabled — this machine passed all three.");
   await beat(page, PACE.read);
 });
 
@@ -416,11 +482,27 @@ test("B2 — create a policy", async () => {
     "the New policy button is disabled — this session is not an operator (shoot in local mode)",
   ).toBeEnabled({ timeout: 30_000 });
 
-  await act(page, newPolicyBtn);
+  await act(page, newPolicyBtn, "New policy — opens straight into the spec.");
   const dlg = page.getByRole("dialog");
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
-  await caption(page, "Name it. The spec is four fields.");
+  // Sam: "the modal's own body text is the most interesting thing on screen."
+  // VERIFY the inline-floor clause against the server's confinement_floor
+  // behavior (composer/clamp.go's EffectiveConfinementFloor and risk.go's
+  // RequiredConfinementFloor both gate an inline spec exactly like a saved
+  // one — runs_create.go:437-450 — but re-check before speaking it as fact).
+  await spotlight(page, dlg.getByText(/admin-gated config/));
+  await caption(
+    page,
+    "Admin-gated, validated server-side — and an inline spec is still bound by the host's own floor.",
+  );
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  await caption(page, "Name it. The spec is JSON — four fields, written once by an admin.");
+  await beat(page, PACE.read);
+  await caption(page, "Most people never touch this page — you pick the result from a dropdown later.");
+  await beat(page, PACE.read);
   const nameBox = dlg.getByLabel("Name");
   await spotlight(page, nameBox);
   await nameBox.fill(POLICY_NAME);
@@ -433,11 +515,15 @@ test("B2 — create a policy", async () => {
   // prefilled starter, so no intermediate half-edited spec is ever on screen.
   const specBox = dlg.getByLabel("Spec (JSON)");
   await spotlight(page, specBox);
+  await caption(page, "The dialog starts you on a template — we paste our own spec over it.");
+  await beat(page, PACE.read);
   await specBox.fill(JSON.stringify(POLICY_SPEC, null, 2));
   await beat(page, PACE.read);
 
   await caption(page, "Two hosts allowed. Anything unlisted is held for your approval.");
   await beat(page, PACE.read);
+  await caption(page, "wait_for_review is the hold from video seven — and the CCs are Fence, Wall, Vault, by number.");
+  await beat(page, PACE.read + 300);
   await caption(page, "Min confinement class is the floor — the weakest barrier this policy accepts.");
   await beat(page, PACE.read);
   // The plan said "Set it to Wall, and this run refuses to start here." Wall is
@@ -449,27 +535,39 @@ test("B2 — create a policy", async () => {
   await beat(page, PACE.read + 500);
   await spotlight(page, null);
 
-  await act(page, dlg.getByRole("button", { name: "Create policy" }));
+  await act(page, dlg.getByRole("button", { name: "Create policy" }), "Create — validated server-side before it saves.");
   await expect(dlg).toBeHidden({ timeout: 30_000 });
 
   const row = page.getByRole("row", { name: new RegExp(POLICY_NAME) });
   await expect(row).toBeVisible({ timeout: 30_000 });
 
-  // THE PASTE, PROVEN. If .fill() had ever silently left the starter behind,
-  // this row's barrier chip would read Wall (STARTER_SPEC's CC2) and its egress
-  // chip "1 domain allowed" — and the run in B4 would be governed by a policy
-  // the narrator never described. Both are OUR spec's own values, so neither
-  // depends on what this host can build.
+  // THE PASTE, PROVEN — by the egress chip now: if .fill() had silently left
+  // the starter behind, this row would read "1 domain allowed" (STARTER_SPEC
+  // allows one host), not two. The barrier chip alone no longer tells the two
+  // specs apart — STARTER_SPEC also floors at CC2 (friction 3) — but it still
+  // confirms the saved row matches what we authored, so both stay asserted.
   await expect(
     row.getByText(POLICY_FLOOR_LABEL, { exact: true }),
-    "the saved policy's barrier floor is not Fence — the CC2 starter spec was saved instead of the pasted one",
+    "the saved policy's barrier floor is not Wall — it does not match what B2 pasted",
   ).toBeVisible();
-  await expect(row.getByText(POLICY_EGRESS_SUMMARY, { exact: true })).toBeVisible();
+  await expect(
+    row.getByText(POLICY_EGRESS_SUMMARY, { exact: true }),
+    "not '2 domains allowed' — the CC2 starter spec's one-host egress was saved instead of the pasted one",
+  ).toBeVisible();
 
   // ID column: Name(0), ID(1), Barrier(2), Egress(3), Attributes(4), Updated(5)
   // — policies.tsx:208-215's own column order.
   createdPolicyId = (await row.getByRole("cell").nth(1).textContent())?.trim() ?? "";
   expect(createdPolicyId, "policy row rendered but its ID cell read empty").not.toBe("");
+
+  // THE RECEIPT, HELD. All four personas called the bare UUID "a receipt in a
+  // language I wasn't given a dictionary for" — nothing here can translate it
+  // (there is no name beyond the one already on the row), so the fix is to
+  // hold on it long enough to read, and pay it off later at the run page.
+  await spotlight(page, row);
+  await caption(page, "Saved — two of two. That row's ID is what every run will cite as its receipt.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -507,7 +605,7 @@ test("B3 — use it", async () => {
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
 
-  await caption(page, "Barrier is the wall. Confinement is the promise. The policy carries both.");
+  await caption(page, "Barrier is the wall around the box; confinement is the rules at its door. The policy carries both.");
 
   // FRICTION (2), NOW FIXED — and this is the beat the plan could not have: the
   // rail no longer describes wizard state a saved-policy launch would drop. It
@@ -524,7 +622,22 @@ test("B3 — use it", async () => {
   await expect(railPolicy).toContainText("2 hosts allowed");
   await expect(railPolicy).toContainText("The network edits on this page do not apply to it.");
   await spotlight(page, railPolicy);
+  await caption(page, "Read the note: with a saved policy, the network edits on this page stop applying.");
   await beat(page, PACE.read + 600);
+  await spotlight(page, null);
+
+  // INERT-BUT-LIT (Sam/Priya/Dana, product finding (d) for the ledger): the
+  // LEFT form still shows Network radios and Barrier chips selected/enabled
+  // here too. Network truly is dead once a policy is attached (the note
+  // above); Barrier is NOT — it still sets this run's requested class, which
+  // B4 proves by deliberately picking a weaker one. This beat only owes the
+  // header reconcile: the rail's OWN Barrier chip (this host's default, still
+  // untouched at this point in the take) sits ABOVE the policy's Wall floor,
+  // which is the point — a floor is a minimum, not the setting.
+  const barrierRail = rail.getByText("Barrier", { exact: true }).locator("xpath=..");
+  await spotlight(page, barrierRail);
+  await caption(page, "Vault clears the Wall floor — a floor is a minimum, not the setting.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 });
 
@@ -536,20 +649,77 @@ test("B4 — launch, effective policy", async () => {
   test.setTimeout(600_000);
   const page = stage();
 
+  const rail = page.locator("aside").filter({ hasText: "What this run can do" });
   // The rail's launch-error line — the only danger-toned paragraph on this
   // screen (new-run-screen.tsx:933-938), and it renders the control plane's own
   // message verbatim. Raced against the navigate below so a refused launch
   // fails in a second with a cause, instead of a 3-minute URL timeout at the
   // end of an otherwise-finished take.
-  const launchError = page
-    .locator("aside")
-    .filter({ hasText: "What this run can do" })
-    .locator("p.text-danger");
+  const launchError = rail.locator("p.text-danger");
 
-  // SV15: the click plays silent — "Launch." was cut from the script; the lines
-  // after the boot carry the beat instead. SPRINT: nothing is spoken between
-  // here and the wait, because everything from here IS the wait.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  // ── THE FLOOR, FILMED ─────────────────────────────────────────────────
+  // The one claim in eight videos delivered without footage, per all four
+  // personas. B3 left the policy attached at whatever barrier this host
+  // defaults to (Vault, today — file header). Pick the weaker Fence
+  // explicitly, with the policy still attached, and see what the app does
+  // with the contradiction.
+  //
+  // REHEARSAL-VERIFY (read against new-run-screen.tsx as of 2026-08-20, not
+  // yet confirmed live): patch() (:234-254) detaches selectedPolicyId on ANY
+  // edit to confinementClass while a policy is attached, including this
+  // click — so the Fence radio's own `disabled` prop (host-capability only,
+  // :714) is NOT the signal that matters here; it reads enabled on this host
+  // (all three tiers build) and clicking it anyway drops the policy rather
+  // than reaching Launch with the contradiction intact. That IS the floor
+  // being enforced — just client-side instead of over the wire — and is
+  // filmed as the clamp. Branch on what actually happened (whether the
+  // rail's Policy section survived) rather than on the radio's disabled
+  // state: if it's gone, film the clamp; if a future change to patch()
+  // leaves it attached, Launch is attempted for real and raced against
+  // launchError for the 422/400 body — the original plan. Either branch
+  // re-attaches before the real Launch below, because B4's own assertions
+  // need this beat's exploration to end with the run still governed by
+  // createdPolicyId, not an inline stand-in.
+  const fenceRadio = page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: "Fence" });
+  await act(page, fenceRadio, "Pick the weaker Fence explicitly — with nightly-triage still attached.");
+
+  const stillAttached = await rail
+    .getByText(POLICY_NAME, { exact: true })
+    .isVisible()
+    .catch(() => false);
+
+  if (stillAttached) {
+    await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — below the floor, on purpose.");
+    await spotlight(page, launchError);
+    await expect(
+      launchError,
+      "the contradiction reached Launch but the control plane let it through",
+    ).toBeVisible({ timeout: 30_000 });
+    await caption(page, "And the control plane says no — the 422, rendered right here.");
+    await beat(page, PACE.read + 400);
+    await spotlight(page, null);
+  } else {
+    await spotlight(page, fenceRadio);
+    await caption(page, "And the policy let go — this page won't hold a barrier below what it requires.");
+    await beat(page, PACE.read);
+    await spotlight(page, null);
+  }
+
+  // Re-attach (or confirm) the policy so the launch below is the governed run
+  // B2/B3 built, not an inline stand-in. The picker cannot land the request
+  // above the policy's own floor (:674-690), so this also settles the run at
+  // Wall — "leave the clamp" rather than chase Vault back.
+  await act(page, page.getByRole("combobox", { name: "Saved policy" }));
+  await act(page, page.getByRole("option", { name: POLICY_NAME }));
+  await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
+  await caption(page, "Below the floor, the control plane refuses the launch. Pick at or above it, and it runs.");
+  await beat(page, PACE.read + 400);
+
+  // SV15: "Launch." was cut from the ORIGINAL script as redundant — but a
+  // silent click read as an unexplained jump to all four personas (S5), so
+  // one short line covers the act itself now. SPRINT: still nothing spoken
+  // between here and the wait, because everything from here IS the wait.
+  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — this time, at or above the floor.");
 
   // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go: "dispatch
   // is invoked synchronously from the create-run handler"), so the navigate does
@@ -602,9 +772,13 @@ test("B4 — launch, effective policy", async () => {
     "the launched run carries no policy_id (or the wrong one) — it did not launch by reference",
   ).toBe(createdPolicyId);
 
-  // The barrier the control plane ENFORCED, named by the server's own map. Not
-  // "Fence": on a host that can build more, the wizard resolves the strongest
-  // available class and the policy's CC1 is only the floor (file header).
+  // The barrier the control plane ENFORCED, named by the server's own map —
+  // read off the wire rather than hardcoded. Expect "Wall": the floor beat
+  // above re-attaches the policy through the Saved-policy combobox, which
+  // raises confinementClass no higher than the policy's own floor
+  // (new-run-screen.tsx:674-690), so this run's requested class is pinned to
+  // CC2 by construction now, not by whatever this host's default happens to
+  // be (file header).
   const enforcedLabel = hostNames[run.confinement_class] ?? String(run.confinement_class);
   // #main-content excludes the app-shell's OWN top-bar barrier chip, which shows
   // the host's strongest tier on every route — without this scope the run
@@ -617,6 +791,16 @@ test("B4 — launch, effective policy", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
+  // THE ALLOWLIST, EXERCISED. Sam: "an echo doesn't test an allowlist… the
+  // policy's main clause was never on trial." DEMO_COMMAND now actually
+  // reaches a policy-listed host, so this run's ledger carries more than the
+  // implicit wardynd control-channel allow every run gets.
+  const egressPanel = main.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
+  await spotlight(page, egressPanel);
+  await caption(page, "And the ledger shows the policy at work — npmjs.org allowed, nothing else asked for.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
   // The Identity widget's Policy row (identity.tsx:78-85) renders only when the
   // run HAS a policy_id — which is exactly the claim. Both cockpit presets place
   // the widget (widget-registry.ts:155-162), and this run is terminal by now, so
@@ -626,6 +810,8 @@ test("B4 — launch, effective policy", async () => {
   await expect(policyRow).toBeVisible({ timeout: 30_000 });
   await caption(page, "Not what you typed. What the control plane enforced.");
   await spotlight(page, policyRow);
+  await beat(page, PACE.read);
+  await caption(page, "That ID is nightly-triage's — the Policies page resolves it.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 

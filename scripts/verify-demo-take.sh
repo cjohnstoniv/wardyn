@@ -506,8 +506,11 @@ spec = (p or {}).get("spec") or {}
 # them. allowed_domains is compared as a SET: the server is free to sort it.
 print("V08_POL_HOSTS", sorted(spec.get("allowed_domains") or []) == ["github.com", "npmjs.org"])
 print("V08_POL_HOLD", (spec.get("first_use_approval") or "") == "wait_for_review")
-# The STARTER_SPEC trap (policies.tsx): its floor is CC2 and it allows exactly
-# one host. A CC2 here means the paste never replaced the prefilled editor.
+# The STARTER_SPEC trap (policies.tsx): its floor is ALSO CC2 now (the spec's
+# own floor moved CC1->CC2 so B4 can film a real floor refusal), so this field
+# alone can no longer catch a failed paste — V08_POL_HOSTS (two domains vs the
+# starter's one) is what still would. CC2 here just confirms the saved floor
+# matches what B2 pasted.
 print("V08_POL_FLOOR", (spec.get("min_confinement_class") or ""))
 # -1, not 0, when there is no policy at all: an absent row must never read as
 # "no grants" and score a PASS on a take that never created anything.
@@ -520,7 +523,7 @@ while read -r k v; do
     V08_POL_ID)     V08_POL_ID="$v" ;;
     V08_POL_HOSTS)  [[ "$v" == True ]] && ok "two allowed hosts (github.com, npmjs.org)" || bad "allowed_domains is not the pasted pair — the spec on camera is not the spec that saved" ;;
     V08_POL_HOLD)   [[ "$v" == True ]] && ok "first_use_approval=wait_for_review (unlisted hosts are HELD)" || bad "first_use_approval is not wait_for_review — 'held for your approval' is false" ;;
-    V08_POL_FLOOR)  [[ "$v" == CC1 ]] && ok "barrier floor CC1 (Fence) — the pasted spec, not the CC2 starter" || bad "min_confinement_class=${v}, want CC1 — the CC2 STARTER_SPEC was saved instead of the paste" ;;
+    V08_POL_FLOOR)  [[ "$v" == CC2 ]] && ok "barrier floor CC2 (Wall) — the pasted spec's own floor" || bad "min_confinement_class=${v}, want CC2 — the saved policy does not match what B2 pasted" ;;
     V08_POL_GRANTS) case "$v" in
                       0)  ok "no credential grants" ;;
                       -1) bad "no policy to read grants from" ;;
