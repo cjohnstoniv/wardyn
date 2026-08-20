@@ -5,9 +5,10 @@
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
 `wardyn attach`) shows. It authenticates registered **public keys only** (no
-passwords) and is **owner-only**: a human may SSH into a run only if they
-created it. An admin reaching someone else's run still uses the web terminal
-— see [Bounds](#bounds) for why that gap is real, not an oversight.
+passwords) and is **owner-or-admin**: a human may SSH into a run they
+created, or — if their key was registered while they held the admin role —
+into anyone's. That admin half is a registration-time stamp, not a live role
+check; see [Bounds](#bounds) for the ceiling that comes with it.
 
 The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is
 set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`,
@@ -21,7 +22,7 @@ key** — paste your public key (the console never asks for a private key; the
 paste field's own helper line says so, and pasting one is refused
 server-side with a specific error). A key registered against your SSO
 session lands under your OIDC `sub` — the only principal the gateway's
-owner-only check (below) will ever match against a run you created.
+owner check (below) will ever match against a run you created.
 
 **Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
 registers the key against the shared, non-human `admin-token` principal, not
