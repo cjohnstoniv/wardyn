@@ -210,7 +210,7 @@ func TestListApprovals_AllStates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestClient(srv).ListApprovals(context.Background(), "")
+	got, err := newTestClient(srv).ListApprovals(context.Background(), "", uuid.Nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,8 +228,39 @@ func TestListApprovals_StateFilter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).ListApprovals(context.Background(), types.ApprovalPending)
+	_, err := newTestClient(srv).ListApprovals(context.Background(), types.ApprovalPending, uuid.Nil)
 	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ListApprovals's runID param is the fix for the server's ?run_id= filter
+// being otherwise unreachable from the SDK (W19-S1-4 / W20-hold-fsm-7): a
+// non-nil runID must reach the wire, and uuid.Nil must not add the param at
+// all (an empty ?run_id= would 400 on the server, which parses it with
+// uuid.Parse).
+func TestListApprovals_RunIDFilter(t *testing.T) {
+	runID := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("run_id"); got != runID.String() {
+			t.Errorf("got run_id %q, want %s", got, runID)
+		}
+		writeJSON(w, http.StatusOK, []types.ApprovalRequest{})
+	}))
+	defer srv.Close()
+
+	if _, err := newTestClient(srv).ListApprovals(context.Background(), "", runID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("run_id") {
+			t.Errorf("expected no run_id param for uuid.Nil, got %q", r.URL.RawQuery)
+		}
+		writeJSON(w, http.StatusOK, []types.ApprovalRequest{})
+	}))
+	defer srv2.Close()
+	if _, err := newTestClient(srv2).ListApprovals(context.Background(), "", uuid.Nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
