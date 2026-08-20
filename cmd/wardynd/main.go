@@ -47,11 +47,12 @@ import (
 
 // Secret names seeded/used at boot.
 const (
-	secretSigningKey   = "wardyn-signing-key"  // embedded identity ES256 PEM
-	secretGitHubAppID  = "github-app-id"       // GitHub App numeric id
-	secretGitHubAppKey = "github-app-key"      // GitHub App PEM private key
-	secretSessionKey   = "wardyn-session-key"  // OIDC session-cookie HMAC key (32 bytes)
-	secretSSHHostKey   = "wardyn-ssh-host-key" // SSH gateway ed25519 host key PEM
+	secretSigningKey   = "wardyn-signing-key"    // embedded identity ES256 PEM
+	secretGitHubAppID  = "github-app-id"         // GitHub App numeric id
+	secretGitHubAppKey = "github-app-key"        // GitHub App PEM private key
+	secretSessionKey   = "wardyn-session-key"    // OIDC session-cookie HMAC key (32 bytes)
+	secretSSHHostKey   = "wardyn-ssh-host-key"   // SSH gateway ed25519 host key PEM
+	secretUISessionKey = "wardyn-ui-session-key" // UI-sandbox relay cookie HMAC key (32 bytes)
 )
 
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
@@ -102,6 +103,9 @@ func run() error {
 	// unit-testable without standing up the whole daemon.
 	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.listen, *f.tlsTerminated, *f.allowPlaintextListen)
 	if err != nil {
+		return err
+	}
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate); err != nil {
 		return err
 	}
 
@@ -294,6 +298,13 @@ func run() error {
 		SSHListenAddr:    *f.sshListen,
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
+		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
+		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
+		// checks both.
+		UIListenAddr:     *f.uiListen,
+		UIAdvertiseURL:   *f.uiAdvertise,
+		UIOriginTemplate: *f.uiOriginTemplate,
+		UISessionKey:     feats.uiSessionKey,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -307,6 +318,10 @@ func run() error {
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
 	startSSHGateway(rootCtx, f, srv)
+
+	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
+	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
+	startUISandboxGateway(rootCtx, f, posture, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
@@ -358,6 +373,77 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 		tlsEnabled:    tlsEnabled,
 		secureCookies: tlsEnabled || tlsTerminated,
 	}, nil
+}
+
+// validateUISandboxConfig is the UI-sandbox gateway's boot-time fail-closed
+// rule, kept beside validateConfig and pure for the same reason.
+//
+// The refusal that matters is the SAME-ADDRESS one. Everything the gateway
+// relays is the sandbox's OWN code, and the only thing keeping that code away
+// from the console's session storage and admin actions is that it arrives on a
+// different browser origin. Bound to the console's address, the gateway would
+// not merely fail to listen twice — the feature's entire security argument
+// would be false. So it is refused loudly here, in terms of what breaks, rather
+// than surfacing as "address already in use". The SSH gateway's address is
+// checked too: a shared port there is a plain misconfiguration, but it is one
+// boot can name instead of leaving to a bind error.
+//
+// The origin template, when set, must carry {run} — a template without it would
+// hand EVERY run the same host, silently turning per-run isolation back into
+// the shared origin it exists to replace.
+func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string) error {
+	if uiListen == "" {
+		return nil // off: nothing to validate, no listener, no new surface
+	}
+	if sameListenAddress(uiListen, listen) {
+		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -listen — "+
+			"the UI-sandbox gateway relays the SANDBOX's own pages, and serving them on the console's origin would let that "+
+			"sandbox-authored code read the console session and drive every admin action the operator can; "+
+			"give the gateway its own address (e.g. \":8081\") or unset WARDYN_UI_SANDBOX_LISTEN to disable it", uiListen)
+	}
+	if sshListen != "" && sameListenAddress(uiListen, sshListen) {
+		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -ssh-listen; give each gateway its own address", uiListen)
+	}
+	if originTemplate != "" && !strings.Contains(originTemplate, "{run}") {
+		return fmt.Errorf("refusing to start: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE %q has no {run} placeholder — "+
+			"every run would share one origin while the deployment claims per-run isolation; "+
+			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
+	}
+	return nil
+}
+
+// sameListenAddress reports whether two listen addresses name the same bind.
+// Ports must match; hosts match when they are literally equal or when both are
+// the "everything" bind (empty, 0.0.0.0, ::) — ":8080" and "0.0.0.0:8080" are
+// one address, and either collides with a specific host on the same port too,
+// which is why an unspecified host on a matching port counts as the same.
+func sameListenAddress(a, b string) bool {
+	ah, ap := listenHost(a), listenPort(a)
+	bh, bp := listenHost(b), listenPort(b)
+	if ap != bp || ap == "" {
+		return false
+	}
+	if strings.EqualFold(ah, bh) {
+		return true
+	}
+	return listenHostIsUnspecified(ah) || listenHostIsUnspecified(bh)
+}
+
+// listenPort is listenHost's twin: the port half of a listen address, or "".
+func listenPort(listen string) string {
+	if _, port, err := net.SplitHostPort(listen); err == nil {
+		return strings.TrimSpace(port)
+	}
+	return ""
+}
+
+// listenHostIsUnspecified reports whether host binds every interface.
+func listenHostIsUnspecified(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
 }
 
 // validateOperatorPosture is the second boot-time fail-closed rule, kept beside
@@ -616,6 +702,26 @@ func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte
 				return nil, fmt.Errorf("generate session key: %w", gerr)
 			}
 			slog.Info("wardynd: generated and persisted OIDC session key")
+			return key, nil
+		},
+	)
+}
+
+// loadOrCreateUISessionKey returns the UI-sandbox gateway's relay-cookie HMAC
+// key, persisted in the secret store and generated on first boot — the same
+// loadOrCreateSecret pattern as the signing/session/SSH-host keys. It is
+// SEPARATE from the OIDC session key on purpose: the two cookies live on
+// different origins and authorize different things, so one key must never be
+// able to forge the other's cookie.
+func loadOrCreateUISessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
+	return loadOrCreateSecret(ctx, secrets, secretUISessionKey,
+		func(b []byte) bool { return len(b) >= 32 },
+		func() ([]byte, error) {
+			key := make([]byte, 32)
+			if _, gerr := rand.Read(key); gerr != nil {
+				return nil, fmt.Errorf("generate ui session key: %w", gerr)
+			}
+			slog.Info("wardynd: generated and persisted UI-sandbox relay cookie key")
 			return key, nil
 		},
 	)

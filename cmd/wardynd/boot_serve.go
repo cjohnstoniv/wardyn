@@ -125,6 +125,53 @@ func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
 	})
 }
 
+// startUISandboxGateway launches the UI-sandbox gateway's own HTTP(S) listener
+// in its own goroutine, like startSSHGateway above. A no-op when
+// -ui-sandbox-listen is empty (off = no listener, no new surface) or when the
+// server built no handler for it.
+//
+// It is a SECOND http.Server, not a route on the console's: that separation is
+// the security control (see internal/api/uigateway.go's header), and boot has
+// already refused a UI address equal to the console's. It reuses the SAME TLS
+// cert/key — one certificate, two names is a deployment detail, and a
+// deployment that terminates TLS upstream terminates both the same way.
+//
+// The timeouts mirror serveAndShutdown's for the same reasons: no whole-request
+// deadline (a relayed editor holds a long-lived streaming connection), a
+// header-read deadline, and a capped header size. Shutdown rides rootCtx: the
+// listener closes when the daemon does.
+func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server) {
+	handler := srv.UIGatewayHandler()
+	if *f.uiListen == "" || handler == nil {
+		return
+	}
+	httpSrv := &http.Server{
+		Addr:              *f.uiListen,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	go goSafe("ui.gateway", func() {
+		<-rootCtx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
+	})
+	go goSafe("ui.gateway.serve", func() {
+		slog.Info("wardynd: ui-sandbox gateway listening", slog.String("listen", *f.uiListen), slog.Bool("tls", posture.tlsEnabled))
+		var err error
+		if posture.tlsEnabled {
+			err = httpSrv.ListenAndServeTLS(*f.tlsCert, *f.tlsKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("wardynd: ui-sandbox gateway stopped", slog.Any("err", err))
+		}
+	})
+}
+
 // serveAndShutdown runs the HTTP(S) server until a shutdown signal or a serve
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are

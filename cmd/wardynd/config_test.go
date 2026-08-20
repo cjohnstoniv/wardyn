@@ -509,3 +509,71 @@ func TestBedrockAWSProfile_FallsBackToStandardAWSProfile(t *testing.T) {
 		t.Fatalf("bedrockAWSProfile = %q, want wardyn-only (Wardyn-specific must win)", got)
 	}
 }
+
+// ─── validateUISandboxConfig: the second origin must actually be a second one ──
+
+// TestValidateUISandboxConfig is the UI-sandbox gateway's boot contract. The
+// same-address case is the one that matters: the gateway relays the SANDBOX's
+// own pages, and the ONLY thing keeping that code away from the console's
+// session is that it arrives on a different browser origin. Bound to the
+// console's address, the feature's whole security argument would be false — so
+// boot refuses, in terms of what breaks.
+func TestValidateUISandboxConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		uiListen       string
+		listen         string
+		sshListen      string
+		originTemplate string
+		wantErr        string // substring; empty = must succeed
+	}{
+		{name: "off is always fine", listen: ":8080"},
+		{name: "distinct ports", uiListen: ":8081", listen: ":8080"},
+		{name: "distinct hosts and ports", uiListen: "127.0.0.1:8081", listen: "127.0.0.1:8080", sshListen: ":2222"},
+		{
+			name: "identical address refused", uiListen: ":8080", listen: ":8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			// ":8080" and "0.0.0.0:8080" are one bind; the refusal must see
+			// through the spelling, not compare strings.
+			name: "unspecified host still collides", uiListen: "0.0.0.0:8080", listen: ":8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			name:     "unspecified UI bind collides with a specific console bind",
+			uiListen: ":8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			name: "ssh gateway address collides", uiListen: ":2222", listen: ":8080", sshListen: ":2222",
+			wantErr: "same address as -ssh-listen",
+		},
+		{
+			name:     "origin template without a run placeholder refused",
+			uiListen: ":8081", listen: ":8080", originTemplate: "https://ui.example.com",
+			wantErr: "{run}",
+		},
+		{
+			name: "origin template with a run placeholder", uiListen: ":8081", listen: ":8080",
+			originTemplate: "https://run-{run}.ui.example.com",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want accepted, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("want refused, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
