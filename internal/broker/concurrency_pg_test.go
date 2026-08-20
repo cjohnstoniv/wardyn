@@ -492,3 +492,64 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 		t.Fatalf("github minter calls = %d, want >= 1 (winner must mint)", gh.Calls)
 	}
 }
+
+// TestPG_ExpiredApproval_ReRaisesPending is the REAL-SQL regression for
+// W19-W19c-2 (the fake-DB twin in broker_test.go exercises the fake's own
+// branch, not the query). The sweeper (approval.ExpireStale) EXPIREs a stale
+// PENDING credential approval; the next mint must raise a FRESH PENDING row a
+// human can still decide — not re-find the swept row forever and map it to
+// ErrApprovalDenied, wedging the run with nothing in the approval queue.
+// Fails RED against the pre-fix WHERE clause (no `state <> 'EXPIRED'`).
+func TestPG_ExpiredApproval_ReRaisesPending(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+
+	runID := uuid.New()
+	seedRun(ctx, t, pool, runID)
+	defer func() { _, _ = pool.Exec(ctx, `DELETE FROM agent_runs WHERE id=$1`, runID) }()
+
+	scope := pgGithubScope(t)
+	spec := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope, RequiresApproval: true, TTLSeconds: 600}
+	grantID := pgSeedGrant(ctx, t, pool, runID, spec)
+
+	// The swept row: what ExpireStale leaves behind. requested_at is backdated so
+	// a re-raised PENDING is unambiguously the newer row.
+	swept := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO approvals (id, run_id, grant_id, kind, requested_scope, state, requested_at, reason)
+		 VALUES ($1,$2,$3,'credential',$4,'EXPIRED', now() - interval '1 hour', 'stale')`,
+		swept, runID, grantID, []byte(scope)); err != nil {
+		t.Fatalf("seed expired approval: %v", err)
+	}
+
+	gh := &FakeGitHubMinter{Token: "ghs_should_not_mint"}
+	_, err := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh).
+		MintForGrant(ctx, callerFor(runID), grantID)
+	var pend ErrApprovalPending
+	if !errors.As(err, &pend) {
+		t.Fatalf("want ErrApprovalPending after an expiry sweep, got %v", err)
+	}
+	if pend.ApprovalID == swept {
+		t.Fatal("re-raised the SWEPT approval id; want a new PENDING row")
+	}
+	if gh.Calls != 0 {
+		t.Fatalf("github minter called %d times, want 0 (nothing is approved yet)", gh.Calls)
+	}
+
+	var freshState string
+	if err := pool.QueryRow(ctx, `SELECT state FROM approvals WHERE id=$1`, pend.ApprovalID).Scan(&freshState); err != nil {
+		t.Fatalf("read re-raised approval: %v", err)
+	}
+	if freshState != string(types.ApprovalPending) {
+		t.Fatalf("re-raised approval state = %s, want PENDING", freshState)
+	}
+	// The expiry stays on the record: the sweep is history, not something the
+	// recovery rewrites.
+	var sweptState string
+	if err := pool.QueryRow(ctx, `SELECT state FROM approvals WHERE id=$1`, swept).Scan(&sweptState); err != nil {
+		t.Fatalf("read swept approval: %v", err)
+	}
+	if sweptState != string(types.ApprovalExpired) {
+		t.Fatalf("swept approval state = %s, want EXPIRED", sweptState)
+	}
+}
