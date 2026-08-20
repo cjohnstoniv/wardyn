@@ -294,7 +294,10 @@ headlessly, only if you *also* set `WARDYN_FORCE_STOP_HOST=1`
 (`WARDYN_FORCE_RESET=1` alone confirms the volume wipe and nothing else, so it
 never silently kills a host-mode daemon it wasn't asked to touch). To reset
 host mode instead, `make stop-host && make setup`. `make doctor` is read-only
-— re-run it any time to re-check this host's capabilities.
+— it creates and changes nothing on this host — so re-run it any time to
+re-check this host's capabilities. (Its one container is a throwaway
+`alpine:3.20 test -S`, run `--pull=never` to check whether your docker socket
+is bind-mountable, and skipped outright when that image isn't already local.)
 
 ### When it goes wrong
 
