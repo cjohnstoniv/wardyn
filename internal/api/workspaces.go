@@ -665,6 +665,14 @@ const (
 // already approved. These are candidates an operator can promote into the
 // workspace's approved-egress list. Read-only and advisory — it never widens
 // anything itself.
+//
+// W25-S1-2: the route is member-reachable, so the run scan is filtered by
+// ownsRunOrAdmin — the same owner-or-admin predicate handleListRuns and
+// getRunAuthorized use. Every host returned comes from a RUN's audit trail;
+// unfiltered, a member learned which hosts a colleague's run on the shared
+// workspace dialled — exactly the run telemetry getRunAuthorized 404s them out
+// of on /runs/{id}. An admin still sees the whole workspace's telemetry, which
+// is what the operator-owned promote flow needs.
 func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -698,7 +706,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 		if scanned >= maxObservedRuns {
 			break
 		}
-		if !runUsesWorkspace(run, ws) {
+		if !runUsesWorkspace(run, ws) || !s.ownsRunOrAdmin(r, run) {
 			continue
 		}
 		scanned++
