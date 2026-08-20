@@ -247,14 +247,25 @@ step "pinning the Service node ports to match the kind port mappings"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" patch service "${RELEASE}" -p \
   "{\"spec\":{\"ports\":[{\"port\":${HTTP_PORT},\"nodePort\":${NODE_HTTP_PORT}},{\"port\":${SSH_PORT},\"nodePort\":${NODE_SSH_PORT}}]}}"
 
+# A 200 is NOT proof: any other daemon holding this host port answers one too,
+# and one holding 127.0.0.1 specifically beats this container's publication on
+# every loopback connection. So assert the ONE field that identifies what
+# answered as the install this script just made — the k8s runner substrate.
+# (The kind config now binds loopback explicitly so such a collision fails at
+# cluster-create; this catches a port stolen later, or a re-run over one.)
 step "proving /healthz through the published NodePort"
 ok=0
 for _ in $(seq 1 30); do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${HTTP_PORT}/healthz" || true)"
-  if [[ "${code}" == "200" ]]; then ok=1; break; fi
+  body="$(curl -s "http://127.0.0.1:${HTTP_PORT}/healthz" || true)"
+  if [[ "${body}" == *'"runner":"k8s"'* ]]; then ok=1; break; fi
   sleep 2
 done
-[[ "${ok}" == "1" ]] || die "/healthz never returned 200 on http://127.0.0.1:${HTTP_PORT} (last code: ${code:-none})"
+if [[ "${ok}" != "1" ]]; then
+  if [[ -n "${body}" ]]; then
+    die "http://127.0.0.1:${HTTP_PORT}/healthz answered, but not with runner=k8s — another daemon owns that host port (a compose stack on 127.0.0.1:${HTTP_PORT}?). Free it and re-run. Body: ${body}"
+  fi
+  die "/healthz never answered on http://127.0.0.1:${HTTP_PORT}"
+fi
 
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods
 
