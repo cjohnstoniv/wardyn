@@ -4,12 +4,15 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -138,6 +141,63 @@ func TestRedactPolicyForRead(t *testing.T) {
 	plain := types.RunPolicy{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
 	if got := redactPolicyForRead(plain); got.Spec.LLMInspection != nil {
 		t.Errorf("a policy with no llm_inspection must pass through unchanged, got %+v", got.Spec.LLMInspection)
+	}
+}
+
+// TestGetDefaultPolicy pins W14-S1-6: the control plane's ceiling policy
+// (Config.DefaultPolicy — the same value composer.Clamp bounds a member's
+// inline policy against) is now readable, redacted the same way a stored
+// policy's read path is. "default" is a static route registered ahead of
+// /policies/{id}, so it must never fall into parseIDParam's bad-uuid 400.
+func TestGetDefaultPolicy(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"api.anthropic.com"},
+		LLMInspection: &types.LLMInspectionSpec{
+			Mode: "alert", DetectSecrets: true,
+			WorkspaceSecretValues: []string{"must-never-be-read-back"},
+		},
+	}
+	w := do(t, h.srv, http.MethodGet, "/api/v1/policies/default", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.RunPolicySpec
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.MinConfinementClass != types.CC2 {
+		t.Errorf("min_confinement_class = %q, want CC2", got.MinConfinementClass)
+	}
+	if got.LLMInspection == nil || strings.Contains(got.LLMInspection.WorkspaceSecretValues[0], "must-never-be-read-back") {
+		t.Errorf("W12-S1-1 redaction not applied to the default-policy read: %+v", got.LLMInspection)
+	}
+}
+
+// duplicateNamePolicyStore fakes the run_policies.name UNIQUE constraint's
+// 23505 failure that store.PG.CreatePolicy now maps to store.ErrConflict.
+type duplicateNamePolicyStore struct {
+	store.Store
+}
+
+func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (types.RunPolicy, error) {
+	return types.RunPolicy{}, store.ErrConflict
+}
+
+// TestCreatePolicyDuplicateName pins W20-S1-3: a duplicate policy name must
+// surface as a caller-actionable 409, never handleCreatePolicy's former
+// blanket 500 (raw driver error text).
+func TestCreatePolicyDuplicateName(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, duplicateNamePolicyStore{}))
+	w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken,
+		`{"name":"prod","spec":{"min_confinement_class":"CC2"}}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if w.Code == http.StatusInternalServerError {
+		t.Errorf("must never fall through to the raw-500 path")
 	}
 }
 

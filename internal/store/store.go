@@ -217,7 +217,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 
 // ─── RunPolicy ───────────────────────────────────────────────────────────────
 
-// CreatePolicy inserts a policy and returns the persisted row.
+// CreatePolicy inserts a policy and returns the persisted row. Returns
+// ErrConflict when the name's UNIQUE constraint (run_policies.name) rejects a
+// duplicate — the caller maps that to 409, never the raw driver error (W20-S1-3).
 func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
@@ -227,7 +229,15 @@ func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolic
 		INSERT INTO run_policies (id, name, created_at, updated_at, spec)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, created_at, updated_at, spec`
-	return scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.RunPolicy{}, ErrConflict
+		}
+		return types.RunPolicy{}, err
+	}
+	return out, nil
 }
 
 // GetPolicy returns the policy for id, or ErrNotFound.
