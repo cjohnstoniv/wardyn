@@ -105,6 +105,18 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 
 // Evict removes all per-run secrets for runID. Process-global secrets are
 // unaffected. Idempotent.
+//
+// NO production path calls this today, so a run's corpus lives as long as the
+// process — a bound worth closing, but NOT by evicting where it first looks
+// natural. Every masking site takes its Snapshot lazily, at use time, and
+// several of those uses come AFTER the run is terminal: the audit recorder
+// masks each event's Data/Target as it is recorded (cmd/wardynd's
+// maskingRecorder), including the finalize audit and any teardown_error a
+// failed StopSandbox attaches, and a Snapshot that returns nothing masks
+// nothing — this layer fails OPEN by design. Evicting inside finalizeRunTail
+// therefore unmasks the very events most likely to quote a credential. A
+// future eviction lane has to run after the last reader, not at the run's
+// terminal transition.
 func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
