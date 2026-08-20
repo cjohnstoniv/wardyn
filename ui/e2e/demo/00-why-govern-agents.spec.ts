@@ -84,10 +84,10 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Every dependency install executes code strangers wrote — beside your credentials.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-script"));
-  await caption(page, "Build scripts and postinstall hooks run with whatever your shell can reach.");
+  await caption(page, "Build scripts and install hooks run with everything your shell can reach — and the shell reaches the whole machine.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-ci"));
-  await caption(page, "And CI runs all of it unattended, with the deploy keys nearby.");
+  await caption(page, "And CI — the robot that runs your team's checks — runs it all unattended, with the deploy keys nearby.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#s1-supply"));
   await caption(page, "Supply-chain attacks live exactly here — one compromised package, reading your environment and shipping it out.");
@@ -106,9 +106,10 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#agent-caps"));
   await caption(page, "It runs commands, edits files, installs packages, calls APIs. Anything your shell can do, it can do.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
+  await spotlight(page, page.locator("#s2-eager"));
   await caption(page, "It is not malicious. It is eager, fast, and working unsupervised at two in the morning.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // --- S3 · the exhibit -------------------------------------------------------
   await show(page, "s3");
@@ -117,6 +118,8 @@ test("V00 — why govern agents (the primer)", async () => {
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-pending"));
   await caption(page, "Its own tooling reached for a telemetry endpoint — its usage reporting. Nobody asked for that; it is just what the tool does.");
+  await beat(page, PACE.read);
+  await caption(page, "Harmless-looking, today. But anything that leaves, leaves through this same door — code, credentials, your data.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-quote"));
   await caption(page, "Caught at the door and held — parked until a human decides. Most setups never even see it leave.");
@@ -156,9 +159,19 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, null);
 
   // --- S6 · observe, then decide ------------------------------------------------
+  // Three numbered cards, three beats — one blob ring over a numbered sequence
+  // was Sam's "missed beat"; the loop is the product idea and earns its rhythm.
   await show(page, "s6");
-  await spotlight(page, page.locator("#steps"));
-  await caption(page, "So don't guess. Run the job once, watched. See every host it actually reached. Then decide — on evidence.");
+  await spotlight(page, page.locator("#steps > .card").nth(0));
+  await caption(page, "So don't guess. Run the job once, watched.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.locator("#steps > .card").nth(1));
+  await caption(page, "See every host it actually reached — evidence, not a wishlist.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.locator("#steps > .card").nth(2));
+  await caption(page, "Then decide: yes, no, or ask me — and it lands on the record.");
+  await beat(page, PACE.read);
+  await caption(page, "Turning one watched run into a policy you keep — that is episode nine.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#s6-thesis"));
   await caption(page, "One boundary, the same discipline — for your builds, your pipelines, and your agents.");
@@ -167,7 +180,7 @@ test("V00 — why govern agents (the primer)", async () => {
 
   // --- S7 · the series map --------------------------------------------------------
   await show(page, "s7");
-  await caption(page, "The rest of this series stands that answer up for real — Wardyn: open source, on your own machine, every claim proved on camera.");
+  await caption(page, "The rest of this series stands that answer up for real — Wardyn: open source, one command on your own machine, every claim proved on camera.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#roadmap"));
   await caption(page, "Eleven more episodes, about three minutes each. Here is the map.");

@@ -130,6 +130,16 @@ if [[ -n "${VIDEO}" && "${VIDEO}" != "01" && "${RESET_EXPLICIT}" == 0 ]]; then
   DO_RESET=0
 fi
 
+# Video 00 (the primer) is a slides-lane take: a local HTML deck over file://,
+# recorded like any console take but touching NO product surface. It needs no
+# stack, no workspace, no model token — and it must never gate on (or mutate)
+# whatever happens to be answering :8080, which is not necessarily the series
+# stack (a quickstart squatting the port with bearer auth killed a rehearsal
+# at the subscription-connect step for a video that never uses the model).
+STACKLESS=0
+[[ "${VIDEO}" == "00" ]] && STACKLESS=1
+[[ "${STACKLESS}" == 1 ]] && DO_RESET=0
+
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1;35m═══ %s\033[0m\n\n' "$*"; }
 die()  { printf '\033[1;31m[record-demo] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -283,8 +293,8 @@ fi
 
 # Model access. The token is read from a file and piped, so it is never an
 # argument, never in the environment of a child we do not control, and never
-# rendered on camera.
-if [[ -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
+# rendered on camera. A stackless take uses no model at all.
+if [[ "${STACKLESS}" == 0 && -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
   die "no Claude subscription token. Run:  claude setup-token > ${TOKEN_FILE}   (or export WARDYN_SUBSCRIPTION_TOKEN)"
 fi
 
@@ -318,6 +328,7 @@ log "preflight OK"
 
 # --- workspace --------------------------------------------------------------
 
+if [[ "${STACKLESS}" == 0 ]]; then
 step "Materializing the demo workspace"
 
 # Rebuilt from the fixture every time: a previous recording left the agent's
@@ -334,6 +345,7 @@ rm -f "${WORKSPACE_PATH}/TASK.md"   # director's notes, not part of the project 
   git -c user.email=demo@wardyn.local -c user.name="Wardyn Demo" commit -qm "slugify demo workspace"
 ) || die "could not git init the workspace"
 log "seeded $(find "${WORKSPACE_PATH}" -type f -not -path '*/.git/*' | wc -l) files at ${WORKSPACE_PATH}"
+fi # STACKLESS
 
 # --- capture ----------------------------------------------------------------
 
@@ -405,6 +417,9 @@ if [[ "${DO_RESET}" == 1 ]]; then
   # dead air, and they are not what the video is about.
 fi
 
+if [[ "${STACKLESS}" == 1 ]]; then
+  step "Act 0 · skipped (slides-lane take — no stack involved)"
+else
 # Skip setup entirely when we did not reset and the stack is already answering.
 #
 # `make setup` rebuilds the image and re-ups the compose project. That is
@@ -443,6 +458,7 @@ else
     || die "subscription connect failed"
 fi
 ./wardyn setup status || true
+fi # STACKLESS
 
 # --- the terminal beats -----------------------------------------------------
 
