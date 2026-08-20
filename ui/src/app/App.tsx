@@ -242,6 +242,7 @@ export default function App() {
               attentionCount={attentionCount}
               unreachable={!!setupStatus?.unreachable}
               lastOkAt={lastOkAt}
+              confinementClasses={setupStatus?.unreachable ? undefined : setupStatus?.runner?.confinement_classes}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token

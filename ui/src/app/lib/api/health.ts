@@ -175,6 +175,10 @@ export const health = {
     operator: boolean;
     role: "admin" | "member";
     email: string;
+    // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
+    // present only for method:"sso". Absent for local/token auth, which has
+    // no session to expire.
+    session_expires_at?: string;
   } | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
@@ -185,6 +189,7 @@ export const health = {
         operator: boolean;
         role: "admin" | "member";
         email: string;
+        session_expires_at?: string;
       };
     } catch {
       return null;

@@ -497,6 +497,16 @@ func RoleFromContext(ctx context.Context) string {
 	return r
 }
 
+// ExpiryFromContext returns when the session Middleware verified will expire,
+// or the zero time when there is no SSO session. W31-S1-7: there is no
+// refresh — the session dies outright at this instant — so the console
+// surfaces it as an advance warning instead of a surprise 401 that wipes
+// mid-work state back to the sign-in gate.
+func ExpiryFromContext(ctx context.Context) time.Time {
+	t, _ := ctx.Value(expiryCtxKey{}).(time.Time)
+	return t
+}
+
 // GroupsFromContext returns the login-time group snapshot of the session
 // Middleware verified — the subjects a `group` capability grant matches.
 //
@@ -673,7 +683,8 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
-	return context.WithValue(ctx, roleCtxKey{}, sess.Role)
+	ctx = context.WithValue(ctx, roleCtxKey{}, sess.Role)
+	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
 // ─── constants ───────────────────────────────────────────────────────────────
@@ -700,6 +711,10 @@ type roleCtxKey struct{}
 // groupsCtxKey is the context key for the session's login-time group snapshot.
 // Unexported: use GroupsFromContext.
 type groupsCtxKey struct{}
+
+// expiryCtxKey is the context key for the session's expiry.
+// Unexported: use ExpiryFromContext.
+type expiryCtxKey struct{}
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────
 
