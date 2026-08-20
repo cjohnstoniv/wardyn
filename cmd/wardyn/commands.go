@@ -827,8 +827,16 @@ only at the end.`,
 				if !follow {
 					return nil
 				}
+				// A failed GetRun is fatal, not a reason to keep polling: an
+				// unknown/typo'd id 404s (the audit endpoint happily answers
+				// 200 [] for it) and an unauthorized caller 401/403s, so
+				// swallowing the error left `wardyn logs` looping silently
+				// forever instead of reporting it.
 				run, err := c.GetRun(cmd.Context(), id)
-				if err == nil && run.State.IsTerminal() {
+				if err != nil {
+					return err
+				}
+				if run.State.IsTerminal() {
 					return nil
 				}
 				select {

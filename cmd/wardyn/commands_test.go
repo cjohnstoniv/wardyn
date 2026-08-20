@@ -1048,9 +1048,12 @@ func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	out := captureStdoutViaCmd(t, func(root *cobra.Command) {
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
 		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
 	if !strings.Contains(out, "run.dispatch") {
 		t.Errorf("logs output = %q, want it to contain the dispatched event", out)
 	}
@@ -1059,12 +1062,34 @@ func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
 	}
 }
 
-// captureStdoutViaCmd builds rootCmd(), lets configure set its args/flags,
-// executes it with stdout captured (logsCmd writes via cmd.OutOrStdout(),
-// which SetOut would normally redirect, but this helper keeps parity with
-// the other list commands' os.Stdout-based tests and doubles as the timeout
-// backstop for a follow loop that fails to exit).
-func captureStdoutViaCmd(t *testing.T, configure func(root *cobra.Command)) string {
+// TestLogsCmd_UnknownRunErrorsInsteadOfHanging: the audit endpoint answers
+// 200 [] for a run id it has never seen, so an unknown/typo'd id — or an
+// unauthorized caller, or a persistently 5xx-ing server — only ever surfaces
+// through GetRun. Swallowing that error left the follow loop polling an empty
+// trail forever with nothing printed and no exit.
+func TestLogsCmd_UnknownRunErrorsInsteadOfHanging(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "run not found"})
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	}); err == nil {
+		t.Fatal("logs returned nil for an unknown run id, want the GetRun 404 propagated")
+	}
+}
+
+// runCmdWithTimeout builds rootCmd(), lets configure set its args/flags, and
+// executes it with output captured (logsCmd writes via cmd.OutOrStdout()).
+// It doubles as the timeout backstop for a follow loop that fails to exit.
+func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (string, error) {
 	t.Helper()
 	root := rootCmd()
 	configure(root)
@@ -1075,13 +1100,11 @@ func captureStdoutViaCmd(t *testing.T, configure func(root *cobra.Command)) stri
 	go func() { done <- root.Execute() }()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("logs returned error: %v", err)
-		}
+		return out.String(), err
 	case <-time.After(5 * time.Second):
-		t.Fatal("logs did not return within 5s — follow loop likely never saw the terminal state")
+		t.Fatal("command did not return within 5s — follow loop likely never exited")
+		return "", nil
 	}
-	return out.String()
 }
 
 // --------------------------------------------------------------------------
