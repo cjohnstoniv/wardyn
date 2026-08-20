@@ -10,8 +10,9 @@ re-open only what wardynd needs:
     .Values.k8s.apiServer.ports, scoped to .Values.k8s.apiServer.to when set
     (empty by default — see the BOLD warning on that value) — wardynd itself
     drives the k8s runner substrate via client-go
-  - ingress to the HTTP (+ SSH when ssh.enabled) ports from the configured
-    sources (default: same namespace, e.g. an ingress controller / the UI)
+  - ingress to the HTTP (+ SSH when ssh.enabled, + the UI-sandbox gateway when
+    uiSandbox.enabled) ports from the configured sources (default: same
+    namespace, e.g. an ingress controller / the UI)
   - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
     k8s.runsNamespace differs from this release's namespace: that namespace's
     proxy sidecars call back to wardynd for credential mints, approval
@@ -49,6 +50,10 @@ spec:
         - protocol: TCP
           port: ssh
         {{- end }}
+        {{- if .Values.uiSandbox.enabled }}
+        - protocol: TCP
+          port: ui
+        {{- end }}
     {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
     # A different runs namespace carries no chart labels (the chart never
     # creates/labels it — see values.yaml's k8s.runsNamespace doc) — match
@@ -58,8 +63,9 @@ spec:
     # and strand every run's proxy sidecar with no route back to wardynd
     # (credential mints, approval checks, recording uploads all go dark,
     # with no render-time or even boot-time signal). A SEPARATE rule (not
-    # folded into the one above): this peer gets http only, never ssh — a
-    # run's proxy sidecar has no business on the SSH port.
+    # folded into the one above): this peer gets http only, never ssh and
+    # never the UI-sandbox gateway — a run's proxy sidecar has no business on
+    # either operator/human port.
     - from:
         - namespaceSelector:
             matchLabels:

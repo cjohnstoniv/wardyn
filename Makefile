@@ -434,7 +434,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
-	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }
+	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }

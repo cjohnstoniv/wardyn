@@ -8,6 +8,11 @@ targeting the Deployment's "ssh" named containerPort. An operator who wants SSH
 exposed differently from HTTP (e.g. its own LoadBalancer while HTTP stays
 ClusterIP) brings their own minimal Service instead — see the chart README's
 "Split SSH exposure" recipe.
+
+uiSandbox.enabled adds a THIRD port the same way ("ui"). That one MUST be
+routed to a different hostname than the console at your ingress/LoadBalancer —
+it serves the sandbox's own pages, and the separate browser origin is the
+control (README "UI sandbox gateway", docs/UI-SANDBOXES.md).
 */}}
 apiVersion: v1
 kind: Service
@@ -26,6 +31,12 @@ spec:
     - name: ssh
       port: {{ .Values.ssh.port }}
       targetPort: ssh
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.uiSandbox.enabled }}
+    - name: ui
+      port: {{ .Values.uiSandbox.port }}
+      targetPort: ui
       protocol: TCP
     {{- end }}
   selector:

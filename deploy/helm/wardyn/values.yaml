@@ -183,6 +183,35 @@ ssh:
   # enabled — the chart never guesses a public address.
   advertiseHost: ""
 
+# UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
+# relay from a browser to ONE policy-declared loopback port inside a run's
+# sandbox, e.g. a code editor). Off by default; enabled it is a CONDITIONAL
+# third port on the same Service/Deployment, driving
+# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE.
+#
+# `port` MUST differ from service.port: what the gateway serves is the
+# SANDBOX's own pages, and the separate browser origin is the only thing
+# keeping that code away from the console's session (wardynd refuses to boot
+# if the two addresses are equal). Terminating both ports on one hostname
+# defeats the same control — give the gateway its own host, and a certificate
+# that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
+uiSandbox:
+  enabled: false
+  port: 8081
+  # Externally-reachable BASE URL of the gateway, e.g.
+  # "https://wardyn-ui.example.com" (WARDYN_UI_SANDBOX_ADVERTISE) — published
+  # on /healthz for the console's Open button. Required when enabled: the
+  # chart never guesses a public address, and the raw in-cluster bind is
+  # wrong for every real deployment.
+  advertiseURL: ""
+  # OPTIONAL per-run origin, e.g. "https://run-{run}.ui.example.com"
+  # (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) — needs wildcard DNS and a wildcard
+  # certificate, and MUST contain {run} (boot refuses it otherwise). Set, each
+  # run's apps get their own browser origin; unset, every run shares one
+  # origin separated only by a path-scoped cookie — a published residual
+  # (threatmodel/THREAT-MODEL.md §5 #18), not a detail.
+  originTemplate: ""
+
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 networkPolicy:
   enabled: true

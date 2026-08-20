@@ -13,7 +13,9 @@ until an operator asks for it. Secret-bearing extras go through .Values.extraEnv
 (WARDYN_RUNNER/WARDYN_K8S_NAMESPACE/WARDYN_PROXY_IMAGE/WARDYN_CONFINEMENT_MAP/
 WARDYN_CONTROL_PLANE_URL — refused at render if serviceAccount.automount is
 off, since the substrate drives the API server via client-go); ssh.* adds the
-optional SSH port + WARDYN_SSH_LISTEN/WARDYN_SSH_ADVERTISE.
+optional SSH port + WARDYN_SSH_LISTEN/WARDYN_SSH_ADVERTISE; uiSandbox.* adds
+the optional UI-sandbox gateway port + WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/
+_ORIGIN_TEMPLATE (docs/UI-SANDBOXES.md).
 
 Hardening (defense in depth alongside the per-run sandbox envelope):
   - runs as a non-root user (the wardynd image is distroless:nonroot, uid 65532)
@@ -196,6 +198,16 @@ spec:
             - name: WARDYN_SSH_ADVERTISE
               value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" .Values.ssh.advertiseHost) (int .Values.ssh.port) | quote }}
             {{- end }}
+            {{- if .Values.uiSandbox.enabled }}
+            - name: WARDYN_UI_SANDBOX_LISTEN
+              value: {{ printf ":%d" (int .Values.uiSandbox.port) | quote }}
+            - name: WARDYN_UI_SANDBOX_ADVERTISE
+              value: {{ required "wardyn: uiSandbox.advertiseURL is required when uiSandbox.enabled=true (the externally-reachable base URL of the gateway — the console's Open button opens it, and it must be a DIFFERENT host than the console)" .Values.uiSandbox.advertiseURL | quote }}
+            {{- with .Values.uiSandbox.originTemplate }}
+            - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -203,6 +215,11 @@ spec:
             {{- if .Values.ssh.enabled }}
             - name: ssh
               containerPort: {{ .Values.ssh.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.uiSandbox.enabled }}
+            - name: ui
+              containerPort: {{ .Values.uiSandbox.port }}
               protocol: TCP
             {{- end }}
           livenessProbe:

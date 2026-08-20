@@ -34,14 +34,17 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
   Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
-  [Split SSH exposure](#split-ssh-exposure) to expose it differently).
+  [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
+  port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see
+  [UI sandbox gateway](#ui-sandbox-gateway)).
 - **ServiceAccount** (dedicated identity; token auto-mount off on the pod by
   default, so it also holds when you bring your own ServiceAccount —
   `k8s.enabled` requires flipping this to `true`, see below).
 - **Secret** — only in the inline/demo modes (DSN and/or admin token, see
   below); skipped for whichever credential you supply as an external Secret.
 - **NetworkPolicy** — default-deny ingress/egress (Wardyn's L0 egress posture),
-  re-opening DNS, Postgres egress, HTTP (+ SSH, when enabled) ingress from this
+  re-opening DNS, Postgres egress, HTTP (+ SSH and + the UI-sandbox gateway,
+  when enabled) ingress from this
   namespace, and (`k8s.enabled`) API-server egress plus an ingress peer for a
   separate `k8s.runsNamespace`.
 - **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only) —
@@ -358,6 +361,69 @@ spec:
 (`ssh.port`, default `2222`) regardless of what port your own Service exposes
 it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 (what it does once traffic reaches it, session semantics, client setup).
+
+## UI sandbox gateway
+
+`uiSandbox.enabled` relays one policy-declared loopback port inside a run's
+sandbox — a code editor, a dev server — to a browser
+([docs/UI-SANDBOXES.md](../../../docs/UI-SANDBOXES.md)). Like `ssh.*` it adds a
+conditional port to the SAME Service/Deployment, and it is off by default.
+
+**The one thing this chart cannot do for you: give it its own hostname.** What
+the gateway serves is the sandbox's own HTML and JavaScript. On the console's
+origin that code could read the console's session and drive every admin action
+the operator can — so `wardynd` refuses to boot when the two *bind addresses*
+are equal, and it is on you to keep them apart at the *hostname* level too. A
+single ingress hostname routing `/` to the console and something else to the
+gateway re-creates exactly the shared origin the second listener exists to
+prevent.
+
+```yaml
+uiSandbox:
+  enabled: true
+  port: 8081
+  # A DIFFERENT hostname than the console's, with a certificate that covers it.
+  advertiseURL: https://wardyn-ui.example.com
+  # Optional, strongly preferred: one origin per run (wildcard DNS + wildcard
+  # certificate). Unset, every run's apps share one origin, separated only by
+  # a path-scoped cookie — published residual #18 in the threat model.
+  originTemplate: https://run-{run}.ui.example.com
+```
+
+Route it with an Ingress (or its own Service) against the Deployment's named
+`ui` containerPort, the same shape as the "Split SSH exposure" recipe above:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wardyn-ui-sandbox
+spec:
+  rules:
+    # Wildcard host: what originTemplate needs. Drop to a single host only if
+    # you are accepting the shared-origin residual.
+    - host: "*.ui.example.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wardyn
+                port:
+                  name: ui
+  tls:
+    - hosts: ["*.ui.example.com"]
+      secretName: wardyn-ui-sandbox-tls
+```
+
+The gateway relays WebSockets (a browser IDE needs them), so an ingress
+controller in front of it must not buffer or strip the `101` upgrade.
+
+Runs still have to declare `ui_apps` in policy
+([docs/POLICIES.md](../../../docs/POLICIES.md)) and run an image that ships the
+matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on
+its own opens nothing.
 
 ## Values
 
