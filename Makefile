@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -330,6 +330,18 @@ test-e2e-byoi: ## Live BYOI e2e: wrap stock/harness/hostile bases + selftest gat
 test-e2e-ssh: ## Live SSH gateway e2e: exec/sftp/-L forward/recording/denial/concurrency
 	@echo "Running live SSH gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ssh.sh
+
+# The same gateway on the OTHER substrate: the sandbox is a Pod, reached
+# through Runner.Attach/ExecStream's k8s implementation. Proves the exec lane
+# ('id' exits 0 + exit-code propagation), the pty lane, and the ssh.exec +
+# session.attach{transport:ssh} audit rows. sftp/-L are skipped OUT LOUD (an
+# image contract, not a substrate one — the script says why, docs/SSH.md
+# "Image contract (BYOI)" is canonical); the compose lane above proves those.
+# Runs against the cluster `make kind-quickstart` leaves behind — it never
+# creates or deletes one — and self-skips without WARDYN_TEST_K8S=1.
+test-e2e-ssh-k8s: ## Live SSH gateway e2e on Kubernetes (needs a kind-quickstart cluster up)
+	@echo "Running live SSH gateway e2e on Kubernetes (existing kind-quickstart cluster; shell lane only)..."
+	WARDYN_TEST_K8S=1 ./scripts/run-e2e-ssh-k8s.sh
 
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
