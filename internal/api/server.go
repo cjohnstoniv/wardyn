@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"sync"
 	"time"
@@ -403,6 +404,29 @@ type Config struct {
 	// SSHListenAddr is set, so a deployment with SSH off never even mints this
 	// secret).
 	SSHHostKey ed25519.PrivateKey
+	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
+	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
+	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
+	// content is sandbox-authored, and the second listener IS the origin
+	// separation that keeps it away from the console's storage (boot refuses —
+	// cmd/wardynd's validateUISandboxConfig).
+	UIListenAddr string
+	// UIAdvertiseURL is WARDYN_UI_SANDBOX_ADVERTISE: the externally-reachable
+	// base URL of that listener (e.g. "https://wardyn-ui.example.com"), used to
+	// build the enter-URL template /healthz publishes. Advisory copy, like
+	// SSHAdvertiseAddr — the gateway binds UIListenAddr, never this.
+	UIAdvertiseURL string
+	// UIOriginTemplate is WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE: an optional PER-RUN
+	// origin (e.g. "https://run-{run}.ui.example.com") for deployments with
+	// wildcard DNS. Set, it gives every run its own browser origin — closing the
+	// shared-origin residual path mode leaves — and the gateway then REFUSES an
+	// enter served on any other host. Empty = shared path-mode origin, where one
+	// run's page is separated from another's only by the path-scoped cookie.
+	UIOriginTemplate string
+	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
+	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
+	// cookie that cannot be signed must never be issued.
+	UISessionKey []byte
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -465,6 +489,19 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
+	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
+	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
+	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
+	// the single shared reverse proxy + exec-lane transport built on first use.
+	// All process-local, like sshSessions and lastTouch above and correct for
+	// the same reason (replicas>1 is refused by construction). Zero values are
+	// ready to use.
+	uiConnsMu   sync.Mutex
+	uiConns     map[uuid.UUID]int
+	uiReadyMu   sync.Mutex
+	uiReady     map[string]time.Time
+	uiProxyOnce sync.Once
+	uiProxy     *httputil.ReverseProxy
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -614,6 +651,13 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// disabled — the smallest honest wire change: no new endpoint, one
 		// field a deployment without SSH simply omits populating.
 		"ssh": s.sshGatewayHealthz(),
+		// ui_sandbox discloses the UI-sandbox gateway's presence and the ONE
+		// field the console needs to open a declared app: the enter-URL
+		// template on the gateway's own origin (the console must never build
+		// that origin itself — a different origin is the whole point). nil
+		// (JSON null) when the gateway is off, the same "a deployment without
+		// it simply omits the block" shape as ssh above.
+		"ui_sandbox": s.uiSandboxHealthz(),
 	})
 }
 
