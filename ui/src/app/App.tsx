@@ -53,6 +53,9 @@ const ApprovalsScreen = React.lazy(() =>
 const PoliciesScreen = React.lazy(() =>
   import("./components/screens/policies").then((m) => ({ default: m.PoliciesScreen })),
 );
+const PermissionsScreen = React.lazy(() =>
+  import("./components/screens/permissions").then((m) => ({ default: m.PermissionsScreen })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({ default: m.SecretsScreen })),
 );
@@ -329,6 +332,14 @@ export default function App() {
             element={
               <React.Suspense fallback={<RouteFallback />}>
                 <PoliciesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/permissions"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <PermissionsScreen />
               </React.Suspense>
             }
           />

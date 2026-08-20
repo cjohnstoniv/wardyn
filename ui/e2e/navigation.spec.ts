@@ -7,8 +7,8 @@ import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders a FLAT six-item sidebar — Runs, Approvals,
-// Workspaces, Policies, Secrets, Audit — of react-router <NavLink>s
+// The shell (app-shell.tsx) renders a FLAT seven-item sidebar — Runs, Approvals,
+// Workspaces, Policies, Permissions, Secrets, Audit — of react-router <NavLink>s
 // (role="link"), with no group headings. Settings, SSH keys and Demos live in
 // the account menu; Recordings is reachable by URL until it folds into Audit.
 // The top bar carries a "Toggle theme" button (aria-label) and a permanent
@@ -29,6 +29,7 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Runs", heading: "Runs", blurb: /each confined behind its own barrier/i },
   { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
+  { label: "Permissions", heading: "Permissions", blurb: /Each capability is enforced on its own/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
   { label: "Workspaces", heading: "Workspaces", blurb: /a run can attach\. runs can only attach what's listed here/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
@@ -41,6 +42,7 @@ const SIDEBAR_LABELS: NavLabel[] = [
   "Approvals",
   "Workspaces",
   "Policies",
+  "Permissions",
   "Secrets",
   "Audit",
 ];
