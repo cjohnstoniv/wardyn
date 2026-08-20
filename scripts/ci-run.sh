@@ -166,7 +166,16 @@ cleanup() {
   fi
   exit "${code}"
 }
+# W16-S1-5: EXIT alone never fires on a hard job-cancel (SIGTERM, the signal a
+# CI runner sends to abort a job) — the sandbox + control-plane network it
+# started leaks past the job. `exit` inside a signal handler still fires the
+# EXIT trap (bash re-enters it exactly once with the handler's own exit code),
+# so TERM/INT just need to exit — cleanup itself stays registered only on
+# EXIT, never running twice. SIGKILL still cannot be trapped by any process;
+# nothing short of a reaper outside this shell recovers from that one.
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # Ephemerality is load-bearing, not hygiene: a reused postgres volume holds
 # secrets age-encrypted to a PREVIOUS boot's ephemeral key, and wardynd fails
@@ -254,7 +263,18 @@ run_id="$(jq -r '.id' "${run_json}" 2>/dev/null || sed -n 's/.*"id"[^"]*"\([0-9a
 # ── collect artifacts ────────────────────────────────────────────────────────
 if [[ -n "${run_id}" ]]; then
   log "Collecting artifacts for run ${run_id} -> ${OUT_DIR}"
-  wardyn run get "${run_id}" --json >"${run_json}" 2>/dev/null || warn "run get failed"
+  # W16-S1-4: `>"${run_json}"` truncates the file the moment the shell sets up
+  # redirection — BEFORE `wardyn run get` runs — so a failed refetch destroyed
+  # the run.json already captured from the --wait launch above, even though the
+  # recording is still fetchable via `wardyn run recording`. Refetch into a temp
+  # file and only replace run.json once the call actually succeeded.
+  run_json_tmp="$(mktemp)"
+  if wardyn run get "${run_id}" --json >"${run_json_tmp}" 2>/dev/null; then
+    mv "${run_json_tmp}" "${run_json}"
+  else
+    warn "run get failed — keeping the run.json captured at launch"
+    rm -f "${run_json_tmp}"
+  fi
 
   # The per-run audit trail truncates at 1000 events (oldest-first) unless
   # paged (W16-S1-2) — a run with more tool calls/egress decisions than that
