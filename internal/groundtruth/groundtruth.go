@@ -143,11 +143,13 @@ func (d EventData) marshal() json.RawMessage {
 	return b
 }
 
-// Correlator resolves a container id and/or kernel cgroup id to a Wardyn run.
-// The ingest sidecar implements this by listing docker containers labelled
-// wardyn.managed=true and indexing them by container id (and, where available,
-// cgroup id). It is the only knowledge this package has about how correlation
-// happens — keeping the mapper target-agnostic and unit-testable.
+// Correlator resolves a container id to a Wardyn run. The ingest sidecar
+// implements this by indexing docker containers labelled wardyn.managed=true by
+// container id — fed by `docker events` (so a short-lived container is known
+// before its first kernel event) and reconciled by `docker ps -a`. There is NO
+// cgroup-id index: this export shape carries no cgroup id (an earlier version of
+// this comment claimed one). It is the only knowledge this package has about how
+// correlation happens — keeping the mapper target-agnostic and unit-testable.
 type Correlator interface {
 	// RunForContainer returns the run id for a container id (any prefix length
 	// Tetragon emits) and whether it is a Wardyn-managed agent container. ok
