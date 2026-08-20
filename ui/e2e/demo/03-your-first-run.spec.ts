@@ -50,7 +50,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
+import { sweepStaleState } from "./sweep";
+import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page).
 import { stage } from "./stage";
@@ -80,8 +81,10 @@ const COMMAND = [
   "echo taking inventory of the workspace...",
   "ls -la",
   "wc -l src/*.js test/*.js",
+  `curl -sS --max-time 5 https://example.com || echo "example.com: refused, as configured"`,
   `wc -l src/*.js test/*.js > ${ARTIFACT}`,
   "echo inventory written",
+  `cat ${ARTIFACT}`,
 ].join("\n");
 
 // Real containers: minutes, not seconds. Ceilings for the PRODUCT — pacing
@@ -133,6 +136,9 @@ async function preflight(page: Page): Promise<void> {
       }
     }
   }
+
+  // S6: also kill any run still squatting on slugify from an earlier take.
+  await sweepStaleState(["slugify"]);
 }
 
 test.beforeAll(async () => {
@@ -156,8 +162,18 @@ test("V03 beat 1 — name it, aim it", async () => {
   await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Your first run", "A governed command, in the background");
-  await caption(page, "Everything Wardyn does is a run: a sandbox, a policy around it, and a record after it.");
+
+  // Two ring moves across the one cold-open line (no text changes) — the
+  // static form otherwise sits still for ~16s with nothing pointing at it.
+  const formCard = page.getByRole("heading", { name: "This run", level: 2 }).locator("xpath=ancestor::section[1]");
+  const rail = page.getByText("What this run can do");
+  await spotlight(page, formCard);
+  await caption(page, "Everything Wardyn does is a run: a sandbox, a policy around it,");
   await beat(page, PACE.read);
+  await spotlight(page, rail);
+  await caption(page, "and a record after it.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
   await caption(page, "The first one should be boring on purpose — a plain command, no agent, no network.");
   await beat(page, PACE.read);
   await caption(page, "That way the form itself gets to be the lesson.");
@@ -171,15 +187,26 @@ test("V03 beat 1 — name it, aim it", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
+  // Description too, filmed silently — no caption; the field being on camera
+  // at all is the teaching (Dana: "that field is what my auditor reads first").
+  await page.getByLabel("Description").fill("Inventory only — nothing should leave the box.");
+
   // The three kinds of task. Shell command is the radio this video picks; the
-  // other two get one honest line each so the viewer knows the map.
-  await caption(page, "Three kinds of task. An agent works on its own; a terminal is you, live inside the box.");
+  // other two get one honest line each so the viewer knows the map — ringed in
+  // turn, since both are visible while Agent task is still the default pick.
+  await caption(page, "Three kinds of task.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByRole("radio", { name: /Agent task/ }));
+  await caption(page, "An agent works on its own;");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByRole("radio", { name: /Terminal/ }));
+  await caption(page, "a terminal is you, live inside the box.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("radio", { name: /Shell command/ }), "And a shell command just runs — unattended, start to finish.");
 
   const cmd = page.getByLabel("Command");
-  await spotlight(page, cmd);
   await cmd.fill(COMMAND);
+  await spotlight(page, cmd);
   await caption(page, "This one takes stock of the project and writes the tally to a file.");
   await beat(page, PACE.read);
   await spotlight(page, null);
@@ -194,11 +221,13 @@ test("V03 beat 2 — the envelope", async () => {
   const page = stage();
 
   // The workspace video 02 built. The combobox's option carries the name.
-  await caption(page, "Attach the workspace from last video — the one directory this run may touch.");
-  await beat(page, PACE.read);
   const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
-  await act(page, wsPicker);
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first());
+  await act(page, wsPicker, "Attach the workspace from last video — the one directory this run may touch.");
+  await act(
+    page,
+    page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(),
+    "slugify — the folder video two onboarded, writes granted.",
+  );
 
   // Confined, then the NONE preset — not the default. The form seeds
   // "Just the model provider" (initialWizardState allows api.anthropic.com,
@@ -209,19 +238,27 @@ test("V03 beat 2 — the envelope", async () => {
   await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined means default-deny: nothing reaches the network unless we allow it.");
   await act(page, page.getByRole("radio", { name: /^None/ }), "These presets are the tuning knob — and this command needs no internet, so: none.");
 
+  // The barrier rides along unremarked otherwise — name it once, on camera,
+  // wording deliberately tier-agnostic so it stays true at whichever barrier
+  // this host defaults to at take time (series ruling S4).
+  await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
+  await caption(page, "The barrier row rides along from video one — any tier, exactly the same governance.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
   // The unlisted-hosts rule — the OTHER half of the envelope (owner note:
   // whether requests are even expected must be controllable, with always-deny
   // as the fallback). The three modes are the card's own Seg now, and this
   // run picks the strictest one on camera because it is the honest choice: a
   // command that expects zero requests should not park approvals on a human.
   const rules = page.getByRole("radiogroup", { name: "Unlisted hosts" });
-  await rules.scrollIntoViewIfNeeded().catch(() => {});
+  await centerInFrame(rules); // S2: scrollIntoViewIfNeeded leaves it under the caption bar
   await spotlight(page, rules);
   await caption(page, "And you decide what happens if it reaches for anything anyway.");
   await beat(page, PACE.read);
   await caption(page, "Hold it for a live decision, deny but raise it for review — or deny silently.");
   await beat(page, PACE.read);
-  await act(page, rules.getByRole("radio", { name: "Deny silently" }), "This run expects no requests at all, so nothing should even ask. Deny, silently.");
+  await act(page, rules.getByRole("radio", { name: "Deny silently" }), "It pokes one off-list host on purpose — deny silently means it fails fast, on the record.");
   await spotlight(page, null);
 
   // The rail is the contract, and with zero hosts it is one sentence long.
@@ -231,8 +268,11 @@ test("V03 beat 2 — the envelope", async () => {
   await rail.scrollIntoViewIfNeeded().catch(() => {});
   await spotlight(page, rail);
   await expect(page.getByText("0 hosts allowed")).toBeVisible();
-  await caption(page, "The rail is the contract, settled before launch: this workspace, and nothing else.");
-  await beat(page, PACE.read + 400);
+  await caption(page, "This panel — what this run can do — is the contract, settled before launch.");
+  await beat(page, PACE.read);
+  await spotlight(page, wsPicker);
+  await caption(page, "Plus the workspace above: that directory, and nothing else.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 });
 
@@ -244,7 +284,11 @@ test("V03 beat 3 — launch, walk away", async () => {
   test.setTimeout(RUN_FINISHES + 120_000);
   const page = stage();
 
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await act(
+    page,
+    page.getByRole("button", { name: "Launch run" }),
+    "Launch. From here the envelope is set — only an approval could widen it.",
+  );
 
   // The cockpit opens on the new run.
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
@@ -269,10 +313,17 @@ test("V03 beat 3 — launch, walk away", async () => {
   // start overlay.
   const pane = page.getByText("run finished · replay").locator("..").locator("..");
   await pane.scrollIntoViewIfNeeded().catch(() => {});
-  await act(page, page.getByRole("radio", { name: "2x speed" }), "Here is everything it did — the run records its own terminal.");
+  // Start playback FIRST — the player opens on a black, unstarted frame, and a
+  // caption spoken before the click narrates emptiness (persona round 1).
   const player = page.locator(".ap-player, .ap-wrapper, .ap-terminal").first();
   await expect(player).toBeVisible({ timeout: 60_000 });
   await player.click().catch(() => {});
+  await act(page, page.getByRole("radio", { name: "2x speed" }), "Here is everything it did — the run records its own terminal.");
+  // Film mitigation for product finding #9 (exec runs speak "agent" elsewhere
+  // on this page): the replay's own first line is the honest label — point at
+  // it and say so. agent-run-lib.sh prints it before the command runs.
+  await caption(page, "The first line is the honest label — a shell command, no agent harness. Same governance either way.");
+  await beat(page, PACE.read);
   await caption(page, "Replayed at double speed: the listing, the line counts, the inventory being written.");
   // Hold for the cast itself (~7s at 1×, ~4s at 2×) plus a breath — the
   // whole point of the beat is that the WORK is on screen.
@@ -310,14 +361,29 @@ test("V03 beat 4 — the receipts", async () => {
     fs.existsSync(path.join(WORKSPACE_PATH, ARTIFACT)),
     `the run's ${ARTIFACT} never landed in ${WORKSPACE_PATH} — was the workspace onboarded writable?`,
   ).toBe(true);
-  await caption(page, "And the inventory file is really on this machine's disk — the write grant from last video, doing its job.");
+  await caption(page, "You watched it print the file it wrote — and that path is the host's own disk, through the mount.");
   await beat(page, PACE.read);
 
-  // 3. The audit trail: create → dispatch → complete, nobody watching.
+  // 3. wardynd's own allow row — the run's ONE egress line despite "no
+  // network": the sandbox's control channel back to Wardyn, not the internet.
+  // The deny-silently curl above now gives the panel a deny row to sit beside
+  // it, so the contrast (deny + allow, side by side) is the teaching.
+  const egressPanel = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
+  await spotlight(page, egressPanel);
+  await caption(page, "One allow in the ledger — wardynd, the sandbox's control channel back to Wardyn. Not the internet.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  // 4. The audit trail: create → exec → complete, nobody watching.
   await act(page, page.getByRole("tab", { name: "Audit" }));
-  await caption(page, "The audit trail: created, dispatched, completed — written as it happened.");
+  await caption(page, "The trail: run create, exec, complete — written as it happened, append-only.");
   await beat(page, PACE.read);
   await expect(page.getByText(/run\.create|Created the run/i).first()).toBeVisible({ timeout: 30_000 });
+  await beat(page, PACE.read);
+  // VERIFY at rehearsal: kernel.sensor.blind must actually read true for the
+  // barrier this take's run used — reword or drop the line if it doesn't
+  // (series ruling S4: don't outrun what the screen shows).
+  await caption(page, "kernel.sensor.blind is Wardyn noting its kernel eye can't see this barrier — video ten's subject.");
   await beat(page, PACE.read);
 });
 
@@ -332,7 +398,7 @@ test("V03 conclusion", async () => {
   await chapter(page, "What you just saw", "One command, fully governed, receipts kept");
   await caption(page, "That is the whole shape of a run: an envelope you set, work inside it, a record after.");
   await beat(page, PACE.read);
-  await caption(page, "This one was a shell command with no network at all — and it still left a diff and a trail.");
+  await caption(page, "No internet was granted, one poke was denied silently — and it still left a file and a trail.");
   await beat(page, PACE.read);
   await caption(page, "Everything else in this series is the same shape with more inside the envelope.");
   await beat(page, PACE.read + 400);

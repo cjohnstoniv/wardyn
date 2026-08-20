@@ -63,7 +63,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./overlay";
+import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
@@ -138,6 +139,9 @@ async function assertSentinelAbsent(page: Page, where: string): Promise<void> {
 
 test.beforeAll(async () => {
   if (!process.env.WARDYN_DEMO) return;
+  // S6: deny stale pending approvals / kill stale runs first — the Approvals
+  // badge otherwise carries a prior take's number through the whole video.
+  await sweepStaleState([WORKSPACE_NAME]);
   await resetFixtures(stage());
 });
 
@@ -169,8 +173,11 @@ test("V02 beat 1 — the blast radius", async () => {
   await caption(page, "A workspace is how your actual code gets in: one directory or repo, mounted on purpose.");
   await beat(page, PACE.read);
 
-  await spotlight(page, heading);
+  // S3: ring the empty-state card, not the H1 sitting above nothing.
+  await spotlight(page, page.getByText("No workspaces yet").locator(".."));
   await caption(page, "This list is the whole blast radius.");
+  await beat(page, PACE.read);
+  await caption(page, "Empty list, empty blast radius — right now a run could reach nothing at all.");
   await beat(page, PACE.read);
   await caption(page, "A run attaches a workspace, or it gets nothing — the rest of this machine does not exist to it.");
   await beat(page, PACE.read + 400);
@@ -203,20 +210,25 @@ test("V02 beat 2 — onboard the project", async () => {
   // remote points at the proxy, the proxy does the fetch, and the token never
   // leaves proxy memory. Scoped to the App lane on purpose: PAT and SSH
   // clones DO dial the git host from inside, as the git card's footer admits.
+  // S3: ring the Repository card while these two captions describe it.
+  await spotlight(page, dlg.getByRole("button", { name: "Repository" }));
   await caption(page, "With the GitHub App, the sandbox never talks to GitHub at all.");
   await beat(page, PACE.read);
   await caption(page, "Its git remote points at the proxy — the proxy fetches the repo, and it keeps the token.");
   await beat(page, PACE.read);
-  await caption(page, "An empty workspace is a scratchpad. Today: a directory already on this machine.");
-  await beat(page, PACE.read);
 
+  // S3: the ring flies to the Empty card, then to Local directory as it's
+  // clicked — one named thing at a time instead of a 20s frozen dialog.
+  await spotlight(page, dlg.getByRole("button", { name: "Empty" }));
   // Source cards are OptionCards — aria-pressed buttons whose accessible name
   // carries the hint text too, so match on a prefix.
-  await act(page, dlg.getByRole("button", { name: /Local directory/ }));
+  await act(page, dlg.getByRole("button", { name: /Local directory/ }), "An empty workspace is a scratchpad. Today: a directory already on this machine.");
 
   const pathField = dlg.getByLabel("Path on this host");
   await spotlight(page, pathField);
-  await pathField.fill(WORKSPACE_PATH);
+  // S5: the path is the teaching — type it visibly rather than filling silently.
+  await pathField.click();
+  await page.keyboard.type(WORKSPACE_PATH, { delay: 30 });
   await caption(page, "The path is the boundary: this directory, and nothing above it, is reachable from inside.");
   await beat(page, PACE.read);
   await spotlight(page, null);
@@ -235,16 +247,19 @@ test("V02 beat 2 — onboard the project", async () => {
   await act(page, advanced, "Advanced is where the sandbox-side details live.");
   await beat(page, PACE.read);
 
-  await spotlight(page, dlg.getByRole("radiogroup", { name: "Container image" }));
+  // S3: one ring per card, moved as each is named — not one ring parked on
+  // the whole group while three cards are walked in turn (persona round 1).
+  await spotlight(page, dlg.getByRole("button", { name: /Standard sandbox image/ }));
   await caption(page, "Which container image the sandbox boots — the standard image suits most projects.");
   await beat(page, PACE.read);
-  // The devcontainer option is the top card in this radiogroup, so the claim
-  // is made while the card is in the ring. "Built exactly as written" is the
-  // card's own hint (add-workspace-dialog.tsx) — the narration matches it
-  // rather than promising more: BuildDevcontainer consumes the repo's own
-  // .devcontainer/devcontainer.json unmodified (docs/ENVBUILD.md).
+  // "Built exactly as written" is the card's own hint (add-workspace-dialog.tsx)
+  // — the narration matches it rather than promising more: BuildDevcontainer
+  // consumes the repo's own .devcontainer/devcontainer.json unmodified
+  // (docs/ENVBUILD.md).
+  await spotlight(page, dlg.getByRole("button", { name: /devcontainer\.json/ }));
   await caption(page, "A repo that ships a standard devcontainer file just works — built exactly as written.");
   await beat(page, PACE.read);
+  await spotlight(page, dlg.getByRole("button", { name: /Pinned image ref/ }));
   await caption(page, "Or pin an exact image ref, and Wardyn pulls it as given.");
   await beat(page, PACE.read);
   await spotlight(page, dlg.getByLabel("Mount path"));
@@ -290,6 +305,15 @@ test("V02 beat 3 — what it remembers", async () => {
   await caption(page, "Every workspace gets a page like this — its own standing record.");
   await beat(page, PACE.read);
 
+  // Persona round 1: this red banner owned the page for 25-90s here, unnamed
+  // — every persona flagged it. Name it once, then move on to the ledger.
+  await spotlight(page, page.getByText(/Open recording on Fence/).locator(".."));
+  await caption(page, "That red panel is Record Mode printing its own worst case — video six's subject.");
+  await beat(page, PACE.read);
+  await caption(page, "Nothing records until you start it.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
   // The ledger is EMPTY today and the narration says so — that is the teaching.
   // Hosts land here in two ways the series shows later: an approval saved with
   // the Always scope (video on approvals) and a recording that proves what a
@@ -305,6 +329,8 @@ test("V02 beat 3 — what it remembers", async () => {
   await spotlight(page, null);
 
   const deniedHeading = page.getByRole("heading", { name: /^Denied hosts ·/, level: 2 });
+  // S2: center before speaking — the caption bar covered this heading (persona round 1).
+  await centerInFrame(deniedHeading);
   await spotlight(page, deniedHeading);
   await caption(page, "Denied hosts is the other half, and a deny always beats an allow.");
   await beat(page, PACE.read);
@@ -325,10 +351,16 @@ test("V02 beat 4 — write-only secrets", async () => {
   await page.goto("/secrets");
   await expect(page.getByRole("heading", { name: "Secrets", level: 1 })).toBeVisible({ timeout: 30_000 });
 
-  await caption(page, "This is the same store the setup step filled — model and git credentials live here too.");
+  // Verified against internal/api/secrets.go:172-203 (S1): the store hides
+  // only wardyn-signing-key/wardyn-session-key, so the model subscription
+  // does not live here, and no git PAT existed on the take's stack — say
+  // what is actually on screen instead.
+  await caption(page, "Setup fills this same store — today it holds one secret, the SSH host key Wardyn minted.");
   await beat(page, PACE.read);
-  await caption(page, "The rule for all of them: values go in and never come out.");
+  await spotlight(page, page.getByText(/Exception:/));
+  await caption(page, "The rule: values go in and never come out — one printed exception, the git token a clone borrows.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   await act(page, page.getByRole("button", { name: "Add secret", exact: true }));
   const dlg = page.getByRole("dialog");
@@ -354,9 +386,6 @@ test("V02 beat 4 — write-only secrets", async () => {
   // From here on the sentinel is checked at every beat that could leak it.
   await assertSentinelAbsent(page, "Secrets screen, right after Save secret");
 
-  await caption(page, "Stored, and already unreadable. I can rotate it or delete it — never read it back.");
-  await beat(page, PACE.read);
-
   // Open the row menu (Rotate/Delete), then Escape without acting — the
   // Radix menu can open above the row and outside the viewport for a
   // positional click; nothing here is meant to be clicked anyway.
@@ -366,12 +395,18 @@ test("V02 beat 4 — write-only secrets", async () => {
   const menu = page.getByRole("menu");
   await expect(menu.getByRole("menuitem", { name: /Rotate/ })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: /Delete/ })).toBeVisible();
-  await beat(page, 900);
+  // S1: the proof was spoken before the menu opened, then played mute — move
+  // the claim onto the receipt (persona round 1: "the … menu never opens").
+  await caption(page, "Stored, and already unreadable. I can rotate it or delete it — never read it back.");
+  await beat(page, PACE.read);
+  await caption(page, "Rotate it, delete it — and no reveal. It never comes back.");
+  await beat(page, PACE.read + 600);
+  await expect(menu.getByRole("menuitem", { name: /reveal|show|copy|view/i })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await spotlight(page, null);
   await assertSentinelAbsent(page, "Secrets screen, row menu open");
 
-  await caption(page, "A value nobody can display is a value nobody can shoulder-surf.");
+  await caption(page, "You just watched its only display — from here on, nobody sees it again, including you.");
   await beat(page, PACE.read + 400);
 });
 
@@ -384,6 +419,10 @@ test("V02 conclusion", async () => {
   const page = stage();
 
   await chapter(page, "What you just saw", "A workspace on the record, and a secret nobody can read");
+  // S1: the recap describes the workspace page — return to it instead of
+  // leaving the Secrets table underneath the words (persona round 1).
+  await page.goto("/workspaces");
+  await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   await caption(page, "A workspace is the one piece of this machine a run is allowed to touch.");
   await beat(page, PACE.read);
   await caption(page, "This one mounts a real project, writable because you granted it — not because it asked.");
