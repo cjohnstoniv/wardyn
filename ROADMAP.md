@@ -192,17 +192,20 @@ shipped behavior; none is scheduled.
   CUSTOM roles beyond admin/member. The admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,
   no separation of duty from a real admin user (v1.0's row, above).
-- **The SSH gateway has no admin/operator override.** SSH authorization is a
-  single `run.created_by == the key's registered principal` check — narrower
-  than the web terminal's `requireOperator` gate, which lets an admin attach to
-  ANY run. An admin who needs another human's run over SSH has no path there
-  today; they use the web terminal, same as a member would. The fix is a role
-  column an operator's own registered key could satisfy alongside "owner" —
-  marked with a `ponytail:` comment at the check itself
-  (`internal/api/sshgateway.go`'s `sshAuth`) rather than built, since no
-  deployment has asked for it and the narrower behavior is safe by
-  construction, not merely unfinished (`threatmodel/THREAT-MODEL.md`
-  residual #15).
+- **The SSH gateway's admin override is a registration-time stamp, weaker
+  than the web terminal's live check.** `sshAuth` now grants an admin's own
+  registered key an override — `run.created_by == principal` OR
+  `key.role == admin` (migration `0043_ssh_key_role.sql`) — closing the gap
+  this bullet used to name. What's left: `role` is stamped once, at
+  `POST /me/ssh-keys` time, from the session's role THEN; it is never
+  re-checked against the human's role NOW, unlike the web terminal's
+  `requireOperator` gate, which reads the session live on every attach. A
+  demoted admin's already-registered key keeps the override until that key
+  is deleted and re-registered (or revoked) — there's no live lookup or
+  expiry to catch a stale stamp automatically. Overrides are audited
+  distinctly (`ssh.auth` carries `override:true`), and the ceiling is
+  documented, not silently assumed away, in `docs/SSH.md`'s Bounds section
+  and `threatmodel/THREAT-MODEL.md` residual #15.
 - **The legacy `sources`/`base_image` workspace columns have no drop date, and
   the migration number reserved for it is gone.** 0.4.5's source-library split
   (migration `0031_source_library.sql`) kept the old embedded columns live for

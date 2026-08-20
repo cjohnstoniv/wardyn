@@ -463,27 +463,34 @@ hiding them would repeat the failure mode we are designed to avoid.
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
 
-15. **SSH gateway authorization has no admin override.** Unlike the browser
-    terminal (`GET /runs/{id}/attach` — owner-or-admin via a minted attach
-    ticket, since v0.5 a member may attach to a run THEY OWN this way;
-    admin-only via the ticket-LESS session-cookie fall-through), SSH gateway
-    (`docs/SSH.md`) authorization is exactly one check:
-    `run.created_by == the connecting key's registered principal`, with no
-    admin-or-owner alternative. So an admin reaching another human's run uses
-    the web terminal (owner-or-admin attach ticket); a member has no path to
-    another human's run over either transport — SSH's owner-only check
-    refuses them the same as it refuses everyone else, and the web
-    terminal's ticket mint is itself owner-or-admin-gated
-    (`handleAttachTicket`'s `getRunAuthorized`). This is a *narrower*, not a
-    wider, gap than #14 (SSH grants an admin strictly LESS reach than the
-    browser terminal already does) — named here because a reader auditing
-    "who can reach a live shell in MY run" should not have to infer that SSH
-    and the browser terminal answer the question differently. The upgrade
-    path (a role column, so an admin's own registered key could satisfy an
-    "admin OR owner" check) is marked with a `ponytail:` comment at the
-    authorization check (`internal/api/sshgateway.go`'s `sshAuth`) rather
-    than built now — no deployment has asked for it, and the narrower
-    behavior is safe by construction, not merely unfinished.
+15. **SSH gateway's admin override is a registration-time stamp, not a live
+    role check.** Since `0043_ssh_key_role.sql` (v0.6), SSH gateway
+    (`docs/SSH.md`) authorization is `run.created_by == the connecting key's
+    registered principal` OR the key's `role` column reads `admin`
+    (`internal/api/sshgateway.go`'s `sshAuth`). That closes the gap this
+    residual used to describe — an admin reaching another human's run no
+    longer needs the browser terminal — but opens a narrower one in its
+    place: `role` is stamped ONCE, at `POST /me/ssh-keys` time, from the
+    registering session's role at that moment, and `sshAuth` never
+    re-consults the human's CURRENT role — there is no live lookup, no
+    revocation sweep, no expiry. Unlike the browser terminal's
+    `requireOperator` gate (`GET /runs/{id}/attach`'s admin-only,
+    ticket-less session-cookie fall-through), which reads the session's role
+    fresh on every attach, a demoted admin's already-registered SSH key goes
+    on granting the override indefinitely — until that key is deleted
+    (self-service `DELETE /me/ssh-keys/{fingerprint}`, or an operator with
+    direct store access) and, if the human re-registers, re-stamped with
+    whatever role they hold at that later moment. A member's key never
+    satisfies the override regardless of stamp drift — only `role==admin`
+    does, and a member can't reach `role==admin` by any path but actually
+    holding the admin role at registration time. The override is audited
+    distinctly (`ssh.auth` success carries `override:true` whenever the
+    owner check failed and the role check is what passed the connection),
+    so the staleness ceiling is attributable after the fact even though it
+    isn't prevented up front. Documented, not silently assumed away, in
+    `docs/SSH.md`'s Bounds section; the re-register path (delete, then
+    re-add) is the only supported way to force a re-stamp — there is no
+    in-place role-update endpoint.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given

@@ -193,17 +193,39 @@ would neither work nor mean anything).
 username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-only, no admin override.** SSH authorization is
-`run.created_by == the key's registered principal` — a single equality
-check, deliberately narrower than the browser terminal (owner-or-admin via a
-minted attach ticket; admin-only via the ticket-less session-cookie
-fall-through). SSH has no session cookie and no role column to carry an
-admin override through, so today: an admin reaching another human's run
-uses the web terminal (owner-or-admin attach ticket); a member has no path
-to another human's run over either transport. Extending SSH to admins needs
-a role column this table doesn't have yet — tracked as a residual in
-[../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), not
-silently assumed away.
+**Owner-or-admin, and the admin half is a registration-time stamp — weaker
+than the web terminal's.** SSH authorization is
+`run.created_by == the key's registered principal`, OR the key's `role`
+column (migration `0043`) reads `admin`. A member's key never satisfies the
+override — only the owner check does, same as before. The `role` column is
+stamped once, at `POST /me/ssh-keys` time, from the role the registering
+session actually held **then**; the gateway never re-checks it against the
+human's role **now**. That makes it strictly weaker than the browser
+terminal's `requireOperator` gate, which reads the session's role live on
+every attach: **a demoted admin's already-registered key keeps its override
+until the key is deleted and re-registered, or explicitly revoked** — there
+is no background job or login-time sweep that catches a stale stamp. An
+operator who demotes someone and wants the override gone immediately has
+exactly one lever: delete that principal's key
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service only — there is no admin
+view of another human's keys, so this means asking them, or an operator with
+direct store access, to remove it) so the next connection attempt has no
+registered key to authenticate at all. The demoted user's own path back to a
+correctly-scoped key is ordinary re-registration: delete the stale key, then
+`POST` it again — the new row is stamped with whatever role the session
+holds at that later moment, member or admin, honestly. There is no
+in-place "update this key's role" endpoint; delete-then-re-add is the
+supported re-stamp path, not a workaround.
+
+An override connection is audited distinctly: the `ssh.auth` success event
+carries `override:true` in its data whenever the owner check did NOT match
+and the admin-role check is what let the connection through — so "who used
+the override, and when" is a normal audit-log query, not something you have
+to infer from `run.created_by` mismatches after the fact. Tracked as
+threat-model residual #15 in
+[../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), which now
+documents the staleness ceiling above rather than the older "no override at
+all" gap.
 
 **Pre-auth listener DoS bounds.** `ssh.NewServerConn` blocks with no default
 timeout, so an unauthenticated pre-auth connection is a real containment
