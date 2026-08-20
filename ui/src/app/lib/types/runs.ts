@@ -7,6 +7,8 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
+import type { UIApp } from "./policy";
+
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
@@ -94,6 +96,12 @@ export interface AgentRun {
   // directly to gate "Always" — use runHasWorkspace(run), which also covers
   // workspace_id; see its doc for why.
   workspace_ids?: string[];
+  // READ-ONLY denormalization of the EFFECTIVE policy's ui_apps, served by
+  // GET /runs/{id} only (internal/api/runs_policy.go). The console cannot
+  // resolve this itself: an AgentRun carries only policy_id, and an inline or
+  // default policy has no id to fetch — so this field is the only way the
+  // run-detail UI-apps lane knows what a run declares.
+  ui_apps?: UIApp[];
 }
 
 // ============================================================

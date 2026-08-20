@@ -400,6 +400,23 @@ function PolicyDetail({
               />
             )}
 
+            {/* ui_apps is operator-authored via the API/YAML and READ-ONLY here
+                on purpose (docs/design/ui-sandboxes-prompt.md §5): there is no
+                editor control for it in 0.6, and the raw-JSON editor below is
+                the one place it can be changed. */}
+            <DetailField
+              label="UI apps"
+              value={
+                (policy.spec.ui_apps?.length ?? 0) === 0 ? (
+                  <span className="text-muted-foreground">None declared</span>
+                ) : (
+                  <Mono>
+                    {policy.spec.ui_apps!.map((a) => `${a.name} → localhost:${a.port}${a.path || "/"}`).join(", ")}
+                  </Mono>
+                )
+              }
+            />
+
             {/* Raw JSON stays one click away (C7), never the primary content. */}
             <details className="group rounded-lg border border-border">
               <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
