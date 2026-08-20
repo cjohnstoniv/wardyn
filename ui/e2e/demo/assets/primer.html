@@ -56,8 +56,10 @@
   /* S3 — the exhibit */
   #s3 .row { align-items: flex-start; }
   #exhibit-wrap { flex: 0 0 auto; }
+  /* The one receipt in the episode earns the biggest thing on screen (Sam r3,
+     Dana r3: "blow the panel up"). */
   #exhibit {
-    width: 950px; display: block; border-radius: 14px;
+    width: 1080px; display: block; border-radius: 14px;
     border: 1px solid rgba(255,255,255,.14); box-shadow: 0 18px 60px rgba(0,0,0,.55);
   }
   #exhibit-note { font-size: 19px; margin-top: 12px; }
@@ -84,7 +86,7 @@
     font-size: 16px; font-weight: 650; letter-spacing: .16em; color: #f59e0b; margin-bottom: 12px;
   }
   #d-room .inner { background: #0b0d12; border: 1px dashed rgba(255,255,255,.18); border-radius: 12px;
-    padding: 18px 22px; font-size: 22px; }
+    padding: 18px 22px; font-size: 24px; }
   #d-room .inner div { padding: 4px 0; }
   #d-room .nokeys { margin-top: 12px; font-size: 19px; color: #a1a1aa; }
   .arrow { width: 90px; height: 2px; background: rgba(255,255,255,.35); position: relative; flex: 0 0 auto; }
@@ -103,7 +105,7 @@
     width: 380px; background: #11141b; border: 2px solid rgba(255,255,255,.22);
     border-radius: 18px; padding: 26px 30px;
   }
-  #d-proxy .what { font-size: 23px; }
+  #d-proxy .what { font-size: 25px; }
   #d-proxy .keys { margin-top: 14px; font-size: 21px; color: #f59e0b; }
   #d-out { width: 340px; padding: 26px 30px; border: 2px dashed rgba(255,255,255,.16); border-radius: 18px; }
   #d-out .what { font-size: 24px; color: #d4d4d8; }
@@ -140,9 +142,13 @@
     <div class="card" id="t-ci"><b>CI jobs</b>
       <span class="muted">All of the above, unattended, with the deploy keys nearby.</span></div>
   </div>
-  <div class="muted" id="s1-supply" style="font-size:25px">Supply-chain attacks live exactly here &mdash; one compromised
+  <!-- Punchlines land WITH their spoken beat (spec calls __unhide), not at
+       slide-open: three personas across two rounds read every payoff ~30s
+       before it was said and waited for the voice to catch up. visibility
+       (not display) so layout and ring boxes are stable. -->
+  <div class="muted" id="s1-supply" style="font-size:25px;visibility:hidden">Supply-chain attacks live exactly here &mdash; one compromised
     package, quietly reading and shipping out. <span class="mono" style="color:#f59e0b">SolarWinds &middot; event-stream &middot; XZ Utils</span></div>
-  <div id="s1-predates" style="font-size:27px"><b style="color:#f59e0b">That risk predates AI.</b>
+  <div id="s1-predates" style="font-size:27px;visibility:hidden"><b style="color:#f59e0b">That risk predates AI.</b>
     <span class="muted">Most teams never watch the traffic.</span></div>
 </section>
 
@@ -169,13 +175,16 @@
            panel ring reading as "pointing at all six rows" cost the beat in
            persona round 1. Percentages track the crop (row 3 of primer-datadog
            .png); recompute if the exhibit is ever recropped. -->
-      <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:44.5%;height:13.5%"></div>
+      <!-- Tighter than the row itself: the drawn ring adds 6px pad + glow, and
+           at 13.5% tall it visibly clipped the allow row beneath (Dana r3). -->
+      <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:45.5%;height:11%"></div>
       <div id="exhibit-note" class="muted">A coding agent, mid ordinary job &mdash; unedited. <span style="color:#f59e0b">Egress:</span> traffic trying to leave the box.</div>
     </div>
     <div id="exhibit-quote">
       <div class="mono">APPROVAL NEEDED &mdash; OFF-POLICY EGRESS</div>
       <div class="host mono">http-intake.logs.us5.datadoghq.com</div>
       <div class="muted">The agent&rsquo;s own tooling, reaching for a telemetry endpoint nobody asked for &mdash; caught at the door and held for a human.</div>
+      <div id="exhibit-refs" class="mono" style="margin-top:14px;font-size:19px;color:#f59e0b;visibility:hidden">who decides &rarr; ep 10 &nbsp;&middot;&nbsp; the record &rarr; ep 12</div>
     </div>
   </div>
 </section>
@@ -217,7 +226,7 @@
       <div class="what">only what was allowed &mdash; carrying what the checkpoint attached</div>
     </div>
   </div>
-  <div id="d-rule"><b>Deny by default.</b> Decide the exceptions. Write every attempt down.</div>
+  <div id="d-rule" style="visibility:hidden"><b>Deny by default.</b> Decide the exceptions. Write every attempt down.</div>
 </section>
 
 <section id="s6">
@@ -225,13 +234,13 @@
   <h1>Nobody can predict a tool&rsquo;s needs. So don&rsquo;t guess &mdash; observe.</h1>
   <div id="steps">
     <div class="card"><b>1 &middot; RUN</b><div class="big">Run the job once, watched</div>
-      <span class="muted">A real run, inside the room, everything logged.</span></div>
+      <span class="muted">One deliberate open run, inside the room, everything logged.</span></div>
     <div class="card"><b>2 &middot; SEE</b><div class="big">See what it actually reached</div>
       <span class="muted">Every host, every attempt &mdash; evidence, not a wishlist.</span></div>
     <div class="card"><b>3 &middot; DECIDE</b><div class="big">Decide what&rsquo;s allowed</div>
       <span class="muted">Yes, no, or ask me &mdash; and it&rsquo;s on the record.</span></div>
   </div>
-  <div id="s6-thesis" style="font-size:29px"><b style="color:#f59e0b">One boundary, same discipline</b>
+  <div id="s6-thesis" style="font-size:29px;visibility:hidden"><b style="color:#f59e0b">One boundary, same discipline</b>
     <span class="muted">&mdash; builds, pipelines, and agents.</span></div>
 </section>
 
@@ -251,12 +260,18 @@
     <div><span class="n">11</span><span>CI &amp; headless</span></div>
     <div><span class="n">12</span><span>Audit &amp; attach</span></div>
   </div>
-  <div class="muted mono" style="font-size:20px">Open source &middot; Apache-2.0 &middot; one command, on your own machine</div>
+  <div class="muted mono" style="font-size:20px">Open source &middot; Apache-2.0 &middot; one command &mdash; <span style="color:#f59e0b">make setup</span> &mdash; on your own machine</div>
 </section>
 
 <script>
   // The spec's one control: show slide N, hide the rest. Fade is CSS; callers
   // wait ~400ms after switching so a caption never lands mid-transition.
+  // Reveal a staged punchline at its spoken beat. visibility (not display) so
+  // the element held its layout slot all along and ring geometry is stable.
+  window.__unhide = function (id) {
+    var el = document.getElementById(id);
+    if (el) el.style.visibility = "visible";
+  };
   window.__slide = function (id) {
     document.querySelectorAll("section").forEach(function (s) {
       s.classList.remove("on");
