@@ -50,7 +50,7 @@ head_ "The real run (act 5)"
 # permanent grant holds, and that one is newer — so "newest" picks the run that
 # deliberately does no work and raises no approval, and every check below would
 # fail against it.
-DEMO_TITLE="${WARDYN_DEMO_TITLE:-Slugify + reach two hosts}"
+DEMO_TITLE="${WARDYN_DEMO_TITLE:-Add slugify — one off-list host}"
 RUN=$(./wardyn runs list --json 2>/dev/null | DEMO_TITLE="${DEMO_TITLE}" python3 -c '
 import sys, json, os
 want = os.environ["DEMO_TITLE"]

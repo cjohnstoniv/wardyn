@@ -68,6 +68,7 @@ import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight } from "./overl
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
 import { clearWorkspace, decide } from "./funnel";
+import { sweepStaleState } from "./sweep";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -90,10 +91,16 @@ const RUN_FINISHES = 900_000;
  * or leave both at their defaults. It is read from the environment here so one
  * export drives the driver and the verifier together.
  */
-const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "V05 — slugify, one held host";
+const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "Add slugify — one off-list host";
 
 /** Filled on camera in beat 1. Short: the field renders two rows. */
 const RUN_DESCRIPTION = "First governed run of the series — real code, one host held at the door.";
+
+/** Captured at Launch (B7) so the closing recap (beat 10's OUTRO) can navigate
+ *  back to THIS run instead of speaking its captions over the throwaway proof
+ *  run's page, which contradicts every noun in them ("no diff to show" under
+ *  "a diff on your disk"). */
+let slugifyRunUrl = "";
 
 // --- Beat 10's nouns: the borrowed-secret proof (owner fold, 2026-08-17) ---
 //
@@ -224,6 +231,11 @@ test.beforeAll(async () => {
     expect(reqRes.ok(), `could not seed the ${PROOF_SECRET} requirement (${reqRes.status()})`).toBe(true);
   }
 
+  // (d) S6 stale-stack hygiene: deny every stale pending approval and kill any
+  // run still squatting on slugify from an earlier take — the stuck Approvals
+  // badge, the six red "Killed" cards and the "workspace already in use"
+  // launch toast all trace back to this being skipped.
+  await sweepStaleState(["slugify"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -249,7 +261,7 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   // lines and no title, and chapter() would speak words that are not in it.
   await caption(page, "Last video we stood up Wardyn, a workspace, and a model.");
   await beat(page, PACE.read);
-  await caption(page, "Nothing has run inside the boundary yet. Now something does.");
+  await caption(page, "Drills so far — demos, an inventory, a hand-driven shell. Now the first real job goes in.");
   await beat(page, PACE.read + 600);
 
   await act(page, page.getByRole("button", { name: "New run" }));
@@ -313,22 +325,36 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
     "Autonomous: it works unattended, and I appear only when policy stops it.",
   );
 
+  // "Hold in Wardyn" is the biggest governance dial on this screen and the
+  // series has never once named it — today's default ("Auto") keeps the
+  // sandbox itself as the only boundary; a pilot could flip this and hold
+  // every tool call too. Named, not clicked: the sandbox-only default is what
+  // the rest of this video's claims depend on.
+  await spotlight(page, page.getByRole("radiogroup", { name: "Tool approvals" }));
+  await caption(page, "Below it, a bigger dial — hold every tool call for a human. Today, the sandbox is the boundary.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  // Fill first, THEN ring it: both captions below are spoken with the box
+  // already full and ringed, not over an empty, unspotlit field (persona
+  // round 1's complaint about this exact beat).
+  const taskBox = page.getByLabel("Task");
+  await taskBox.fill(DEMO_TASK);
+  await spotlight(page, taskBox);
+
   // The truth about an autonomous run, said where the viewer is choosing it.
   // agent-run execs `claude -p "$task"` ONCE (deploy/images/claude-code/agent-run)
   // — there is no second turn, no follow-up, no way to add a sentence later.
   // Everything the agent will ever know about the job is in the box below.
   await caption(page, "The task is the whole briefing — the only prompt this agent will ever get.");
   await beat(page, PACE.read);
-
-  const taskBox = page.getByLabel("Task");
-  await spotlight(page, taskBox);
-  await taskBox.fill(DEMO_TASK);
-  await spotlight(page, null);
-  // Reads the task in ITS ORDER (task.ts): the host first, then the code. A
-  // line that still promised "two hosts" would be describing the task this
-  // video used to run — the metadata probe is V01's lesson now.
-  await caption(page, "In plain English: reach a host, add slugify with a test, write it down.");
+  // Reads the task in ITS ORDER (task.ts): the host first, then the code. Owns
+  // the coaching on camera instead of calling it "plain English" — task.ts's
+  // retry loop (the operator-may-be-approving nudge) is settled, load-bearing
+  // choreography that keeps the take shootable, not something to hide.
+  await caption(page, "The brief pokes one off-list host on purpose — so you can watch the boundary work — then codes.");
   await beat(page, PACE.read + 1400);
+  await spotlight(page, null);
 
   // --- B3 Workspace -------------------------------------------------------
   //
@@ -416,7 +442,12 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   await spotlight(page, rail);
   await caption(page, "The rail is the contract — what this run can do, before it runs.");
   await beat(page, PACE.read);
-  await caption(page, "Credentials are minted at launch, injected by the proxy, never written inside.");
+  // The ring stays on the WHOLE rail for the first claim, then narrows to the
+  // one block the second claim is actually about — reusing one ring for two
+  // different claims is exactly what persona round 1 caught here.
+  const credentialsBlock = rail.getByText("Credentials", { exact: true }).locator("xpath=..");
+  await spotlight(page, credentialsBlock);
+  await caption(page, "Minted means made fresh at launch — a short-lived token, injected by the proxy, never written inside.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 });
@@ -433,6 +464,9 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // --- B7 Launch, let it work ---------------------------------------------
   await act(page, page.getByRole("button", { name: "Launch run" }));
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
+  // So the closing recap (beat 10) can navigate back to this run rather than
+  // speaking over the throwaway proof run's page.
+  slugifyRunUrl = page.url();
 
   // This run is autonomous, so run-detail renders the static "Output" notice in
   // the hero tile, NOT an attachable terminal (run-detail.tsx's TerminalPane:
@@ -543,6 +577,21 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
     HELD_HOST,
   );
   await beat(page, PACE.read + 900);
+  await caption(
+    page,
+    "That was the plain Approve — good for the rest of this run, not a day longer; the caret holds narrower and wider.",
+  );
+  await beat(page, PACE.read);
+
+  // The unscripted second hold: Claude Code reaching for its own telemetry
+  // under this same policy. Nobody planted it — the best evidence in the
+  // series when it fires. A live agent's own behavior is never guaranteed, so
+  // this stays conditional and skips silently when it doesn't happen.
+  if (await page.getByTestId("live-approval-row").filter({ hasText: /datadoghq/ }).count()) {
+    await caption(page, "And a second hold nobody scripted — the harness phoning its own telemetry. Not on the list.");
+    await beat(page, PACE.read);
+    await decide(page, "Deny", "Deny. It parks, it never leaves, and the deny is a row too.", "datadoghq");
+  }
 
   // --- B8b The rail, while it works ---------------------------------------
   //
@@ -559,6 +608,7 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // cannot accidentally resolve to a wrapper that happens to sort first.
   const egressCard = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
   const filesCard = page.getByRole("heading", { name: "Files changed" }).locator("xpath=ancestor::section[1]");
+  const identityCard = page.getByRole("heading", { name: "Identity" }).locator("xpath=ancestor::section[1]");
 
   await spotlight(page, egressCard);
   await caption(page, "Receipts arrive as it works: every call to the model, allowed and logged.");
@@ -566,6 +616,12 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await spotlight(page, filesCard);
   await caption(page, "Files change on the right as the agent works — no terminal needed to supervise.");
   await beat(page, PACE.read + 900);
+
+  // Five videos on screen and never once named — the run's own identity,
+  // minted at start and revoked at the end, sitting quietly in the rail.
+  await spotlight(page, identityCard);
+  await caption(page, "And the run's own identity — minted at start, revoked at the end. Video ten reads it back.");
+  await beat(page, PACE.read);
 
   // The "watch the tape" promise, moved here from B7 (where its leisure once
   // cost a take — see the sprint comment above): with the decision already
@@ -608,16 +664,25 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // against a torn-down sandbox answers 409 and renders "This run has finished
   // — its sandbox is gone." Left alone, polling has already stopped (usePoll is
   // paused once live=false) and the last-good rows stay on screen.
+  //
+  // The swap is a reflow, not an instant cut — a ring measured mid-move
+  // straddles two panels' worth of seam (persona round 1 counted 3+ misfires
+  // in twelve seconds right here). Let it settle, and wait for the CONTENT to
+  // exist before pointing at it, not after. RE-VERIFY at rehearsal that
+  // egressCard/filesCard still resolve to exactly one element each post-swap —
+  // the live and finished widget sets sit in the same DOM window this beat
+  // straddles.
+  await beat(page, PACE.afterClick);
+  await expect(filesCard).toContainText("src/slug.js", { timeout: 120_000 });
   await spotlight(page, filesCard);
   await caption(page, "Done. Files changed lists exactly what it touched: source, test, and notes.");
 
-  // ASSERT THE PAYOFF. The narration names three files; if the workspace mounted
-  // read-only, or the agent stopped after the curl, the widget shows "No files
-  // changed yet." and this line is a lie told over an empty box. All three are
-  // guaranteed by DEMO_TASK (steps 2 and 3 — NOTES.md is written by steps 1 and
-  // 3 both) against the demo-node fixture, which ships src/slug.js and
-  // test/slug.test.js for the agent to MODIFY.
-  await expect(filesCard).toContainText("src/slug.js", { timeout: 60_000 });
+  // ASSERT THE REST OF THE PAYOFF. The narration names three files; if the
+  // workspace mounted read-only, or the agent stopped after the curl, the
+  // widget shows "No files changed yet." and this line is a lie told over an
+  // empty box. All three are guaranteed by DEMO_TASK (steps 2 and 3 — NOTES.md
+  // is written by steps 1 and 3 both) against the demo-node fixture, which
+  // ships src/slug.js and test/slug.test.js for the agent to MODIFY.
   await expect(filesCard).toContainText("test/slug.test.js");
   await expect(filesCard).toContainText("NOTES.md");
   // …and the diffstat itself: "+N" proves real counted edits rather than a row
@@ -713,18 +778,22 @@ test("beat 9b — the run kept its own tape", async () => {
 
   const hero = page.getByTestId("run-terminal-pane");
   await spotlight(page, hero);
-  await caption(page, "The run kept its own tape. This is the agent's actual terminal — every keystroke, replayable.");
+  // Autonomous runs have no PTY to type into (B7's own "Output" notice) — the
+  // tape is the agent's terminal OUTPUT, never its keystrokes. "Every
+  // keystroke" is an overclaim the run mode itself contradicts.
+  await caption(page, "The run kept its own tape — the agent's terminal output, replayable after the fact.");
   await beat(page, PACE.read + 600);
 
   // SPEED FIRST, THEN PLAY. `speed` is a creation-time option in
   // asciinema-player v3, so TerminalPlayer rebuilds the player whenever it
   // changes (terminal-player.tsx's effect deps) — picking 4x after pressing
   // play would throw away the playback the viewer just watched start.
-  await act(
-    page,
-    speeds.getByRole("radio", { name: "4x speed" }),
-    "Four-times speed, and the idle gaps are already squeezed out.",
-  );
+  const fourX = speeds.getByRole("radio", { name: "4x speed" });
+  await act(page, fourX, "Four-times speed, and the idle gaps are already squeezed out.");
+  // Prove the control the caption just named is the one actually holding — a
+  // rebuild race must never leave the words describing a speed the player
+  // silently reverted from.
+  await expect(fourX).toHaveAttribute("aria-checked", "true");
 
   // autoPlay is false, so the player parks behind its own start overlay
   // (asciinema-player's .ap-overlay-start) — clicking that is what starts it.
@@ -733,13 +802,21 @@ test("beat 9b — the run kept its own tape", async () => {
   // either: the vendor's markup gives nothing better to aim at.
   await act(page, page.locator(".ap-overlay-start"));
 
-  // ~45 s of watching it play. Real time on purpose: the player's own
-  // idleTimeLimit: 2 plus 4x is the compression, and it is the PRODUCT doing
-  // it — wrapping this in a fast-forward span would be the recorder taking
-  // credit for a feature the viewer is supposed to see working.
-  await beat(page, 20_000);
+  // Real time on purpose: the player's own idleTimeLimit: 2 plus 4x is the
+  // compression, and it is the PRODUCT doing it — wrapping this in a
+  // fast-forward span would be the recorder taking credit for a feature the
+  // viewer is supposed to see working. Total dwell on the player capped at
+  // 12s (down from ~45s) — the two long silent holds were the single
+  // worst-reviewed stretch in the video.
+  await beat(page, 5_000);
+  // The agent flags its own gap mid-session — every persona rated it better
+  // advertising than the narration. Best-effort: a live agent's own words are
+  // never a hard requirement of the take, so this points at it only if it
+  // actually printed.
+  const asciiCaveat = hero.getByText(/ascii/i).first();
+  if (await asciiCaveat.count()) await spotlight(page, asciiCaveat);
   await caption(page, "Real work, watched after the fact — supervision without the sitting around.");
-  await beat(page, 25_000);
+  await beat(page, 7_000);
   await spotlight(page, null);
   await caption(page, "");
 });
@@ -803,9 +880,18 @@ test("V05 beat 10 — borrowed, never held", async () => {
   expect(proofRunId.length > 0, "proof-run create returned no id").toBe(true);
 
   await page.goto(`/runs/${proofRunId}`);
-  await caption(page, "A background run, wired off camera to that token — by name, through its workspace.");
+  await caption(page, "A background run. Its workspace carries the grant — the run just names the secret.");
   await beat(page, PACE.read);
   await expect(page.getByText(/Running|Completed/).first()).toBeVisible({ timeout: 180_000 });
+
+  // Vault carried the agent run above; this one quietly downgrades to Fence —
+  // an echo with no model call needs nothing stronger.
+  const fenceBadge = page.getByText("Fence", { exact: true }).first();
+  await expect(fenceBadge).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, fenceBadge);
+  await caption(page, "Fence this time — a tiny echo job doesn't need a microVM.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // The Credentials widget: minted at sandbox startup, never on traffic — so
   // even this instantly-finished run earns its count.
@@ -815,9 +901,18 @@ test("V05 beat 10 — borrowed, never held", async () => {
   await expect(page.getByText(/1 eligible · 1 minted/).first()).toBeVisible({ timeout: 120_000 });
   await caption(page, "One credential eligible, one minted — a short-lived stand-in, made by the broker at start.");
   await beat(page, PACE.read);
-  await spotlight(page, page.getByText(/never sees your real keys/).first());
-  await caption(page, "The widget says it plainly: the agent never sees your real keys.");
-  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // "On the record" is said three times in this video and the Audit tab is
+  // never once opened — Sam/Dana: a label asserting a security property is
+  // not the property. Open it and point at the actual row instead of the
+  // widget's own claim about itself.
+  await act(page, page.getByRole("tab", { name: "Audit" }));
+  const requirementRow = page.getByText(new RegExp(PROOF_SECRET)).first();
+  await expect(requirementRow).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, requirementRow);
+  await caption(page, "Host, decision, scope, time — the same rows an auditor gets.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
   // Both halves on the record (the retired workspaces-and-secrets spec's own
@@ -834,15 +929,32 @@ test("V05 beat 10 — borrowed, never held", async () => {
   await caption(page, "read by the run's identity, at start. The value crossed no screen and no shell.");
   await beat(page, PACE.read);
 
-  // The deterministic negative: video two's canary value — the secret's actual
-  // content — appears NOWHERE. Not on this page, not in the run's audit trail.
+  // The deterministic negative, searched for ON CAMERA rather than only
+  // asserted against the API: video two's canary value — the secret's actual
+  // content — appears NOWHERE, not on this page and not in the trail.
+  await act(page, page.getByRole("link", { name: "open full Audit" }));
+  const search = page.getByPlaceholder("Search events, domains, run IDs…");
+  await expect(search).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, search);
+  await search.click();
+  await spotlight(page, null);
+  await page.keyboard.type(PROOF_CANARY, { delay: 40 });
+  await caption(page, "Search the trail for the value you watched go in during video two — nothing. That is the design.");
+  await beat(page, PACE.read);
+  await expect(page.getByText("No events match these filters.")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).not.toContainText(PROOF_CANARY);
+
   const fullTrail = await (
     await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}`, { headers })
   ).text();
   expect(fullTrail.includes(PROOF_CANARY), "the canary VALUE leaked into the audit trail").toBe(false);
-  await caption(page, "And the value itself — video two's canary — appears nowhere. That is the whole design.");
   await beat(page, PACE.read + 600);
+
+  // The recap must play over the run it describes, not this beat's throwaway
+  // proof run (whose own page says "no diff to show" under "a diff on your
+  // disk"). Go back to the run captured at Launch (B7) before speaking.
+  await page.goto(slugifyRunUrl);
+  await expect(page.getByTestId("run-terminal-pane")).toBeVisible({ timeout: 30_000 });
 
   // --- OUTRO --------------------------------------------------------------
   //
@@ -852,7 +964,7 @@ test("V05 beat 10 — borrowed, never held", async () => {
   // take asserted on camera, so the summary cannot outrun the footage.
   await caption(page, "One governed run, end to end: a task handed over in plain English, a sandbox it never left.");
   await beat(page, PACE.read + 400);
-  await caption(page, "One host held at the door — you decided, on the record.");
+  await caption(page, "Two holds at the door — one approved, one refused. Both on the record.");
   await beat(page, PACE.read + 400);
   await caption(page, "A diff on your disk, receipts in the audit trail, and the whole session on tape.");
   await beat(page, PACE.read + 600);
