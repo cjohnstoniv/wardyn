@@ -312,7 +312,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Secrets", "Audit"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -345,7 +345,7 @@ describe("SidebarNav (member role — B3)", () => {
     for (const label of ["Runs", "Approvals"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
-    for (const label of ["Policies", "Secrets", "Workspaces", "Audit"]) {
+    for (const label of ["Policies", "Permissions", "Secrets", "Workspaces", "Audit"]) {
       expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
     }
   });
@@ -355,7 +355,7 @@ describe("SidebarNav (member role — B3)", () => {
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Secrets", "Audit"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
