@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -342,6 +342,20 @@ test-e2e-ssh: ## Live SSH gateway e2e: exec/sftp/-L forward/recording/denial/con
 test-e2e-ssh-k8s: ## Live SSH gateway e2e on Kubernetes (needs a kind-quickstart cluster up)
 	@echo "Running live SSH gateway e2e on Kubernetes (existing kind-quickstart cluster; shell lane only)..."
 	WARDYN_TEST_K8S=1 ./scripts/run-e2e-ssh-k8s.sh
+
+# Live UI-sandbox gateway e2e: the ticket -> enter -> cookie -> code-server
+# handoff on the SECOND origin, the ui.* audit rows (and the session.attach row
+# that must NOT appear), an undeclared app and a foreign run's ticket both
+# refused 403, the inbound/outbound header strips asserted against an
+# in-sandbox echo responder, and the exec baseline (relayed socat execs pooled,
+# then reaped by the idle timeout). Brings up its OWN dedicated compose stack
+# (project "wardynv06uisbx", ports 18081/15433/18083) with both listeners wired
+# and tears it down after -- never touches another stack. Needs Docker + curl +
+# jq and the code-server image (built on demand: make agent-image-vscode);
+# self-skips without WARDYN_TEST_DOCKER=1.
+test-e2e-ui-sandbox: ## Live UI-sandbox relay e2e: handoff/audit/403s/header strips/exec baseline
+	@echo "Running live UI-sandbox gateway e2e (dedicated compose stack; requires Docker)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ui-sandbox.sh
 
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
