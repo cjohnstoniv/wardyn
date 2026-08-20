@@ -51,6 +51,12 @@ COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
 API_PORT=18080
 PG_PORT=15432
 SSH_PORT=12222
+# The registry sidecar publishes a host port too, and nothing overrode it: on
+# a shared daemon this stack collided with the operator's own `wardyn-registry`
+# on the 5010 default and `compose up` died with "port is already allocated"
+# before wardynd ever started (observed live). Namespaced like the other three
+# — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
+REGISTRY_PORT=15010
 
 # Project-unique agent image tag/repo (NOT the shared wardyn/agent-*:local
 # convention every other e2e script trusts): on a box where wardyn_pick_docker_host
@@ -68,6 +74,7 @@ AGENT_IMAGE="wardynv05e2e/agent-claude-code:pinned"
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
+    WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" \
     WARDYN_SSH_LISTEN=":2222" WARDYN_SSH_ADVERTISE="127.0.0.1:${SSH_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
