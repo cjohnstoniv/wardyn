@@ -155,8 +155,15 @@ helm install wardyn ./deploy/helm/wardyn \
   --set image.repository="$REGISTRY/wardynd" \
   --set image.tag="$TAG" \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
+
+(`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see
+[Database (DSN)](#database-dsn--two-modes) below. Without a stable age
+identity the chart refuses to render: the default ephemeral one is
+regenerated every boot and crash-loops the pod on its second restart, unable
+to decrypt what the first boot encrypted.)
 
 The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
 (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
@@ -190,13 +197,18 @@ the chart at it (the default `postgres.dsn.secretRef.name` is `wardyn-postgres-d
 ```bash
 kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
+  --from-literal=age-key="$(docker run --rm "$REGISTRY/wardynd:$TAG" -gen-age-key)" \
   -n wardyn
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-The DSN never appears in the rendered manifests or Helm release history.
+The DSN never appears in the rendered manifests or Helm release history. The
+`age-key` entry is the secret-store identity: without `secrets.ageKeyFromSecret`
+pointing at it, the chart refuses to render (see `deploy/helm/wardyn/templates/secret.yaml`) —
+the default ephemeral identity cannot survive a restart against a real Postgres.
 
 **2. Inline (demo only).** Clear `secretRef.name` and pass the DSN; the chart
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
@@ -242,6 +254,7 @@ extraEnv:
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   -f rbac-values.yaml   # the snippet above
 ```
@@ -261,6 +274,18 @@ pods in this cluster (`internal/runner/k8s`) instead of the Docker Compose
 path — a completely separate confinement substrate (L1, NetworkPolicy-backed,
 proven live by a boot-time egress canary) from the Compose stack's L0
 (structural, no-default-route) one.
+
+**Boot-time canary trap: a pre-existing default-deny NetworkPolicy in
+`k8s.runsNamespace`.** The canary's phase A applies no NetworkPolicy of its
+own — it exists only to prove the cluster is reachable at all before phase B
+proves Wardyn's own deny-all rule takes effect. If the namespace already
+carries a default-deny NetworkPolicy from something else (a cluster-wide
+baseline, another operator's policy), phase A is blocked too, and wardynd
+refuses to boot with an INDETERMINATE verdict — indistinguishable from a
+genuinely broken cluster, even though per-run confinement would work fine
+once Wardyn's own allow-rules are in place. Use a namespace with no ambient
+default-deny for `k8s.runsNamespace`, or add an allow rule for pods labeled
+`wardyn.managed=true` to the pre-existing policy.
 
 ```bash
 helm install wardyn ./deploy/helm/wardyn -n wardyn \

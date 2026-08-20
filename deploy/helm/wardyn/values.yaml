@@ -88,7 +88,11 @@ secrets:
   # the render rather than silently dropping it — use ageKeyFromSecret there.
   ageKey: ""
   # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
-  # "age-key" entry you want injected as WARDYN_AGE_KEY.
+  # "age-key" entry you want injected as WARDYN_AGE_KEY. Strongly recommended
+  # whenever postgres.dsn.secretRef.name is set (persistent Postgres): left at
+  # the default (false, ephemeral key), the pod crash-loops on its SECOND
+  # restart, unable to decrypt what the first boot encrypted. See README
+  # "Database (DSN)".
   ageKeyFromSecret: false
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
