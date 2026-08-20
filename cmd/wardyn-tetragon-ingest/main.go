@@ -4,8 +4,9 @@
 // Command wardyn-tetragon-ingest is the host-scoped eBPF GROUND-TRUTH sidecar:
 // the SECOND of Wardyn's three advertised audit streams. It tails Tetragon's
 // line-delimited JSON export, correlates each kernel event to a Wardyn run via
-// the container label wardyn.run-id (by listing docker containers labelled
-// wardyn.managed=true), maps a bounded event subset to types.AuditEvent
+// the container label wardyn.run-id (by watching `docker events` and listing
+// containers labelled wardyn.managed=true — correlator.go), maps a bounded
+// event subset to types.AuditEvent
 // (internal/groundtruth), and POSTs batches to the control plane's
 // POST /api/v1/internal/groundtruth endpoint with a host-sensor bearer token.
 // The control plane records them append-only — so they land in Postgres AND fan
@@ -29,8 +30,11 @@
 // leak of workloads Wardyn does not own (W24-S1-1). Set
 // -forward-unmapped-host-events / WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS=true
 // to opt a deployment back into full-host coverage: such events are then sent
-// with run_id NULL + correlation="unmapped", visible rather than silently
-// dropped. Events that DO correlate to a Wardyn run are NEVER gated — always
+// with run_id NULL + correlation="unmapped", visible rather than dropped.
+// Gated drops are COUNTED either way and published on the heartbeat as
+// dropped_unmapped, so "the sensor saw nothing" and "the sensor saw plenty and
+// correlated none" are distinguishable on /healthz rather than both reading
+// observed_total:0. Events that DO correlate to a Wardyn run are NEVER gated — always
 // forwarded. It emits a periodic kernel.sensor.heartbeat (run_id NULL) so
 // /healthz can report ebpf_groundtruth=healthy ONLY while events are arriving.
 // Host eBPF is blind inside CC3/Kata guests; for such runs a one-time
@@ -103,7 +107,7 @@ func run() error {
 	}()
 
 	// Container->run correlator. Throttle on-miss refreshes to half the ticker.
-	corr := newDockerCorrelator(nil, refreshIval/2)
+	corr := newDockerCorrelator(nil, nil, refreshIval/2)
 	if err := corr.Refresh(ctx); err != nil {
 		// Non-fatal: the daemon may not be reachable yet (compose ordering).
 		// Everything correlates as unmapped until the first successful refresh —
@@ -142,7 +146,7 @@ func run() error {
 		// size. Runs in its own goroutine so this initial beat never blocks
 		// startup on a control-plane POST.
 		beat := func() {
-			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount(), sink.observedByKindSnapshot()))
+			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount(), mapper.droppedUnmappedCount(), sink.observedByKindSnapshot()))
 		}
 		beat()
 		every(ctx, heartbeatIval, beat)
@@ -152,10 +156,15 @@ func run() error {
 			slog.WarnContext(ctx, "wardyn-tetragon-ingest: container index refresh failed", slog.Any("err", err))
 		}
 	})
+	// Live container->run index off `docker events`: a snapshot alone cannot see
+	// a container that starts and exits between two polls, and its kernel events
+	// then correlate as unmapped (correlator.go's E1 finding).
+	go corr.Watch(ctx)
 	go every(ctx, statsIval, func() {
 		slog.InfoContext(ctx, "wardyn-tetragon-ingest: stats",
 			slog.Uint64("posted", sink.postedCount()),
 			slog.Uint64("dropped", sink.droppedCount()),
+			slog.Uint64("dropped_unmapped", mapper.droppedUnmappedCount()),
 		)
 	})
 

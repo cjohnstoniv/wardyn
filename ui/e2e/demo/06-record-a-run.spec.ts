@@ -280,11 +280,17 @@ test.beforeAll(async () => {
   // the poll rather than a single read. ("idle" is fine here: nothing has run
   // yet, so zero observed events is the truth.)
   // INFORMATIONAL ONLY (2026-08-18): B4 no longer narrates the kernel groups,
-  // so a quiet sensor no longer blocks the take. The pipeline on this host has
-  // a real defect past the sensor — tetragon exports events, the ingest posts
-  // batches, the control-plane counter stays frozen — filed for 0.6; until it
-  // lands, the series' one on-camera ground-truth mention stays V10's honest
-  // "Ground truth · unavailable — that sensor is opt-in."
+  // so this read never blocks the take. The frozen-counter defect this comment
+  // used to describe — a poll-based container index that lost short-lived
+  // runs — is fixed in 0.6 (the docker-events correlation index): exec/write
+  // events now reach the control plane. What still keeps kernel groups off this take's script:
+  // the groundtruth compose profile is opt-in and this stack does not run
+  // it, so ebpf_groundtruth reads "unavailable" regardless of the fix, and
+  // even with the profile up, kernel.network.connect stays permanently dead
+  // on WSL2 + Docker Desktop — measured, environmental, not a bug (see
+  // deploy/compose/README.md). The series' one on-camera ground-truth
+  // mention stays V10's honest "Ground truth · unavailable — that sensor is
+  // opt-in."
   const gt = (await apiGet<{ ebpf_groundtruth?: { state?: string } }>("/healthz")).ebpf_groundtruth?.state ?? "unavailable";
   console.log(`[v06] ebpf_groundtruth state: ${gt} (informational — the kernel groups are not narrated)`);
 });
@@ -543,14 +549,19 @@ test("B4 — evidence becomes policy", async () => {
   await beat(page, PACE.read + 900);
 
   // The kernel groups (Executed / File writes / Connects) are deliberately NOT
-  // narrated: the ground-truth ingest pipeline on this host posts events the
-  // control plane never counts (filed for 0.6 with the full evidence trail),
+  // narrated: this stack does not run the opt-in groundtruth compose profile,
   // so those boxes read "None observed." — and a beat that calls an empty box
   // "kernel ground truth" is the exact honesty gap this video must not walk
-  // into. The evidence narrated here is the audit-side kind, which populates
-  // regardless: every connection, counted; every mint, counted. When the 0.6
-  // fix lands, the credential-shaped ~/.gitconfig write from B3 is already in
-  // the session, waiting to be pointed at.
+  // into. That is a profile-off gap, not the frozen-counter defect the series
+  // used to carry: 0.6 fixed the correlation index (it is fed by docker events
+  // now), so exec/write events reach the control plane once the profile IS up,
+  // though
+  // kernel.network.connect stays environmentally capped on WSL2 + Docker
+  // Desktop regardless (deploy/compose/README.md). The evidence narrated here
+  // is the audit-side kind, which populates regardless: every connection,
+  // counted; every mint, counted. The credential-shaped ~/.gitconfig write
+  // from B3 is already in the session, waiting to be pointed at the day this
+  // take runs against the groundtruth profile.
   await caption(page, "Every line here is evidence from the run itself — nothing typed, nothing guessed.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);

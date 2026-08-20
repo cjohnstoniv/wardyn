@@ -26,7 +26,7 @@ import (
 func TestSynthesizeProfile_StampsEbpfGroundtruthCaveat(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
-	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, 0, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
 	hb.Time = time.Now()
 	fake := &recordStore{
 		run: types.AgentRun{ID: runID, Agent: "claude-code", Repo: "org/repo",

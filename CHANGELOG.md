@@ -12,9 +12,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Ground-truth heartbeat and `/healthz` now publish `dropped_unmapped`
+  alongside the existing `dropped_total` and `observed_total`, and the
+  `/healthz` idle state names which of its two causes it is ("kernel events
+  observed but none correlated to a run" vs. the plain "no kernel events
+  observed"), so "the sensor saw nothing" and "the sensor saw plenty and
+  correlated none" stop reading as the same `observed_total: 0`.
+
 ### Changed
 
 ### Fixed
+
+- **Ground-truth's control-plane counter could freeze on a live sensor.** The
+  ingest sidecar built its container→run index from a `docker ps` snapshot
+  (running containers only) and replaced it wholesale on every refresh, while
+  the Tetragon export tails with lag — a run whose container exited before the
+  tail caught up resolved unmapped, was dropped, and moved no counter at all.
+  The index is now fed by `docker events` (a container is known at CREATE,
+  before its first exec) and merged rather than replaced, with entries
+  outliving their container by 15 minutes so a lagging tail still correlates.
 
 ### Security
 

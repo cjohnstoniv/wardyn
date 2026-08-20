@@ -510,7 +510,7 @@ func TestMapUnknownKind(t *testing.T) {
 }
 
 func TestHeartbeatEventWithDropped(t *testing.T) {
-	ev := HeartbeatEventWithDropped(3, 7, map[string]uint64{ActionProcessExec: 7})
+	ev := HeartbeatEventWithDropped(3, 7, 11, map[string]uint64{ActionProcessExec: 7})
 	if ev.Action != ActionSensorHeartbeat {
 		t.Errorf("action = %q, want %q", ev.Action, ActionSensorHeartbeat)
 	}
@@ -531,9 +531,10 @@ func TestHeartbeatEventWithDropped(t *testing.T) {
 	// /healthz can tell a blind sensor (observed==0) apart from one where events
 	// flow.
 	var hb struct {
-		DroppedTotal   uint64            `json:"dropped_total"`
-		ObservedTotal  uint64            `json:"observed_total"`
-		ObservedByKind map[string]uint64 `json:"observed_by_kind"`
+		DroppedTotal    uint64            `json:"dropped_total"`
+		ObservedTotal   uint64            `json:"observed_total"`
+		DroppedUnmapped uint64            `json:"dropped_unmapped"`
+		ObservedByKind  map[string]uint64 `json:"observed_by_kind"`
 	}
 	if err := json.Unmarshal(ev.Data, &hb); err != nil {
 		t.Fatalf("decode heartbeat data: %v", err)
@@ -546,6 +547,11 @@ func TestHeartbeatEventWithDropped(t *testing.T) {
 	}
 	if hb.ObservedByKind[ActionProcessExec] != 7 {
 		t.Errorf("observed_by_kind[%s] = %d, want 7", ActionProcessExec, hb.ObservedByKind[ActionProcessExec])
+	}
+	// dropped_unmapped separates a BLIND sensor from a broken CORRELATION: both
+	// read observed_total==0 without it.
+	if hb.DroppedUnmapped != 11 {
+		t.Errorf("dropped_unmapped = %d, want 11", hb.DroppedUnmapped)
 	}
 }
 

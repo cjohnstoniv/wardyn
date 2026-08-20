@@ -25,16 +25,22 @@ import (
 // the aggregate alone cannot distinguish "all three kinds arriving" from "one
 // kind carrying the whole count while the others are silently blind" (a
 // mis-scoped TracingPolicy, say). May be nil/empty on an older sensor build.
-func HeartbeatEventWithDropped(droppedTotal, observedTotal uint64, observedByKind map[string]uint64) types.AuditEvent {
+// droppedUnmapped is the count of mapped kernel events the sensor refused to
+// forward because they correlated to no run (the sidecar's default-on unmapped
+// gate). It exists so "the sensor saw nothing" and "the sensor saw plenty and
+// correlated none" stop being the same observed_total==0 on /healthz — the
+// second is a correlation failure, and it must not be invisible.
+func HeartbeatEventWithDropped(droppedTotal, observedTotal, droppedUnmapped uint64, observedByKind map[string]uint64) types.AuditEvent {
 	data := heartbeatData{
 		EventData: EventData{
 			Stream:      Stream,
 			Subtype:     "heartbeat",
 			Correlation: CorrelationUnmapped, // host-scoped, not bound to a run
 		},
-		DroppedTotal:   droppedTotal,
-		ObservedTotal:  observedTotal,
-		ObservedByKind: observedByKind,
+		DroppedTotal:    droppedTotal,
+		ObservedTotal:   observedTotal,
+		DroppedUnmapped: droppedUnmapped,
+		ObservedByKind:  observedByKind,
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -61,6 +67,10 @@ type heartbeatData struct {
 	// it to tell "sensor alive but observing nothing" (idle) apart from "events
 	// flowing" (healthy) — a live heartbeat alone never proves ground truth.
 	ObservedTotal uint64 `json:"observed_total"`
+	// DroppedUnmapped is the cumulative count of kernel events dropped because
+	// they correlated to no run. Nonzero with ObservedTotal==0 means the sensor
+	// is NOT blind — correlation is failing. Omitted by an older sensor build.
+	DroppedUnmapped uint64 `json:"dropped_unmapped,omitempty"`
 	// ObservedByKind splits ObservedTotal by event Action
 	// (kernel.process.exec/kernel.network.connect/kernel.file.write).
 	// /healthz reports per-kind coverage off this — see HeartbeatEventWithDropped.

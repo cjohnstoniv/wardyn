@@ -612,7 +612,12 @@ type ApprovalDecision struct {
 //	  "correlation": "mapped" | "unmapped",  // unmapped => run_id NULL, never
 //	                                          // silently dropped (visible blindness)
 //	  "reason": "...",                  // sensor.blind / failure detail (omitempty)
-//	  "dropped_total": <uint64>         // heartbeat only: sensor backpressure drops
+//	  "dropped_total": <uint64>,        // heartbeat only: sensor backpressure drops
+//	  "observed_total": <uint64>,       // heartbeat only: kernel events mapped off the tail
+//	  "dropped_unmapped": <uint64>      // heartbeat only: events dropped as
+//	                                    // uncorrelated — nonzero with
+//	                                    // observed_total 0 means correlation is
+//	                                    // broken, NOT that the sensor is blind
 //	}
 //
 // Outcome stays within the existing CHECK ("success"|"failure"|"denied"): the
