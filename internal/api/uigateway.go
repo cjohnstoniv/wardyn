@@ -88,9 +88,12 @@ const (
 	// (each connection is a live exec in the sandbox), the sibling of
 	// maxSSHSessionsPerRun.
 	maxUIConnsPerRun = 8
-	// uiIdleConnTimeout reaps a pooled relay connection — and with it the socat
-	// exec behind it — after this long idle. Without it, a closed browser tab
-	// would leave execs parked in the sandbox until the run stopped.
+	// uiIdleConnTimeout closes a pooled relay connection after this long idle,
+	// so a closed browser tab stops holding relay capacity. It closes the exec's
+	// streams, which is NOT the same as ending the exec: socat exits when it
+	// sees both halves end, so one whose app-side half the app still holds open
+	// can outlive its connection and be reaped only when the sandbox stops
+	// (stated residual — docs/UI-SANDBOXES.md, "Resource bounds").
 	uiIdleConnTimeout = 90 * time.Second
 	// uiReadyTTL is how long a successful launcher probe is trusted before the
 	// next connection re-probes. Short: an app that died must resurface as a
