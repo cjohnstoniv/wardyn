@@ -90,9 +90,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "And CI — the robot that runs your team's checks — runs it all unattended, with the deploy keys nearby.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#s1-supply"));
-  await caption(page, "Supply-chain attacks live exactly here — one compromised package, reading your environment and shipping it out.");
-  await beat(page, PACE.read);
-  await caption(page, "It has names — SolarWinds, event-stream, XZ Utils. It keeps happening.");
+  await caption(page, "Supply-chain attacks live exactly here — SolarWinds, event-stream, XZ Utils. One compromised package, quietly reading and shipping out.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#s1-predates"));
   await caption(page, "That risk predates AI. Most teams simply never watch the traffic.");
