@@ -8,6 +8,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+<!-- 0.6 work populates these sections as it lands. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
 ## [0.5.0] — 2026-08-18
 
 ### Security
