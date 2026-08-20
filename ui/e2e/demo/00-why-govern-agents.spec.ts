@@ -88,17 +88,17 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Start before agents — with code your machines already run every day.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-dep"));
-  await caption(page, "Every dependency install executes code strangers wrote — beside your credentials.");
+  await caption(page, "Every dependency install executes code you never read — beside your credentials.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-script"));
-  await caption(page, "Build scripts and install hooks run with everything your shell can reach — and the shell reaches the whole machine.");
+  await caption(page, "Build scripts and install hooks run with everything your shell can reach — the command line every program on your machine answers to.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-ci"));
   await caption(page, "And CI — the robot that runs your team's checks — runs it all unattended, with the deploy keys nearby.");
   await beat(page, PACE.read);
   await unhide(page, "s1-supply");
   await spotlight(page, page.locator("#s1-supply"));
-  await caption(page, "Supply-chain attacks live exactly here — SolarWinds, event-stream, XZ Utils. One compromised package, quietly reading and shipping out.");
+  await caption(page, "Supply-chain attacks live exactly here. event-stream — a package millions depended on, handed to a stranger who slipped in a wallet stealer.");
   await beat(page, PACE.read);
   await unhide(page, "s1-predates");
   await spotlight(page, page.locator("#s1-predates"));
@@ -124,9 +124,9 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "This is a real frame from episode six of this series — a coding agent's egress panel: everything trying to LEAVE its box.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-pending"));
-  await caption(page, "Its own tooling — here, the coding harness's own usage reporting — reached for a telemetry endpoint. Nobody asked; it is just what the tool does.");
+  await caption(page, "Its own harness — the CLI wrapped around the model — quietly reported usage back to its vendor. Nobody asked; it is just what the tool does.");
   await beat(page, PACE.read);
-  await caption(page, "Harmless-looking, today. But a request that isn't harmless looks identical at this door — episode five stops those.");
+  await caption(page, "Harmless, today. A theft looks identical at this door — same row, but the cargo is your customer list. Episode five stops those.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-quote"));
   await caption(page, "This one was caught and held — parked until a human decides. Most setups never even see it leave.");
@@ -137,12 +137,14 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#exhibit-refs"));
   await caption(page, "Who decides, how far a yes reaches, and the record it all leaves — episodes ten and twelve.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
-  // The truth line closes S3 (it summarizes the exhibit); S4 flips exactly
-  // when the voice reaches the two answers (Dana r3's re-cut — round 2's
-  // early flip had the screen ahead of the voice for ~7s).
+  // The truth line closes S3 (it summarizes the exhibit) and gets its own
+  // band — every other hinge line earned one, and this was the last spot
+  // where the screen went dead under an important sentence (Priya+Sam r4).
+  await unhide(page, "s3-truth");
+  await spotlight(page, page.locator("#s3-truth"));
   await caption(page, "That is the uncomfortable truth: you cannot list what a tool will need up front — and you rarely know everything it does.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // --- S4 · trust it all, or block it all -------------------------------------
   await show(page, "s4");
@@ -167,6 +169,8 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#d-proxy"));
   await caption(page, "A proxy is the checkpoint at that door. It stands outside the room, it holds the keys — and it attaches them on the way out.");
   await beat(page, PACE.read);
+  await caption(page, "So a thief can't take the key. What a run may do with it — that is the policy's job, episode eight.");
+  await beat(page, PACE.read);
   await unhide(page, "d-rule");
   await spotlight(page, page.locator("#d-rule"));
   await caption(page, "Deny by default. Decide the exceptions. Write every attempt down.");
@@ -178,7 +182,7 @@ test("V00 — why govern agents (the primer)", async () => {
   // was Sam's "missed beat"; the loop is the product idea and earns its rhythm.
   await show(page, "s6");
   await spotlight(page, page.locator("#steps > .card").nth(0));
-  await caption(page, "So don't guess. Run the job once, watched — the door deliberately opened for that one supervised run, everything logged.");
+  await caption(page, "So don't guess. Run the job once, watched — the door deliberately opened for that one supervised run, on work you trust.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#steps > .card").nth(1));
   await caption(page, "See every host it actually reached — evidence, not a wishlist.");
@@ -186,7 +190,9 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#steps > .card").nth(2));
   await caption(page, "Then decide: yes, no, or ask me — and it lands on the record.");
   await beat(page, PACE.read);
-  await caption(page, "Turning one watched run into a policy you keep — that is episode nine.");
+  await unhide(page, "s6-ep9");
+  await spotlight(page, page.locator("#s6-ep9"));
+  await caption(page, "Turning one watched run into a policy you keep — and keeping that first run safe — is episode nine.");
   await beat(page, PACE.read);
   await unhide(page, "s6-thesis");
   await spotlight(page, page.locator("#s6-thesis"));
@@ -196,6 +202,9 @@ test("V00 — why govern agents (the primer)", async () => {
 
   // --- S7 · the series map --------------------------------------------------------
   await show(page, "s7");
+  // Ring the footer that carries these exact words — the styled 02 tile read
+  // as a ring while the voice said open-source/one-command (Dana r4).
+  await spotlight(page, page.locator("#oss-line"));
   await caption(page, "The rest of this series stands that answer up for real — Wardyn: open source, one command on your own machine, every claim proved on camera.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#roadmap"));
