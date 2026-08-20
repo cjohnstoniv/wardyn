@@ -381,6 +381,26 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(await screen.findByText("runs screen")).toBeInTheDocument();
   });
 
+  // W25-W25.2-3: a member's unfiltered feed is ALWAYS empty (server scopes
+  // members to ?run_id= of a run they own) — the operator empty-state copy
+  // ("The trail starts with your first run") is false for them, since it
+  // implies a personal absence of events rather than a permanently
+  // inaccessible global view. Must say so honestly instead.
+  it("tells a member the full feed is admin-only instead of the generic empty-state", async () => {
+    listAuditMock.mockResolvedValue([]);
+    const { OperatorProvider } = await import("../wardyn/operator-context");
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <AuditScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/admin-only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/the trail starts with your first run/i)).not.toBeInTheDocument();
+  });
+
   // A dead or missing kernel sensor is the ABSENCE of events, so the list can
   // never show it — only this chip can. Nothing is claimed when the daemon
   // doesn't report the field at all.
