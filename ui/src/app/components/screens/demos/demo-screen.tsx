@@ -249,8 +249,7 @@ export function DemoScreen() {
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>
             Demos need the sandbox runner — set up a barrier under{" "}
-            {/* TODO(stage-4): /settings */}
-            <Link to="/integrations" className="font-medium underline underline-offset-2">
+            <Link to="/settings" className="font-medium underline underline-offset-2">
               Settings
             </Link>{" "}
             first.
@@ -494,7 +493,7 @@ export function DemoRunControls({
 // sees a denial land on the record WITHOUT leaving the demo for the Audit screen.
 // Projects egress.allow/deny/pending audit rows via egressFromAudit; polls /audit
 // every 2s while mounted (i.e. while the demo sandbox is running).
-export function DemoAuditPanel({ runId }: { runId: string }) {
+function DemoAuditPanel({ runId }: { runId: string }) {
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const refresh = React.useCallback(async () => {
     const list = await audit.listAudit(runId).catch(() => null);

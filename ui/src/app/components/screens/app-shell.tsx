@@ -537,7 +537,6 @@ function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
   const strongest = strongestAvailable(classes);
   return (
     <Link
-      // TODO(stage-4): /settings
       to="/settings"
       className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       aria-label={strongest ? "Sandbox barrier — open Settings" : "No sandbox barrier — open Settings"}

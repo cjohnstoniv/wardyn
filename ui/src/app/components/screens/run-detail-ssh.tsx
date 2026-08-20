@@ -196,7 +196,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 // needs the brackets stripped, not just the last colon split off, and the
 // latter has no port to split at all (naive lastIndexOf would carve a
 // fragment off the address itself).
-export function splitHostPort(addr: string): [host: string, port: string] {
+function splitHostPort(addr: string): [host: string, port: string] {
   const bracketed = addr.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketed) return [bracketed[1], bracketed[2] ?? ""];
   // More than one colon, unbracketed: a bare IPv6 literal (always has 2+

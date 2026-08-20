@@ -765,21 +765,6 @@ export function wizardStateFromProposal(
   };
 }
 
-// Per-step validation. Returns null when the step is valid, else an error string
-// the wizard renders inline and uses to gate Next/Launch.
-// A workspace's recorded PROFILES: its settled OPEN recordings. Each is tied to the
-// workspace by construction (it lives in the workspace's record_results) — no naming
-// heuristic or policy↔workspace FK needed — and synthesizes a full least-privilege
-// policy on demand (api.profileRun). Confined verify replays + failed captures are
-// excluded (they aren't the canonical learned profile).
-export type WorkspaceProfileOption = { key: string; label: string; runId: string };
-export function workspaceProfileOptions(ws: Workspace | undefined): WorkspaceProfileOption[] {
-  if (!ws) return [];
-  return Object.entries(ws.record_results ?? {})
-    .filter(([, v]) => v.status === "recorded" && !v.confined && !!v.run_id)
-    .map(([key, v]) => ({ key, label: v.label || key, runId: v.run_id }));
-}
-
 // applyProfileSpecToState loads a recorded profile's synthesized spec into the wizard's
 // steps 2-4 (access, egress, confinement) while KEEPING the operator's Basics choices
 // (runType, agent, mode, task, workspace, image). Sets selectedProfile so the footer
