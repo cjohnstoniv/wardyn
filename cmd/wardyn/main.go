@@ -163,6 +163,7 @@ func rootCmd() *cobra.Command {
 		approvalDecisionCmd(client, "approve", "Approve a pending approval request", (*sdk.Client).Approve),
 		approvalDecisionCmd(client, "deny", "Deny a pending approval request", (*sdk.Client).Deny),
 		auditCmd(client),
+		logsCmd(client),
 		policyCmd(client),
 		workspaceCmd(client),
 		sourceCmd(client),

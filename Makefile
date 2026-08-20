@@ -733,7 +733,7 @@ reset: ## Clean slate: wipe local volumes (runs + audit + recordings) then setup
 reset-all: ## FULL undo: host daemon + compose + ~/.wardyn files (ARGS: --dry-run, --purge-*)
 	./scripts/up.sh reset-all $(ARGS)
 
-doctor: ## Read-only preflight (docker, ports, confinement classes, WSL/Windows)
+doctor: ## Read-only preflight — creates/changes nothing (docker, ports, confinement classes, WSL/Windows)
 	./scripts/up.sh doctor
 
 dev-pg: ## Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)

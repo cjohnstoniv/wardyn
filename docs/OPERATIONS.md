@@ -23,9 +23,19 @@ permanent.
 
 | Store | Where | Holds | If you lose it |
 |---|---|---|---|
-| Postgres | volume `postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
+| Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+
+`postgres_data`, `registry_data` and `audit` are declared WITHOUT an explicit
+`name:` in `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the
+compose project — `compose_postgres_data` by default (the project name comes from
+the `deploy/compose` directory, `docker compose config | grep '^name:'`). Only
+`recordings` is explicitly named (`${WARDYN_NS:-wardyn}-recordings`), because the
+docker runner has to mount that same volume into agent containers BY NAME. Reach
+for the unprefixed form and `docker volume inspect postgres_data` reports no such
+volume — and a volume-level backup that ignores that error archives nothing. Back
+Postgres up with `pg_dump` (below), not at the volume layer.
 
 The `audit` volume is **derived**, not primary: it is the optional file sink
 (`WARDYN_AUDIT_SINKS`, see [ENV.md](ENV.md)). Postgres is the source of truth for
@@ -44,7 +54,8 @@ docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
-#    (the volume is named, not project-prefixed — see docker-compose.yaml)
+#    (`recordings` is the ONE explicitly-named volume, so no project prefix —
+#     see docker-compose.yaml)
 docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
   tar czf /to/recordings-$(date +%F).tar.gz -C /from .
 
@@ -828,7 +839,7 @@ in **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`,
 `wardyn site-config get|apply`) — the corporate upstream proxy and the list of
 outbound redirects every run's egress inherits. Unconfigured is a valid,
 common state: a host with direct internet access needs none of this. Because
-it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
+it lives in Postgres, `make reset` / `make reset-all` take it with the volume; `wardyn
 site-config get > corp-baseline.json` before a reset and `wardyn site-config
 apply corp-baseline.json` after is the round-trip — the document carries
 secret **names**, never values, so it's safe to keep beside the repo. Because
@@ -962,12 +973,22 @@ client that `get`s a config saved before `integrations` existed, then `apply`s
 it back unmodified (the exact round-trip described at the top of this
 section), would otherwise silently delete every stored integration.
 
-The practical edge: `wardyn site-config apply` does not strip `integrations`
-from the file it reads (`cmd/wardyn/siteconfig.go`), so once any are stored, a
-fresh `wardyn site-config get > corp-baseline.json` captures them too — drop
-the `integrations` key from that file before `apply`, or the request 400s.
-Manage integrations themselves through their own routes (`GET /api/v1/integrations`,
-`PUT`/`DELETE /api/v1/integrations/{id}`), never through this document.
+The practical edge: once any integrations are stored, a fresh `wardyn
+site-config get > corp-baseline.json` captures them too, and the client strips
+them back out on the way in (`PutSiteConfig`, `pkg/client/families.go`) so the
+`apply` half of the round-trip does not 400 on its own capture. That strip is
+what keeps the recovery flow working, but it also means **`apply` never
+restores an integration** — the ones in the file are dropped, and the stored
+ones are carried forward untouched. `wardyn site-config apply` prints a warning
+naming how many it dropped, so a restore that did not happen does not read as
+one. Manage integrations themselves through their own routes (`GET
+/api/v1/integrations`, `PUT`/`DELETE /api/v1/integrations/{id}`), never through
+this document.
+
+`apply` also decodes the file strictly (`DisallowUnknownFields`, the same
+validator the server runs): because this is a whole-document replace, a typo'd
+key is not an ignored line — it would leave the real setting out of the body and
+delete it. A misspelled field fails on the host, before anything is sent.
 
 ### Testing it: two probes, not a courtesy button
 

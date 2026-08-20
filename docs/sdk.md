@@ -21,6 +21,7 @@ import (
     "time"
 
     "github.com/cjohnstoniv/wardyn/pkg/client"
+    "github.com/google/uuid"
 )
 
 func main() {
@@ -48,9 +49,13 @@ func main() {
     // 3. Poll or fetch later.
     run, _ := c.GetRun(ctx, created.ID)
 
-    // 4. Approve a pending credential or egress request. Omitting DecisionOpts
-    //    keeps today's default scope: the grant holds for the rest of the run.
-    pending, _ := c.ListApprovals(ctx, client.ApprovalPending)
+    // 4. Approve a pending credential or egress request. The run filter is
+    //    uuid.Nil here ("every run"); pass a run id instead — e.g.
+    //    c.ListApprovals(ctx, client.ApprovalPending, created.ID) — to get
+    //    only that run's approvals (the server's ?run_id= predicate).
+    //    Omitting DecisionOpts keeps today's default scope: the grant holds
+    //    for the rest of the run.
+    pending, _ := c.ListApprovals(ctx, client.ApprovalPending, uuid.Nil)
     for _, ap := range pending {
         approved, err := c.Approve(ctx, ap.ID, "reviewed and safe")
         if err != nil {

@@ -409,13 +409,23 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 	return out, err
 }
 
-// ListApprovals returns approval requests filtered by state.
-// Pass an empty string to return all states.
+// ListApprovals returns approval requests filtered by state and (optionally)
+// by run. Pass an empty state to return all states, and uuid.Nil for runID to
+// return approvals for every run — the server's own ?run_id= filter
+// (internal/api/approvals.go's handleListApprovals) was otherwise unreachable
+// from the CLI.
 // Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED" (types.ApprovalState).
-func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, opts ...ListOpts) ([]types.ApprovalRequest, error) {
+func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, runID uuid.UUID, opts ...ListOpts) ([]types.ApprovalRequest, error) {
 	path := "/api/v1/approvals"
+	q := url.Values{}
 	if state != "" {
-		path += "?state=" + url.QueryEscape(string(state))
+		q.Set("state", string(state))
+	}
+	if runID != uuid.Nil {
+		q.Set("run_id", runID.String())
+	}
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	var out []types.ApprovalRequest
 	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)

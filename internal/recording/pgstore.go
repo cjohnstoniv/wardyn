@@ -24,7 +24,9 @@ var _ Store = (*PGStore)(nil)
 // callers (the HTTP upload handler, via http.MaxBytesReader). The other
 // caller — the interactive-attach session recorder
 // (internal/api/attach.go newSessionRecorder's finish closure) — calls
-// SaveCastNamed directly, in-process, with no HTTP body to bound. Unlike a
+// SaveCastNamed directly, in-process, with no HTTP body to bound; it now
+// truncates at its own, much lower maxSessionCastBytes, so in practice this cap
+// only ever bites the upload path. Unlike a
 // local fs write, an oversized BYTEA row bloats the shared Postgres
 // table/WAL/backups for every replica, not just one pod's disk, so the store
 // enforces its own cap rather than trusting every caller to have one
