@@ -12,10 +12,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- Ground-truth heartbeat and `/healthz` now publish `observed_total` and
-  `dropped_unmapped` alongside the existing `dropped_total`, so "the sensor
-  saw nothing" and "the sensor saw plenty and correlated none" read as two
-  different numbers instead of the same `observed_total: 0`.
+- Ground-truth heartbeat and `/healthz` now publish `dropped_unmapped`
+  alongside the existing `dropped_total` and `observed_total`, and the
+  `/healthz` idle state names which of its two causes it is ("kernel events
+  observed but none correlated to a run" vs. the plain "no kernel events
+  observed"), so "the sensor saw nothing" and "the sensor saw plenty and
+  correlated none" stop reading as the same `observed_total: 0`.
 
 ### Changed
 

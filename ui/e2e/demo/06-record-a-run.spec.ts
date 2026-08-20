@@ -282,8 +282,8 @@ test.beforeAll(async () => {
   // INFORMATIONAL ONLY (2026-08-18): B4 no longer narrates the kernel groups,
   // so this read never blocks the take. The frozen-counter defect this comment
   // used to describe — a poll-based container index that lost short-lived
-  // runs — is FIXED on main (93ad4cf1): exec/write events now reach the
-  // control plane. What still keeps kernel groups off this take's script:
+  // runs — is fixed in 0.6 (the docker-events correlation index): exec/write
+  // events now reach the control plane. What still keeps kernel groups off this take's script:
   // the groundtruth compose profile is opt-in and this stack does not run
   // it, so ebpf_groundtruth reads "unavailable" regardless of the fix, and
   // even with the profile up, kernel.network.connect stays permanently dead
@@ -553,8 +553,9 @@ test("B4 — evidence becomes policy", async () => {
   // so those boxes read "None observed." — and a beat that calls an empty box
   // "kernel ground truth" is the exact honesty gap this video must not walk
   // into. That is a profile-off gap, not the frozen-counter defect the series
-  // used to carry: E1/E2 fixed the correlation index (93ad4cf1), so exec/write
-  // events reach the control plane once the profile IS up, though
+  // used to carry: 0.6 fixed the correlation index (it is fed by docker events
+  // now), so exec/write events reach the control plane once the profile IS up,
+  // though
   // kernel.network.connect stays environmentally capped on WSL2 + Docker
   // Desktop regardless (deploy/compose/README.md). The evidence narrated here
   // is the audit-side kind, which populates regardless: every connection,
