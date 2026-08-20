@@ -64,8 +64,23 @@ interface DenyTarget {
   until?: string;
 }
 
-// A held request is a wait_for_review first-use approval — the proxy carries the
-// mode in the approval's requested_scope so the UI can flag the live hold.
+// The proxy's hold (ResolveWait, internal/egress/proxy/approvals.go) parks a
+// wait_for_review connection for defaultHoldTimeout (30s) and then fails the
+// request closed — the approval row itself stays PENDING for up to 24h
+// (approvalExpiryAfter), so nothing server-side flips the mode once the real
+// hold has already timed out.
+// ponytail: hardcoded mirror of the server constant, not a config read —
+// production always calls configureHold with timeout<=0 (keeps this
+// default), so there is nothing to read yet; wire it through if the hold
+// timeout ever becomes operator-configurable.
+const HOLD_TIMEOUT_MS = 30_000;
+
+// A held request is a wait_for_review first-use approval whose live hold has
+// not yet timed out — the proxy carries the mode in the approval's
+// requested_scope so the UI can flag it, but PENDING alone doesn't mean
+// "still holding the sandbox": the connection fails closed at
+// HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
+// afterward (W20-hold-fsm-2).
 //
 // Exported because the run cockpit's command bar states the same fact ("N
 // waiting · sandbox held") one row above this strip. Two copies of the
@@ -73,7 +88,10 @@ interface DenyTarget {
 // disagreement would read as "nothing is holding the sandbox" while the
 // sandbox is, in fact, held.
 export function isHeld(a: ApprovalRequest): boolean {
-  return String((a.requested_scope?.mode as string) ?? "") === "wait_for_review";
+  if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
+  const requestedAt = Date.parse(a.requested_at);
+  if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
+  return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
 
 // rowLabel is the row's identity line: the host for an egress hold, the tool
@@ -124,6 +142,12 @@ export function LiveApprovals({
   // audit log) — but Approve's non-default scopes (picked from the caret)
   // decide immediately too, same reasoning, one click either way.
   const [denyTarget, setDenyTarget] = React.useState<DenyTarget | null>(null);
+  // W20-hold-fsm-5: a failed poll used to fall silently back to the last
+  // snapshot, which for an empty snapshot renders the SAME affirmative
+  // "Watching for…" idle text as a confirmed-empty poll — the one state where
+  // silence is indistinguishable from "nothing pending." Tracked separately
+  // from `pending` so a transient failure doesn't clear rows already shown.
+  const [pollError, setPollError] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -140,8 +164,11 @@ export function LiveApprovals({
       // surfaces via the run detail's "Waiting for your confirmation" banner,
       // which routes to the Approvals screen's kind-aware card.
       setPending(all.filter((a) => a.run_id === runId && (a.kind === "egress_domain" || a.kind === "tool_call")));
+      setPollError(false);
     } catch {
-      /* transient poll error — keep the last snapshot */
+      // transient poll error — keep the last pending snapshot, but flag it so
+      // the idle render doesn't claim a confirmed-empty poll.
+      setPollError(true);
     }
   }, [runId]);
 
@@ -190,6 +217,13 @@ export function LiveApprovals({
   };
 
   if (pending.length === 0) {
+    if (pollError) {
+      return (
+        <p className="text-[0.6875rem] text-warning" data-testid="live-approvals-poll-error">
+          Couldn't check for pending approvals — retrying…
+        </p>
+      );
+    }
     return (
       <p className="text-[0.6875rem] text-muted-foreground" data-testid="live-approvals-idle">
         {idleHint}
