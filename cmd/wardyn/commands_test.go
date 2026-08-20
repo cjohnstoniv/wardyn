@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -657,6 +658,100 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 	}
 }
 
+// TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
+// actually uses the server's ?run_id= filter (W19-S1-4 / W20-hold-fsm-7)
+// instead of silently discarding it.
+func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
+	runID := uuid.New()
+	if err := execCmd(t, "approvals", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	q, err := url.ParseQuery(srv.last().query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", srv.last().query, err)
+	}
+	if got := q.Get("run_id"); got != runID.String() {
+		t.Errorf("run_id query = %q, want %s", got, runID)
+	}
+}
+
+// TestApprovalsListCmd_PrintsHostAndHoldHint pins the HOST and HOLD columns:
+// a live wait_for_review egress hold must show its requested host and a
+// "time left" hint, not the pre-fix blank cells that left the CLI decide
+// loop unable to tell a live 30s hold from an ordinary up-to-24h pendency.
+func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
+		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedAt: time.Now(),
+		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
+	}})
+	got := captureStdout(t, func() {
+		if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok"); err != nil {
+			t.Fatalf("approvals list returned error: %v", err)
+		}
+	})
+	if !strings.Contains(got, "pkg.example.com") {
+		t.Errorf("output = %q, want it to contain the requested host", got)
+	}
+	if !strings.Contains(got, "left") {
+		t.Errorf("output = %q, want a live-hold time-left hint", got)
+	}
+}
+
+// TestApprovalsGetCmd_RequiresRunFlag: `approvals get` has no server-side
+// get-by-id endpoint to fall back on, so --run is mandatory, not optional.
+func TestApprovalsGetCmd_RequiresRunFlag(t *testing.T) {
+	if err := execCmd(t, "approvals", "get", uuid.New().String(), "--token", "tok"); err == nil {
+		t.Error("expected error when --run is missing, got nil")
+	}
+}
+
+// TestApprovalsGetCmd_FindsByIDWithinRun exercises the actual lookup: the
+// server has no GET /approvals/{id}, so `get` must list --run's approvals
+// and find the matching ID itself.
+func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
+	runID := uuid.New()
+	wantID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: runID, State: types.ApprovalPending},
+		{ID: wantID, RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+			RequestedScope: json.RawMessage(`{"host":"api.example.com"}`)},
+	})
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals get returned error: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, wantID.String()) || !strings.Contains(got, "api.example.com") {
+		t.Errorf("output = %q, want it to name %s and its host", got, wantID)
+	}
+
+	q, err := url.ParseQuery(srv.last().query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", srv.last().query, err)
+	}
+	if got := q.Get("run_id"); got != runID.String() {
+		t.Errorf("run_id query = %q, want %s", got, runID)
+	}
+}
+
+// TestApprovalsGetCmd_NotFound: the ID isn't in --run's approvals.
+func TestApprovalsGetCmd_NotFound(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
+	})
+	err := execCmd(t, "approvals", "get", uuid.New().String(), "--run", uuid.New().String(),
+		"--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Error("expected error for an approval id not found in --run, got nil")
+	}
+}
+
 // approve/deny take exactly one positional arg.
 func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
 	if err := execCmd(t, "approve", "--token", "tok"); err == nil {
@@ -867,6 +962,126 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 	if !strings.Contains(errBuf.String(), "truncated") || !strings.Contains(errBuf.String(), "--offset=1") {
 		t.Errorf("stderr = %q, want a truncation warning naming --offset=1", errBuf.String())
 	}
+}
+
+// --------------------------------------------------------------------------
+// logTail (W22-S1-4: `wardyn logs`)
+// --------------------------------------------------------------------------
+
+// TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
+// exists to prevent: the server's Since filter round-trips through RFC3339
+// (1-second resolution), so re-polling with since=<last event's second> can
+// legitimately return that same event again. filter must drop it, not
+// re-print it, while still admitting a genuinely new event landing in that
+// same second.
+func TestLogTail_Filter_DedupesSameSecondBoundary(t *testing.T) {
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	e1 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.dispatch"}
+	e2 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.allow"} // same second, different event
+
+	var tail logTail
+	first, tail := tail.filter([]types.AuditEvent{e1})
+	if len(first) != 1 || first[0].ID != e1.ID {
+		t.Fatalf("first poll = %v, want just e1", first)
+	}
+
+	// Re-poll returns the server's whole since-inclusive page: e1 again
+	// (same second) plus the genuinely new e2.
+	second, tail := tail.filter([]types.AuditEvent{e1, e2})
+	if len(second) != 1 || second[0].ID != e2.ID {
+		t.Fatalf("second poll = %v, want just the new event e2 (e1 must be deduped)", second)
+	}
+
+	// A third poll with nothing new yields nothing.
+	third, _ := tail.filter([]types.AuditEvent{e1, e2})
+	if len(third) != 0 {
+		t.Errorf("third poll = %v, want no events (both already seen)", third)
+	}
+}
+
+// TestLogTail_Filter_AdvancesPastSecondBoundary: a later-second event resets
+// the dedup set to just that event, so an even-later re-poll of the SAME
+// later event is also correctly deduped (not just the original second).
+func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Second)
+	e1 := types.AuditEvent{ID: uuid.New(), Time: t0}
+	e2 := types.AuditEvent{ID: uuid.New(), Time: t1}
+
+	var tail logTail
+	_, tail = tail.filter([]types.AuditEvent{e1, e2})
+	if !tail.since.Equal(t1) {
+		t.Fatalf("tail.since = %v, want %v (the later event's time)", tail.since, t1)
+	}
+	again, _ := tail.filter([]types.AuditEvent{e1, e2})
+	if len(again) != 0 {
+		t.Errorf("re-poll of the same page = %v, want nothing new", again)
+	}
+}
+
+// TestLogsCmd_FollowStopsAtTerminalState drives the real cobra command: two
+// audit-event polls plus a run whose state flips to COMPLETED must print
+// both events, exactly once each, and return without hanging.
+func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var pollN int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			mu.Lock()
+			n := pollN
+			pollN++
+			mu.Unlock()
+			if n == 0 {
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{{ID: uuid.New(), Time: t0, Action: "run.dispatch", Outcome: "success"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+		case strings.Contains(r.URL.Path, "/api/v1/runs/"):
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdoutViaCmd(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if !strings.Contains(out, "run.dispatch") {
+		t.Errorf("logs output = %q, want it to contain the dispatched event", out)
+	}
+	if got := strings.Count(out, "run.dispatch"); got != 1 {
+		t.Errorf("run.dispatch printed %d times, want exactly 1 (no duplicate re-poll)", got)
+	}
+}
+
+// captureStdoutViaCmd builds rootCmd(), lets configure set its args/flags,
+// executes it with stdout captured (logsCmd writes via cmd.OutOrStdout(),
+// which SetOut would normally redirect, but this helper keeps parity with
+// the other list commands' os.Stdout-based tests and doubles as the timeout
+// backstop for a follow loop that fails to exit).
+func captureStdoutViaCmd(t *testing.T, configure func(root *cobra.Command)) string {
+	t.Helper()
+	root := rootCmd()
+	configure(root)
+	out := &strings.Builder{}
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	done := make(chan error, 1)
+	go func() { done <- root.Execute() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("logs returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("logs did not return within 5s — follow loop likely never saw the terminal state")
+	}
+	return out.String()
 }
 
 // --------------------------------------------------------------------------

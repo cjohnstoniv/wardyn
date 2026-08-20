@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -515,6 +516,50 @@ func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) strin
 	return ""
 }
 
+// approvalScopePeek extracts the fields common to the several
+// requested_scope JSON shapes (egressScope, apiKeyScope, gitPATScope,
+// sshKeyScope all carry "host"; only the egress_domain shape carries "mode")
+// without the CLI needing to know which kind it is decoding.
+type approvalScopePeek struct {
+	Host string `json:"host,omitempty"`
+	Mode string `json:"mode,omitempty"`
+}
+
+// approvalHoldWindow mirrors internal/egress/proxy/approvals.go's
+// defaultHoldTimeout: a wait_for_review egress approval blocks the sandbox
+// for at most this long, so a still-PENDING row older than this has almost
+// certainly already timed out on the proxy side even though nobody decided
+// it yet.
+const approvalHoldWindow = 30 * time.Second
+
+// approvalHoldHint reports whether a is a live wait_for_review hold and, if
+// so, how much of its window is left — the CLI decide loop otherwise has no
+// way to tell a live 30s hold apart from an ordinary up-to-24h pendency
+// (W19-S1-4 / W20-hold-fsm-7).
+func approvalHoldHint(a types.ApprovalRequest) string {
+	if a.State != types.ApprovalPending {
+		return ""
+	}
+	var s approvalScopePeek
+	if json.Unmarshal(a.RequestedScope, &s) != nil || s.Mode != "wait_for_review" {
+		return ""
+	}
+	if left := approvalHoldWindow - time.Since(a.RequestedAt); left > 0 {
+		return fmt.Sprintf("live hold, ~%ds left", int(left.Seconds()))
+	}
+	return "hold likely timed out"
+}
+
+// approvalHost extracts the "host" field from a's requested_scope, common to
+// every scope kind except tool_call (which has none, and prints "").
+func approvalHost(a types.ApprovalRequest) string {
+	var s approvalScopePeek
+	if json.Unmarshal(a.RequestedScope, &s) != nil {
+		return ""
+	}
+	return s.Host
+}
+
 // approvalsCmd lists approval requests; approve/deny act on a single one.
 func approvalsCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
@@ -522,14 +567,19 @@ func approvalsCmd(client clientFn) *cobra.Command {
 		Short: "List approval requests (approve/deny decide a single one)",
 	}
 	var state string
+	var runFilter string
 	var asJSON bool
 	var listLimit int
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List approval requests (optionally filtered by --state)",
+		Short: "List approval requests (optionally filtered by --state and/or --run)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state), listPageOpts(listLimit)...)
+			runID, err := parseOptionalUUID(runFilter, "--run")
+			if err != nil {
+				return err
+			}
+			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state), runID, listPageOpts(listLimit)...)
 			if err != nil {
 				return err
 			}
@@ -537,25 +587,86 @@ func approvalsCmd(client clientFn) *cobra.Command {
 				return emitJSON(aps)
 			}
 			tw := newTab()
-			// SCOPE is appended last, not inserted, so a script scraping the first
-			// N columns by position is unaffected. It prints "" for a still-PENDING
-			// row or a credential/tool_call approval — neither has a decision scope
-			// (DecisionScope's own doc: empty means nobody has decided yet) — which
-			// reads as a blank cell, not a bug.
-			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tREQUESTED\tSCOPE")
+			// SCOPE and HOLD are appended last, not inserted, so a script scraping
+			// the first N columns by position is unaffected. SCOPE prints "" for a
+			// still-PENDING row or a credential/tool_call approval — neither has a
+			// decision scope (DecisionScope's own doc: empty means nobody has
+			// decided yet). HOLD prints "" for anything that isn't a live
+			// wait_for_review egress hold — see approvalHoldHint.
+			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tHOST\tREQUESTED\tSCOPE\tHOLD")
 			for _, a := range aps {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					a.ID, short(a.RunID.String()), a.Kind, a.State,
-					a.RequestedAt.Format(time.RFC3339), a.DecisionScope)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					a.ID, short(a.RunID.String()), a.Kind, a.State, approvalHost(a),
+					a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
 			}
 			return tw.Flush()
 		},
 	}
 	list.Flags().StringVar(&state, "state", "", "filter by state (e.g. PENDING)")
+	list.Flags().StringVar(&runFilter, "run", "", "filter to approvals on one run (server-side)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	cmd.AddCommand(list)
+
+	// get has no server-side counterpart (the human/admin API has no GET
+	// /approvals/{id} — only the sandbox-internal lane does) so it scopes a
+	// list-by-run call to one ID client-side. --run is required for exactly
+	// that reason: without it there is no server filter to reuse and this
+	// would have to fetch every approval in the deployment to find one.
+	var getRun string
+	var getJSON bool
+	get := &cobra.Command{
+		Use:   "get <approval-id> --run <run-id>",
+		Short: "Show one approval request (looked up within --run's approvals)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			apID, err := uuid.Parse(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid approval id %q: %w", args[0], err)
+			}
+			if getRun == "" {
+				return errors.New("--run is required: the API has no get-by-id lookup, so `approvals get` scans one run's approvals")
+			}
+			runID, err := uuid.Parse(getRun)
+			if err != nil {
+				return fmt.Errorf("invalid --run %q: %w", getRun, err)
+			}
+			aps, err := client().ListApprovals(cmd.Context(), "", runID)
+			if err != nil {
+				return err
+			}
+			for _, a := range aps {
+				if a.ID != apID {
+					continue
+				}
+				if getJSON {
+					return emitJSON(a)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
+					a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
+					a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
+				return nil
+			}
+			return fmt.Errorf("approval %s not found on run %s", apID, runID)
+		},
+	}
+	get.Flags().StringVar(&getRun, "run", "", "run ID to search (required)")
+	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
+	cmd.AddCommand(get)
 	return cmd
+}
+
+// parseOptionalUUID parses raw as a uuid.UUID, returning uuid.Nil when raw is
+// empty (an unset filter flag) instead of erroring.
+func parseOptionalUUID(raw, flagName string) (uuid.UUID, error) {
+	if raw == "" {
+		return uuid.Nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid %s %q: %w", flagName, raw, err)
+	}
+	return id, nil
 }
 
 // approvalDecisionCmd builds the approve/deny command. The two decisions are
@@ -614,6 +725,123 @@ func parseDecisionUntil(s string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("--until %q is not a duration (e.g. 2h) or an RFC3339 timestamp", s)
 	}
 	return t, nil
+}
+
+// logTail dedupes a run's audit-event stream across repeated polls for
+// logsCmd. The server's Since filter is RFC3339 (second resolution, see
+// AuditFilter.Since), so re-polling with since=<last event's second> can
+// legitimately re-return every event from that same second — logTail tracks
+// which event IDs at the current boundary second were already emitted so
+// those are skipped, while a genuinely new event at (or after) that second
+// is not.
+type logTail struct {
+	since time.Time
+	seen  map[uuid.UUID]bool
+}
+
+// filter returns the events in page (server-guaranteed time-ascending, i.e.
+// oldest-first) that are new since the last call, plus the tail's updated
+// state. A value receiver/return (not a pointer method) so a unit test can
+// assert the before/after state directly with no I/O.
+func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
+	next := t
+	if next.seen == nil {
+		next.seen = map[uuid.UUID]bool{}
+	}
+	var newEvents []types.AuditEvent
+	for _, e := range page {
+		if e.Time.Before(next.since) {
+			continue // stale event from a filter granularity mismatch; already emitted
+		}
+		if e.Time.Equal(next.since) {
+			if next.seen[e.ID] {
+				continue
+			}
+			next.seen[e.ID] = true
+		} else {
+			next.since = e.Time
+			next.seen = map[uuid.UUID]bool{e.ID: true}
+		}
+		newEvents = append(newEvents, e)
+	}
+	return newEvents, next
+}
+
+// logLine renders one audit event as a single human-readable log line.
+func logLine(e types.AuditEvent) string {
+	line := fmt.Sprintf("%s %-24s %s", e.Time.Format(time.RFC3339), e.Action, e.Outcome)
+	if len(e.Data) > 0 && string(e.Data) != "null" {
+		line += " " + string(e.Data)
+	}
+	return line
+}
+
+// logsCmd tails a run's audit-event trail as a live, human-readable log
+// stream — the CLI's answer to W22-S1-4: a batch/headless run's live
+// progress was otherwise unreachable from the CLI (`attach` opens a
+// SEPARATE interactive exec, not a tail of the agent — see Runner.Attach's
+// doc; `run --wait` only polls terminal state, printing nothing in between).
+//
+// Honesty note: this reuses the existing audit-event pipeline rather than
+// adding a new server-side stdout/stderr capture (no such capture exists for
+// exec-mode runs anywhere in the current architecture — see
+// internal/runner/runner.go's Exec/ExecStream docs). Every line is a real
+// audited action, not raw process bytes; it is the closest live signal the
+// CLI has today without new server plumbing.
+func logsCmd(client clientFn) *cobra.Command {
+	var follow bool
+	var interval time.Duration
+	cmd := &cobra.Command{
+		Use:   "logs <run-id>",
+		Short: "Tail a run's audit-event trail (progress, not raw agent stdout — see --help)",
+		Long: `Tail a run's audit-event trail: dispatch, egress decisions, credential mints,
+and completion, printed as they happen.
+
+This is NOT the agent's raw stdout/stderr — no such capture exists for a
+headless/exec-mode run today. It is the live-progress signal the CLI has: a
+batch run's own audit trail, which is exactly what --wait's terminal
+"reason:" line already reads from, just streamed as it's written instead of
+only at the end.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			c := client()
+			var tail logTail
+			for {
+				var f sdk.AuditFilter
+				if !tail.since.IsZero() {
+					f.Since = tail.since.UTC().Format(time.RFC3339)
+				}
+				page, _, err := c.AuditEventsPage(cmd.Context(), id, f)
+				if err != nil {
+					return err
+				}
+				var newEvents []types.AuditEvent
+				newEvents, tail = tail.filter(page)
+				for _, e := range newEvents {
+					fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
+				}
+				if !follow {
+					return nil
+				}
+				run, err := c.GetRun(cmd.Context(), id)
+				if err == nil && run.State.IsTerminal() {
+					return nil
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(interval):
+				}
+			}
+		},
+	}
+	cmd.Flags().BoolVarP(&follow, "follow", "f", true, "keep polling until the run reaches a terminal state (like tail -f)")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "poll interval while following")
+	return cmd
 }
 
 // auditCmd shows the audit trail for a run. The per-run trail caps at 1000
