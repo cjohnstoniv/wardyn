@@ -61,7 +61,7 @@ import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
-import { OPERATOR_ONLY_REASON, RESIDUAL_PREFIX } from "../wardyn/copy";
+import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 
@@ -417,19 +417,19 @@ function PolicyDetail({
               />
             )}
 
-            {/* ui_apps is operator-authored via the API/YAML and READ-ONLY here
-                on purpose (docs/design/ui-sandboxes-prompt.md §5): there is no
-                editor control for it in 0.6, and the raw-JSON editor below is
-                the one place it can be changed. */}
+            {/* D3.2: read-only — ui_apps is operator-authored (API/YAML), no
+                editor here in 0.6 (docs/design/ui-sandboxes-prompt.md §5). */}
             <DetailField
-              label="UI apps"
+              label={POLICY_UI_APPS.label}
               value={
-                (policy.spec.ui_apps?.length ?? 0) === 0 ? (
-                  <span className="text-muted-foreground">None declared</span>
-                ) : (
+                (policy.spec.ui_apps?.length ?? 0) > 0 ? (
                   <Mono>
-                    {policy.spec.ui_apps!.map((a) => `${a.name} → localhost:${a.port}${a.path || "/"}`).join(", ")}
+                    {policy
+                      .spec.ui_apps!.map((a) => POLICY_UI_APPS.value(a.name, a.port, a.path || "/"))
+                      .join(", ")}
                   </Mono>
+                ) : (
+                  POLICY_UI_APPS.none
                 )
               }
             />

@@ -31,6 +31,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
+import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { usePrincipal } from "../wardyn/operator-context";
 import { SectionCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
@@ -47,16 +48,22 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     advertise_addr?: string;
     host_key_fingerprint?: string;
   } | null>(null);
-  // The UI-sandbox gateway's own healthz block. null = off or not loaded; the
-  // lane treats both as off, which is the fail-closed reading.
-  const [uiSandbox, setUISandbox] = React.useState<{
-    enabled?: boolean;
-    enter_url_template?: string;
-  } | null>(null);
   // null = not loaded yet (treated as "assume keys exist" below, so a human
   // who HAS keys never sees the no-keys lead-in flash before the real answer
   // arrives).
   const [keys, setKeys] = React.useState<SSHPublicKey[] | null>(null);
+
+  // UI apps lane (docs/design/ui-sandboxes-prompt.md): a third, independent
+  // sub-affordance under the same owner+running gate as SSH/CLI above — no
+  // second fetch effect, it rides the same healthz call.
+  const [uiSandbox, setUISandbox] = React.useState<{
+    enabled?: boolean;
+    enter_url_template?: string;
+  } | null>(null);
+  // Which declared app's ticket-mint/open is in flight, and the last failure
+  // (scoped to one app — the other rows stay untouched per the mock's S5).
+  const [openingApp, setOpeningApp] = React.useState<string | null>(null);
+  const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
 
   React.useEffect(() => {
     if (!owned || !running) return; // nothing to show either way — skip the fetch
@@ -97,6 +104,42 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
   const sshOn = !!ssh?.enabled;
+  const uiApps: UIApp[] = run.ui_apps ?? [];
+  const uiSandboxOn = !!uiSandbox?.enabled;
+
+  // Mints a single-use attach ticket (the SAME endpoint the terminal lanes
+  // use) and opens the app on the UI-sandbox origin in a new tab. A failed
+  // mint renders inline under that app's row (S5); a destination-side
+  // failure (e.g. the BYOI missing-launcher 502) happens after navigation, in
+  // the new tab itself — unobservable here across origins, so "the new tab is
+  // the feedback" for that case, exactly as the mock's step 4 says.
+  //
+  // window.open's return is deliberately NOT checked: with "noopener" the spec
+  // requires it to return null even when the tab opened fine, so a `!win`
+  // branch showed a popup-blocked error on EVERY successful Open. A blocked
+  // popup is undetectable from here, and the mock lists no such state.
+  async function openApp(app: UIApp) {
+    setAppError(null);
+    setOpeningApp(app.name);
+    try {
+      const ticket = await runsApi.attachTicket(run.id);
+      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) puts {run} in the HOST
+      // *and* the query — "https://run-{run}.ui.example.com/__wardyn/enter?run=
+      // {run}&app={app}&ticket={ticket}" — so a single String.replace fills the
+      // host and leaves `?run={run}` literal, which uuid.Parse rejects on every
+      // Open. split/join replaces every occurrence (replaceAll is ES2021; this
+      // tsconfig's lib is ES2020).
+      const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
+        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+        uiSandbox?.enter_url_template ?? "",
+      );
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setOpeningApp(null);
+    }
+  }
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
@@ -196,104 +239,95 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
         </Link>
       )}
 
-      <UIAppsLane run={run} enabled={!!uiSandbox?.enabled} template={uiSandbox?.enter_url_template ?? ""} />
+      {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)
+          orders the card CLI -> SSH (heading + command) -> UI apps. */}
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-[0.75rem] font-medium text-foreground">{UI_APPS_LANE.title}</p>
+        {!uiSandboxOn && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
+          </p>
+        )}
+        {uiSandboxOn && uiApps.length === 0 && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.noApps, "ui_apps")}
+          </p>
+        )}
+        {uiSandboxOn && uiApps.length > 0 && (
+          <>
+            <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+              {UI_APPS_LANE.intro}
+            </p>
+            {uiApps.map((app) => (
+              <div key={app.name} className="mt-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[0.75rem] font-medium text-foreground">{app.name}</p>
+                    <Mono className="text-[0.7188rem] text-muted-foreground">
+                      {UI_APPS_LANE.appSub(app.port, app.path || "/")}
+                    </Mono>
+                  </div>
+                  <Button size="sm" disabled={openingApp === app.name} onClick={() => openApp(app)}>
+                    {openingApp === app.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta(app.name)}
+                  </Button>
+                </div>
+                {appError?.app === app.name && (
+                  <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+                    <p className="text-[0.75rem] font-medium text-foreground">
+                      {UI_APPS_LANE.errorTitle(appError.app)}
+                    </p>
+                    {appError.message.startsWith(UI_APPS_LAUNCHER_MISSING_PREFIX) && (
+                      <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+                        {monoTokens(
+                          UI_APPS_LANE.errorLauncher(app.name),
+                          `/usr/local/bin/wardyn-ui-${app.name}`,
+                          "deploy/images/vscode/",
+                        )}
+                      </p>
+                    )}
+                    <p className="mt-1.5 font-mono text-[0.7188rem] leading-relaxed text-muted-foreground">
+                      {appError.message}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+            <p className="mt-3 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            <p className="mt-2 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+          </>
+        )}
+      </div>
     </SectionCard>
   );
 }
 
-// The UI-apps lane: the third block in this card, after Wardyn CLI and SSH.
-// Strings are frozen in docs/design/ui-sandboxes-prompt.md §7 and asserted
-// byte-for-byte in run-detail-ssh.test.tsx — two of them (the new-tab line and
-// the no-recording line) state the threat model rather than describe the UI,
-// so softening either is a threat-model change, not copy editing.
-//
-// Never an <iframe>: embedding the app on this origin is the exact attack the
-// gateway's second listener exists to prevent. Open is always a new tab on the
-// origin the SERVER advertises (enter_url_template), never one built here.
-function UIAppsLane({ run, enabled, template }: { run: AgentRun; enabled: boolean; template: string }) {
-  const apps: UIApp[] = run.ui_apps ?? [];
-  const [busy, setBusy] = React.useState<string | null>(null);
-  const [failed, setFailed] = React.useState<{ app: string; message: string } | null>(null);
-
-  async function open(app: UIApp) {
-    setBusy(app.name);
-    setFailed(null);
-    try {
-      const ticket = await runsApi.attachTicket(run.id);
-      const url = template
-        .replace("{run}", encodeURIComponent(run.id))
-        .replace("{app}", encodeURIComponent(app.name))
-        .replace("{ticket}", encodeURIComponent(ticket));
-      window.open(url, "_blank", "noopener");
-    } catch (e) {
-      setFailed({ app: app.name, message: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(null);
-    }
+// monoTokens renders one frozen copy string with its env-var / policy-field /
+// file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
+// SSH lane right above, which wraps WARDYN_SSH_LISTEN the same way). The
+// strings stay whole and frozen in copy.ts — this only splits them at render,
+// so the rendered text content still byte-matches the canonical table.
+function monoTokens(text: string, ...tokens: string[]): (string | React.ReactElement)[] {
+  let key = 0;
+  let parts: (string | React.ReactElement)[] = [text];
+  for (const token of tokens) {
+    parts = parts.flatMap((part) =>
+      typeof part !== "string"
+        ? [part]
+        : part
+            .split(token)
+            .flatMap((seg, i) =>
+              i === 0
+                ? [seg]
+                : [
+                    <Mono key={`t${key++}`} className="text-foreground">
+                      {token}
+                    </Mono>,
+                    seg,
+                  ],
+            ),
+    );
   }
-
-  return (
-    <div className="mt-4 border-t border-border pt-3">
-      <p className="text-[0.75rem] font-medium text-foreground">UI apps</p>
-      {!enabled && (
-        <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-          Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev
-          server — to your browser through Wardyn. An operator turns it on by setting{" "}
-          <Mono className="text-foreground">WARDYN_UI_SANDBOX_LISTEN</Mono> where wardynd starts.
-        </p>
-      )}
-      {enabled && apps.length === 0 && (
-        <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-          On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in
-          the policy's <Mono className="text-foreground">ui_apps</Mono> list — an app is a name, a loopback port
-          and a path.
-        </p>
-      )}
-      {enabled && apps.length > 0 && (
-        <>
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-            Wardyn relays a port the sandbox is already listening on to your browser. The sandbox gets no network
-            of its own — the relay rides the same exec lane the terminal does.
-          </p>
-          {apps.map((app) => (
-            <div key={app.name}>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[0.75rem] text-foreground">{app.name}</p>
-                  <Mono className="text-[0.7188rem] text-muted-foreground">
-                    localhost:{app.port}
-                    {app.path || "/"}
-                  </Mono>
-                </div>
-                <Button size="sm" disabled={busy === app.name} onClick={() => void open(app)}>
-                  {busy === app.name ? "Opening…" : `Open ${app.name}`}
-                </Button>
-              </div>
-              {failed?.app === app.name && (
-                <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
-                  <p className="text-[0.75rem] font-medium text-foreground">Couldn't start {app.name}</p>
-                  <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-                    This image has no <Mono className="text-foreground">/usr/local/bin/wardyn-ui-{app.name}</Mono>.
-                    Use an image that ships the launcher (
-                    <Mono className="text-foreground">deploy/images/vscode/</Mono>), or add one to your own image.
-                  </p>
-                  <p className="mt-1 text-[0.7188rem] leading-relaxed text-muted-foreground">{failed.message}</p>
-                </div>
-              )}
-            </div>
-          ))}
-          <p className="mt-2.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-            Opens in a new tab, on a different address than this console. That separation is deliberate: the app is
-            the sandbox's own code, and it must never be able to read your console session.
-          </p>
-          <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-            Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that
-            you opened and closed the app, never what you did in it.
-          </p>
-        </>
-      )}
-    </div>
-  );
+  return parts;
 }
 
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)

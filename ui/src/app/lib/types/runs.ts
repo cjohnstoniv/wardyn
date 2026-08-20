@@ -7,8 +7,6 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { UIApp } from "./policy";
-
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
@@ -22,6 +20,17 @@ export type Agent =
   | (string & {});
 
 export type ConfinementClass = "CC1" | "CC2" | "CC3";
+
+// One in-sandbox loopback HTTP app the UI gateway may relay (mirrors Go's
+// internal/types/policy.go UIApp). Operator-authored via policy, never
+// user-editable in the console (0.6 has no UIApp editor). port is the
+// in-sandbox port the app listens on; path is the landing path after the
+// gateway's ticket handoff (empty means "/").
+export interface UIApp {
+  name: string;
+  port: number;
+  path?: string;
+}
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
 // Vault order is spelled out. It lives beside the type it enumerates because both
@@ -96,11 +105,12 @@ export interface AgentRun {
   // directly to gate "Always" — use runHasWorkspace(run), which also covers
   // workspace_id; see its doc for why.
   workspace_ids?: string[];
-  // READ-ONLY denormalization of the EFFECTIVE policy's ui_apps, served by
-  // GET /runs/{id} only (internal/api/runs_policy.go). The console cannot
-  // resolve this itself: an AgentRun carries only policy_id, and an inline or
-  // default policy has no id to fetch — so this field is the only way the
-  // run-detail UI-apps lane knows what a run declares.
+  // READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps
+  // (internal/api/runs_policy.go handleGetRun) — the run row itself carries
+  // only policy_id, and an inline/default policy has no id to fetch, so the
+  // console reads this off the run payload rather than GET /policies/{id}.
+  // Absent (never present as []) when the run has no declared apps or the
+  // lookup failed server-side — both render the lane's "no apps" state.
   ui_apps?: UIApp[];
 }
 
