@@ -55,6 +55,28 @@ persona is the audience, not an auditor.
 | 09 | What replaces the human approver in CI? What does the pipeline's exit code mean? What receipts does a pipeline run leave? |
 | 10 | Who may SSH into a run? What does the second person see? What proof exists afterward of who did what? |
 
+## Series review (after the final video of a round)
+
+Per-video viewing judges each episode alone; a full review round ALSO ends
+with one series-level pass per persona, judging the whole as a course:
+
+- **Order**: is this the sequence YOU needed? Name any video you'd move, and
+  what confused you at the moment you watched it in the shipped order (a
+  concept used before it was taught, a payoff that landed before its setup).
+- **Coverage**: what's missing — the video you kept waiting for that never
+  came, the question the series never answered that you needed answered
+  before your verdict.
+- **Duplication**: what did you watch twice? Name the beats that re-taught
+  something you already had, and which occurrence to keep.
+- **Arc & momentum**: where did the series sag, where did it peak, and where
+  would you have stopped watching if nobody was making you continue. Does
+  each outro's promise match what the next video actually opens with?
+- **Length & split**: any video that should be two, or two that should be one?
+- **The one restructure** you'd make if you could only change one thing.
+
+Inputs for this pass: all ten transcripts in order, plus your OWN ten viewing
+reports as your notes. Answer as the persona, in their terms.
+
 ## Report format
 
 Timestamped think-aloud (bullet per moment worth a note), then the four
@@ -64,3 +86,6 @@ reaction — say it like a person, not like a linter.
 ## Revisions
 
 - 2026-08-20: initial protocol (persona library round 1).
+- 2026-08-20 (b): added the series-level review pass (order / coverage /
+  duplication / arc / length / one-restructure) — round 1 reviewed videos only
+  individually and shipped no whole-course judgment; owner directive.
