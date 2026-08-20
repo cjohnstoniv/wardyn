@@ -1,0 +1,184 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// ─── the closed kind set ──────────────────────────────────────────────────────
+//
+// Four kinds, and this slice is the ONLY place the set is written down —
+// migration 0042 deliberately puts no CHECK on capability_grants.capability, so
+// a fifth kind is a constant here plus its enforcement call site, with no DDL.
+// The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
+// mirrors these ids and must not drift.
+//
+// Three of the four NARROW what a member may already do; capImage WIDENS (a
+// member cannot name a custom image at all today). Both directions resolve
+// through the same rules below — the difference lives at the enforcement seam,
+// not here.
+const (
+	// capEgressHost bounds the egress hosts a member may author on an inline
+	// policy, and the hosts a member may approve an egress request for. Values
+	// are a bare host or a "*.suffix" wildcard, matched by entryCoversAny — the
+	// one host matcher this package already has.
+	capEgressHost = "egress_host"
+	// capSecret bounds which secret names a member may reference from an inline
+	// policy, and which ones they can see listed. Exact names.
+	capSecret = "secret"
+	// capWorkspace bounds which onboarded workspaces a member may launch a run
+	// against. Values are workspace uuids (as strings).
+	capWorkspace = "workspace"
+	// capImage WIDENS: it names the exact image refs a member may launch
+	// directly, a power members do not have at all without a grant. Note that
+	// devcontainer_repo is NOT a capability and stays unconditionally
+	// admin-only — it executes attacker-authored build configuration, which is
+	// not a thing to hand out one row at a time.
+	capImage = "image"
+)
+
+// capabilityKinds is the closed set, in the order the admin surface shows them.
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage}
+
+// validCapabilityKind reports whether kind is one of the four. The API write
+// boundary uses it in place of the CHECK the schema deliberately does not have.
+func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
+
+// capWildcard matches every value of its kind. Spelled the same for all four so
+// an admin does not have to learn a per-kind syntax for "all of them".
+const capWildcard = "*"
+
+// ─── resolution ───────────────────────────────────────────────────────────────
+
+// capabilitySubjects returns the grant subjects that describe the caller on
+// ctx: their user identities and their group snapshot.
+//
+// users carries BOTH the lowercased OIDC sub and the email, because an admin
+// writing a grant knows one or the other and should not have to guess which one
+// this IdP made authoritative. Matching either is a deliberate widening of who
+// a `user` row hits — and it is safe in the direction that matters, since a
+// DENY written against either identity also hits.
+//
+// groups is nil for a pre-0.6 cookie (the snapshot predates the field) and
+// empty when the IdP sent nothing usable. stale reports the former: the caller
+// has a session but no answerable group identity, so their group grants cannot
+// be evaluated until they log in again. Callers surface that; they must not
+// silently treat it as "no groups".
+func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool) {
+	if sub := oidcHumanFromContext(ctx); sub != "" {
+		users = append(users, strings.ToLower(sub))
+	}
+	if email := strings.ToLower(strings.TrimSpace(oidcEmailFromContext(ctx))); email != "" && !slices.Contains(users, email) {
+		users = append(users, email)
+	}
+	groups = oidcGroupsFromContext(ctx)
+	return users, groups, groups == nil
+}
+
+// capAllowed answers "may this caller use `kind` at `value`". Precedence, in
+// order, and the order IS the design:
+//
+//  1. Admin, admin token, and local mode are EXEMPT. A capability bounds a
+//     member; the admin tier is the one writing the grants.
+//  2. Any matching DENY ⇒ false. Deny beats everything, including a grant on
+//     the caller's own user row — there is no user-over-group precedence,
+//     because "Bob's user allow overrode the group deny" is a breach report.
+//  3. Any matching ALLOW ⇒ true.
+//  4. The kind is not enforced ⇒ true. An absent enforcement row is a
+//     freshly-upgraded 0.5 deployment, which must behave byte-for-byte as it
+//     did before this file existed.
+//  5. Otherwise false.
+//
+// Deny sits ABOVE the enforcement switch on purpose: it makes deny rows the
+// adoption on-ramp. An admin can blacklist one host for one contractor without
+// flipping the whole deployment fail-closed, which is the only way this feature
+// gets used before anyone trusts it.
+//
+// Errors are never allowed to read as permission. A store failure returns
+// (false, err) so the caller answers 500 rather than deciding either way; a nil
+// Store (test wiring only — wardynd always wires PG) is that same error, NOT a
+// silent allow.
+//
+// ponytail: no cache. Two indexed reads per call on a small table, so a new
+// grant takes effect on the very next request. A process-local cache is the HA
+// blocker OPERATIONS already names for other state, and a stale permission
+// cache is a security bug rather than a slow page — add one only behind a
+// shared invalidation channel.
+func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, error) {
+	if !validCapabilityKind(kind) {
+		return false, fmt.Errorf("api: unknown capability kind %q", kind)
+	}
+	if s.isOperator(ctx) {
+		return true, nil
+	}
+	if s.cfg.Store == nil {
+		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
+	}
+
+	users, groups, _ := capabilitySubjects(ctx)
+	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
+	if err != nil {
+		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+	}
+	allowed := false
+	for _, g := range grants {
+		if g.Capability != kind || !capValueMatches(kind, g.Value, value) {
+			continue
+		}
+		if g.Effect == types.CapabilityDeny {
+			return false, nil // scan no further: deny is final
+		}
+		allowed = true
+	}
+	if allowed {
+		return true, nil
+	}
+
+	enforced, err := s.capEnforced(ctx, kind)
+	if err != nil {
+		return false, err
+	}
+	return !enforced, nil
+}
+
+// capEnforced reports whether kind's switch is on. An absent row is off — the
+// zero-config default that keeps an upgraded 0.5 deployment unchanged.
+func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
+	}
+	enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx)
+	if err != nil {
+		return false, fmt.Errorf("api: read capability enforcement: %w", err)
+	}
+	return enf[kind], nil
+}
+
+// capValueMatches reports whether a grant written for grantValue covers want.
+//
+// egress_host reuses entryCoversAny (artifact_redirect.go), the SAME matcher
+// the egress substitution drop uses — so "*.pythonhosted.org" and "pypi.org:443"
+// behave here exactly as they do everywhere else egress hosts are compared.
+// Deliberately not a second host matcher: two matchers that disagree is how a
+// deny gets bypassed by a port suffix.
+//
+// Every other kind is an exact, case-sensitive compare. A secret name, a
+// workspace uuid and an image ref are all identifiers where a near-miss must
+// not match; only egress hosts have a defensible subdomain semantics.
+func capValueMatches(kind, grantValue, want string) bool {
+	grantValue = strings.TrimSpace(grantValue)
+	if grantValue == capWildcard {
+		return true
+	}
+	if kind == capEgressHost {
+		return entryCoversAny(grantValue, map[string]bool{egressEntryHost(want): true})
+	}
+	return grantValue == strings.TrimSpace(want)
+}

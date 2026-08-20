@@ -839,7 +839,9 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	return g, nil
 }
-func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error { return store.ErrNotFound }
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
