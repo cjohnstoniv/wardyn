@@ -21,9 +21,19 @@ permanent.
 
 | Store | Where | Holds | If you lose it |
 |---|---|---|---|
-| Postgres | volume `postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
+| Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+
+`postgres_data`, `registry_data` and `audit` are declared WITHOUT an explicit
+`name:` in `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the
+compose project — `compose_postgres_data` by default (the project name comes from
+the `deploy/compose` directory, `docker compose config | grep '^name:'`). Only
+`recordings` is explicitly named (`${WARDYN_NS:-wardyn}-recordings`), because the
+docker runner has to mount that same volume into agent containers BY NAME. Reach
+for the unprefixed form and `docker volume inspect postgres_data` reports no such
+volume — and a volume-level backup that ignores that error archives nothing. Back
+Postgres up with `pg_dump` (below), not at the volume layer.
 
 The `audit` volume is **derived**, not primary: it is the optional file sink
 (`WARDYN_AUDIT_SINKS`, see [ENV.md](ENV.md)). Postgres is the source of truth for
@@ -42,7 +52,8 @@ docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
-#    (the volume is named, not project-prefixed — see docker-compose.yaml)
+#    (`recordings` is the ONE explicitly-named volume, so no project prefix —
+#     see docker-compose.yaml)
 docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
   tar czf /to/recordings-$(date +%F).tar.gz -C /from .
 
