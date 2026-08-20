@@ -63,7 +63,9 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { WORKSPACE_NAME } from "./task";
-import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
+import { decide } from "./funnel";
+import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
 
@@ -164,6 +166,11 @@ test.beforeAll(async () => {
         .catch(() => {});
     }
   }
+
+  // (5) S6: also kill any run still squatting on slugify from an earlier
+  // take — the source of the "workspace already in use by 1 active run(s) —
+  // proceeding anyway" toast firing mid-take.
+  await sweepStaleState(["slugify"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -191,7 +198,7 @@ test("V04 beat 1 — an agent, and a hand on the wheel", async () => {
   await title.fill(RUN_TITLE);
 
   // Agent task this time — and Interactive, which is the video.
-  await act(page, page.getByRole("radio", { name: /Agent task/ }), "An agent task, run by Claude Code.");
+  await act(page, page.getByRole("radio", { name: /Agent task/ }), "An agent task, run by Claude Code — Anthropic's coding agent.");
   await act(page, page.getByRole("radio", { name: /^Interactive/ }), "Interactive: the sandbox comes up idle, and you drive it over this terminal.");
 
   // Start in a SHELL, not in the agent's own TUI. The default drops you
@@ -200,18 +207,31 @@ test("V04 beat 1 — an agent, and a hand on the wheel", async () => {
   const startWith = page.getByRole("radiogroup", { name: "Start with" });
   await startWith.scrollIntoViewIfNeeded().catch(() => {});
   await act(page, startWith.getByRole("radio", { name: /^Terminal/ }), "Start with a plain shell — we will launch the agent ourselves, from inside.");
+  await caption(page, "And the contract panel keeps up — attaching now drops you into a terminal.");
+  await beat(page, PACE.read);
 
   // The workspace, and the envelope: exactly one host, the model's.
   const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
-  await act(page, wsPicker);
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first());
+  await act(page, wsPicker, "The workspace again — slugify, the folder from video two.");
+  await act(
+    page,
+    page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(),
+    "The blast radius doesn't change with the mode.",
+  );
 
   await act(page, page.getByRole("radio", { name: /^Confined/ }));
+  // Barrier never named in V04's original take — it rides along as this
+  // host's default, unremarked. Wording is tier-agnostic on purpose: true
+  // whichever of Fence/Wall/Vault the host defaults to.
+  await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
+  await caption(page, "The barrier is this host's default — the credential story ahead holds on any tier.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
   await act(page, page.getByRole("radio", { name: /^Just the model provider/ }), "Confined again — but an agent needs its model, so this run gets exactly one host.");
-  await caption(page, "api.anthropic.com, and nothing else. The rail holds the whole contract.");
+  await caption(page, "api.anthropic.com, and nothing else. The panel on the right — what this run can do — holds the whole contract.");
   await beat(page, PACE.read);
 
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — the same envelope, now with you inside it.");
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
 });
 
@@ -273,14 +293,31 @@ test("V04 beat 3 — the decoy", async () => {
   // leg to Anthropic. The honest ceiling is stated as the barrier, exactly as
   // video one taught it: nothing IN the box can read the key, so getting it
   // means getting OUT of the box.
+  // S3 hygiene: clear the sentinel-token ring HERE (moved up from the end of
+  // this stretch) — left parked, it sliced the `cat` command line for 35s
+  // while five unrelated captions played over it.
+  await spotlight(page, null);
   await caption(page, "So play the attacker. Compromise this container, find the credential, exfiltrate it.");
   await beat(page, PACE.read);
   await caption(page, "You have stolen a decoy. Anthropic has never heard of it.");
   await beat(page, PACE.read);
+  // Forward promise: the proof needs a shell OUTSIDE the sandbox (an in-box
+  // curl would be upgraded by the proxy, which terminates TLS here) — video
+  // ten's host-terminal lane carries it.
+  await caption(page, "Video ten steals it for real — watches Anthropic refuse it.");
+  await beat(page, PACE.read);
+  const credentialsCard = page
+    .getByRole("heading", { name: "Credentials", level: 2 })
+    .locator("xpath=ancestor::section[1]");
+  await spotlight(page, credentialsCard);
   await caption(page, "The live token exists only in the proxy, outside the box — even this shell's own traffic carries the decoy.");
+  await beat(page, PACE.read);
+  await caption(page, "Yes — that means the proxy terminates the sandbox's TLS. The boundary reads what crosses it; that is its job.");
   await beat(page, PACE.read);
   await caption(page, "Reaching the real one means breaking out of the sandbox itself.");
   await beat(page, PACE.read);
+  const barrierBadge = page.getByText(/^(Fence|Wall|Vault)$/).first();
+  await spotlight(page, barrierBadge);
   await caption(page, "And that is exactly the wall you sized in video one — Fence, Wall, or Vault.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
@@ -314,7 +351,10 @@ test("V04 beat 4 — the boundary", async () => {
   // A REAL, quota-consuming Anthropic call. Deliberately no fallback: a take
   // where this fails films the opposite of the video's claim.
   await typeInTerminal(page, 'claude -p "name three primary colors"');
+  await spotlight(page, page.getByText("EGRESS", { exact: false }).locator(".."));
   await caption(page, "The proxy strips what the sandbox sent, and attaches the live token at the boundary.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // \b matters: "credentials" from beat 3 is still in scrollback and contains
   // "red". A word-bounded colour proves an actual answer arrived — and the
@@ -336,6 +376,33 @@ test("V04 beat 4 — the boundary", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Beat 4b — the unscripted hold (conditional: not every take raises it)
+// ---------------------------------------------------------------------------
+
+test("V04 beat 4b — the unscripted hold", async () => {
+  test.setTimeout(60_000);
+  const page = stage();
+
+  // UNSCRIPTED and unstaged: Claude Code sometimes reaches for its own
+  // telemetry (http-intake.logs.us5.datadoghq.com) right after it starts,
+  // and this policy holds it rather than sending it. S1: no receipt, no
+  // claim — wait a real window, and if it never raises, say nothing.
+  const telemetryRow = page.getByTestId("live-approval-row").filter({ hasText: "datadoghq" }).first();
+  const held = await telemetryRow.waitFor({ state: "visible", timeout: 20_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (!held) return;
+
+  await centerInFrame(telemetryRow);
+  await spotlight(page, telemetryRow);
+  await caption(page, "And look — Claude Code just tried to phone its own telemetry. Unlisted host, so it is held, not sent.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+  await decide(page, "Deny", "Nobody planted this — the boundary caught it live. Denied, on the record.", "datadoghq");
+});
+
+// ---------------------------------------------------------------------------
 // Beat 5 — on the record
 // ---------------------------------------------------------------------------
 
@@ -351,14 +418,30 @@ test("V04 beat 5 — on the record", async () => {
   await beat(page, PACE.read);
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await expect(search).toBeVisible({ timeout: 30_000 });
-  await search.fill("subscription_inject");
+  // S5: the query is the teaching — type it visibly rather than filling silently.
+  await caption(page, "Search the injection's action name.");
+  await search.click();
+  await page.keyboard.type("subscription_inject", { delay: 45 });
   // audit.tsx's ACTION_VERB row for the event — the credential story, named.
   await expect(page.getByText("Injected the subscription credential at the proxy").first()).toBeVisible({
     timeout: 30_000,
   });
   await spotlight(page, page.getByText("Injected the subscription credential at the proxy").first());
+  // S6's beforeAll sweep keeps this to exactly one row — a stale run still
+  // holding slugify would mint a second injection and make "One event" false.
   await caption(page, "One event: the proxy injected the credential. The sandbox never appears in that sentence.");
   await beat(page, PACE.read + 600);
+  await spotlight(page, null);
+
+  // GroundTruthChip (audit.tsx) reads "unavailable" (no sensor ever reported)
+  // or "degraded" (a stale PERSISTED heartbeat — a host that ever ran the
+  // sensor keeps saying degraded after a bounce). "Dark" is true for both —
+  // the same wording V10's finale settled on (babe5355) — so the line cannot
+  // be falsified by whichever state this stack is in at take time.
+  const groundTruthChip = page.getByText(/Ground truth · (unavailable|degraded)/);
+  await spotlight(page, groundTruthChip);
+  await caption(page, "Ground truth dark is the kernel sensor being honest on this barrier — video ten's subject.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 });
 
