@@ -591,7 +591,7 @@ func securityHeaders(next http.Handler) http.Handler {
 // fail: liveness/startup also point at /healthz in the chart, and a DB blip
 // must not restart-loop a pod that is otherwise fine.
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
 	defer cancel()
 	if s.cfg.Store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})

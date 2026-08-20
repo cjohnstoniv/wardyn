@@ -185,6 +185,35 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	return replayed, replayErr
 }
 
+// Lines reports how many events are sitting in the spool right now — the audit
+// backlog a store outage builds up, and the count that has to drain back before
+// the queryable trail is complete again. Served as the wardyn_audit_spool_lines
+// gauge on /metrics: a spool that never returns to 0 is a drain that is not
+// working, which nothing else on the scrape surface shows. A nil spool (spooling
+// disabled) reports 0, and so does an unreadable file — this is an observability
+// gauge, not a correctness path.
+//
+// ponytail: re-reads and counts the file per call, O(spool size). The spool is
+// empty in steady state and /metrics is scraped, not hot-looped; track a counter
+// alongside f only if a long outage ever makes this show up in a profile.
+func (a *AuditSpool) Lines() int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	buf, err := os.ReadFile(a.path)
+	if err != nil {
+		return 0
+	}
+	// Same line semantics as Drain: trailing newline is a terminator, not a line.
+	trimmed := bytes.TrimRight(buf, "\n")
+	if len(bytes.TrimSpace(trimmed)) == 0 {
+		return 0
+	}
+	return bytes.Count(trimmed, []byte{'\n'}) + 1
+}
+
 // StartDrain runs Drain on a ticker until ctx is cancelled, replaying spooled
 // events into rec once the store recovers. Each tick drains repeatedly (yielding
 // the lock between batches so Append is not starved) until the backlog clears or a
