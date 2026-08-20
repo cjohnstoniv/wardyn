@@ -325,6 +325,18 @@ services:
       # latter.
       WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
       WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
+      # UI-sandbox gateway (docs/UI-SANDBOXES.md), same off-by-default shape:
+      # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
+      # key, whatever the port mapping above publishes. Turn it on with
+      # WARDYN_UI_SANDBOX_LISTEN=:8081 (matching that mapping) and
+      # WARDYN_UI_SANDBOX_ADVERTISE=http://localhost:8081 — the second value is
+      # what the console's Open button uses, and it must NOT be the console's
+      # own origin: the relay serves the sandbox's own pages. The per-run
+      # origin template is not usable here (it needs wildcard DNS), so a
+      # compose stack runs the shared-origin mode this documents as a residual
+      # (threatmodel/THREAT-MODEL.md §5 #18).
+      WARDYN_UI_SANDBOX_LISTEN: "${WARDYN_UI_SANDBOX_LISTEN:-}"
+      WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
@@ -423,6 +435,15 @@ services:
       # unused mapped port with no listener behind it is inert (connection
       # refused).
       - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
+      # UI-sandbox gateway (docs/UI-SANDBOXES.md). Same always-mapped,
+      # loopback-only, inert-until-enabled treatment as the SSH port above.
+      # 127.0.0.1:8081 is a DIFFERENT ORIGIN than 127.0.0.1:8080 as far as the
+      # browser is concerned (origin = scheme + host + PORT), which is exactly
+      # the separation the gateway needs — but cookies are not port-scoped, so
+      # on this stack the console's own cookies would be attached to relay
+      # requests if the gateway did not strip every wardyn_* cookie inbound.
+      # It does (internal/api/uigateway.go, uiStripInbound).
+      - "127.0.0.1:${WARDYN_UI_SANDBOX_PORT:-8081}:8081"
     depends_on:
       postgres:
         condition: service_healthy

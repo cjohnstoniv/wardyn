@@ -383,6 +383,13 @@ cmd_doctor() {
   else
     report ok "port ${_ssh_port} free."
   fi
+  # Same story for the UI-sandbox gateway mapping (docs/UI-SANDBOXES.md).
+  _ui_sandbox_port="${WARDYN_UI_SANDBOX_PORT:-8081}"
+  if port_in_use "${_ui_sandbox_port}"; then
+    report warn "port ${_ui_sandbox_port} already in use — wardynd's UI-sandbox gateway mapping may fail to bind. Override with WARDYN_UI_SANDBOX_PORT=<port>, or free the port."
+  else
+    report ok "port ${_ui_sandbox_port} free."
+  fi
 
   if [ -e /dev/kvm ]; then
     report ok "/dev/kvm present (CC3/Kata-capable hardware)."
