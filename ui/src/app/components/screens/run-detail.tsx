@@ -35,6 +35,7 @@ import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { health } from "../../lib/api/health";
 import { usePoll } from "../../lib/use-poll";
@@ -57,7 +58,7 @@ import {
   Chip,
 } from "../wardyn/primitives";
 import { JsonBlock } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
@@ -719,6 +720,13 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
           open full Audit <ArrowRight className="size-3" />
         </Link>
       </div>
+      {/* W17-S1-3: the per-run fetch (auditApi.listAudit) is capped at
+          LIST_LIMIT/auditPerRunDefaultLimit and returned OLDEST-first — a
+          chatty run's late events silently fall off the end with no cue. */}
+      <TruncatedNote count={events.length} cap={LIST_LIMIT}>
+        Showing the first {LIST_LIMIT} events for this run (truncated, oldest-first) — later events may
+        be missing.
+      </TruncatedNote>
       {events.length === 0 ? (
         <div className="rounded-xl border border-border bg-card">
           <EmptyState icon={ScrollText} title="No events yet" description="This run has not recorded any audit events." />

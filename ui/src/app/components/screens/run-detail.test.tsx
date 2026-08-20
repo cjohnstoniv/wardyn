@@ -38,8 +38,9 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: vi.fn(),
   },
 }));
+const listAuditMock = vi.fn().mockResolvedValue([]);
 vi.mock("../../lib/api/audit", () => ({
-  audit: { listAudit: vi.fn().mockResolvedValue([]) },
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
   exitCodeFromAudit: () => undefined,
 }));
@@ -60,6 +61,8 @@ beforeEach(() => {
   getRunMock.mockReset();
   listApprovalsMock.mockReset();
   listApprovalsMock.mockResolvedValue([]);
+  listAuditMock.mockReset();
+  listAuditMock.mockResolvedValue([]);
 });
 
 const RUN = {
@@ -225,5 +228,46 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
     const always = await screen.findByRole("button", { name: /^Always/ });
     expect(always).toBeDisabled();
     expect(screen.getByText(/isn't attached to one/i)).toBeInTheDocument();
+  });
+});
+
+// W17-S1-3: the run-detail Audit tab's own fetch is capped at LIST_LIMIT
+// (server: auditPerRunDefaultLimit) and returned oldest-first — a chatty run's
+// later events can silently fall off the end. A capped page must say so; a
+// page under the cap must not.
+describe("RunDetailScreen — Audit tab truncation cue", () => {
+  function auditEvent(i: number) {
+    return {
+      id: `e${i}`,
+      time: new Date().toISOString(),
+      actor_type: "agent",
+      actor: "spiffe://wardyn/agent",
+      action: "kernel.process.exec",
+      outcome: "success",
+      run_id: "run-1",
+    };
+  }
+
+  it("shows a truncation cue when the per-run window hits the 1000 cap", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: string) =>
+      Promise.resolve(action ? [] : Array.from({ length: 1000 }, (_, i) => auditEvent(i))),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByText(/truncated, oldest-first/i)).toBeInTheDocument();
+  });
+
+  it("shows no truncation cue under the cap", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: string) =>
+      Promise.resolve(action ? [] : [auditEvent(1)]),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    await screen.findByText(/1 event for this run/i);
+    expect(screen.queryByText(/truncated, oldest-first/i)).not.toBeInTheDocument();
   });
 });
