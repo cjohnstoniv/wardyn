@@ -62,16 +62,6 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   unverified: "Unverified",
 };
 
-// Setup-checklist residency sub-line (compose_setup.go's Residency field) — the
-// one-line honest answer to "where does this credential actually live at run
-// time", shown muted under a checklist row. Keyed by the wire value; an
-// unrecognized/absent residency renders no sub-line (see SetupItemResidency).
-export const SETUP_RESIDENCY_NOTE: Record<string, string> = {
-  proxy_injected: "held by the proxy — never inside the sandbox",
-  resident_mount: "mounted into the sandbox",
-  brokered_mint: "brokered at launch by the control plane — never stored in the sandbox",
-};
-
 // Outcome-true button labels (D9) — the label predicts what the click does.
 export const BTN = {
   showSetupCommand: "Show setup command",

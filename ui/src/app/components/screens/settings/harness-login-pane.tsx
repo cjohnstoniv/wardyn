@@ -199,7 +199,7 @@ export function extractAuthUrl(s: string): string | null {
 // and we prefer the complete one since it pre-fills the code. Same
 // trailing-boundary rule as the others so a still-streaming URL isn't opened
 // truncated. Exported for tests.
-export function extractDeviceVerificationUrl(s: string): string | null {
+function extractDeviceVerificationUrl(s: string): string | null {
   const re = /https:\/\/(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)\/[^\s'"<>]*/gi;
   let best: string | null = null;
   let m: RegExpExecArray | null;

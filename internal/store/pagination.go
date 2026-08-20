@@ -125,15 +125,11 @@ func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page)
 // Same fail-closed contract as RunsByCreatorPager — an absent implementation
 // must never fall back to the unscoped list.
 //
-// PRODUCTION WIRING NOTE: api.Config.Approvals is wardynd's approvalService
-// wrapper (cmd/wardynd/adapters.go), not a bare store.PG — like its existing
-// ListApprovalsPage, this method needs a matching delegation method added there
-// before a member's unscoped GET /approvals is actually served from the store
-// rather than the fail-closed 500. That wiring is out of this lane's scope
-// (internal/api, internal/store, internal/composer call sites only); until it
-// lands, the api-layer call site's fail-closed fallback is what a deployment
-// actually observes for THIS ONE case (?run_id= of an owned run is unaffected —
-// it never needs this interface).
+// api.Config.Approvals is wardynd's approvalService wrapper
+// (cmd/wardynd/adapters.go), not a bare store.PG, so it needs its own
+// delegation method for this to be reachable in production — it has one, and
+// asserts the interface, so a member's unscoped GET /approvals is served from
+// the store rather than the api-layer fail-closed fallback.
 type ApprovalsByRunCreatorPager interface {
 	ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
 }
