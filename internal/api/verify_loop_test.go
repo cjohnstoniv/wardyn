@@ -101,6 +101,21 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 			if len(fake.ws.Requirements) != 0 {
 				t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 			}
+			// W19-W19b-5: the junk-host-shape gate used to fail silent, unlike
+			// every other give-up path in learnVerifyEgress — it must now audit
+			// the miss too, so an operator can see why the contract wasn't
+			// updated instead of wondering why the next replay still holds.
+			if tc.name == "junk host shape" {
+				found := false
+				for _, ev := range h.audit.events {
+					if ev.Action == "workspace.requirement.write" && ev.Outcome == "failure" {
+						found = true
+					}
+				}
+				if !found {
+					t.Error("no workspace.requirement.write failure audit event recorded for an invalid host shape")
+				}
+			}
 		})
 	}
 }
