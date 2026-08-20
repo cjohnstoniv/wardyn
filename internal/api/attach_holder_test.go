@@ -74,6 +74,18 @@ func (s *countingShellSession) written() int {
 	return len(s.writes)
 }
 
+// writtenBytes is the total keystroke payload that reached the sandbox — what a
+// large-paste test needs, since one paste is one write of many bytes.
+func (s *countingShellSession) writtenBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, w := range s.writes {
+		n += len(w)
+	}
+	return n
+}
+
 func (s *countingShellSession) resizeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

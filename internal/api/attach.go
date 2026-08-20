@@ -39,6 +39,14 @@ const attachKeepaliveInterval = 30 * time.Second
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
+// attachReadLimit bounds ONE client->server message. It must be set explicitly:
+// coder/websocket's default is 32 KiB, and exceeding the limit does not drop the
+// frame — it CLOSES the socket with StatusMessageTooBig. A terminal paste is a
+// single message, so on the default an operator pasting a >32 KiB patch or log
+// silently lost their whole session. 1 MiB is far above any realistic paste while
+// still bounding what one socket can make the daemon buffer.
+const attachReadLimit = 1 << 20
+
 // resizeMsg is the only control message the client may send out-of-band on the
 // PTY stream: a window-size change. Everything else on the client->server
 // direction is raw PTY input (binary frames). Resize is sent as a TEXT frame so
@@ -178,6 +186,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// without a handshake. A clean close is attempted in the happy path below;
 	// this defer guarantees the socket never leaks on any error return.
 	defer c.CloseNow()
+	// Raise the library's 32 KiB default so a large paste is delivered instead of
+	// killing the connection (see attachReadLimit).
+	c.SetReadLimit(attachReadLimit)
 
 	// Open the interactive shell inside the sandbox. On failure, close the socket
 	// cleanly with a policy-violation status and audit the failed attach.
