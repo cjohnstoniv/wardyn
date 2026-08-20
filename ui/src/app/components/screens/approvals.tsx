@@ -19,6 +19,9 @@ import {
 import { toast } from "sonner";
 import { canDecideApproval, decisionArgs, type ApprovalKind, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
+import { anyCapabilityEnforced, capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
+import { DENIED } from "../../lib/permissions-copy";
+import type { MeCapabilities } from "../../lib/types";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -269,6 +272,11 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // own runs (handleListApprovals's creator-pager branch) — role only picks
   // the empty-state copy here.
   const role = useRole();
+  // The caller's own capability set, for the ONE member moment on this screen:
+  // an egress_domain approval whose host isn't granted to them. Fetched here,
+  // not per card — the answer is the same for every row.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [longestList, setLongestList] = React.useState(0);
@@ -351,6 +359,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         description="Decisions that gate what agents can do — nothing privileged happens without one. Approving a credential authorizes the broker to mint a short-lived, scoped token."
       />
 
+      {/* The snapshot ceiling, said where it costs something: group membership
+          was recorded at sign-in, so a session that predates group recording
+          can't resolve group grants at all. Only shown once a capability is
+          actually being enforced against this caller. */}
+      {caps?.groups_snapshot_stale && anyCapabilityEnforced(caps) && (
+        <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.STALE_GROUPS}</p>
+      )}
+
       <TruncatedNote count={longestList} cap={LIST_LIMIT} />
 
       <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)} className="mb-4">
@@ -396,7 +412,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         ) : (
           <div className="space-y-3.5">
             {pendingItems.map((a) => (
-              <PendingCard key={a.id} item={a} onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })} />
+              <PendingCard
+                key={a.id}
+                item={a}
+                caps={caps}
+                onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
+              />
             ))}
           </div>
         )
@@ -439,9 +460,13 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
 function PendingCard({
   item,
+  caps,
   onAct,
 }: {
   item: ApprovalRequest;
+  // The viewer's own capability set, or null when the question doesn't apply
+  // (an admin, or an answer still in flight).
+  caps: MeCapabilities | null;
   onAct: (action: "approve" | "deny") => void;
 }) {
   const scope = item.requested_scope ?? {};
@@ -454,7 +479,13 @@ function PendingCard({
   // is already scoped to rows the caller owns (or every row, for an admin),
   // so ownership itself needs no re-check here.
   const operator = useOperator();
-  const canDecide = canDecideApproval(operator, item.kind);
+  const kindDecidable = canDecideApproval(operator, item.kind);
+  // The `egress_host` capability bounds which hosts a member may DECIDE on —
+  // the authorizeMemberDecision seam (approvals.go). Advisory here: the server
+  // refuses it anyway, this just says so before the click instead of after.
+  const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
+  const hostUngranted = !!host && !capabilityAllowed(caps, "egress_host", host);
+  const canDecide = kindDecidable && !hostUngranted;
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
@@ -500,11 +531,22 @@ function PendingCard({
         <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
           <X className="size-4" /> Deny
         </Button>
-        {!canDecide && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+        {!canDecide && (
+          <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : OPERATOR_ONLY_REASON}</Chip>
+        )}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
         </span>
       </div>
+
+      {/* Say what the denial costs and the way out, at the moment it happens —
+          and that a grant would still not hand this member the Always scope. */}
+      {hostUngranted && host && (
+        <>
+          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.APPROVE_BODY(host)}</p>
+          <p className="mt-1.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.ALWAYS_STILL_ADMIN}</p>
+        </>
+      )}
     </div>
   );
 }

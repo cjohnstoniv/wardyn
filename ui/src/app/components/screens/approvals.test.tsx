@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { ApprovalRequest } from "../../lib/types";
+import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
 // deny() must NOT leave the dialog's confirm button spinning forever, must
@@ -52,6 +52,19 @@ vi.mock("../../lib/api/approvals", () => {
     },
   };
 });
+// GET /me/capabilities backs the member why-denied surface below. Default: an
+// empty, unenforced set — which is 0.5's behaviour, so every pre-existing test
+// in this file is unaffected by it.
+let mockCaps: MeCapabilities = {
+  grants: [],
+  enforcement: {},
+  session_groups: [],
+  groups_snapshot_stale: false,
+};
+vi.mock("../../lib/api/permissions", () => ({
+  permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
+}));
+
 // RunContextRow (redesign) fetches the gated run to inline its context.
 vi.mock("../../lib/api/runs", () => ({
   runs: {
@@ -69,6 +82,7 @@ vi.mock("../../lib/api/runs", () => ({
 
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
+import { DENIED } from "../../lib/permissions-copy";
 
 describe("ApprovalsScreen — deny error handling", () => {
   beforeEach(() => {
@@ -211,5 +225,81 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  });
+});
+
+
+// 0.6 pillar 2: the ONE member why-denied moment on this screen. A member may
+// decide an egress_domain approval on their own run — unless `egress_host` is
+// enforced and the host isn't granted to them (authorizeMemberDecision). The
+// copy is read from the canon, never retyped.
+describe("ApprovalsScreen — egress host not granted (member)", () => {
+  beforeEach(() => {
+    mockPendingKind = "egress_domain";
+    mockPendingEmpty = false;
+    denyMock.mockReset();
+    approveMock.mockReset();
+    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+  });
+
+  function renderMember() {
+    return render(
+      <OperatorProvider operator={false}>
+        <RoleProvider role="member">
+          <MemoryRouter>
+            <ApprovalsScreen />
+          </MemoryRouter>
+        </RoleProvider>
+      </OperatorProvider>,
+    );
+  }
+
+  it("unenforced: the member decides their own egress approval, exactly as in 0.5", async () => {
+    renderMember();
+    expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
+  });
+
+  it("enforced + ungranted: both decisions disable, with the reason and the Always caveat", async () => {
+    mockCaps = { ...mockCaps, enforcement: { egress_host: true } };
+    renderMember();
+    expect(await screen.findByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
+    expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
+    expect(screen.getByText(DENIED.ALWAYS_STILL_ADMIN)).toBeInTheDocument();
+  });
+
+  it("enforced + granted by a *.suffix row: the decision is offered again", async () => {
+    mockCaps = {
+      ...mockCaps,
+      enforcement: { egress_host: true },
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user",
+          subject: "bob@corp.example",
+          capability: "egress_host",
+          value: "*.example.com",
+          effect: "allow",
+          created_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    };
+    renderMember();
+    expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
+  });
+
+  it("a stale group snapshot is named — but only once something is being enforced", async () => {
+    mockCaps = { ...mockCaps, groups_snapshot_stale: true };
+    const { unmount } = renderMember();
+    await screen.findByRole("button", { name: /^approve$/i });
+    expect(screen.queryByText(DENIED.STALE_GROUPS)).not.toBeInTheDocument();
+    unmount();
+
+    mockCaps = { ...mockCaps, enforcement: { egress_host: true }, groups_snapshot_stale: true };
+    renderMember();
+    expect(await screen.findByText(DENIED.STALE_GROUPS)).toBeInTheDocument();
   });
 });

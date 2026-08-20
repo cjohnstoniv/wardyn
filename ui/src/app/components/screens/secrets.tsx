@@ -7,6 +7,8 @@ import * as React from "react";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch } from "lucide-react";
 import { secrets as secretsApi } from "../../lib/api/secrets";
 import { getErrorMessage } from "../../lib/format";
+import { useMyCapabilities } from "../../lib/capabilities";
+import { DENIED } from "../../lib/permissions-copy";
 import { LANE_META, laneOfName, type Lane } from "../../lib/scm-provider";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -77,6 +79,10 @@ const STANDING_TOOLTIP =
 
 export function SecretsScreen() {
   const operator = useOperator();
+  // When `secret` is enforced, handleListSecrets returns only the names this
+  // member holds — say so, or a short list reads as "there are only two
+  // secrets here" rather than "you were shown two of them".
+  const caps = useMyCapabilities(!operator);
   const [names, setNames] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -112,6 +118,10 @@ export function SecretsScreen() {
           </>
         }
       />
+
+      {caps?.enforcement.secret && (
+        <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.SECRETS_NARROWED}</p>
+      )}
 
       {status === "ready" && names.length > 0 && (
         <div className="mb-4 flex items-center gap-3">

@@ -28,6 +28,8 @@ import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
+import { DENIED } from "../../../lib/permissions-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
@@ -38,6 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
@@ -159,6 +162,12 @@ function RailSection({ title, children }: { title: string; children: React.React
 export function NewRunScreen() {
   const navigate = useNavigate();
   const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
+  // Visibility is not capability: the workspace list is NOT narrowed by the
+  // `workspace` grant (the launch gate refuses, and a hidden workspace makes
+  // that refusal unexplainable and the grant undiscoverable). Ungranted rows
+  // are annotated instead.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
   // Seed with the PERSISTED default (Settings' promise); the health probe
   // below re-resolves it against what this host actually enforces. The old
   // resolveDefaultCc(…, ["CC1"]) hardcoded the availability list, so a saved
@@ -301,6 +310,11 @@ export function NewRunScreen() {
     confinement === "saved" && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
       : undefined;
+  // Whether the workspace this run is aimed at is one the caller may launch
+  // against. Advisory — denyMemberRequest is the real gate.
+  const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
+  const selectedWorkspaceUngranted =
+    !!pickedWorkspaceId && !capabilityAllowed(caps, "workspace", pickedWorkspaceId);
 
   // The screen's ONE validation rule. Deliberately a local derivation rather
   // than a shared validator: it answers "can this button be pressed", which is
@@ -634,10 +648,20 @@ export function NewRunScreen() {
                     {statusWord(w.status) === "Import failed" && (
                       <span className="text-danger"> — import failed</span>
                     )}
+                    {!capabilityAllowed(caps, "workspace", w.id) && (
+                      <Chip tone="neutral">{DENIED.WORKSPACE_CHIP}</Chip>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {/* The reason rides the SELECTION, not each row: a Radix item's
+                content is what the closed trigger renders, so a per-row
+                paragraph would end up inside the trigger. The chip above
+                annotates every ungranted row; this says what it costs. */}
+            {selectedWorkspaceUngranted && (
+              <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
+            )}
             <Button variant="ghost" size="sm" className="mt-2 px-1" onClick={() => setAddWsOpen(true)}>
               <Plus className="size-4" /> Add workspace
             </Button>
