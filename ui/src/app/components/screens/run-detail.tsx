@@ -34,7 +34,7 @@ import {
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
+import { audit as auditApi, egressFromAudit, exitCodeFromAudit, taskModeFromAudit } from "../../lib/api/audit";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { health } from "../../lib/api/health";
 import { usePoll } from "../../lib/use-poll";
@@ -432,6 +432,10 @@ function Cockpit({
   // session, and directly beneath it the approval that is HOLDING the session —
   // not in a sidebar, not a toast, because the person who has to decide it is
   // already looking here. Interactive OR autonomous, as long as the run is live.
+  // task_mode lives only in the run.create audit event (request-scoped, never
+  // on AgentRun) — this page already holds the full trail, so the pane can
+  // speak honestly about a no-harness run for free.
+  const execMode = taskModeFromAudit(audit) === "exec";
   const terminalPane = (
     <>
       <TerminalPane
@@ -441,6 +445,7 @@ function Cockpit({
         recState={recState}
         recordingDisabled={recordingDisabled}
         onGoRecording={onGoRecording}
+        execMode={execMode}
       />
       {run.state === "RUNNING" && (
         <div className="shrink-0 space-y-2 pt-2.5">
@@ -491,6 +496,7 @@ function TerminalPane({
   recState,
   recordingDisabled,
   onGoRecording,
+  execMode,
 }: {
   run: AgentRun;
   terminal: boolean;
@@ -498,6 +504,8 @@ function TerminalPane({
   recState: "idle" | "loading" | "error" | "ready";
   recordingDisabled: boolean;
   onGoRecording: () => void;
+  // run.create's task_mode said "exec" — a shell command ran, no agent harness.
+  execMode: boolean;
 }) {
   const operator = useOperator();
   const principal = usePrincipal();
@@ -557,7 +565,7 @@ function TerminalPane({
     // is why that tile tails output instead of offering a prompt.
     <PaneFrame
       title={run.interactive ? "Terminal" : "Output"}
-      chip={run.interactive ? undefined : RUN_COCKPIT.autonomous}
+      chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
     >
       <PaneNotice
         text={

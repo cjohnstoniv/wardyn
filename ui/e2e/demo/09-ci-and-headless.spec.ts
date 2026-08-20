@@ -109,7 +109,7 @@ function pipelineRun(): { id: string; state: string; task: string } {
   }
   const run = JSON.parse(fs.readFileSync(RUN_JSON, "utf8")) as { id?: string; state?: string; task?: string };
   if (!run.id || !run.task) throw new Error(`${RUN_JSON} carries no run id/task — the pipeline never finished collecting.`);
-  // Beat 5 narrates a COMPLETED badge and beat 6 an `agent exit 0` chip. On a
+  // Beat 5 narrates a COMPLETED badge and beat 6 an `exit 0` chip. On a
   // FAILED/KILLED run both are false, and asserting them on screen would burn
   // 60s of BOARD_SETTLES waiting for a badge that will never render. record-
   // demo.sh does NOT abort the browser lane when the beat script exits
@@ -117,7 +117,7 @@ function pipelineRun(): { id: string; state: string; task: string } {
   // only thing standing between a bad pipeline run and two filmed minutes of it.
   if (run.state !== "COMPLETED") {
     throw new Error(
-      `${RUN_JSON} says state=${run.state || "(none)"} — beats 5-6 narrate "Completed" and "agent exit zero". ` +
+      `${RUN_JSON} says state=${run.state || "(none)"} — beats 5-6 narrate "Completed" and "exit zero". ` +
         `The pipeline run did not succeed; fix it and re-shoot rather than filming the board over a failure.`,
     );
   }
@@ -206,9 +206,9 @@ test("beat 6 — same trail, no human", async () => {
   // run.complete's data.exit_code), which is exactly why it is worth filming:
   // the number the pipeline exited with and the number on this chip come from
   // the same event, not from two systems that agree by luck.
-  const exitChip = page.getByText("agent exit 0", { exact: true });
+  const exitChip = page.getByText("exit 0", { exact: true });
   await expect(exitChip).toBeVisible({ timeout: 60_000 });
-  await caption(page, "Agent exit zero — the pipeline's number, on the run's own header.");
+  await caption(page, "Exit zero — the pipeline's number, on the run's own header.");
   await spotlight(page, exitChip);
   await beat(page, PACE.read + 700);
   await spotlight(page, null);

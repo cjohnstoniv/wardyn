@@ -38,11 +38,18 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: vi.fn(),
   },
 }));
+// Settable so the exec-labeling test below can flip the run's task mode;
+// undefined = a harness run (the default every other test wants).
+const auditMocks = vi.hoisted(() => ({ taskMode: undefined as string | undefined }));
 vi.mock("../../lib/api/audit", () => ({
   audit: { listAudit: vi.fn().mockResolvedValue([]) },
   egressFromAudit: () => [],
   exitCodeFromAudit: () => undefined,
+  taskModeFromAudit: () => auditMocks.taskMode,
 }));
+afterEach(() => {
+  auditMocks.taskMode = undefined;
+});
 vi.mock("../../lib/api/recordings", () => ({
   // Resolves, rather than a bare vi.fn() returning undefined: a FINISHED run on
   // Overview now fetches its cast on mount (the hero pane replays in place), so
@@ -115,6 +122,17 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     // RUN_MODE.autonomous.blurb — there is no PTY to type into.
     expect(await screen.findByText(/Runs unattended/i)).toBeInTheDocument();
     expect(screen.getByText("Output")).toBeInTheDocument();
+  });
+
+  // Persona-review product finding #9: a run whose form said "No agent, no
+  // model" must not be chipped "the agent drives". task_mode lives only in the
+  // run.create audit event, so the pane derives it from the trail it already
+  // holds.
+  it("labels an exec-mode run honestly — a shell command, no agent harness", async () => {
+    auditMocks.taskMode = "exec";
+    renderRun({ ...RUN, interactive: false, state: "RUNNING" });
+    expect(await screen.findByText("exec — shell command, no agent harness")).toBeInTheDocument();
+    expect(screen.queryByText(/the agent drives/i)).not.toBeInTheDocument();
   });
 
   it("a finished run replays in place rather than leaving the biggest pane dead", async () => {

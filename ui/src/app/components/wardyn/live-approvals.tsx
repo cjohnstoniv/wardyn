@@ -97,7 +97,7 @@ export function LiveApprovals({
   runId,
   reasonApprove = "approved live",
   reasonDeny = "rejected live",
-  idleHint = "Watching for off-policy egress and held tool calls — anything the agent tries that isn't allow-listed surfaces here to approve or deny, live.",
+  idleHint = "Watching for off-policy egress and held tool calls — anything this run tries that isn't allow-listed surfaces here to approve or deny, live.",
   // Whether THIS run resolves to an onboarded workspace — Always persists
   // there, so it's greyed out without one. Default false so a caller that
   // forgets to pass it shows the option disabled rather than offering a click

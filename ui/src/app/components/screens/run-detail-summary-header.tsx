@@ -145,7 +145,7 @@ export function SummaryHeader({
           every width: it's the only place a FAILED run says why. */}
       {exitCode !== undefined && (
         <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono className="shrink-0">
-          agent exit {exitCode}
+          exit {exitCode}
         </Chip>
       )}
 

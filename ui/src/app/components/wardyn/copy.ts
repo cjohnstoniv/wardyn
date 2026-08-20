@@ -325,6 +325,10 @@ export const RUN_COCKPIT = {
     `${principal} is driving this session now. Taking over disconnects them and records you as the holder in the audit trail.`,
   // 3. No PTY to type into — the agent drives.
   autonomous: "autonomous — the agent drives",
+  // 3b. Same pane, exec task mode: a shell command ran with NO agent harness
+  // (task_mode is audit-only, taskModeFromAudit) — "the agent drives" would be
+  // false five ways on a run whose form said "No agent, no model".
+  execNoHarness: "exec — shell command, no agent harness",
   // 4. Terminal state: the pane becomes the replay surface in place.
   finishedReplay: "run finished · replay",
   // The in-place replay pane's two empty states. They exist HERE because the
