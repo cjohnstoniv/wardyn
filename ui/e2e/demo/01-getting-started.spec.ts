@@ -9,19 +9,30 @@
  * WHAT THIS FILMS. One command has already brought a control plane up on this
  * machine; nothing has been configured and nothing has run. The take opens on
  * the first-boot hero, walks the funnel's three setup steps — the barrier, the
- * mandatory Network gate, Secrets — then the five hands-on guardrail demos,
- * and ENDS THERE, on a spoken conclusion. No workspace is onboarded and no run
- * is launched: adding a workspace is video 02 and running one is video 03
- * (owner restructure, 2026-08-17), so this video closes on its own subject —
- * a governed host whose guardrails you just watched hold.
+ * mandatory Network gate, Secrets — then closes on a short spoken recap and a
+ * handoff to the next episode. No workspace is onboarded and no run is
+ * launched: adding a workspace is video 02 and running one is video 03 (owner
+ * restructure, 2026-08-17), so this video closes on its own subject — a
+ * governed host, ready for real work.
+ *
+ * SPLIT PROVENANCE (2026-08-20, owner-approved). This video used to run
+ * straight through into five hands-on guardrail demos and end there. The
+ * owner-approved 12-episode restructure gives those demos their own episode —
+ * "What it stops" (05a-what-it-stops.spec.ts; "05a" is an interim filename,
+ * because the series renumber that claims a real 05 for it is a separate,
+ * later commit) — so this file now ends where the old "guardrail demos"
+ * chapter card used to begin. The outro below is new; everything before it is
+ * unchanged from the pre-split take, plus the persona-adjudicated edits from
+ * local/demo-review-2026-08-20/ADJUDICATION.md's "V01" section that land on
+ * beats still filmed here.
  *
  * WHERE THE CODE CAME FROM. This is an extraction of walkthrough.spec.ts acts
- * 1-4, and the choreography is MOVED, not rewritten: the funnel waits, the
- * per-demo pacing, the "let the curl actually resolve" arithmetic and the
- * post-approval payoff assertions are all proven on camera and a rewrite would
- * lose them. What changed is the narration — every caption below is a SAY line
- * from the V01 presenter script (the plan file's "### V01 — Getting started"),
- * verbatim, because those lines were budgeted at ~2.4 words/sec and the
+ * 1-2 (cold open through Secrets), moved rather than rewritten: the funnel
+ * waits and the connectivity-probe arithmetic are proven on camera and a
+ * rewrite would lose them. What changed is the narration — every caption
+ * below is either a SAY line from the V01 presenter script (the plan file's
+ * "### V01 — Getting started"), verbatim, or a persona-adjudicated edit from
+ * ADJUDICATION.md, because those lines were budgeted at ~2.4 words/sec and the
  * captions ARE what Kokoro speaks.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
@@ -57,97 +68,21 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
-import { FUNNEL_DEMOS } from "./task";
-import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
+import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each act
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { advance, APPROVAL_APPEARS, decide } from "./funnel";
+import { advance } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
-// Sandboxes are real containers — the connectivity probe and every one of the
-// five demos launches one. These are minutes, not seconds. They are ceilings
-// for waiting on the PRODUCT; the pacing the viewer sees comes from overlay.ts.
-// (APPROVAL_APPEARS is the third of them and lives in funnel.ts, beside the
-// decide() that waits on it.)
+// Sandboxes are real containers — the connectivity probe launches one. This is
+// minutes, not seconds. It is a ceiling for waiting on the PRODUCT; the pacing
+// the viewer sees comes from overlay.ts.
 const SANDBOX_UP = 180_000;
 
 test.describe.configure({ mode: "serial" });
-
-// ---------------------------------------------------------------------------
-// The five guardrail demos, as V01 films them.
-//
-// FUNNEL_DEMOS (task.ts) is the shared definition — same ids, same commands,
-// same captions the walkthrough proved. Two V01-only deltas, both from the
-// script's "Pacing trims banked" note, live here rather than in task.ts so
-// walkthrough.spec.ts and the other nine videos are untouched:
-//
-//   - `property`: the single line B6-B10 speak over each demo — the one thing
-//     that demo exists to teach. Verbatim from the V01 script (capitalised: the
-//     script quotes them mid-sentence, and scripts/narrate-prewarm.sh only
-//     warms lines that start with a capital).
-//   - `lines-that-cant-be-crossed` loses its third command and shortens the
-//     second. The 192.168.1.1 probe teaches nothing the metadata probe did not
-//     already teach, and --max-time 5 twice is ~10s of dead air in the longest
-//     video of the series.
-// ---------------------------------------------------------------------------
-
-type V01Demo = {
-  id: string;
-  label: string;
-  cmds: readonly string[];
-  caption: string;
-  approve: boolean;
-  scope: "run" | "once";
-  intro: string;
-  policyLine: string;
-  property: string;
-};
-
-const DEMO_PROPERTY: Record<string, string> = {
-  "sealed-box": "Deny is the default, and a refusal needs no human.",
-  "fail-then-approve": "A refusal can also ask — the boundary moves when a person moves it.",
-  "held-at-the-door": "The decision can happen while the request is still open.",
-  "lines-that-cant-be-crossed": "Some limits are not policy at all. No setting can open them.",
-  "once-or-for-good": "An approval has a scope, and the narrowest is one connection.",
-};
-
-// What each demo IS, spoken over its heading before anything runs — and the
-// policy it launches under, spoken over the step's own "The policy Wardyn
-// runs" block. The intro says what to watch for; the policy line reads the
-// config the viewer can see, in plain words. Owner direction (2026-08-17):
-// every demo gets a real introduction including its initial policy, not just
-// the property line.
-const DEMO_INTRO: Record<string, string> = {
-  "sealed-box": "First, the sealed box — a sandbox whose policy allows nothing at all.",
-  "fail-then-approve": "Next, the same refusal — but this policy asks a person instead of just saying no.",
-  "held-at-the-door": "Now the live version: the request is held open while Wardyn waits for your answer.",
-  "lines-that-cant-be-crossed": "Then the opposite extreme — a policy that opens the whole public internet.",
-  "once-or-for-good": "Last, scopes: when you do say yes, how far should that yes reach?",
-};
-const DEMO_POLICY_LINE: Record<string, string> = {
-  "sealed-box": "Here is its whole policy: an empty allow list, and unlisted traffic denied outright.",
-  "fail-then-approve": "One field changed — an unlisted host now raises an approval instead of a flat no.",
-  "held-at-the-door": "Same shape, but held: off-policy traffic parks at the proxy until you decide it.",
-  "lines-that-cant-be-crossed": "Allow-all egress — the loosest policy Wardyn will write.",
-  "once-or-for-good": "The ask-first policy again. What changes this time is how we answer it.",
-};
-
-/** Same two beats as the card's first two steps, minus the LAN probe. */
-const LINES_CMDS = [
-  "curl -sSI https://example.com",
-  "curl -sSI --max-time 2 http://169.254.169.254/latest/meta-data/",
-] as const;
-
-const V01_DEMOS: V01Demo[] = FUNNEL_DEMOS.map((d) => ({
-  ...d,
-  cmds: d.id === "lines-that-cant-be-crossed" ? LINES_CMDS : d.cmds,
-  property: DEMO_PROPERTY[d.id],
-  intro: DEMO_INTRO[d.id],
-  policyLine: DEMO_POLICY_LINE[d.id],
-}));
 
 /**
  * A chapter card that is NOT spoken.
@@ -206,6 +141,12 @@ test("V01 act 1 — cold open, first light", async () => {
   }
   await expect(hero).toBeVisible({ timeout: 60_000 });
 
+  // The "how it works" strip under the hero (intro.tsx's HowItWorksStrip) is
+  // what the per-line rings below point at — five cards: "Own identity",
+  // "Behind a barrier", "Keys stay brokered by default", "You gate the risky
+  // bits", "Everything recorded".
+  const howItWorks = page.getByRole("list", { name: "How Wardyn protects each run" });
+
   // The opening card and the three lines under it are the only chance this
   // series gets to say WHAT WARDYN IS. The first cut said "One command to a
   // governed host", which is a slogan: it describes no mechanism, names no
@@ -214,12 +155,22 @@ test("V01 act 1 — cold open, first light", async () => {
   // proxy, no resident credential — because a viewer who does not know what
   // this is by second twenty has no reason to watch the other nine videos.
   await chapter(page, "Wardyn", "An agent gets its own sandbox, a policy it cannot exceed, and no credentials to steal");
+  // [a] the cold open ran ~20-29s with no motion (ADJUDICATION V01) — the ring
+  // now moves per line instead of parking still for all five captions.
+  await spotlight(page, howItWorks.getByText("Behind a barrier", { exact: true }).locator(".."));
   await caption(page, "Wardyn runs coding agents in a sandbox with no route out except a proxy you control.");
   await beat(page, PACE.read);
+  // [a] "proxy" landed as a known noun from 0:09 with no gloss (ADJUDICATION
+  // V01) — one plain-language clause, at first use.
+  await caption(page, "The proxy is a checkpoint outside the box — every request must pass through it.");
+  await beat(page, PACE.read);
+  await spotlight(page, howItWorks.getByText("Keys stay brokered by default", { exact: true }).locator(".."));
   await caption(page, "It never hands them a key — the proxy attaches credentials on the way out.");
   await beat(page, PACE.read);
+  await spotlight(page, howItWorks.getByText("Everything recorded", { exact: true }).locator(".."));
   await caption(page, "So a compromised agent has nothing to steal, and every attempt is on the record.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
   await caption(page, "This series is for whoever has to sign off on that.");
   await beat(page, PACE.read);
   await caption(page, "Video one: from nothing to a governed host, with the guardrails proved on camera.");
@@ -235,11 +186,18 @@ test("V01 act 1 — cold open, first light", async () => {
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
-  await act(page, page.getByRole("button", { name: /^Get started/ }));
+  // [a] "Get started" used to be an uncaptioned click, reported as a jump-cut
+  // (ADJUDICATION V01).
+  await act(
+    page,
+    page.getByRole("button", { name: /^Get started/ }),
+    "Get started opens the setup funnel — ten steps, only three of them essential.",
+  );
   // "Step 1 of 10" is the script's own SCREEN note and Track B froze the funnel
   // STRUCTURE (DA12) before this spec was extracted. A different count means the
-  // funnel gained or lost a step — and act 3 below films five of them by name,
-  // so the video would be wrong in a way no caption could cover.
+  // funnel gained or lost a step — and the demos (now 05a-what-it-stops.spec.ts)
+  // still occupy five of them, so the video would be wrong in a way no caption
+  // could cover.
   await expect(page.getByText(/^Step 1 of 10$/)).toBeVisible({ timeout: 30_000 });
 });
 
@@ -269,14 +227,19 @@ test("V01 act 2 — barrier, network, model", async () => {
   await spotlight(page, tiers);
   await caption(page, "Wardyn builds three of them, and they trade speed for strength.");
   await beat(page, PACE.read);
+  // [a] per-column spotlight during the walk (ADJUDICATION V01) — the ring
+  // moves per tier instead of parking on the whole group for six captions.
+  await spotlight(page, tiers.getByRole("radio", { name: /Fence/ }));
   await caption(page, "Fence is a container — ordinary Linux isolation, sharing your machine's kernel.");
   await beat(page, PACE.read);
   await caption(page, "Fast to start, and the weakest: a kernel bug is a way out of it.");
   await beat(page, PACE.read);
+  await spotlight(page, tiers.getByRole("radio", { name: /Wall/ }));
   await caption(page, "Wall runs gVisor, which hands the agent a kernel written in software.");
   await beat(page, PACE.read);
   await caption(page, "Its system calls hit that copy, so an exploit has nothing real to land on.");
   await beat(page, PACE.read);
+  await spotlight(page, tiers.getByRole("radio", { name: /Vault/ }));
   await caption(page, "Vault is a micro virtual machine, through Kata — its own kernel, its own hardware.");
   await beat(page, PACE.read);
   await caption(page, "Strongest, slowest to boot, and it needs virtualization the host may not have.");
@@ -285,10 +248,15 @@ test("V01 act 2 — barrier, network, model", async () => {
   // The permanent "Doesn't stop:" row (copy.ts's RESIDUAL_PREFIX) is the whole
   // honesty claim the next line makes — a tier matrix that also prints what each
   // barrier does NOT protect against.
-  await spotlight(page, page.getByText("Doesn't stop:", { exact: true }));
+  // [a] the ring used to land on the "Doesn't stop:" label, not the row
+  // (ADJUDICATION V01) — environment-step.tsx renders it as a real <tr>
+  // (RowLabelled), so walking up to the nearest one catches the per-tier cells.
+  await spotlight(page, page.getByText("Doesn't stop:", { exact: true }).locator("xpath=ancestor::tr[1]"));
   await caption(page, "Every tier also prints what it does not stop. No barrier is a promise of safety.");
   await beat(page, PACE.read);
-  await caption(page, "And Wardyn probes this host, so it only offers the ones it can actually enforce.");
+  // [a] "only offers the ones it can enforce" had no receipt on this all-Ready
+  // host (ADJUDICATION V01) — reworded to what this screen can actually show.
+  await caption(page, "Wardyn probed this host first — a tier it can't enforce shows up disabled. Here, all three passed.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -299,7 +267,8 @@ test("V01 act 2 — barrier, network, model", async () => {
   // selection that did not happen.
   const fence = tiers.getByRole("radio", { name: /Fence/ });
   await expect(fence).toBeEnabled();
-  await act(page, fence);
+  // [a] the pick itself used to be filmed mute (ADJUDICATION V01).
+  await act(page, fence, "Fence is enough for today's demos — one click, saved as the default for new runs.");
   await expect(fence).toHaveAttribute("aria-checked", "true");
 
   await advance();
@@ -345,6 +314,9 @@ test("V01 act 2 — barrier, network, model", async () => {
   await spotlight(page, reached);
   await caption(page, "Reached, direct — nothing sits between this machine and the internet.");
   await beat(page, PACE.read);
+  // [a] the corporate-proxy line used to leave the ring on the sidebar chip
+  // (ADJUDICATION V01) — point at the field "here" actually names.
+  await spotlight(page, page.getByLabel(/Proxy URL/i));
   await caption(page, "On a corporate network there usually is, and you would configure that proxy here.");
   await beat(page, PACE.read);
   await caption(page, "The probe then runs through it, so what you see proven is what a run will get.");
@@ -356,11 +328,24 @@ test("V01 act 2 — barrier, network, model", async () => {
   // needs to know Wardyn has an answer for it.
   await caption(page, "Tighter networks go further and block the public registries outright.");
   await beat(page, PACE.read);
-  await caption(page, "The other tab redirects those — npm, PyPI, container images — at your internal mirrors.");
+  // [a] the egress-redirection tab used to be narrated before it existed on
+  // screen, then sit silent for ~11s once it appeared (ADJUDICATION V01,
+  // series ruling S5) — click the tab itself (the same state change the first
+  // "Next" press used to trigger blind) and speak over what it reveals.
+  await act(
+    page,
+    page.getByRole("tab", { name: /Egress redirection/ }),
+    "The other tab redirects those — npm, PyPI, container images — at your internal mirrors.",
+  );
+  await caption(page, "The mirror's token is named here too — injected proxy-side; the sandbox never holds it.");
   await beat(page, PACE.read);
 
-  // Next ×2: the first press answers by revealing the step's other tab rather
-  // than moving on, which is exactly what advance() is built to absorb.
+  // Next: the tab click above already did what the first "Next" press used to
+  // do on its own (setup-screen.tsx's corp_network onNext override swaps the
+  // tab instead of leaving the step while Host proxy is showing), so this now
+  // advances straight to Secrets. advance() still absorbs a second Next if the
+  // gate ever needs one — "press Next until the step counter changes", not
+  // "press Next once".
   await advance();
 
   // --- B4 — Secrets ---------------------------------------------------------
@@ -388,6 +373,10 @@ test("V01 act 2 — barrier, network, model", async () => {
   await spotlight(page, subLane);
   await caption(page, "The model was connected before recording — a subscription sign-in, captured once.");
   await beat(page, PACE.read);
+  // [a] "captured once… and stored by Wardyn" used to be where the model-
+  // credential story stopped (ADJUDICATION V01).
+  await caption(page, "It lives in Wardyn's own store on this host — runs borrow it, they never hold it.");
+  await beat(page, PACE.read);
 
   // The honesty split, told over the two cards' own footers. Model card first.
   await spotlight(page, page.getByText(/keys never enter the sandbox/i).first());
@@ -413,223 +402,28 @@ test("V01 act 2 — barrier, network, model", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// B5-B10 — the guardrails. ~59% of this video's runtime.
-//
-// Every wait in this act is load-bearing and every one of them is moved
-// verbatim from walkthrough.spec.ts act 3. Read the comments before touching
-// the arithmetic: each one records a specific way a take went green while the
-// terminal on screen showed the opposite.
+// Conclusion — the video ends here, on the funnel's three setup steps, by the
+// 12-episode restructure (2026-08-20, owner-approved). The five guardrail
+// demos that used to be act 3 are their own episode now — "What it stops"
+// (05a-what-it-stops.spec.ts) — so getting-started closes the moment ITS OWN
+// subject — a host with a barrier, a proven network path, and its secrets —
+// is proven, and hands off to what comes next. Workspace onboarding (video
+// 02) and running one (video 03) were already someone else's subject before
+// this split; the demos joining them is what's new.
 // ---------------------------------------------------------------------------
 
-test("V01 act 3 — the five guardrail demos", async () => {
-  test.setTimeout(1_500_000);
-  const page = stage();
-
-  // The BRIDGE (owner note: "this is a presentation"). The first three steps
-  // just ended; before any demo starts, say where we are and what the next
-  // stretch of the video is for — the viewer should never have to infer the
-  // itinerary from what the mouse does.
-  await caption(page, "Barrier picked, network proven, secrets stored — this host can now run sandboxes.");
-  await beat(page, PACE.read);
-  await caption(page, "So before your own work goes in one, let's watch a few.");
-  await beat(page, PACE.read);
-  await chapter(page, "The guardrails", "Five sandboxes, five ways the boundary holds");
-  await caption(page, "Five small demos, each a real sandbox under a policy you can read on screen.");
-  await beat(page, PACE.read);
-  await caption(page, "Together they show how a sandbox's access is configured, tuned, and enforced.");
-  await beat(page, PACE.read);
-
-  // See the audit-panel block at the bottom of the loop: the trail line is a
-  // fact about Wardyn, said once, not a per-demo refrain.
-  let auditLineSpoken = false;
-
-  for (const demo of V01_DEMOS) {
-    await expect(page.getByRole("heading", { name: demo.label, level: 2 })).toBeVisible({ timeout: 60_000 });
-
-    // Owner note (2026-08-17): each demo gets a real introduction — what it is
-    // and what to watch for — not just the property line. The intro is spoken
-    // over the step's own heading and overview text, which the camera is
-    // already looking at.
-    await caption(page, demo.intro);
-    await beat(page, PACE.read);
-
-    // ...and the POLICY the sandbox is about to launch under. The step body
-    // renders it in full ("The policy Wardyn runs", demos-step.tsx) — this
-    // series claims policies are readable, so read one, on camera, every time.
-    const policyBlock = page.getByTestId(`demo-policy-${demo.id}`);
-    await policyBlock.scrollIntoViewIfNeeded().catch(() => {});
-    await spotlight(page, policyBlock);
-    await caption(page, demo.policyLine);
-    await beat(page, PACE.read + 600);
-    await spotlight(page, null);
-
-    // No caption on the click — "starting the sandbox" narrates itself.
-    await act(page, page.getByTestId(`demo-start-${demo.id}`));
-    await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
-    await beat(page, PACE.read);
-
-    // The one property this demo exists to teach, spoken over its sandbox
-    // coming up (~12s of boot the script already budgeted as dead air).
-    await caption(page, demo.property);
-    await beat(page, PACE.read + 600);
-
-    for (const [i, cmd] of demo.cmds.entries()) {
-      // fail-then-approve and once-or-for-good both run the same command
-      // twice: the first is refused and raises the approval, the retry after
-      // approval is what gets through — the SCOPE granted is what differs.
-      if (demo.approve && i === 1) {
-        await decide(
-          page,
-          "Approve",
-          "The refusal raised an approval. Granting it — then the very same command again.",
-          "example.com",
-          demo.scope,
-        );
-        await caption(
-          page,
-          demo.scope === "once"
-            ? "A plain Approve would keep it allowed for the rest of this run — Once covers only this one connection."
-            : "A plain Approve keeps it allowed for the rest of this run (the split button's caret offers other options).",
-        );
-      }
-      await typeInTerminal(page, cmd);
-      // Let the command actually RESOLVE before moving on. This is not pacing:
-      // ending a demo while a curl is still in flight kills the sandbox before
-      // its decision reaches the audit log, and the proof silently goes missing
-      // from a take that looks perfectly fine. Derive the wait from the
-      // command's own --max-time. Demos that involve an approval are excluded —
-      // their curl is SUPPOSED to still be hanging when we decide it.
-      const maxTime = demo.approve ? null : cmd.match(/--max-time (\d+)/);
-      await beat(page, maxTime ? (Number(maxTime[1]) + 2) * 1000 : PACE.read + 800);
-
-      // The retry after an approval MUST visibly succeed. This is the payoff of
-      // both approve-demos, and without the assertion a failed retry just
-      // raises a fresh approval that the NEXT step latches onto — so the take
-      // stays green while narrating "approved, and it goes through" over a
-      // terminal showing two refusals and no success. (The proxy itself warns a
-      // `once` grant is spent before success is guaranteed.)
-      if (demo.approve && i === 1) {
-        await expect(page.locator(".xterm-screen").first()).toContainText(/HTTP\/2 200|HTTP\/1\.1 200/, {
-          timeout: 45_000,
-        });
-      }
-    }
-
-    if (demo.id === "sealed-box") {
-      // "Instant refusal on camera" is the whole beat, so prove the refusal is
-      // on camera. This policy is always_deny with an empty allowlist: the
-      // proxy answers the CONNECT with a 403 and curl reports it. A take that
-      // somehow filmed a 200 here would narrate "deny is the default" over a
-      // successful request.
-      await expect(page.locator(".xterm-screen").first()).toContainText(/403|curl: \(\d+\)/, { timeout: 45_000 });
-      await beat(page, PACE.read);
-    }
-
-    if (demo.id === "once-or-for-good") {
-      // Once really does mean once: the grant the retry above just spent is
-      // gone, so the SAME command run a third time is refused all over again
-      // and raises a brand-new approval — the entire point of this demo.
-      // Deliberately left undecided: proving the re-raise appeared is the
-      // beat, not deciding it a second time.
-      await typeInTerminal(page, demo.cmds[0]);
-      await caption(
-        page,
-        "Same command, one more time. Once already spent itself on the last connection — refused again, and a fresh approval appears.",
-      );
-      await expect(page.getByTestId("live-approval-row").filter({ hasText: "example.com" })).toBeVisible({
-        timeout: APPROVAL_APPEARS,
-      });
-      await beat(page, PACE.read + 900);
-    }
-
-    if (demo.approve && demo.cmds.length === 1) {
-      // held-at-the-door: the curl is still hanging at the proxy right now.
-      await decide(page, "Approve", "The command has not failed — it is hanging, held open at the proxy, waiting for a human.", "example.com");
-      await caption(page, "Approved inside the window, so that same in-flight request completes. No retry.");
-      await beat(page, PACE.read + 900);
-
-      // ...and the other half of a live decision: a host you refuse.
-      await typeInTerminal(page, "curl -sSI --max-time 60 https://wikipedia.org");
-      await beat(page, 1200);
-      await decide(page, "Deny", "A second host, held the same way — this one gets refused.", "wikipedia.org");
-      await beat(page, PACE.read);
-    }
-
-    if (demo.id === "lines-that-cant-be-crossed") {
-      // Prove the block from the TERMINAL, not the audit panel.
-      //
-      // SV3 corrected this beat against the live stack: the sandbox's NO_PROXY
-      // covers only the proxy and localhost, so the http:// metadata probe DOES
-      // reach the egress proxy, which refuses to dial it — it films as
-      // `HTTP/1.1 403`, not as a bare connect failure. On a stack where the
-      // proxy is out of that path it dies at the network layer instead (curl 7,
-      // no route). Either shape is the same fact and both are accepted; what is
-      // NOT accepted is a success.
-      await expect(page.locator(".xterm-screen").first()).toContainText(
-        /HTTP\/1\.1 403|Failed to connect to 169\.254\.169\.254|curl: \(\d+\)/,
-        { timeout: 60_000 },
-      );
-      await caption(page, "The proxy refuses to even dial it — and the kernel has no route there either.");
-      await beat(page, PACE.read + 900);
-
-      // The second half of the property, and the part that separates this demo
-      // from every other one in the act: there is no pending decision, because
-      // there was never a decision to make. Assert the strip really is empty —
-      // narrating "no approval was raised" over a pending row would invert the
-      // lesson.
-      await expect(page.getByTestId("live-approval-row")).toHaveCount(0);
-      await caption(page, "No approval was raised, because no approval could have granted it.");
-      await beat(page, PACE.read + 900);
-    }
-
-    // The decisions are on the record before we move on. Deliberately skipped
-    // for lines-that-cant-be-crossed: its headline denial never reaches the
-    // proxy as a DENY (see above), so its panel shows only the allow — and
-    // narrating "every one of those decisions is on the record" over that would
-    // be a claim the trail does not support.
-    const auditPanel = page.getByTestId("demo-audit-panel");
-    if (demo.id !== "lines-that-cant-be-crossed" && (await auditPanel.isVisible().catch(() => false))) {
-      await spotlight(page, auditPanel);
-      // Spoken ONCE, on the first demo that has a panel to show. It is a fact
-      // about the product, not about this demo, so saying it over all four cost
-      // ~39 words and taught nothing after the first time — the spotlight alone
-      // carries it thereafter, which is what a presenter would actually do.
-      if (!auditLineSpoken) {
-        auditLineSpoken = true;
-        await caption(page, "Every one of those decisions landed in the audit trail, live, as it happened.");
-      }
-      await beat(page, PACE.read);
-      await spotlight(page, null);
-    }
-
-    const endDemo = page.getByRole("button", { name: "End demo" });
-    if (await endDemo.isVisible().catch(() => false)) await act(page, endDemo);
-    await advance();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Conclusion — the video ends here, ON the demos, by owner direction
-// (2026-08-17). The workspace onboarding and Review/Finish beats that used to
-// be act 4 are not filmed in this video at all any more: video 02 is "add a
-// workspace" and video 03 is "run one", so getting-started closes the moment
-// its own subject — a governed host whose guardrails you just watched hold —
-// is proven. What replaces the old act is a spoken summary: this is a
-// presentation, and a presentation ends by telling you what you saw.
-// ---------------------------------------------------------------------------
-
-test("V01 act 4 — conclusion", async () => {
+test("V01 act 3 — conclusion", async () => {
   test.setTimeout(120_000);
   const page = stage();
 
-  await chapter(page, "What you just saw", "A governed host, and five boundaries that held");
+  await chapter(page, "What you just saw", "A governed host, ready for real work");
   await caption(page, "That is Wardyn: your agents and workloads run in sandboxes, under policies you write.");
   await beat(page, PACE.read);
   await caption(page, "In one sitting this host got a barrier, a proven network path, and its secrets.");
   await beat(page, PACE.read);
-  await caption(page, "Then five sandboxes showed the boundary working: denied, asked, held, and scoped.");
-  await beat(page, PACE.read);
-  await caption(page, "Credentials stayed out of the sandbox, and every decision landed in the audit trail.");
+  // [a] nobody could answer "what did setup require" (ADJUDICATION V01) — the
+  // one quiz question every persona failed.
+  await caption(page, "From a fresh install that was: one barrier click, one connectivity test, one sign-in.");
   await beat(page, PACE.read + 600);
   await caption(page, "Next: give a run something real to work on — a workspace.");
   await beat(page, PACE.read);
