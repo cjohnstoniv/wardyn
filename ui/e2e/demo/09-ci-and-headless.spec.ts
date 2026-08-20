@@ -228,7 +228,7 @@ test("beat 6 — same trail, no human", async () => {
   const appendOnly = page.getByText(/Append-only · \d+ events? for this run/).first();
   await expect(appendOnly).toBeVisible({ timeout: 30_000 });
   await spotlight(page, appendOnly);
-  await caption(page, "Append-only, create through complete. Nobody watched, and the trail is identical.");
+  await caption(page, "Append-only, create through complete — the same rows video three's watched run left. Nobody watched this one.");
   await beat(page, PACE.read + 1200);
   await spotlight(page, null);
 
@@ -236,6 +236,9 @@ test("beat 6 — same trail, no human", async () => {
   // The series motif ("Run anything. Keep your keys.") belongs to V10 and is
   // deliberately absent here — V02 through V09 never speak it.
   await caption(page, "Governance that doesn't need you awake.");
+  await beat(page, PACE.read);
+  // The missing recap: "the recap is where I catch what I missed" (Priya).
+  await caption(page, "What you just saw: a policy answered instead of a human, and the verdict became the build's own exit.");
   await beat(page, PACE.read);
   await caption(page, "Next: that trail in full, and attaching to a live run.");
   await beat(page, PACE.chapter);

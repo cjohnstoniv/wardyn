@@ -469,7 +469,16 @@ drive() {
   local cmd="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
 
   # --- B1 · the owner attaches --------------------------------------------
-  say "The console printed this command — I only copied it."
+  say "Every key here was added on the SSH keys page — your own, self-service, before this run existed."
+  say "My key was registered at setup — this fingerprint. Remember it."
+  # KEEP-VERIFY: both clauses below check against the SSH lane's actual
+  # implementation (internal/api/sshgateway.go: "ssh <run-id>@<advertise-host>
+  # lands in the same tmux session and masked live recorder the web terminal
+  # (attach.go) uses" — no sshd runs inside the sandbox, and whatever the
+  # shell reaches from either door crosses the same proxy/egress policy) —
+  # re-check before the take.
+  say "The door is Wardyn's own broker on the host — the sandbox runs no SSH daemon."
+  say "Same shell the browser cockpit drives — this one survives a closed laptop, and the egress rules still govern it."
   pane_type "${P_OWNER}" "${cmd}"
   # First connect against an empty known_hosts: the client stops and prints the
   # host key. preflight already proved that key is the one /healthz discloses —
@@ -477,7 +486,6 @@ drive() {
   # fact by the time it is spoken, not a hope.
   pane_wait "${P_OWNER}" 'continue connecting|fingerprint' 45 \
     || die "no host-key prompt in the owner's terminal — known_hosts was not empty, or nothing answered on ${SSH_HOST}:${SSH_PORT}"
-  say "The run id is the username. That is the whole addressing."
   pane_type "${P_OWNER}" "yes"
   pane_settle "${P_OWNER}" 2 120 || die "the owner's session never settled after accepting the host key"
   # THE STAGING CHECK THAT CANNOT BE MADE ANY OTHER WAY. If the operator left
@@ -495,7 +503,7 @@ drive() {
     || die "no successful session.attach with transport=ssh — the owner is not actually attached"
 
   # --- B2 · two windows, one driver ---------------------------------------
-  say "Second terminal, second key, same person."
+  say "A second window — still me, my other key."
   # Anchor the holder's frame before the observer arrives. If an arriving
   # observer clamped the shared tmux window (the bug the third line says is
   # fixed), the sandbox redraws and the holder's scrollback is disturbed. The
@@ -517,7 +525,7 @@ drive() {
   pane_type "${P_OWNER}" "echo same session"
   pane_wait "${P_OBS}" 'same session' 30 \
     || die "the observer never saw the holder's terminal — these are not one session"
-  say "And the first window never shrank — that bug is fixed."
+  say "And the first window stays exactly as it was — the driver never even notices the watcher."
   if [[ -n "${anchor}" ]]; then
     pane_text "${P_OWNER}" | grep -qF -- "${anchor}" \
       || die "the holder's frame was rewritten when the observer arrived — the shared terminal was disturbed (see internal/api/attach_holder_test.go)"
@@ -525,12 +533,15 @@ drive() {
   beat 900
 
   # --- B3 · the refusal ----------------------------------------------------
+  say "A colleague's key is a different story."
   say "Now a different person's key. Same command, same run."
   pane_type "${P_STRANGER}" "${cmd}"
   pane_wait "${P_STRANGER}" 'Permission denied \(publickey\)' 60 \
     || die "the foreign key was not refused — check it is registered under ${FOREIGN_PRINCIPAL} and the run is owned by ${PRINCIPAL}"
   say "Refused at authentication. A run is private to whoever created it."
   say "SSH has no admin override. By design, not a gap."
+  say "An admin can still kill the run, and read every receipt it left."
+  say "Supervision is the tape, not the shoulder."
   # THE MONEY ROW. "not the run owner" is the registered-but-foreign branch; a
   # key that was never registered logs "unregistered key" instead and the whole
   # finale is then about the wrong refusal (SV13).
@@ -539,6 +550,16 @@ drive() {
   [[ "$(audit_rows ssh.auth 'select(.outcome == "success")')" -ge 2 ]] \
     || die "fewer than two successful ssh.auth rows — beat 4 would have nothing to show but the refusal"
   beat 1200
+
+  # --- B3b · the decoy, tried for real -------------------------------------
+  # V04's stolen sentinel, from OUTSIDE the boundary this time: an in-sandbox
+  # curl would be upgraded by the proxy (it terminates TLS and injects the
+  # live token), so this proof can only run from the driver's own host shell —
+  # never from inside one of the three panes above. VERIFIED LIVE: this
+  # endpoint answers a bad bearer with 401.
+  say "Video four's stolen decoy, tried for real, from outside the boundary."
+  type_cmd "curl -s -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/models -H 'authorization: Bearer sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token'"
+  say "Four-oh-one. Anthropic has never heard of it — that is the whole design."
 
   # --- hand over to the browser half --------------------------------------
   # Observer first, holder last, neither with `exit`. These detaches are what

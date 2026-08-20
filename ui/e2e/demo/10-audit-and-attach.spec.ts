@@ -194,7 +194,7 @@ test("beat 4 — the trail", async () => {
     "fewer than three ssh.auth rows — beats 1-3 did not produce two successes and a refusal",
   ).toBeGreaterThanOrEqual(3);
 
-  await caption(page, "There it is: the refused key, by fingerprint.");
+  await caption(page, "There it is: the refused key, by fingerprint — and the principal it was registered under.");
   // THE MONEY ROW. OutcomeBadge renders outcome "failure" as the red "failure"
   // label (primitives.tsx), so this both finds the refusal and proves it is
   // rendered as one — a green take narrating "refused" over a screen of
@@ -223,7 +223,7 @@ test("beat 5 — name the streams", async () => {
   await spotlight(page, live);
   await beat(page, PACE.read + 600);
 
-  await caption(page, "Kernel ground truth is the third — dark here, because that sensor is opt-in.");
+  await caption(page, "Kernel ground truth — the operating system as its own witness — is the third. Dark on this host: the sensor is opt-in.");
   // GroundTruthChip renders `Ground truth · {state}` off /healthz's
   // ebpf_groundtruth. Two states mean "no sensor feeding this stack":
   // "unavailable" (never opted into the compose profile) and "degraded" (it
@@ -245,6 +245,14 @@ test("beat 5 — name the streams", async () => {
   // nothing; the caption above is what actually carries the point.
   await groundTruth.hover();
   await beat(page, PACE.read + 1200);
+  // KEEP-VERIFY: "the kernel countersigns the other two streams" — re-check
+  // against the sensor docs before the take. Support today:
+  // internal/groundtruth/groundtruth.go frames this stream as "the tamper-
+  // proof 'ground-truth' counterpart to the agent's own self-report (the
+  // Postgres event log) and the human-watchable PTY replay" — drop this line
+  // if a sharper read of the docs contradicts it.
+  await caption(page, "Where it runs, the kernel countersigns the other two streams.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 });
 
@@ -327,6 +335,38 @@ test("beat 6 — the tape", async () => {
   });
   // Long enough for beat 1's keystrokes to actually play back on screen.
   await beat(page, PACE.read + 4000);
+
+  // ----- one run, the whole record (V09's own outro promised "that trail in
+  // full") -----
+  // Searched by THIS run's id (the placeholder advertises run-id search), so
+  // whatever categories of row it actually left are what's on screen — never
+  // a claim with nothing behind it (S1). Every dispatch writes a
+  // run.policy.effective row, staged or not (runs_dispatch.go: "the one
+  // funnel every dispatch flavour... passes through"), so at minimum this
+  // run's own governing policy is always among the rows this sweep turns up.
+  // REHEARSAL-VERIFY: stage this run with a saved policy and at least one
+  // approved/denied host before the take, so the sweep also carries an
+  // egress row, a scoped approval, and a credential-eligibility row — not
+  // just the policy line and the SSH rows beat 4 already proved.
+  await page.goto("/audit");
+  await expect(page.getByRole("heading", { name: "Audit", level: 1 })).toBeVisible({ timeout: 60_000 });
+  const trailSearch = page.getByPlaceholder("Search events, domains, run IDs…");
+  await spotlight(page, trailSearch);
+  await trailSearch.fill(runId);
+  await spotlight(page, null);
+
+  const trailRows = page.locator("main div.divide-y > div");
+  await expect(
+    trailRows.first(),
+    "searching this run's id turned up no audit rows — the trail-in-full beat has nothing to walk",
+  ).toBeVisible({ timeout: AUDIT_SETTLES });
+  await spotlight(page, page.locator("main div.divide-y").first());
+  await caption(page, "One run, its whole record: the policy that governed it, every crossing, every yes and its size.");
+  await beat(page, PACE.read + 1400);
+  await spotlight(page, null);
+
+  await caption(page, "And it leaves as a file — video nine's third artifact is this exact trail.");
+  await beat(page, PACE.read + 800);
 
   // ----- outro (series finale) -----
   await caption(page, "Ten videos, one idea: agents get power, never your credentials.");

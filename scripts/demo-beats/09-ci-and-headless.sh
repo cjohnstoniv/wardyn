@@ -118,6 +118,13 @@ CI_TASK="${WARDYN_CI_TASK:-echo hello from a governed sandbox}"
 CI_IMAGE="${WARDYN_CI_IMAGE:-ubuntu:24.04}"
 ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 ART_DIR="${WARDYN_CI_OUT:-ci-artifacts}"
+# The red-build beat (B3b): a SECOND, throwaway control plane — never B2's
+# project/port/out-dir, or ci-run.sh's own unconditional `down --volumes` at
+# start would tear down the stack beats 5-6 are about to film.
+CI_RED_TASK="${WARDYN_CI_RED_TASK:-curl -sS --max-time 10 https://example.com/ || exit 7}"
+CI_RED_PROJECT="${WARDYN_CI_RED_PROJECT:-${CI_PROJECT}-red}"
+CI_RED_PORT="${WARDYN_CI_RED_PORT:-$((CI_PORT + 1))}"
+CI_RED_OUT="${WARDYN_CI_RED_OUT:-${ART_DIR}-red}"
 
 fail() { printf '\n\033[1;31m[09] %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -130,8 +137,9 @@ narration_zero
 chapter "CI and headless" "The same governance, unattended"
 
 # ── COLD OPEN ───────────────────────────────────────────────────────────────
-say "Every approval so far, a human clicked. A pipeline has no hands."
+say "Every approval so far, a human clicked. A pipeline — the robot that runs your team's checks — has no hands."
 say "CI keeps the governance. Policy replaces the human; the exit code replaces the click."
+say "An exit code is the one number a script leaves behind: zero is success."
 
 # ── B1 · The policy is eight fields ─────────────────────────────────────────
 # The narration counts the FIELDS, not the lines: the file renders as 10 visual
@@ -144,7 +152,8 @@ say "CI keeps the governance. Policy replaces the human; the exit code replaces 
 # before the take.
 type_cmd "cat examples/policies/ci.json"
 beat 600
-say "Eight fields. Empty allowlist means this sandbox can reach nothing."
+say "Eight fields — video eight's four, plus denies, allow-all, methods, and a stop timer."
+say "Floored at Fence — runners rarely have KVM."
 say "First use approval, always deny. Off-list traffic dies instantly, never parks for a reviewer."
 
 # The claim above is checked, not assumed: a fixture edit that adds a ninth key
@@ -162,8 +171,13 @@ fi
 # WARDYN_UP_PORT, not WARDYN_CI_UP_PORT: ci-run.sh defaults it to 0 (an
 # OS-assigned ephemeral port, right for a real CI host, useless for a browser
 # beat) and compose binds 127.0.0.1:${WARDYN_UP_PORT}:8080.
-say "One script builds its own control plane, launches one governed run, tears it down."
+say "A pipeline starts from nothing — so one script stands up a disposable Wardyn, just for this job."
+say "It tears itself down after. We keep this one alive a minute — the browser half wants it."
+say "Already running Wardyn somewhere? The CLI talks to it directly — this is the from-nothing path."
+say "The runner needs what any container build job already has — a Docker daemon."
+say "In the from-nothing shape the repo owns the whole stack — pin jobs to a shared Wardyn when the policy must outrank the branch."
 say "Task mode exec: a plain shell command in your image. No agent, no key."
+say "An agent job works the same — the pipeline seeds an API key as a secret, and the proxy injects it."
 
 # SPOKEN IN FRONT OF THE COMMAND, NOT BEHIND IT. type_cmd blocks for the whole
 # invocation, so nothing can be narrated while it runs, and this lane has no
@@ -177,7 +191,7 @@ say "Task mode exec: a plain shell command in your image. No agent, no key."
 # in the past tense a silence the viewer already sat through. The task stays the
 # fastest thing that can still prove the point (one `echo`) for the same reason:
 # everything after "Launching governed run" is dead air that ships as-is.
-say "Wait blocks until terminal. That verdict becomes the script's exit."
+say "Wait blocks until the run reaches a final state. That verdict becomes the script's exit."
 
 type_cmd "WARDYN_CI_TASK='${CI_TASK}' WARDYN_CI_TASK_MODE=exec WARDYN_CI_IMAGE=${CI_IMAGE} WARDYN_CI_SKIP_BUILD=1 WARDYN_CI_KEEP=1 WARDYN_CI_PROJECT=${CI_PROJECT} WARDYN_UP_PORT=${CI_PORT} scripts/ci-run.sh"
 # Captured BEFORE anything else touches TYPIST_RC, because beat 3 films this
@@ -189,14 +203,31 @@ CI_RC="${TYPIST_RC}"
 # not the status of the typing loop. Single-quoted: `$?` must reach the shell
 # being filmed, not be expanded by this one.
 type_cmd 'echo $?'
-say "Zero, completed. A failed run hands back the command's own exit code."
-say "Killed or stopped is two. A timeout is one twenty-four."
+say "Zero, completed. A failed command hands back its own code — the JSON state field, not the number, is the truth."
+say "Wardyn's own verdicts: killed is two, a deadline is one twenty-four."
+
+# ── B3b · The red build ──────────────────────────────────────────────────────
+# The proof-of-thesis beat: nothing bad has been stopped on camera yet. A
+# second, THROWAWAY control plane — ci-run.sh always tears down and rebuilds
+# its OWN stack at start (`"${COMPOSE[@]}" down --volumes` runs unconditionally,
+# before any KEEP check), so reusing B2's project by name would destroy the
+# very stack beats 5-6 are about to film. Distinct project/port/out-dir: this
+# run's artifacts must never land in ${ART_DIR}, which beat 4 and the browser
+# half both read as B2's run.
+say "Now the same pipeline, reaching for a host the policy never allowed."
+type_cmd "WARDYN_CI_TASK='${CI_RED_TASK}' WARDYN_CI_TASK_MODE=exec WARDYN_CI_IMAGE=${CI_IMAGE} WARDYN_CI_SKIP_BUILD=1 WARDYN_CI_PROJECT=${CI_RED_PROJECT} WARDYN_UP_PORT=${CI_RED_PORT} WARDYN_CI_OUT=${CI_RED_OUT} scripts/ci-run.sh"
+type_cmd 'echo $?'
+CI_RED_RC="${TYPIST_RC}"
+say "Dead in milliseconds, no reviewer to wait for — and the build goes red with the command's own code."
 
 # ── B4 · Receipts ───────────────────────────────────────────────────────────
 type_cmd "ls ${ART_DIR}/"
 say "Three files: the run, its log, the whole audit trail."
 type_cmd "jq .state ${ART_DIR}/run.json"
 say "State, completed. These are the receipts the pipeline uploads."
+type_cmd "jq '.[-3:]' ${ART_DIR}/audit.json"
+say "The last three rows — exec, egress, complete. The same trail, as a file you upload."
+say "The same invocation drops into any CI — one step, plus an artifact upload."
 
 narration_end
 
@@ -241,6 +272,16 @@ if command -v jq >/dev/null 2>&1; then
     "http://127.0.0.1:${CI_PORT}/api/v1/runs" 2>/dev/null)"
   [[ "${_listed}" == *"${_id}"* ]] \
     || fail "run ${_id} is not listed at http://127.0.0.1:${CI_PORT} with this admin token — WARDYN_CI_KEEP did not hold the stack, or the token differs from the one the spec seeds."
+fi
+
+# The red build (B3b) must actually have gone red: the opposite of the checks
+# above, kept separate so a broken take names WHICH run it is unhappy about.
+[[ "${CI_RED_RC}" -ne 0 ]] \
+  || fail "beat 3b says 'the build goes red' but the second ci-run.sh (WARDYN_CI_OUT=${CI_RED_OUT}) exited 0."
+if command -v jq >/dev/null 2>&1 && [[ -s "${CI_RED_OUT}/run.json" ]]; then
+  _red_state="$(jq -r '.state // ""' "${CI_RED_OUT}/run.json")"
+  [[ "${_red_state}" == "FAILED" ]] \
+    || fail "${CI_RED_OUT}/run.json state is '${_red_state}', not FAILED — beat 3b narrates a refused run."
 fi
 
 exit 0
