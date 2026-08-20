@@ -38,7 +38,12 @@ service:
 serviceAccount:
   # Create a dedicated ServiceAccount for wardynd (recommended).
   create: true
-  # Name to use; generated from the fullname when empty.
+  # Name to use; generated from the fullname when empty. With k8s.enabled=true
+  # AND create=false, this must be set explicitly — the chart refuses to
+  # render otherwise (templates/rbac.yaml): the k8s-runner RBAC binding would
+  # otherwise silently fall to the namespace's "default" ServiceAccount,
+  # handing pods/exec + secrets/networkpolicies create-delete to every other
+  # pod in the namespace that also uses it.
   name: ""
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
