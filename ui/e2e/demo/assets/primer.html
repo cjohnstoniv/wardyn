@@ -45,6 +45,13 @@
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .card code { color: #f59e0b; font-size: 24px; }
 
+  /* Deck-only override of the overlay's ring: fade, never fly. On slides the
+     targets are single text lines, and a ring in flight reads as a
+     strikethrough across whatever it crosses — three personas flagged 17
+     mid-flight sites in one round. Console takes keep the flight (big
+     targets, motion = "look here now"); slides don't need it. */
+  #__wardyn_demo_overlay .ring { transition: opacity .3s ease !important; }
+
   /* S2 — what an agent can do */
   #agent-caps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 28px; max-width: 1100px; }
   #agent-caps div {
@@ -136,7 +143,7 @@
   <h1>Your machines already run strangers&rsquo; code, every day.</h1>
   <div class="row">
     <div class="card" id="t-dep"><b><code>npm install</code></b>
-      <span class="muted">Every dependency pull executes code you never read &mdash; beside your credentials.</span></div>
+      <span class="muted">Every dependency install executes code you never read &mdash; beside your credentials.</span></div>
     <div class="card" id="t-script"><b>Build &amp; install scripts</b>
       <span class="muted">Postinstall hooks and Makefiles run with everything your shell can reach.</span></div>
     <div class="card" id="t-ci"><b>CI jobs</b>
@@ -147,7 +154,7 @@
        before it was said and waited for the voice to catch up. visibility
        (not display) so layout and ring boxes are stable. -->
   <div class="muted" id="s1-supply" style="font-size:25px;visibility:hidden">Supply-chain attacks live exactly here &mdash; one compromised
-    package, quietly reading and shipping out. <span class="mono" style="color:#f59e0b">event-stream &middot; ua-parser-js &middot; XZ Utils</span></div>
+    package, quietly reading and shipping out. <span class="mono" style="color:#f59e0b">event-stream &middot; ua-parser-js &middot; Codecov</span></div>
   <div id="s1-predates" style="font-size:27px;visibility:hidden"><b style="color:#f59e0b">That risk predates AI.</b>
     <span class="muted">Most teams never watch the traffic.</span></div>
 </section>
@@ -168,16 +175,18 @@
   <div class="kicker">A real frame from this series</div>
   <h1>Even the honest tools phone home.</h1>
   <div class="row">
-    <div id="exhibit-wrap" style="position:relative">
-      <img id="exhibit" src="primer-datadog.png" alt="Egress panel: allow rows for api.anthropic.com and one pending row for http-intake.logs.us5.datadoghq.com">
-      <!-- Ring target for the one row the narration singles out. The exhibit is
-           a flat image, so the row gets its own transparent hitbox — the whole-
-           panel ring reading as "pointing at all six rows" cost the beat in
-           persona round 1. Percentages track the crop (row 3 of primer-datadog
-           .png); recompute if the exhibit is ever recropped. -->
-      <!-- Tighter than the row itself: the drawn ring adds 6px pad + glow, and
-           at 13.5% tall it visibly clipped the allow row beneath (Dana r3). -->
-      <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:45.5%;height:11%"></div>
+    <div id="exhibit-wrap">
+      <!-- The hitbox's percentages must track the IMAGE alone. In round 4 they
+           were relative to the whole wrap; adding the truth band below grew
+           the wrap and silently shifted the ring one row down — every persona
+           watched the wrong row get ringed during the episode's key beat. -->
+      <div id="exhibit-imgbox" style="position:relative">
+        <img id="exhibit" src="primer-datadog.png" alt="Egress panel: allow rows for api.anthropic.com and one pending row for http-intake.logs.us5.datadoghq.com">
+        <!-- Row 3 of the crop (the pending datadoghq row): tighter than the row
+             so ring pad + glow stay off the rows beside it. Recompute if the
+             exhibit is ever recropped. -->
+        <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:46%;height:10.5%"></div>
+      </div>
       <div id="exhibit-note" class="muted">A coding agent, mid ordinary job &mdash; unedited. <span style="color:#f59e0b">Egress:</span> traffic trying to leave the box.</div>
       <div id="s3-truth" style="font-size:26px;margin-top:14px;visibility:hidden"><b style="color:#f59e0b">You cannot list what a tool will need up front</b>
         <span class="muted">&mdash; and you rarely know everything it does.</span></div>
@@ -224,7 +233,7 @@
       <div class="label">Proxy &mdash; the checkpoint</div>
       <div class="what">Stands outside the room. Decides what passes.</div>
       <div class="keys">holds the keys &mdash; attaches them on the way out</div>
-      <div class="muted" style="margin-top:10px;font-size:19px">a thief can&rsquo;t take the key &mdash; what it may do with it is the policy&rsquo;s job (ep 8)</div>
+      <div class="muted" id="d-thief" style="margin-top:10px;font-size:19px">nothing inside can read or take the key &mdash; what a run may <em>do</em> with it is the policy&rsquo;s job (ep 8)</div>
     </div>
     <div class="arrow"></div>
     <div id="d-out">
