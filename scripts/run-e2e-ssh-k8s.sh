@@ -81,7 +81,14 @@ teardown() {
     curl -sS -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${OWNER_FP:-}" ]]; then
-    curl -sS -X DELETE "${BASE}/api/v1/me/ssh-keys/${OWNER_FP//:/%3A}" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
+    # Percent-encode the WHOLE fingerprint, not just the colon: it is base64,
+    # so it carries '/' about half the time, and a raw '/' ends the path
+    # segment early -- the DELETE 404s and the key we registered outlives the
+    # run, in a cluster that outlives this script. (The compose lane can drop
+    # its key because `compose down --volumes` takes the whole database with
+    # it; here there is nothing to take it away.)
+    curl -sS -X DELETE "${BASE}/api/v1/me/ssh-keys/$(printf '%s' "${OWNER_FP}" | jq -sRr @uri)" \
+      -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   fi
   rm -rf "${TMPDIR}"
 }
