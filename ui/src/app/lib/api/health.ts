@@ -119,6 +119,13 @@ export const health = {
     // false-enabled guess. advertise_addr / host_key_fingerprint are both
     // non-secret (see docs/SSH.md) — the fingerprint is public by design.
     ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
+    // UI-sandbox gateway discovery (run-detail's "UI apps" lane): absent when
+    // the gateway is off (WARDYN_UI_SANDBOX_LISTEN unset) or an older daemon —
+    // both read as "no lane", never a false-enabled guess. enter_url_template
+    // is the ONE field the console reads to build the open URL — it never
+    // composes the UI origin itself, only substitutes {run}/{app}/{ticket}
+    // (internal/api/uigateway.go's uiSandboxHealthz).
+    ui_sandbox?: { enabled?: boolean; enter_url_template?: string; host_mode?: boolean };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). W21-S1-7: recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store

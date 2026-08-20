@@ -436,6 +436,45 @@ export const RUN_COCKPIT = {
   shortcuts: "⌘\\ dock · Esc exit focus",
 } as const;
 
+// UI apps lane (docs/design/ui-sandboxes-prompt.md §7, FROZEN) — the run-detail
+// "Attach from your terminal" card's third lane and the policies screen's
+// read-only ui_apps row. Every byte here is canon; run-detail-ssh.tsx and
+// run-detail-ssh.test.tsx must render/assert these verbatim, never a paraphrase.
+export const UI_APPS_LANE = {
+  title: "UI apps",
+  intro:
+    "Wardyn relays a port the sandbox is already listening on to your browser. The sandbox gets no network of its own — the relay rides the same exec lane the terminal does.",
+  appSub: (port: number, path: string) => `localhost:${port}${path}`,
+  cta: (app: string) => `Open ${app}`,
+  ctaBusy: "Opening…",
+  newTab:
+    "Opens in a new tab, on a different address than this console. That separation is deliberate: the app is the sandbox's own code, and it must never be able to read your console session.",
+  noRecording:
+    "Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that you opened and closed the app, never what you did in it.",
+  off: "Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev server — to your browser through Wardyn. An operator turns it on by setting WARDYN_UI_SANDBOX_LISTEN where wardynd starts.",
+  noApps:
+    "On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in the policy's ui_apps list — an app is a name, a loopback port and a path.",
+  errorTitle: (app: string) => `Couldn't start ${app}`,
+  errorLauncher: (app: string) =>
+    `This image has no /usr/local/bin/wardyn-ui-${app}. Use an image that ships the launcher (deploy/images/vscode/), or add one to your own image.`,
+  // Not from the frozen table (client-side condition, no server round trip) —
+  // covers the mock's step-3 "failure in window.open" case (a blocked popup).
+  errorPopupBlocked:
+    "The browser blocked the new tab — allow pop-ups for this site and try again.",
+} as const;
+
+// Prefix of the server's verbatim missing-launcher body (docs/design/ui-
+// sandboxes-prompt.md §7's "server-side counterpart"), used to decide whether
+// to prepend the friendly lane.error.launcher guidance above the raw text.
+export const UI_APPS_LAUNCHER_MISSING_PREFIX = "no UI launcher in this image:";
+
+// Policies screen's read-only ui_apps detail row (same frozen table, §7).
+export const POLICY_UI_APPS = {
+  label: "UI apps",
+  none: "None declared",
+  value: (app: string, port: number, path: string) => `${app} → localhost:${port}${path}`,
+} as const;
+
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")
 // -> this file's copy-vocabulary kind (ApprovalKind above). Hoisted from
 // approvals.tsx (its own kindLabel() reads it via APPROVAL_KIND_LABEL) so
