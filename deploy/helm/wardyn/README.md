@@ -291,6 +291,7 @@ default-deny for `k8s.runsNamespace`, or add an allow rule for pods labeled
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set serviceAccount.automount=true \
   --set k8s.enabled=true \
   --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"

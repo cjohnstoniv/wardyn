@@ -85,7 +85,15 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 		return canaryIndeterminate, fmt.Errorf("egress canary: %w: %w", a.err, errCanaryIndeterminate)
 	}
 	if !a.reachedRunning || a.exitCode != 0 {
-		return canaryIndeterminate, fmt.Errorf("egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver reachability (reached_running=%v exit_code=%d): %w",
+		// Phase A applies NO NetworkPolicy of its own — a failure here is
+		// indistinguishable from a namespace that ALREADY carries a
+		// default-deny NetworkPolicy from something else (a cluster-wide
+		// policy, another operator's baseline). That combination permanently
+		// refuses boot even though per-run confinement would work fine once
+		// Wardyn's own allow-rules are in place; naming it saves an operator
+		// from chasing a phantom cluster/CNI bug (see deploy/helm/wardyn/README.md
+		// "Kubernetes runner substrate").
+		return canaryIndeterminate, fmt.Errorf("egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver reachability (reached_running=%v exit_code=%d) — if this namespace already has a default-deny NetworkPolicy from elsewhere (unrelated to Wardyn), that is the likely cause: use a namespace with no ambient default-deny, or add an allow rule for pods labeled wardyn.managed=true: %w",
 			a.reachedRunning, a.exitCode, errCanaryIndeterminate)
 	}
 
