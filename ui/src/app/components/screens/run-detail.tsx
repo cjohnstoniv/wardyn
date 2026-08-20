@@ -346,7 +346,7 @@ export function RunDetailScreen() {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} />
+            <AuditTab events={audit} runId={run.id} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -710,13 +710,20 @@ function ApprovalsTab({
 // ---------------------------------------------------------------------------
 // Audit tab (this run's events)
 // ---------------------------------------------------------------------------
-function AuditTab({ events }: { events: AuditEvent[] }) {
+function AuditTab({ events, runId }: { events: AuditEvent[]; runId: string }) {
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
-        <Link to="/audit" className="ml-1 inline-flex items-center gap-1 text-primary hover:underline">
+        {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
+            member — the server scopes non-admins to ?run_id= of a run they own
+            (internal/api/audit.go handleQueryAudit) — so the unqualified link
+            dropped them on a feed that can never fill. */}
+        <Link
+          to={`/audit?run_id=${runId}`}
+          className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
+        >
           open full Audit <ArrowRight className="size-3" />
         </Link>
       </div>

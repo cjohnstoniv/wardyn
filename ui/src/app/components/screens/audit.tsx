@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ScrollText,
   Search,
@@ -259,7 +259,17 @@ export function AuditScreen() {
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
-  const [runFilter, setRunFilter] = React.useState("");
+  // W25-W25.2-3: the run filter lives in the URL (?run_id=), not component
+  // state. A member's ONLY reachable trail is a run they own (the server 200s
+  // an empty list for any unfiltered /audit query), so the filter has to be
+  // reachable from outside this screen — run-detail's "open full Audit" link
+  // carries the run into it. Deep-linkable and survives a reload for free.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const runFilter = searchParams.get("run_id") ?? "";
+  const setRunFilter = React.useCallback(
+    (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
+    [setSearchParams],
+  );
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
@@ -484,7 +494,7 @@ export function AuditScreen() {
             <EmptyState
               icon={ScrollText}
               title="The full audit feed is admin-only."
-              description="You can still see a run's own trail: open a run and use its Audit tab, or filter this page by that run's ID."
+              description="You can still see a run's own trail: open the run and use its Audit tab — its “open full Audit” link brings that run's events here."
               action={
                 <Button variant="outline" onClick={() => navigate("/runs")}>
                   Open Runs

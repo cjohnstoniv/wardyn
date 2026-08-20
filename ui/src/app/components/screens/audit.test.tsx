@@ -401,6 +401,23 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText(/the trail starts with your first run/i)).not.toBeInTheDocument();
   });
 
+  // W25-W25.2-3: the run filter is URL state. A member's only reachable trail
+  // is a run they own, and they arrive from run-detail's "open full Audit"
+  // link — so ?run_id= must seed the filter and be what the SERVER is asked
+  // for, not something only a rendered row can set (a member has no rows).
+  it("seeds the run filter from ?run_id= and queries the server with it", async () => {
+    listAuditMock.mockResolvedValue([]);
+    getRunMock.mockResolvedValue(undefined);
+    render(
+      <MemoryRouter initialEntries={["/audit?run_id=run-9"]}>
+        <AuditScreen />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-9"));
+    expect(await screen.findByText(/run-9/)).toBeInTheDocument();
+  });
+
   // A dead or missing kernel sensor is the ABSENCE of events, so the list can
   // never show it — only this chip can. Nothing is claimed when the daemon
   // doesn't report the field at all.

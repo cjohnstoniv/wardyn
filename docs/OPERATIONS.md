@@ -200,10 +200,15 @@ product is a member act by design.
 their OWN resources the same way an admin reaches any of them
 (`ownsRunOrAdmin`/`getRunAuthorized`, `internal/api/helpers.go`): `GET`/kill/
 profile/grants on a run, minting its attach ticket, its recording replay, and
-`GET /runs`/`GET /approvals`/`GET /audit` (each scoped to the caller's own
-`created_by` rows) all answer a foreign resource with the **byte-identical
+`GET /runs`/`GET /approvals` (each scoped to the caller's own `created_by`
+rows) all answer a foreign resource with the **byte-identical
 404** a truly-missing one gets — never a 403 — so probing another user's run
-id learns nothing (no existence oracle). `GET /setup/status` redacts
+id learns nothing (no existence oracle). `GET /audit` is **run-scoped, not
+`created_by`-scoped**: a member must pass `?run_id=` naming a run they own —
+no `run_id`, or one they don't own, both return an empty `200` list (a
+collection endpoint's no-oracle answer), so a member's unfiltered audit feed
+is always empty by design. The console reaches it from a run's Audit tab,
+whose "open full Audit" link carries `?run_id=`. `GET /setup/status` redacts
 operator-diagnostic detail (checks, secret names, runner detail) for a member.
 
 **Deciding an approval is kind-restricted, not just owner-restricted**

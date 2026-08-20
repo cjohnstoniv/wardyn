@@ -271,3 +271,19 @@ describe("RunDetailScreen — Audit tab truncation cue", () => {
     expect(screen.queryByText(/truncated, oldest-first/i)).not.toBeInTheDocument();
   });
 });
+
+// W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
+// so the Audit tab's "open full Audit" link must carry the run — a bare /audit
+// drops a member on a feed that can never fill.
+describe("RunDetailScreen — open full Audit link", () => {
+  it("carries the run id into /audit", async () => {
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByRole("link", { name: /open full audit/i })).toHaveAttribute(
+      "href",
+      "/audit?run_id=run-1",
+    );
+  });
+});
