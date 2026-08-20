@@ -239,8 +239,13 @@ spec:
             # readiness check that shares its path with liveness/startup would
             # restart-loop a pod on a transient DB blip instead of just
             # marking it not-ready).
+            #
+            # Overridable because /readyz only EXISTS from the 0.6 images
+            # onward: point an older image at it and every probe 404s, so the
+            # pod never becomes Ready and a rollout to it stalls forever
+            # (readinessProbe.path=/healthz pins it back — see values.yaml).
             httpGet:
-              path: /readyz
+              path: {{ .Values.readinessProbe.path | quote }}
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10

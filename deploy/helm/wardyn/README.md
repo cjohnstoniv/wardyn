@@ -57,7 +57,9 @@ install.
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all
   capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes
   on `/healthz`, readiness on `/readyz` (which additionally pings Postgres, so
-  a dead DB actually takes the pod out of the Service); `WARDYN_PG_DSN` and
+  a dead DB actually takes the pod out of the Service — `/readyz` is 0.6+, so an
+  older image needs `readinessProbe.path` pinned back, see
+  [Installation](#installation)); `WARDYN_PG_DSN` and
   `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
@@ -161,11 +163,12 @@ helm install wardyn ./deploy/helm/wardyn \
 ```
 
 (`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see
-[Database (DSN)](#database-dsn--two-modes) below. **Nothing enforces this at
-render time**: omit it and the chart installs happily, then the pod
-crash-loops on its SECOND restart — the default age identity is ephemeral,
-regenerated every boot, and boot 2 cannot decrypt what boot 1 encrypted. This
-pairing is your job, not the chart's.)
+[Database (DSN)](#database-dsn--two-modes) below. **The chart refuses to render
+without this pairing**, because skipping it is not a trade-off: the default age
+identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what
+boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows
+unrecoverable. `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a
+throwaway install.)
 
 The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
 (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
@@ -174,6 +177,17 @@ on one of those, add
 `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`). To use a
 different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 `/examples/policies/` (`demo.json`, ...).
+
+**`/readyz` is a 0.6-and-later endpoint, and the chart's default image is not
+yet.** The readiness probe targets `/readyz`; images at or below `0.5.0` — which
+is what an empty `image.tag` resolves to today, via `.Chart.AppVersion` — do not
+serve it, so the probe 404s forever, the pod never becomes Ready, and the
+`rollout status` below hangs with no other symptom (nothing crashes, nothing
+logs an error). On any such image, pin the probe back:
+`--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead
+Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
+CI never sees this: `helm-install-test` and the kind quickstart both build
+`wardynd` from source, so their image always has `/readyz`.
 
 The chart **refuses to render** without an admin token or an OIDC issuer: an
 install with neither brings up a pod that passes its `/healthz` probe and 401s
@@ -209,13 +223,14 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
 
 The DSN never appears in the rendered manifests or Helm release history. The
 `age-key` entry is the secret-store identity, and `secrets.ageKeyFromSecret=true`
-is what points wardynd at it. **This is documented-only — the chart does NOT
-fail the render when you skip it** (`templates/secret.yaml` says so in its own
-header comment: an unconditional fail there would break every render that has
-not opted in, including this chart's own `make helm-lint` assertions). Skip it
-and the install succeeds, the first boot works, and the pod crash-loops on its
-second restart: the default identity is ephemeral, so it cannot decrypt what
-the previous boot wrote to a real Postgres.
+is what points wardynd at it. **The chart fails the render if you skip it**
+(`templates/secret.yaml`): without it the install succeeds, the first boot
+works, and the pod crash-loops on its second restart — the default identity is
+ephemeral, so it cannot decrypt what the previous boot wrote to a real Postgres,
+and setting the key afterwards does not recover those rows. Wiring the identity
+yourself through `env.WARDYN_AGE_KEY`/`extraEnv` satisfies the check too, and
+`secrets.allowEphemeralAgeKey=true` is the deliberate opt-out for a throwaway
+install where losing every stored secret on restart is genuinely fine.
 
 **2. Inline (demo only).** Clear `secretRef.name` and pass the DSN; the chart
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
@@ -516,11 +531,18 @@ See `values.yaml` for all options. Key settings:
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
-  **Set one of these against any real (non-inline) Postgres**, even for a quick
-  trial: an ephemeral key does not survive a pod restart, and wardynd's own
-  first-boot secret-store entries (e.g. its internal signing key) are written
-  under whatever key that first boot generated — the NEXT boot generates a
-  different one, can no longer decrypt them, and the pod crash-loops forever.
+  **One of these is REQUIRED against any real (non-inline) Postgres — the chart
+  refuses to render otherwise**, even for a quick trial: an ephemeral key does
+  not survive a pod restart, and wardynd's own first-boot secret-store entries
+  (e.g. its internal signing key) are written under whatever key that first boot
+  generated — the NEXT boot generates a different one, can no longer decrypt
+  them, and the pod crash-loops forever.
+- `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
+  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+- `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
+  Postgres — liveness and startup stay on `/healthz` regardless). **Only override
+  this for an image at or below `0.5.0`**, which serves no `/readyz`: see
+  [Installation](#installation) for what that failure looks like.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see

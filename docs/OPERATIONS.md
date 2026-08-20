@@ -1173,6 +1173,17 @@ Take the Postgres dump above **before** the restart; that dump is the only
 rollback you have. Agent images are built separately — `make agent-images`
 rebuilds them.
 
+**On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever
+matter.** The chart's readiness probe targets `/readyz`, which the 0.6 images
+introduced; an `image.tag` at or below `0.5.0` — including the empty default,
+which resolves to `.Chart.AppVersion` — serves only `/healthz`, so the probe
+404s forever, the pod never joins the Service's endpoints, and
+`helm upgrade`/`rollout status` hangs NotReady with nothing crashed and nothing
+logged. Pin the probe back for such an image with
+`--set readinessProbe.path=/healthz`, accepting that version's ceiling (a dead
+Postgres reads healthy again). CI does not catch this — `helm-install-test` and
+the kind quickstart both build `wardynd` from source.
+
 ## One replica, by construction
 
 `replicas` is not a scaling knob, and it is not modesty either — **the pin is a
