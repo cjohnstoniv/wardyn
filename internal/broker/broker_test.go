@@ -138,10 +138,11 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		return &loadGrantRow{g: g}
 
 	case strings.Contains(sql, "FROM approvals") && strings.Contains(sql, "grant_id = $1"):
-		// ensureApproval select: args[0]=grantID
+		// ensureApproval select: args[0]=grantID. Mirrors the query's
+		// `state <> 'EXPIRED'` filter — a swept row must not be re-found.
 		grantID := args[0].(uuid.UUID)
 		for _, a := range tx.db.approvals {
-			if a.grantID == grantID && a.kind == "credential" {
+			if a.grantID == grantID && a.kind == "credential" && a.state != types.ApprovalExpired {
 				return &ensureApprovalRow{a: a}
 			}
 		}
@@ -381,6 +382,39 @@ func TestMintForGrant_NoApprovalYet_CreatesPending(t *testing.T) {
 		if !jsonScopeEqual(a.scope, spec.Scope) {
 			t.Fatalf("created approval scope != grant scope")
 		}
+	}
+}
+
+// W19-W19c-2: the approval sweeper EXPIREs a stale PENDING approval. The next
+// mint attempt must raise a FRESH PENDING request (a human can still decide it)
+// — not re-find the swept row forever and return ErrApprovalDenied, which
+// wedged the run permanently with nothing left in the queue to approve.
+func TestMintForGrant_ExpiredApproval_ReRaisesPending(t *testing.T) {
+	b, db, _, _ := newTestBroker(t)
+	runID := uuid.New()
+	spec := githubGrantSpec(t, true)
+	gid := seedGrant(db, runID, spec)
+	swept := seedApproval(db, runID, gid, spec.Scope, types.ApprovalExpired)
+	db.approvals[swept].reason = "stale"
+
+	_, err := b.MintForGrant(context.Background(), callerFor(runID), gid)
+	var pend ErrApprovalPending
+	if !errors.As(err, &pend) {
+		t.Fatalf("want ErrApprovalPending after an expiry sweep, got %v", err)
+	}
+	if pend.ApprovalID == swept {
+		t.Fatal("re-raised the SWEPT approval id; want a new PENDING row")
+	}
+	fresh := db.approvals[pend.ApprovalID]
+	if fresh == nil || fresh.state != types.ApprovalPending {
+		t.Fatalf("approval %s not PENDING: %+v", pend.ApprovalID, fresh)
+	}
+	if !jsonScopeEqual(fresh.scope, spec.Scope) {
+		t.Fatal("re-raised approval scope != grant scope")
+	}
+	// The swept row is left alone — the expiry stays on the record.
+	if db.approvals[swept].state != types.ApprovalExpired {
+		t.Fatalf("swept approval state = %s, want EXPIRED", db.approvals[swept].state)
 	}
 }
 

@@ -56,6 +56,15 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 // grant), so the SELECT-then-INSERT runs inside one tx with ON CONFLICT DO
 // NOTHING; a racing double-insert loses harmlessly and the re-select returns
 // the single winner.
+//
+// EXPIRED rows are SKIPPED by both selects (W19-W19c-2). The approval sweeper
+// (approval.ExpireStale) ages out every stale PENDING approval, including this
+// one; without the filter the next mint attempt re-found that EXPIRED row
+// forever, MintForGrant mapped it to ErrApprovalDenied, and the run was
+// permanently wedged with no PENDING request left for a human to decide. An
+// expiry is a sweep nobody decided (types.ApprovalDecision), so re-raising a
+// fresh PENDING is the honest recovery. DENIED is a real human decision and
+// stays terminal — it is deliberately NOT skipped.
 func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, spec types.GrantSpec) (types.ApprovalRequest, error) {
 	tx, err := b.db.Begin(ctx)
 	if err != nil {
@@ -73,7 +82,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 	err = tx.QueryRow(ctx,
 		`SELECT id, state, requested_scope, minted_jti, reason
 		   FROM approvals
-		  WHERE grant_id = $1 AND kind = 'credential'
+		  WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
 		  ORDER BY requested_at DESC
 		  LIMIT 1`, grantID).
 		Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
