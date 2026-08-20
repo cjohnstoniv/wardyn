@@ -429,12 +429,18 @@ model (a run is still owner-or-admin only — no "read-only share" or "co-owner"
 concept), no tenant/org columns, no
 separation of duty among admins — every admin (and the admin token, always)
 can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
-residual #14, still open). The SSH gateway has **no admin override** at all
-today — SSH authorization is a single `run.created_by == the key's principal`
-check, deliberately narrower than the web terminal's `requireOperator` gate;
-an admin who needs another human's run uses the web terminal, same as a
-member would (`docs/SSH.md`'s Bounds section; `threatmodel/THREAT-MODEL.md`
-residual #15). See [ROADMAP.md](../ROADMAP.md) for what's queued.
+residual #14, still open). The SSH gateway's admin override is a
+**registration-time stamp**, not a live role check: since migration `0043` a
+key authorizes when `run.created_by == the key's principal` OR the key's
+`role` column reads `admin`, and that column is written once, at
+`POST /me/ssh-keys` time, from the role the registering session held then.
+The gateway never re-reads the human's role now, so a demoted admin's
+already-registered key keeps the override until that key is deleted
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registered —
+strictly weaker than the web terminal's live `requireOperator` gate. A
+member's key never satisfies the override (`docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
+[ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split above, the
 capability grants, the approval broker, and the append-only audit log all ship in

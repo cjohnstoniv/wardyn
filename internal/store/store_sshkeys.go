@@ -21,10 +21,10 @@ import (
 // table means someone already registered that exact key material.
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
-		INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at)
-		VALUES ($1,$2,$3,$4,$5)
-		RETURNING fingerprint, principal, name, public_key, created_at`
-	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.CreatedAt))
+		INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		RETURNING fingerprint, principal, name, public_key, role, created_at`
+	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.CreatedAt))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -39,7 +39,7 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 // first — the self-service GET /me/ssh-keys list.
 func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error) {
 	const q = `
-		SELECT fingerprint, principal, name, public_key, created_at
+		SELECT fingerprint, principal, name, public_key, role, created_at
 		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`
 	rows, err := s.Pool.Query(ctx, q, principal)
 	if err != nil {
@@ -61,12 +61,13 @@ func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]typ
 }
 
 // GetSSHKeyByFingerprint is the gateway's pre-auth lookup: given the offered
-// key's fingerprint, resolve which principal (if any) registered it.
+// key's fingerprint, resolve which principal (if any) registered it — and with
+// which role (0043), the gateway's admin-override signal.
 // Deliberately UNSCOPED by principal — the caller has not authenticated yet;
 // this call is what authenticates them. Returns ErrNotFound when unregistered.
 func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error) {
 	const q = `
-		SELECT fingerprint, principal, name, public_key, created_at
+		SELECT fingerprint, principal, name, public_key, role, created_at
 		FROM ssh_public_keys WHERE fingerprint = $1`
 	return scanSSHKey(s.Pool.QueryRow(ctx, q, fingerprint))
 }
@@ -89,7 +90,7 @@ func (s PG) DeleteSSHKey(ctx context.Context, fingerprint, principal string) err
 
 func scanSSHKey(row pgx.Row) (types.SSHPublicKey, error) {
 	var k types.SSHPublicKey
-	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.CreatedAt)
+	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.Role, &k.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SSHPublicKey{}, ErrNotFound
 	}

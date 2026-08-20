@@ -78,6 +78,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   observed but none correlated to a run" vs. the plain "no kernel events
   observed"), so "the sensor saw nothing" and "the sensor saw plenty and
   correlated none" stop reading as the same `observed_total: 0`.
+- **SSH gateway admin override.** A registered public key now carries the
+  role it was registered under (`role` column, migration
+  `0043_ssh_key_role.sql`), and `sshAuth` authorizes a connection if
+  `run.created_by == the key's principal` **OR** `key.role == admin` — an
+  admin's own key now reaches any run over SSH, not just the browser
+  terminal. The override is stamped at registration time, not checked live:
+  it is honestly weaker than the web terminal's `requireOperator` gate,
+  which re-reads the session's role on every attach, so a demoted admin's
+  already-registered key keeps the override until that key is deleted and
+  re-registered (or revoked) — there is no expiry or background sweep. Every
+  override connection is audited distinctly (`ssh.auth` success carries
+  `override:true` whenever the owner check did not match), and a member's
+  key never satisfies the check regardless of registration age. See
+  [docs/SSH.md](docs/SSH.md) → "Bounds" and `threatmodel/THREAT-MODEL.md`
+  residual #15.
 
 ### Changed
 

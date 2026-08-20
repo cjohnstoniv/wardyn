@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -535,6 +537,146 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 	}
 	if successes == 0 || failures == 0 {
 		t.Errorf("ssh.auth audit trail = %d success, %d failure; want at least one of each", successes, failures)
+	}
+}
+
+// TestSSHGateway_AdminKeyOverride covers F1's admin override (migration 0043):
+// a key whose STORED role is admin reaches a run it does not own, and the
+// ssh.auth success that results carries override:true; a key stored with the
+// member role is still refused for the same run; and an ordinary owner login
+// carries NO override datum (its absence is what makes the datum greppable).
+func TestSSHGateway_AdminKeyOverride(t *testing.T) {
+	st := newSSHMemStore()
+	bobRun := uuid.New()
+	adminRun := uuid.New()
+	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
+	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "root@example.com", State: types.RunRunning, SandboxRef: "sbx-root"})
+
+	adminPriv, adminPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: ssh.FingerprintSHA256(adminPub),
+		Principal:   "root@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(adminPub)),
+		Role:        oidc.RoleAdmin,
+	})
+	memberPriv, memberPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: ssh.FingerprintSHA256(memberPub),
+		Principal:   "mallory@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(memberPub)),
+		Role:        oidc.RoleMember,
+	})
+
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	t.Run("admin key reaches a run it does not own, audited as an override", func(t *testing.T) {
+		client, err := sshDial(t, h, bobRun.String(), adminPriv)
+		if err != nil {
+			t.Fatalf("admin dial for another human's run failed: %v", err)
+		}
+		defer client.Close()
+
+		ev := waitForAudit(t, h.audit, bobRun, "ssh.auth", "success")
+		if ev == nil {
+			t.Fatalf("no successful ssh.auth event for the admin override; events=%s", auditDump(h.audit.snapshot(), bobRun))
+		}
+		if ev.Actor != "root@example.com" {
+			t.Errorf("ssh.auth success actor = %q, want root@example.com (the admin, not the run's owner)", ev.Actor)
+		}
+		var data struct {
+			Override bool `json:"override"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("decode ssh.auth data %q: %v", string(ev.Data), err)
+		}
+		if !data.Override {
+			t.Errorf("ssh.auth success data = %q, want override:true", string(ev.Data))
+		}
+	})
+
+	t.Run("member key is still refused for a run it does not own", func(t *testing.T) {
+		if _, err := sshDial(t, h, bobRun.String(), memberPriv); err == nil {
+			t.Fatal("dial with a member-role key for another human's run succeeded, want refused")
+		}
+		ev := waitForAudit(t, h.audit, bobRun, "ssh.auth", "failure")
+		if ev == nil {
+			t.Fatalf("no failed ssh.auth event for the member key; events=%s", auditDump(h.audit.snapshot(), bobRun))
+		}
+		if ev.Actor != "mallory@example.com" {
+			t.Errorf("ssh.auth failure actor = %q, want mallory@example.com", ev.Actor)
+		}
+	})
+
+	t.Run("an admin reaching their OWN run is not an override", func(t *testing.T) {
+		client, err := sshDial(t, h, adminRun.String(), adminPriv)
+		if err != nil {
+			t.Fatalf("admin dial for own run failed: %v", err)
+		}
+		defer client.Close()
+
+		ev := waitForAudit(t, h.audit, adminRun, "ssh.auth", "success")
+		if ev == nil {
+			t.Fatalf("no successful ssh.auth event; events=%s", auditDump(h.audit.snapshot(), adminRun))
+		}
+		if len(ev.Data) != 0 {
+			t.Errorf("owner ssh.auth success data = %q, want no datum at all (override marks the exception, not the rule)", string(ev.Data))
+		}
+	})
+}
+
+// TestSSHGateway_OverrideRoleIsARegistrationStamp pins the honesty obligation
+// the plan attaches to F1: the override reads the key's STORED role, stamped
+// once at registration, and nothing at connect time re-derives it. A principal
+// whose live role has since changed — in EITHER direction — is therefore
+// governed by the stamp until the key is deleted or re-registered. Both halves
+// are asserted, since "the current role is never consulted" is only
+// demonstrated by showing the stamp ALONE decides.
+func TestSSHGateway_OverrideRoleIsARegistrationStamp(t *testing.T) {
+	st := newSSHMemStore()
+	run := uuid.New()
+	st.putRun(types.AgentRun{ID: run, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
+
+	// A key stamped admin at registration whose principal is a DEMOTED admin:
+	// nothing about them is admin any more, and the gateway has no live check
+	// able to notice — the stamp still opens bob's run.
+	demotedPriv, demotedPub := mustSSHKeypair(t)
+	demotedFP := ssh.FingerprintSHA256(demotedPub)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: demotedFP,
+		Principal:   "exadmin@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(demotedPub)),
+		Role:        oidc.RoleAdmin,
+	})
+	// A key stamped member at registration whose principal has since been
+	// PROMOTED. The stamp is stale in the other direction, so no override
+	// applies until they re-register.
+	promotedPriv, promotedPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: ssh.FingerprintSHA256(promotedPub),
+		Principal:   "newadmin@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(promotedPub)),
+		Role:        oidc.RoleMember,
+	})
+
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	client, err := sshDial(t, h, run.String(), demotedPriv)
+	if err != nil {
+		t.Fatalf("a key stamped admin must keep its override until deleted/re-registered, got: %v", err)
+	}
+	client.Close()
+
+	if _, err := sshDial(t, h, run.String(), promotedPriv); err == nil {
+		t.Fatal("a key stamped member reached another human's run after its principal was promoted; the stamp, not the live role, must govern")
+	}
+
+	// The remediation the docs promise: delete the stale key and the override
+	// goes with it (re-registering re-stamps from the then-current role).
+	if err := st.DeleteSSHKey(context.Background(), demotedFP, "exadmin@example.com"); err != nil {
+		t.Fatalf("delete stale admin key: %v", err)
+	}
+	if _, err := sshDial(t, h, run.String(), demotedPriv); err == nil {
+		t.Fatal("a deleted key still authenticated; deletion is the documented remediation for a stale stamp")
 	}
 }
 
