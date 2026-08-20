@@ -4,8 +4,9 @@ Stage F4.1 of the 0.6 plan. Audits `main` content as of `50848161` in worktree
 `/home/cjohn/wt-v06-audit`. Supersedes `local/ponytail-review-0.4.5.md` (stale — most of
 its list has since been applied or overtaken).
 
-**No code changes in this stage.** F4.2 applies the obvious wins; contested items stay here
-for owner review. Owner law applies to every deletion: research provenance before removing.
+**F4.1 recorded no code changes.** F4.2 (applied, this file's `Status` column) took the obvious
+wins and deferred the rest with a reason. Every applied deletion had its provenance researched
+first — `git log -S` on the symbol — and two Tier-1 items did not survive that check.
 
 ## Method
 
@@ -29,19 +30,19 @@ Ranked by (confidence x lines removed x defect-risk removed) / risk-of-removal.
 
 ### Tier 1 — take these (high confidence, low risk)
 
-| # | Location | Cut | Replaced by | Δ |
-|---|---|---|---|---|
-| 1 | `ui/src/app/components/wardyn/tier-matrix.tsx` (+ `tier-matrix.test.tsx`) | The whole component pair — nothing renders `TierMatrix`; only its own test imports it | `setup/environment-step.tsx:396-417` already renders `CC_MATRIX_ROWS`/`CC_MATRIX_WHERE` with its own `MatrixCell` (:482). Keep `cc-meta.ts`; move the drift assertions the deleted test held into `environment-step.test.tsx` if not already covered | −223 |
-| 2 | `internal/api/runs_lifecycle.go:219 SweepTerminalSandboxes` | The unwired state — its own doc says "none are wired up here; this is the primitive itself", so an orphaned live sandbox behind a failed finalize is never reclaimed | Call it from the existing periodic reconcile/lifecycle ticker (~5 lines, `cmd/wardynd`), which also retires the `THREAT-MODEL.md:1040` residual. If nobody will wire it: delete the func + `sandbox_sweep_test.go` (−180) and keep the residual honest | +5 / −180 |
-| 3 | `internal/secretmask/secretmask.go:108 Evict` | Either the method or the leak — no production caller evicts, so every run's minted-token corpus stays in the process-global registry for the daemon's lifetime | Call `Evict(runID)` from the run finalize path (`finalizeRunTail`), or delete the method and say in the type doc that masking corpora are process-lifetime | +2 / −15 |
-| 4 | 40 `*_pg_test.go` files, 93 `WARDYN_TEST_PG` reads — e.g. `internal/db/migrate_pg_test.go:34`, `internal/recording/pgstore_pg_test.go:34`, `internal/broker/concurrency_pg_test.go:40`, `cmd/wardynd/gt_rotator_pg_test.go:43` | The per-file copy of skip-if-unset + Connect + Migrate + Cleanup (`pgPool`, `runsPGPool`, `newPGStore`), plus `migrateTolerant` duplicated in `internal/db` and `internal/secretstore/pg` | One `internal/db/dbtest` package with `Pool(t)` (stdlib `httptest` convention); the recording copy's own comment already admits it "mirrors" the others | −200 |
-| 5 | `ui/src/app/components/ui/switch.tsx` + `@radix-ui/react-switch` in `ui/package.json:29` | Both — the primitive has no importer anywhere in `src/` or `e2e/` | Nothing; it is the only unused dependency in the tree | −31, −1 dep |
-| 6 | `ui/src/app/components/wardyn/form-primitives.tsx:95 DomainPillList`; `new-run/wizard-types.ts:775 WorkspaceProfileOption` + `:776 workspaceProfileOptions`; `wardyn/copy.ts:69 SETUP_RESIDENCY_NOTE`, `:109 RISK_ATTRIBUTION` | Five dead exports — declaration is the only occurrence in `src/` and `e2e/` | Nothing. `RISK_ATTRIBUTION`/`SETUP_RESIDENCY_NOTE` are canon strings with no render site; confirm against the mock before deleting (mock-first UI law) | −60 |
-| 7 | `internal/identity/embedded/revocation.go:30 NewMemRevocationStore` | A test fixture shipped in a production file (no non-test caller) | Move `MemRevocationStore` into `embedded_test.go`, or into `identitytest` if the conformance suite needs it | −25 |
-| 8 | `internal/component/registry.go:59 Lookup` | The `export` — only `Resolve` (same file) calls it | Unexport to `lookup` | 0 |
-| 9 | `internal/store/pagination.go:120-137` (`ApprovalsByRunCreatorPager` doc) | The "PRODUCTION WIRING NOTE … that wiring is out of this lane's scope … until it lands" paragraph — stale: `cmd/wardynd/adapters.go:139` delegates it and `:143` asserts it | Delete the paragraph; the next reader currently believes a shipped path is unwired | −12 |
-| 10 | `ui/.../corp-network-egress.tsx:46`, `demos/demo-screen.tsx:497`, `run-detail-ssh.tsx:199`, `run-detail/widget-registry.ts:188`, `new-run/run-warnings.ts:28,43`, `settings/harness-login-pane.tsx:202`, `setup/corp-network-proxy.tsx:53,68` | The `export` keyword on nine symbols used only inside their own file (no test imports them either) | Module-local `function`/`const`; shrinks each file's public surface with zero behavior change | 0 |
-| 11 | `ui/src/app/components/screens/demos/demo-screen.tsx:252`, `screens/app-shell.tsx:540` | Two `TODO(stage-4): /settings` breadcrumbs | Nothing — `/settings` shipped (`App.tsx:327`); the TODOs are stale | −2 |
+| # | Status | Location | Cut | Replaced by | Δ |
+|---|---|---|---|---|---|
+| 1 | **APPLIED** `2bf842bf` | `ui/src/app/components/wardyn/tier-matrix.tsx` (+ `tier-matrix.test.tsx`) | The whole component pair — nothing renders `TierMatrix`; only its own test imports it | `setup/environment-step.tsx:396-417` already renders `CC_MATRIX_ROWS`/`CC_MATRIX_WHERE` with its own `MatrixCell` (:482). Keep `cc-meta.ts`; move the drift assertions the deleted test held into `environment-step.test.tsx` if not already covered | −223 |
+| 2 | **DEFERRED** | `internal/api/runs_lifecycle.go:219 SweepTerminalSandboxes` | The unwired state — its own doc says "none are wired up here; this is the primitive itself", so an orphaned live sandbox behind a failed finalize is never reclaimed | Call it from the existing periodic reconcile/lifecycle ticker (~5 lines, `cmd/wardynd`), which also retires the `THREAT-MODEL.md:1040` residual. If nobody will wire it: delete the func + `sandbox_sweep_test.go` (−180) and keep the residual honest | +5 / −180 |
+| 3 | **DEFERRED** (doc landed `358f7ad8`) | `internal/secretmask/secretmask.go:108 Evict` | Either the method or the leak — no production caller evicts, so every run's minted-token corpus stays in the process-global registry for the daemon's lifetime | Call `Evict(runID)` from the run finalize path (`finalizeRunTail`), or delete the method and say in the type doc that masking corpora are process-lifetime | +2 / −15 |
+| 4 | **DEFERRED** | 40 `*_pg_test.go` files, 93 `WARDYN_TEST_PG` reads — e.g. `internal/db/migrate_pg_test.go:34`, `internal/recording/pgstore_pg_test.go:34`, `internal/broker/concurrency_pg_test.go:40`, `cmd/wardynd/gt_rotator_pg_test.go:43` | The per-file copy of skip-if-unset + Connect + Migrate + Cleanup (`pgPool`, `runsPGPool`, `newPGStore`), plus `migrateTolerant` duplicated in `internal/db` and `internal/secretstore/pg` | One `internal/db/dbtest` package with `Pool(t)` (stdlib `httptest` convention); the recording copy's own comment already admits it "mirrors" the others | −200 |
+| 5 | **APPLIED** `cb351ba9` | `ui/src/app/components/ui/switch.tsx` + `@radix-ui/react-switch` in `ui/package.json:29` | Both — the primitive has no importer anywhere in `src/` or `e2e/` | Nothing; it is the only unused dependency in the tree | −31, −1 dep |
+| 6 | **PART-APPLIED** `83883777` | `ui/src/app/components/wardyn/form-primitives.tsx:95 DomainPillList`; `new-run/wizard-types.ts:775 WorkspaceProfileOption` + `:776 workspaceProfileOptions`; `wardyn/copy.ts:69 SETUP_RESIDENCY_NOTE`, `:109 RISK_ATTRIBUTION` | Five dead exports — declaration is the only occurrence in `src/` and `e2e/` | Nothing. `RISK_ATTRIBUTION`/`SETUP_RESIDENCY_NOTE` are canon strings with no render site; confirm against the mock before deleting (mock-first UI law) | −60 |
+| 7 | **REJECTED** | `internal/identity/embedded/revocation.go:30 NewMemRevocationStore` | A test fixture shipped in a production file (no non-test caller) | Move `MemRevocationStore` into `embedded_test.go`, or into `identitytest` if the conformance suite needs it | −25 |
+| 8 | **APPLIED** `358f7ad8` | `internal/component/registry.go:59 Lookup` | The `export` — only `Resolve` (same file) calls it | Unexport to `lookup` | 0 |
+| 9 | **APPLIED** `358f7ad8` | `internal/store/pagination.go:120-137` (`ApprovalsByRunCreatorPager` doc) | The "PRODUCTION WIRING NOTE … that wiring is out of this lane's scope … until it lands" paragraph — stale: `cmd/wardynd/adapters.go:139` delegates it and `:143` asserts it | Delete the paragraph; the next reader currently believes a shipped path is unwired | −12 |
+| 10 | **APPLIED** `83883777` | `ui/.../corp-network-egress.tsx:46`, `demos/demo-screen.tsx:497`, `run-detail-ssh.tsx:199`, `run-detail/widget-registry.ts:188`, `new-run/run-warnings.ts:28,43`, `settings/harness-login-pane.tsx:202`, `setup/corp-network-proxy.tsx:53,68` | The `export` keyword on nine symbols used only inside their own file (no test imports them either) | Module-local `function`/`const`; shrinks each file's public surface with zero behavior change | 0 |
+| 11 | **APPLIED** `83883777` | `ui/src/app/components/screens/demos/demo-screen.tsx:252`, `screens/app-shell.tsx:540` | Two `TODO(stage-4): /settings` breadcrumbs | Nothing — `/settings` shipped (`App.tsx:327`); the TODOs are stale | −2 |
 
 ### Tier 2 — worth doing, needs a judgement call
 
@@ -68,6 +69,82 @@ Ranked by (confidence x lines removed x defect-risk removed) / risk-of-removal.
 | 25 | `internal/sidecar/sidecar.go:5` | Doc says "binaries" plural, names only `wardyn-scan`; actual importers are `cmd/wardyn-scan` and `cmd/wardyn-aws-sso` | One-word doc fix, not a cut — recorded so the next reader does not "discover" a dead package |
 | 26 | `internal/lifecycle/lifecycle.go:228 Tick` | Exported only so the same-package tests can drive one scan; `Run` (:201) is the only production caller | Unexport if `lifecycle_test.go` is in-package (it is). Trivial, bundle with #8 |
 
+### F4.2 outcomes — what the provenance check changed
+
+Every Tier-1 item below was researched with `git log -S <symbol>` before any deletion. Three
+came back different from how the audit read them.
+
+**#2 SweepTerminalSandboxes — DEFERRED, a design decision, not a cut.** Deleting is off the table:
+`git log` puts it in `26ae235b` (leased watchers / leader-elected rotator), written deliberately
+for the gap `THREAT-MODEL.md:1040` names — grep-dead is not purposeless. Wiring it is not the
+5 lines the audit estimated either. It calls `Store.ListRuns` (the WHOLE table, unpaged) and
+probes `Runner.Status` for every terminal run carrying a `SandboxRef`, so on a ticker its cost
+grows with run history forever, and — like the reaper beside it — it needs `reapTickLock`-style
+leader election or every replica sweeps the same runs at once. Owner call: boot-only (bounded,
+misses post-boot orphans), locked ticker with a bounded/paged query, or an admin route.
+
+**#3 secretmask.Evict — DEFERRED; the proposed fix was wrong and is now documented as such.**
+Calling `Evict` from `finalizeRunTail` would have created a leak, not closed one. Masking sites
+take their `Snapshot` lazily, at use time, and several read AFTER the run is terminal — most
+sharply `cmd/wardynd`'s `maskingRecorder`, which masks each audit event's `Data`/`Target` as it
+is recorded, finalize's own audit and any `teardown_error` included. An empty snapshot masks
+nothing (this layer fails OPEN by design), so evicting at the terminal transition unmasks
+exactly the events most likely to quote a credential. `358f7ad8` writes that ordering
+constraint into `Evict`'s doc so the next reader doesn't rediscover it in production. The
+underlying bound — a run's corpus lives as long as the process — is real and still open; it
+needs an eviction point after the last reader, which nothing currently identifies.
+
+**#4 pg test bootstrap — DEFERRED, and the audit's own sizing was wrong.** "40 files, 93 reads"
+counts every file that reads `WARDYN_TEST_PG`; the actual duplication is SIX bootstrap helpers
+(`internal/broker`, `cmd/wardynd`, `internal/store`, `internal/recording`, `internal/db`,
+`internal/secretstore/pg`), each with a different return shape (`*pgxpool.Pool`, `(*Store,
+*pgxpool.Pool, age.Identity)`, `(*Server, *pgxpool.Pool)`), so one `Pool(t)` does not absorb
+them. `internal/db`'s copy is in-package (`package db`), so a `db/dbtest` helper cycles unless
+that file moves to `package db_test` first. Real, worth doing, needs the live PG lane to verify
+— not an obvious win.
+
+**#6 — PART-APPLIED.** `DomainPillList`, `workspaceProfileOptions`/`WorkspaceProfileOption` and
+`SETUP_RESIDENCY_NOTE` are gone. Provenance says all three lost their callers to `ef49039d`
+(the 5-step wizard's retirement), and `SETUP_RESIDENCY_NOTE` is additionally superseded:
+`lib/integrations.ts`'s `RESIDENCY_META` covers all three of its keys plus three more, and it
+is what the Settings cards actually render.
+
+`RISK_ATTRIBUTION` stays — **DEFERRED, mock-first law.** It is not orphaned copy: `RiskBadge`
+renders in `profile-review.tsx`, so there IS a live risk-grade surface, and it simply never
+shows the "Graded by Wardyn's rules, not the model." attribution D8 asks for. Deleting the
+string would quietly settle an honesty question in the wrong direction. Owner call: render it
+next to the badge, or drop the requirement.
+
+The same commit found two neighbours the audit missed, both collateral of `ef49039d` and both
+dead in-file (not merely over-exported): `parseMissingSecret` and `useAddSecretFix`
+(`run-warnings.ts`), ~90 lines of the launch-error "add the missing secret and retry" wiring,
+whose own docs name the deleted `wizard.tsx` as a caller. Deleted. **Owner note:** that is a UX
+regression that already happened — the one-page New Run screen never grew the affordance back.
+Recorded here rather than rebuilt in an audit lane.
+
+Also cleared while in there: `demo-screen.tsx` and `runs-first-run.tsx` (x2) still linked to
+`/integrations`, so each click bounced through `App.tsx`'s compatibility redirect. They name
+`/settings` directly now — which makes **#23** purely a question about external bookmarks.
+
+**#7 NewMemRevocationStore — REJECTED, the finding is wrong.** It has no *production* caller,
+but `test/apie2e/harness_test.go:327` calls `embedded.NewMemRevocationStore()` from a DIFFERENT
+package. Symbols declared in `_test.go` files are visible only to that directory's own test
+binary, so moving it into `embedded_test.go` breaks the apie2e suite. It stays where it is.
+
+**#26 lifecycle.Tick — REJECTED, same class of error.** `lifecycle_test.go` is
+`package lifecycle_test` (external), so `Tick` cannot be unexported without breaking it. The
+audit assumed in-package and said so explicitly; it was wrong.
+
+### Tier 2 and 3 — all DEFERRED
+
+Untouched by F4.2, by design. Every Tier-2 entry is either a product decision (#12 AI advisor,
+#13 pluggability seams, #14 their conformance suites, #15 the broker's daemon-free coverage) or
+a multi-file refactor that wants its own lane with the live PG/e2e suites (#16 the `Pager`
+fallback, #17 proxy detectors, #18 the loopback predicate, #19 the tree-walk helpers, #20 the
+ENV.md both-directions drift + a `make ci` gate for it). Tier 3 is observation, not worklist —
+except #23, whose in-app half is now done (see #6 above).
+
+
 ## Checked and judged sound — do not re-audit
 
 Recorded so the next pass spends its budget elsewhere. Each of these looks like a candidate
@@ -91,7 +168,14 @@ and is not:
 
 ## Net
 
-Tier 1 alone: roughly **−750 lines and one npm dependency**, with two defect-risk fixes
-(#2 orphaned sandboxes, #3 unbounded mask registry) that are additions, not deletions.
-Tier 2 adds up to **−1,500 more** but three of its seven entries are product decisions
-(pluggability seams, AI advisor, broker test strategy), not code decisions.
+**F4.2 as landed: 22 files, +64 / −474 (−443 excluding the lockfile), one npm dependency,
+across four commits**
+(`2bf842bf`, `cb351ba9`, `83883777`, `358f7ad8`). Six Tier-1 items applied, one part-applied,
+two rejected as wrong findings, three deferred with a named decision behind each.
+
+The two "additions, not deletions" both survived contact with their own code and neither is an
+addition any more: #2 is a sizing question (unpaged `ListRuns` per tick + leader election), and
+#3's proposed call site turned out to be a live footgun that is now documented at the method.
+
+Tier 2 still holds roughly **−1,500 lines**, but three of its seven entries are product
+decisions (pluggability seams, AI advisor, broker test strategy), not code decisions.
