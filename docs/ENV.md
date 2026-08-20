@@ -305,4 +305,7 @@ allowlisted in the ratchet test: `WARDYN_TEST_BOOL`, `WARDYN_TEST_DUR`,
 `WARDYN_E2E_TASKS_DIR`, `WARDYN_E2E_WORK_ROOT`, `WARDYN_E2E_EXPECT_INJECT`,
 `WARDYN_TEST_K8S`, `WARDYN_TEST_K8S_AGENT_IMAGE` (the k8s conformance suite's
 gate + built-agent-image override, `test/conformance/conformance_k8s_test.go`
-— see `make test-conformance-k8s`).
+— see `make test-conformance-k8s`), `WARDYN_E2E_UI_ADDR` (the UI-sandbox
+gateway's second listener on the Playwright e2e backend, default `:8089`;
+`scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
+daemon itself enforces).
