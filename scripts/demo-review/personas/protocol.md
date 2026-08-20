@@ -15,6 +15,12 @@ persona is the audience, not an auditor.
 - An unshot video (transcript-only) is said plainly: "the visuals are not
   filmed yet — you are hearing the narration; judge the words and the flow of
   steps, and say what you EXPECT to need to see."
+- Series context, titles only: the viewer also gets the numbered TITLES of
+  every episode after the one being watched — the way a course syllabus would
+  show them — and NEVER their content. Feedback that amounts to "I wanted X"
+  when a later title plainly owns X is out of scope for this episode; judge
+  instead whether THIS episode hands off to it properly (does it say where X
+  lives, and does the promise match the title?).
 
 ## Think aloud as you watch, with timestamps
 
@@ -89,3 +95,7 @@ reaction — say it like a person, not like a linter.
 - 2026-08-20 (b): added the series-level review pass (order / coverage /
   duplication / arc / length / one-restructure) — round 1 reviewed videos only
   individually and shipped no whole-course judgment; owner directive.
+- 2026-08-20 (c): viewers now receive the TITLES (only) of later episodes —
+  round-1 feedback repeatedly demanded content a scheduled later episode
+  already owned, which reads as a gap when it is actually a handoff; owner
+  directive.
