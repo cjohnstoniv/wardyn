@@ -626,3 +626,81 @@ func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
 		t.Fatalf("admin denied: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// ─── D4: what a member sees on the secrets list ───────────────────────────────
+
+// listSecretNames reads GET /secrets as the given session.
+func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
+	t.Helper()
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", sess, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /secrets = %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Names []string `json:"names"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode names: %v", err)
+	}
+	return body.Names
+}
+
+// TestListSecrets_MemberNarrowing: the listing is the reading half of the same
+// grant that bounds an inline policy, so the picker cannot offer a name the
+// launch gate would drop.
+func TestListSecrets_MemberNarrowing(t *testing.T) {
+	newSrv := func(t *testing.T, grants []types.CapabilityGrant, enf map[string]bool) *Server {
+		t.Helper()
+		h := newHarness(t)
+		h.srv.cfg.OIDC = &oidc.Authenticator{}
+		h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
+			"anthropic-api-key": []byte("sk-ant"),
+			"prod-db-password":  []byte("hunter2"),
+		}}
+		h.srv.cfg.Store = &capStore{grants: grants, enf: enf}
+		h.srv.router = h.srv.routes()
+		return h.srv
+	}
+	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	admin := ssoSession(t, "sub-admin-secrets", "admin@corp.example", oidc.RoleAdmin)
+
+	t.Run("no grants and no switch: the whole list, exactly as 0.5 returned it", func(t *testing.T) {
+		got := listSecretNames(t, newSrv(t, nil, nil), member)
+		slices.Sort(got)
+		if !slices.Equal(got, []string{"anthropic-api-key", "prod-db-password"}) {
+			t.Fatalf("names = %v, want both", got)
+		}
+	})
+
+	t.Run("switch on: only what the member holds", func(t *testing.T) {
+		srv := newSrv(t,
+			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capSecret, "anthropic-api-key", types.CapabilityAllow)},
+			map[string]bool{capSecret: true})
+		if got := listSecretNames(t, srv, member); !slices.Equal(got, []string{"anthropic-api-key"}) {
+			t.Fatalf("names = %v, want only the granted one", got)
+		}
+		// The admin's own listing is untouched: they are the tier that writes
+		// the grants, and a secrets page that hid rows from them would be
+		// unusable.
+		adminNames := listSecretNames(t, srv, admin)
+		slices.Sort(adminNames)
+		if !slices.Equal(adminNames, []string{"anthropic-api-key", "prod-db-password"}) {
+			t.Fatalf("admin names = %v, want the full list", adminNames)
+		}
+	})
+
+	t.Run("switch on with nothing granted: an empty list, never null", func(t *testing.T) {
+		if got := listSecretNames(t, newSrv(t, nil, map[string]bool{capSecret: true}), member); len(got) != 0 {
+			t.Fatalf("names = %v, want none", got)
+		}
+	})
+
+	t.Run("a deny hides one name with the switch off", func(t *testing.T) {
+		srv := newSrv(t,
+			[]types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capSecret, "prod-db-password", types.CapabilityDeny)},
+			nil)
+		if got := listSecretNames(t, srv, member); !slices.Equal(got, []string{"anthropic-api-key"}) {
+			t.Fatalf("names = %v, want the denied one hidden and the rest kept", got)
+		}
+	})
+}

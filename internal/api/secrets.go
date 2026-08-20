@@ -174,13 +174,32 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 // wardyn-session-key) are EXCLUDED from the listing: they back identity/session
 // handling and are not user-managed, so surfacing their names is an unnecessary
 // leak (and they are already non-writable/non-deletable via the API).
+//
+// A MEMBER sees only the names their own `secret` grants cover once that kind
+// is enforced — the reading half of the same capability that bounds which
+// secrets their inline policy may reference (narrowMemberInlinePolicy), so the
+// picker cannot offer a name the launch gate will drop. Narrowed HERE and not
+// in listUserSecretNames, which also feeds the setup checklist and
+// presentSecretNames: those compute whether the DEPLOYMENT is provisioned, and
+// a member's own grants must not make an operator's secret read as missing.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	names, err := s.listUserSecretNames(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"names": names})
+	kept := names[:0:0]
+	for _, n := range names {
+		ok, cerr := s.capSeamAllowed(r.Context(), capSecret, n)
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+			return
+		}
+		if ok {
+			kept = append(kept, n)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"names": kept})
 }
 
 // listUserSecretNames returns the present secret NAMES (never values) with the
