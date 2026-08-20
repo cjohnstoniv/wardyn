@@ -279,7 +279,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// base64/hex/narrated secrets are not caught); a secret split across two writes
 	// IS now masked (liveMaskWriter retains a cross-write tail). (3) The cast is buffered in
 	// memory for the session's lifetime and written once at close, which is fine
-	// for human-length interactive sessions but is not a streaming sink.
+	// for human-length interactive sessions but is not a streaming sink — past
+	// maxSessionCastBytes the recording keeps its head and drops the rest, and
+	// says so in the session.recording audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
@@ -505,6 +507,44 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // wardynd until the operator pastes it back, which is strictly AFTER the bytes
 // would have landed in the cast. The gate lives here, not at the call site, so
 // a future second caller cannot miss it.
+// maxSessionCastBytes bounds the asciicast a LIVE attach buffers in the daemon's
+// heap. The cast is held in memory for the whole session and written once at
+// close, so without a bound a single long, chatty terminal grows unopposed
+// inside a control plane deployed with a 512Mi limit — and, worse, the store
+// then REJECTED the result wholesale at its own 64 MiB cap
+// (internal/recording/pgstore.go), so the session's entire evidence was thrown
+// away at exactly the moment it was meant to be persisted.
+//
+// Well under the store cap, so a recorded session is never lost to that reject.
+//
+// ponytail: past the cap the recording keeps its HEAD and drops the rest —
+// smallest thing that keeps a valid, replayable artifact plus an honest
+// truncated:true in the session.recording audit. A ring buffer that keeps the
+// TAIL instead is the upgrade path if operators ask for the end of long
+// sessions; a streaming sink is the one after that.
+const maxSessionCastBytes = 8 << 20
+
+// capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
+// complete JSON line per Write, so refusing a write WHOLE (never partially)
+// leaves the buffer line-aligned and the cast well-formed. A dropped write is
+// reported as accepted: the recording is best-effort provenance and must never
+// break the live terminal.
+//
+// Not independently locked: every write reaches it through liveMaskWriter.Write
+// and every read through finishRecording, both under that writer's mutex.
+type capBuffer struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (b *capBuffer) Write(p []byte) (int, error) {
+	if b.truncated || b.buf.Len()+len(p) > maxSessionCastBytes {
+		b.truncated = true
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
 func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
 	noop := func(context.Context, types.ActorType, string) {}
 	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
@@ -512,7 +552,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	}
 	runID := run.ID
 
-	buf := &bytes.Buffer{}
+	buf := &capBuffer{}
 	cast := recording.NewCastWriter(buf, int(opts.Cols), int(opts.Rows), s.cfg.Now().UTC())
 
 	// Mask the OUTPUT before it lands in the cast, RE-SNAPSHOTTING the registry on
@@ -536,7 +576,8 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		mw.flushLocked()
 		had := cast.HadOutput()
 		// Copy under the lock; the pump may keep appending after we release it.
-		snap := append([]byte(nil), buf.Bytes()...)
+		snap := append([]byte(nil), buf.buf.Bytes()...)
+		truncated := buf.truncated
 		mw.mu.Unlock()
 
 		// Skip persisting a header-only (no output) cast: an attach that produced
@@ -549,6 +590,11 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		err := s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), sessionID, bytes.NewReader(snap))
 		outcome := "success"
 		data := map[string]any{"session": sessionID, "key": key, "bytes": len(snap)}
+		if truncated {
+			// Say so in the trail rather than let a short cast pass for a whole one.
+			data["truncated"] = true
+			data["limit_bytes"] = maxSessionCastBytes
+		}
 		if err != nil {
 			outcome = "failure"
 			data["error"] = err.Error()
