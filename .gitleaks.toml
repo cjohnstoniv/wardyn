@@ -19,6 +19,11 @@ regexes = [
     # examples (curl-auth-header rule); it is the documented default, not a
     # secret.
     '''demo-admin-token''',
+    # The UI-sandbox e2e's canary string: it is put in an Authorization header
+    # (curl-auth-header rule) precisely so the test can assert the gateway
+    # STRIPS it before the request reaches the sandbox. Its whole job is to be
+    # a value that must never come back — never a credential.
+    '''MUST-NOT-LEAK''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped

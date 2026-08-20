@@ -35,3 +35,9 @@ a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
 # "-----BEGIN OPENSSH PRIVATE KEY-----" armor line — a hint string, no key
 # material (same class as the test-fixture entries above).
 8f553056d6f614c06aa568975fbdb86622a7e462:ui/src/app/components/screens/settings/connection-cards.tsx:private-key:509
+
+# A LOG LINE quoted in the k8s day-2 runbook: wardynd's ephemeral-age-identity
+# warning prints the PUBLIC recipient (age1…, not AGE-SECRET-KEY-…), which is
+# public by construction — that is what a recipient is for. Kept verbatim so an
+# operator can match the message they actually see.
+fb3117ab9f1a4b4f2c037ce22a29c38ab195d1e6:docs/OPERATIONS.md:generic-api-key:1377
