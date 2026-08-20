@@ -91,12 +91,12 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", "", false
 	}
 
-	// Item 5 + HIGH-3 review fix: a member may not bring their own sandbox
-	// image OR devcontainer repo (both are operator surface: attacker repo
-	// code executed by the image builder either way) — checked before the
-	// XOR/builder validation below so a member's request is refused with 403,
-	// never a 400 that implies the shape alone is the problem.
-	if s.denyMemberCustomImage(w, r, req) {
+	// Item 5 + HIGH-3 review fix, plus the 0.6 image/workspace capabilities:
+	// the request-level fields a member does not get to choose freely (see
+	// denyMemberRequest) — checked before the XOR/builder validation below so a
+	// member's request is refused with 403, never a 400 that implies the shape
+	// alone is the problem.
+	if s.denyMemberRequest(w, r, req) {
 		return req, "", "", false
 	}
 
@@ -195,32 +195,77 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	return req, reqCC, warning, true
 }
 
-// denyMemberCustomImage refuses a member's (role != admin) explicit custom
-// sandbox image with a 403 — bring-your-own-image is operator surface (item
-// 5, broadened by the HIGH-3 review fix): the inline_policy clamp
-// (resolveRunPolicy) covers POLICY fields, but req.Image and
-// req.DevcontainerRepo are request-level fields the clamp never touches, so
-// they need their own gate. Both name a build path that hands attacker-
-// reachable repo/image content to the image builder — a member's
-// devcontainer_repo runs exactly as much attacker-controlled build config as
-// a raw image would (the devcontainer.json + Dockerfile/setup steps it
-// points at), so gating req.Image alone left a same-shaped hole open. Reports
-// true (having written the 403 + an authz.denied audit event) when denied;
-// callers must return immediately.
+// denyMemberRequest is the REQUEST-LEVEL half of a member's launch gate: the
+// fields the inline_policy clamp (resolveRunPolicy) never touches because they
+// are not policy at all. Reports true — having written the 403 and an
+// authz.denied audit event — when the run must not proceed; callers must return
+// immediately. An operator is exempt in one line at the top, so nothing below
+// ever costs them a store read.
+//
+// Three fields, three different answers:
+//
+//   - devcontainer_repo is UNCONDITIONALLY operator-only, and is not a
+//     capability kind at all. It hands attacker-authored build configuration
+//     (the devcontainer.json plus whatever Dockerfile/setup steps it points at)
+//     to the image builder, which is not a power to hand out one row at a time.
+//   - image WIDENS: 0.5 refused every member outright, and a grant of the exact
+//     ref is what makes one nameable (capGranted — a grant AND the switch, see
+//     its own comment). Same build path as devcontainer_repo, but a pinned ref
+//     an admin wrote down is a bounded thing; a repo whose contents change
+//     under them is not.
+//   - workspace NARROWS: launching against an onboarded workspace is something
+//     every member could already do, so it stays allowed until an admin
+//     enforces the kind. This gates req.WorkspaceID, the member's OWN choice —
+//     never the workspace a stored policy or a scan linkage brings in, which is
+//     admin-authored (the doctrine in OPERATIONS §Multi-user).
 //
 // A workspace's own base_image (seedRequestWorkspace, called AFTER this) is
-// deliberately NOT gated here: it is operator-authored config (the workspace
-// was onboarded through an operator-only route), never a member's own
-// free-text choice, and seedRequestWorkspace only ever sets req.Image when
-// the caller left it empty — so this check, run BEFORE that seeding, can
-// never catch it. Workspaces have no equivalent devcontainer_repo seed at all.
-func (s *Server) denyMemberCustomImage(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
-	if (req.Image == "" && req.DevcontainerRepo == "") || s.isOperator(r.Context()) {
+// deliberately NOT gated here: it is operator-authored config (the workspace was
+// onboarded through an operator-only route), never a member's own free-text
+// choice, and seedRequestWorkspace only ever sets req.Image when the caller left
+// it empty — so this check, run BEFORE that seeding, can never catch it.
+// Workspaces have no equivalent devcontainer_repo seed at all.
+func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
+	if s.isOperator(r.Context()) {
 		return false
 	}
-	writeError(w, http.StatusForbidden, "a custom sandbox image or devcontainer repo (image / devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
+	if req.DevcontainerRepo != "" {
+		return s.denyMemberField(w, r, "runs.image", "byoi_member",
+			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
+	}
+	if req.Image != "" {
+		granted, err := s.capGranted(r.Context(), capImage, req.Image)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+			return true
+		}
+		if !granted {
+			return s.denyMemberField(w, r, "runs.image", "byoi_member",
+				"image "+req.Image+" is not granted to you — ask an admin to grant the exact image ref, "+
+					"or launch with the agent's convention image or an onboarded workspace's base image")
+		}
+	}
+	if req.WorkspaceID != nil {
+		allowed, err := s.capSeamAllowed(r.Context(), capWorkspace, req.WorkspaceID.String())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+			return true
+		}
+		if !allowed {
+			return s.denyMemberField(w, r, "runs.workspace", "capability_"+capWorkspace,
+				"you are not granted workspace "+req.WorkspaceID.String()+" — ask an admin for access, or launch without a workspace")
+		}
+	}
+	return false
+}
+
+// denyMemberField writes one member refusal — the 403 and its audit row — and
+// returns true so a caller can `return s.denyMemberField(...)`. One helper so a
+// new gate cannot ship the error without the audit event.
+func (s *Server) denyMemberField(w http.ResponseWriter, r *http.Request, target, reason, msg string) bool {
+	writeError(w, http.StatusForbidden, msg)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", "runs.image", "denied", mustJSON(map[string]any{"reason": "byoi_member"})))
+		"authz.denied", target, "denied", mustJSON(map[string]any{"reason": reason})))
 	return true
 }
 

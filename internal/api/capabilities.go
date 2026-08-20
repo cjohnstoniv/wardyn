@@ -122,22 +122,13 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
 
-	users, groups, _ := capabilitySubjects(ctx)
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
-	if err != nil {
-		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
-	}
-	allowed := false
-	for _, g := range grants {
-		if g.Capability != kind || !capValueMatches(kind, g.Value, value) {
-			continue
-		}
-		if g.Effect == types.CapabilityDeny {
-			return false, nil // scan no further: deny is final
-		}
-		allowed = true
-	}
-	if allowed {
+	deny, allow, err := s.capScan(ctx, kind, value)
+	switch {
+	case err != nil:
+		return false, err
+	case deny:
+		return false, nil
+	case allow:
 		return true, nil
 	}
 
@@ -146,6 +137,66 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 		return false, err
 	}
 	return !enforced, nil
+}
+
+// capGranted answers the WIDENING question: does this caller hold an explicit
+// grant of `kind` at `value`? It is not capAllowed with the sign flipped — the
+// two differ on the one case that decides an upgrade's behavior:
+//
+//   - narrowing (capAllowed): an unenforced kind is ALLOWED, because 0.5
+//     already let a member do it.
+//   - widening (capGranted): an unenforced kind is REFUSED, because 0.5 already
+//     refused it.
+//
+// Same rule — "an upgrade with no configuration changes nothing" — landing on
+// opposite defaults because the two kinds start from opposite postures. `image`
+// is the only widening kind today, and the console's own copy states exactly
+// this contract (permissions-copy.ts KIND.image: unenforced means members
+// cannot name an image at all; enforced means a granted ref becomes nameable).
+//
+// Deny still beats allow. A build with no store holds no rows, so it refuses,
+// which is again 0.5.
+func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, error) {
+	if !validCapabilityKind(kind) {
+		return false, fmt.Errorf("api: unknown capability kind %q", kind)
+	}
+	if s.isOperator(ctx) {
+		return true, nil
+	}
+	if s.cfg.Store == nil {
+		return false, nil
+	}
+	enforced, err := s.capEnforced(ctx, kind)
+	if err != nil || !enforced {
+		return false, err
+	}
+	deny, allow, err := s.capScan(ctx, kind, value)
+	if err != nil {
+		return false, err
+	}
+	return allow && !deny, nil
+}
+
+// capScan walks the caller's own grants for one kind/value and reports whether
+// a DENY and/or an ALLOW matched. The single place a stored row is compared
+// against a request, so the narrowing and widening answers can never disagree
+// about what a row covers.
+func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
+	users, groups, _ := capabilitySubjects(ctx)
+	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
+	if err != nil {
+		return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+	}
+	for _, g := range grants {
+		if g.Capability != kind || !capValueMatches(kind, g.Value, value) {
+			continue
+		}
+		if g.Effect == types.CapabilityDeny {
+			return true, false, nil // scan no further: deny is final
+		}
+		allow = true
+	}
+	return false, allow, nil
 }
 
 // capSeamAllowed is capAllowed AT AN ENFORCEMENT SEAM — same answer, plus the

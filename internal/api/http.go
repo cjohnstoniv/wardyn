@@ -347,7 +347,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// only that they are not an admin.
 			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberCustomImage) —
+			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.

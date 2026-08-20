@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -441,5 +442,187 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	}
 	if reasons := auditReasons(t, h.srv, "authz.denied"); len(reasons) != 0 {
 		t.Fatalf("dry run wrote authz.denied events: %v", reasons)
+	}
+}
+
+// ─── D3: the request fields a member does not freely choose ───────────────────
+
+// denyRequest runs the request-level gate directly and returns whether it
+// refused, plus the status it wrote. The HTTP wiring on both doors (create and
+// preflight) is already pinned by TestBYOI_MemberDenied403; what varies here is
+// the capability state, not the route.
+func denyRequest(t *testing.T, srv *Server, req createRunRequest) (bool, int) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	denied := srv.denyMemberRequest(w, memberRequest(t), req)
+	return denied, w.Code
+}
+
+// TestDenyMemberRequest_ImageWidens: 0.5 refused every member's image outright,
+// so an unenforced kind must go on refusing — the mirror of every narrowing
+// kind, and the reason capGranted is not capAllowed.
+func TestDenyMemberRequest_ImageWidens(t *testing.T) {
+	const ref = "ghcr.io/acme/agent:1.4.2"
+	allowRef := grant(types.CapabilitySubjectUser, capSub, capImage, ref, types.CapabilityAllow)
+
+	for _, tc := range []struct {
+		name       string
+		grants     []types.CapabilityGrant
+		enf        map[string]bool
+		req        createRunRequest
+		wantDenied bool
+	}{
+		{
+			name: "no grants and no switch: refused, exactly as 0.5 did",
+			req:  createRunRequest{Image: ref}, wantDenied: true,
+		},
+		{
+			name: "switch on but nothing granted: still refused",
+			enf:  map[string]bool{capImage: true},
+			req:  createRunRequest{Image: ref}, wantDenied: true,
+		},
+		{
+			// The half that would be wrong if the widening kind reused
+			// capAllowed: an unenforced kind reads as "allowed" there.
+			name:   "granted but the switch is OFF: refused",
+			grants: []types.CapabilityGrant{allowRef},
+			req:    createRunRequest{Image: ref}, wantDenied: true,
+		},
+		{
+			name:   "granted and enforced: the member may name it",
+			grants: []types.CapabilityGrant{allowRef},
+			enf:    map[string]bool{capImage: true},
+			req:    createRunRequest{Image: ref}, wantDenied: false,
+		},
+		{
+			name:   "a DIFFERENT ref granted: refused (exact refs, no near miss)",
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capImage, "ghcr.io/acme/agent:1.4.1", types.CapabilityAllow)},
+			enf:    map[string]bool{capImage: true},
+			req:    createRunRequest{Image: ref}, wantDenied: true,
+		},
+		{
+			name: "a deny beats the * grant",
+			grants: []types.CapabilityGrant{
+				grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow),
+				grant(types.CapabilitySubjectUser, capSub, capImage, ref, types.CapabilityDeny),
+			},
+			enf: map[string]bool{capImage: true},
+			req: createRunRequest{Image: ref}, wantDenied: true,
+		},
+		{
+			// devcontainer_repo is not a capability kind: it executes
+			// attacker-authored build config, so no row makes it nameable.
+			name:   "devcontainer_repo stays refused under a * image grant",
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow)},
+			enf:    map[string]bool{capImage: true},
+			req:    createRunRequest{DevcontainerRepo: "org/repo"}, wantDenied: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.srv.cfg.Store = &capStore{grants: tc.grants, enf: tc.enf}
+			denied, code := denyRequest(t, h.srv, tc.req)
+			if denied != tc.wantDenied {
+				t.Fatalf("denied = %v, want %v (status %d)", denied, tc.wantDenied, code)
+			}
+			if tc.wantDenied {
+				if code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403", code)
+				}
+				if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"byoi_member"}) {
+					t.Fatalf("authz.denied reasons = %v, want [byoi_member] (the reason OPERATIONS already documents)", reasons)
+				}
+			}
+		})
+	}
+}
+
+// TestDenyMemberRequest_WorkspaceNarrows: launching against an onboarded
+// workspace is something every member could already do, so it stays allowed
+// until an admin enforces the kind.
+func TestDenyMemberRequest_WorkspaceNarrows(t *testing.T) {
+	ws := uuid.New()
+	req := createRunRequest{Agent: "claude-code", WorkspaceID: &ws}
+
+	for _, tc := range []struct {
+		name       string
+		grants     []types.CapabilityGrant
+		enf        map[string]bool
+		wantDenied bool
+	}{
+		{name: "no grants and no switch: launched, exactly as 0.5 did"},
+		{
+			name: "switch on, nothing granted: refused",
+			enf:  map[string]bool{capWorkspace: true}, wantDenied: true,
+		},
+		{
+			name:   "switch on, this workspace granted: launched",
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capWorkspace, ws.String(), types.CapabilityAllow)},
+			enf:    map[string]bool{capWorkspace: true},
+		},
+		{
+			name:   "switch on, a different workspace granted: refused",
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capWorkspace, uuid.New().String(), types.CapabilityAllow)},
+			enf:    map[string]bool{capWorkspace: true}, wantDenied: true,
+		},
+		{
+			name:       "a deny bites with the switch off",
+			grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capWorkspace, ws.String(), types.CapabilityDeny)},
+			wantDenied: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.srv.cfg.Store = &capStore{grants: tc.grants, enf: tc.enf}
+			denied, code := denyRequest(t, h.srv, req)
+			if denied != tc.wantDenied {
+				t.Fatalf("denied = %v, want %v (status %d)", denied, tc.wantDenied, code)
+			}
+			if !tc.wantDenied {
+				return
+			}
+			if code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", code)
+			}
+			if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_workspace"}) {
+				t.Fatalf("authz.denied reasons = %v, want [capability_workspace]", reasons)
+			}
+		})
+	}
+}
+
+// TestDenyMemberRequest_WorkspaceRefusedOnBothDoors: preflight must refuse what
+// launch would, or Review previews a checklist for a run that cannot start.
+func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.Store = &capStore{Store: newAuthzStore(), enf: map[string]bool{capWorkspace: true}}
+	h.srv.router = h.srv.routes()
+	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	body := `{"agent":"claude-code","workspace_id":"` + uuid.New().String() + `"}`
+
+	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
+		t.Run(path, func(t *testing.T) {
+			w := doSSO(t, h.srv, http.MethodPost, path, member, body)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestDenyMemberRequest_OperatorsAreExempt: the tier that writes the grants
+// launches whatever it likes, and pays no store read to find out.
+func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
+	ws := uuid.New()
+	h := newHarness(t)
+	// A store that ERRORS on every capability read: an operator must never
+	// reach it, so a 500 here would prove the exemption is not first.
+	h.srv.cfg.Store = &capStore{err: errors.New("boom"), enf: map[string]bool{capWorkspace: true, capImage: true}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
+		WithContext(withOIDCGroups(operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), nil))
+	if denied := h.srv.denyMemberRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
+		t.Fatalf("admin denied: %d %s", w.Code, w.Body.String())
 	}
 }
