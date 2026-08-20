@@ -826,7 +826,7 @@ in **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`,
 `wardyn site-config get|apply`) — the corporate upstream proxy and the list of
 outbound redirects every run's egress inherits. Unconfigured is a valid,
 common state: a host with direct internet access needs none of this. Because
-it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
+it lives in Postgres, `make reset` / `make reset-all` take it with the volume; `wardyn
 site-config get > corp-baseline.json` before a reset and `wardyn site-config
 apply corp-baseline.json` after is the round-trip — the document carries
 secret **names**, never values, so it's safe to keep beside the repo. Because
