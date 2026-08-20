@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -78,9 +79,25 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read site config: %w", err)
 			}
+			// Strict decode, same shape as decodeSpecStrict in policy.go and as
+			// the server's own decodeStrict. `apply` REPLACES the whole document,
+			// so a key a non-strict decode drops is not a no-op: the setting the
+			// operator meant to write is absent from what we re-marshal, and the
+			// stored one is deleted. The server can never catch the typo — it
+			// only ever sees the fields that survived this decode.
 			var cfg types.SiteConfig
-			if err := json.Unmarshal(raw, &cfg); err != nil {
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&cfg); err != nil {
 				return fmt.Errorf("parse site config JSON: %w", err)
+			}
+			// PutSiteConfig strips Integrations before the request (the server
+			// 400s on a non-empty one and carries the STORED rows forward
+			// instead), so a captured document's integrations are neither sent
+			// nor restored. Say so — silence here reads as a restore that
+			// happened.
+			if n := len(cfg.Integrations); n > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d integration(s) in this file were not applied — integrations are managed through their own endpoints (`/api/v1/integrations`, or Settings), never this document; the stored ones are left as they are\n", n)
 			}
 			out, dangling, err := client().PutSiteConfig(cmd.Context(), cfg)
 			if err != nil {

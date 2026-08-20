@@ -949,12 +949,22 @@ client that `get`s a config saved before `integrations` existed, then `apply`s
 it back unmodified (the exact round-trip described at the top of this
 section), would otherwise silently delete every stored integration.
 
-The practical edge: `wardyn site-config apply` does not strip `integrations`
-from the file it reads (`cmd/wardyn/siteconfig.go`), so once any are stored, a
-fresh `wardyn site-config get > corp-baseline.json` captures them too — drop
-the `integrations` key from that file before `apply`, or the request 400s.
-Manage integrations themselves through their own routes (`GET /api/v1/integrations`,
-`PUT`/`DELETE /api/v1/integrations/{id}`), never through this document.
+The practical edge: once any integrations are stored, a fresh `wardyn
+site-config get > corp-baseline.json` captures them too, and the client strips
+them back out on the way in (`PutSiteConfig`, `pkg/client/families.go`) so the
+`apply` half of the round-trip does not 400 on its own capture. That strip is
+what keeps the recovery flow working, but it also means **`apply` never
+restores an integration** — the ones in the file are dropped, and the stored
+ones are carried forward untouched. `wardyn site-config apply` prints a warning
+naming how many it dropped, so a restore that did not happen does not read as
+one. Manage integrations themselves through their own routes (`GET
+/api/v1/integrations`, `PUT`/`DELETE /api/v1/integrations/{id}`), never through
+this document.
+
+`apply` also decodes the file strictly (`DisallowUnknownFields`, the same
+validator the server runs): because this is a whole-document replace, a typo'd
+key is not an ignored line — it would leave the real setting out of the body and
+delete it. A misspelled field fails on the host, before anything is sent.
 
 ### Testing it: two probes, not a courtesy button
 
