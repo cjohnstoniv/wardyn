@@ -23,6 +23,32 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 > below) to make wardynd create/manage sandboxes as pods in THIS cluster
 > instead (`internal/runner/k8s`, a `-tags k8s` build).
 
+## Quickstart
+
+`make kind-quickstart` runs [`deploy/kind/quickstart.sh`](../../kind/quickstart.sh):
+one command, a throwaway [kind](https://kind.sigs.k8s.io/) cluster, and a real
+install of this chart with the Kubernetes runner substrate ON (sandboxes are
+pods in that cluster). It builds `wardynd`/`wardyn-proxy` locally, `kind
+load`s them, installs Calico pinned to exactly what CI's `conformance-k8s`
+job pins (the substrate refuses to boot on a CNI that doesn't enforce
+NetworkPolicy — this script never works around that refusal), and prints the
+URL, admin token, and pod list once `/healthz` answers through the published
+NodePort:
+
+```
+$ make kind-quickstart
+...
+Wardyn is up.
+
+  URL:    http://127.0.0.1:8080
+  Token:  <printed>
+  SSH:    ssh -p 2222 <run-id>@127.0.0.1   (docs/SSH.md)
+```
+
+`make kind-down` deletes the cluster. It is demo-grade, not a production
+recipe (single-pod Postgres, no PVC, inline admin token) — read on for a real
+install.
+
 ## What it renders
 
 `helm install wardyn ./deploy/helm/wardyn` (plus the required auth flag from
