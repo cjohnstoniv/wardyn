@@ -213,8 +213,12 @@ describe("ConnectSSHCard — UI apps lane", () => {
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    expect(screen.getByText(UI_APPS_LANE.off)).toBeInTheDocument();
-    expect(screen.getByText(/WARDYN_UI_SANDBOX_LISTEN/)).toBeInTheDocument();
+    // The env var renders in <Mono> (mock visual rule §6), so the frozen
+    // string spans several nodes — the paragraph's text content still has to
+    // byte-match the canonical table.
+    const off = screen.getByText(/Off on this deployment\. It relays/);
+    expect(off.textContent).toBe(UI_APPS_LANE.off);
+    expect(screen.getByText("WARDYN_UI_SANDBOX_LISTEN")).toBeInTheDocument();
     // No CTA when the gateway is off.
     expect(screen.queryByRole("button", { name: /^Open /i })).toBeNull();
   });
@@ -224,7 +228,9 @@ describe("ConnectSSHCard — UI apps lane", () => {
     listKeysMock.mockResolvedValue([]);
     renderCard({ ui_apps: [] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    expect(screen.getByText(UI_APPS_LANE.noApps)).toBeInTheDocument();
+    const noApps = screen.getByText(/On for this deployment/);
+    expect(noApps.textContent).toBe(UI_APPS_LANE.noApps);
+    expect(screen.getByText("ui_apps")).toBeInTheDocument(); // §6: policy field in Mono
     expect(screen.queryByRole("button", { name: /^Open /i })).toBeNull();
   });
 
@@ -266,6 +272,35 @@ describe("ConnectSSHCard — UI apps lane", () => {
     openSpy.mockRestore();
   });
 
+  it("substitutes EVERY placeholder, including the {run} host-mode templates carry twice", async () => {
+    healthMock.mockResolvedValue({
+      ui_sandbox: {
+        enabled: true,
+        // WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (host mode) — {run} in the host AND
+        // the query. A single String.replace fills only the host, leaving
+        // `?run={run}` literal for uuid.Parse to reject on the server.
+        enter_url_template:
+          "https://run-{run}.ui.example.com/__wardyn/enter?run={run}&app={app}&ticket={ticket}",
+      },
+    });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockResolvedValue("tkt_abc123");
+    const openSpy = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith(
+        `https://run-${baseRun.id}.ui.example.com/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
+        "_blank",
+        "noopener",
+      ),
+    );
+    expect(openSpy.mock.calls[0][0]).not.toContain("{run}");
+    openSpy.mockRestore();
+  });
+
   it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {
     healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
@@ -277,7 +312,11 @@ describe("ConnectSSHCard — UI apps lane", () => {
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
     await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
-    expect(screen.getByText(UI_APPS_LANE.errorLauncher("vscode"))).toBeInTheDocument();
+    const launcher = screen.getByText(/This image has no/);
+    expect(launcher.textContent).toBe(UI_APPS_LANE.errorLauncher("vscode"));
+    // §6: the launcher path and the image directory render in Mono.
+    expect(screen.getByText("/usr/local/bin/wardyn-ui-vscode")).toBeInTheDocument();
+    expect(screen.getByText("deploy/images/vscode/")).toBeInTheDocument();
     expect(
       screen.getByText("no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found"),
     ).toBeInTheDocument();

@@ -118,10 +118,16 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     setOpeningApp(app.name);
     try {
       const ticket = await runsApi.attachTicket(run.id);
-      const url = (uiSandbox?.enter_url_template ?? "")
-        .replace("{run}", encodeURIComponent(run.id))
-        .replace("{app}", encodeURIComponent(app.name))
-        .replace("{ticket}", encodeURIComponent(ticket));
+      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) puts {run} in the HOST
+      // *and* the query — "https://run-{run}.ui.example.com/__wardyn/enter?run=
+      // {run}&app={app}&ticket={ticket}" — so a single String.replace fills the
+      // host and leaves `?run={run}` literal, which uuid.Parse rejects on every
+      // Open. split/join replaces every occurrence (replaceAll is ES2021; this
+      // tsconfig's lib is ES2020).
+      const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
+        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+        uiSandbox?.enter_url_template ?? "",
+      );
       const win = window.open(url, "_blank", "noopener");
       if (!win) {
         setAppError({ app: app.name, message: UI_APPS_LANE.errorPopupBlocked });
@@ -174,10 +180,14 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-[0.75rem] font-medium text-foreground">{UI_APPS_LANE.title}</p>
         {!uiSandboxOn && (
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.off}</p>
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
+          </p>
         )}
         {uiSandboxOn && uiApps.length === 0 && (
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noApps}</p>
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.noApps, "ui_apps")}
+          </p>
         )}
         {uiSandboxOn && uiApps.length > 0 && (
           <>
@@ -204,7 +214,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
                     </p>
                     {appError.message.startsWith(UI_APPS_LAUNCHER_MISSING_PREFIX) && (
                       <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-                        {UI_APPS_LANE.errorLauncher(app.name)}
+                        {monoTokens(
+                          UI_APPS_LANE.errorLauncher(app.name),
+                          `/usr/local/bin/wardyn-ui-${app.name}`,
+                          "deploy/images/vscode/",
+                        )}
                       </p>
                     )}
                     <p className="mt-1.5 font-mono text-[0.7188rem] leading-relaxed text-muted-foreground">
@@ -278,6 +292,35 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       )}
     </SectionCard>
   );
+}
+
+// monoTokens renders one frozen copy string with its env-var / policy-field /
+// file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
+// SSH lane right above, which wraps WARDYN_SSH_LISTEN the same way). The
+// strings stay whole and frozen in copy.ts — this only splits them at render,
+// so the rendered text content still byte-matches the canonical table.
+function monoTokens(text: string, ...tokens: string[]): (string | React.ReactElement)[] {
+  let key = 0;
+  let parts: (string | React.ReactElement)[] = [text];
+  for (const token of tokens) {
+    parts = parts.flatMap((part) =>
+      typeof part !== "string"
+        ? [part]
+        : part
+            .split(token)
+            .flatMap((seg, i) =>
+              i === 0
+                ? [seg]
+                : [
+                    <Mono key={`t${key++}`} className="text-foreground">
+                      {token}
+                    </Mono>,
+                    seg,
+                  ],
+            ),
+    );
+  }
+  return parts;
 }
 
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)
