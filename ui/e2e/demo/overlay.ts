@@ -224,6 +224,21 @@ export async function chapter(page: Page, title: string, sub: string): Promise<v
   await page.waitForTimeout(400);
 }
 
+/**
+ * Scroll the target to viewport CENTER before pointing at it. The caption bar
+ * owns the bottom ~160px, so a bottom-third target "in view" is exactly under
+ * the bar while being talked about — series ruling S2 (persona round 1: four
+ * of V01's five payoffs were covered). spotlight()'s own scrollIntoViewIfNeeded
+ * is NOT enough: it leaves bottom-edge targets at the bottom edge.
+ */
+export async function centerInFrame(target: Locator): Promise<void> {
+  await target
+    .evaluate((el) => el.scrollIntoView({ block: "center", behavior: "smooth" }))
+    .catch(() => {});
+  // Let the glide settle before a ring measures the bounding box.
+  await target.page().waitForTimeout(550);
+}
+
 /** Park the ring on a target (or clear it). */
 export async function spotlight(page: Page, target: Locator | null): Promise<void> {
   if (!target) {

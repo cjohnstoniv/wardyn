@@ -137,6 +137,11 @@ export async function decide(
   text: string,
   host?: string,
   decisionScope: "run" | "once" | "always" = "run",
+  // Spoken while the scope menu is OPEN (between the caret click and the
+  // option click). The menu is the best 20 seconds of the scopes episode and
+  // used to flash past in ~2s unnarrated — every persona asked to be shown
+  // it. Optional: takes that don't pass it are unchanged.
+  menuLine?: string,
 ): Promise<void> {
   const page = stage();
   // ALWAYS decide a NAMED host, never "whatever is first in the queue".
@@ -175,6 +180,10 @@ export async function decide(
     // Approve, Approve-caret, Deny, Deny-caret, so .first() is Approve's. The
     // repo's own suite already disambiguates this way (approvals.spec.ts).
     await act(page, row.getByRole("button", { name: "More options" }).first());
+    if (menuLine) {
+      await caption(page, menuLine);
+      await beat(page, PACE.read + 400);
+    }
     // Scope the option to the OPEN MENU, not the page: the funnel rail renders
     // each step as a button whose accessible name starts with its label, so on
     // the "Once, or for good" step a page-wide /^Once/ matches the rail button
