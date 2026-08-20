@@ -823,6 +823,66 @@ V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-10}/narr
   || bad "no ${V10_TL} — beats 1-3 are silent (the driver runs inside tmux; WARDYN_DEMO_WORK_DIR has to reach it)"
 }
 
+# Video 11 · your terminal, our cluster. A TERMINAL-ONLY video (there is no
+# ui/e2e/demo/11-*.spec.ts), shot against the cluster `make kind-quickstart`
+# leaves behind — so unlike every other take the evidence is on a k8s install
+# that wants a bearer token, read from its own Secret the way
+# scripts/run-e2e-ssh-k8s.sh and deploy/kind/quickstart.sh read it.
+#
+# THREE audit checks, deliberately: the two exec rows the video films by their
+# argv and exit code, and who the connections were attributed to. The run's
+# STATE is not asserted for check_video_10's reason — an idle interactive run
+# may be reaped between the take and the check, which does not make the footage
+# dishonest.
+check_video_11() {
+head_ "Video 11 · the run the terminal reached"
+V11_CTX="${WARDYN_V11_CONTEXT:-kind-wardyn-quickstart}"
+V11_NS="${WARDYN_V11_NAMESPACE:-wardyn}"
+V11_API="${WARDYN_URL:-http://127.0.0.1:8080}"
+V11_TOK="${WARDYN_ADMIN_TOKEN:-$(kubectl --context "${V11_CTX}" -n "${V11_NS}" get secret wardyn-auth \
+  -o jsonpath='{.data.admin-token}' 2>/dev/null | base64 -d 2>/dev/null || true)}"
+V11_HANDOFF="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-11}/v11-run-id.txt"
+V11_RUN="${WARDYN_DEMO_RUN_ID:-}"
+[[ -z "${V11_RUN}" && -s "${V11_HANDOFF}" ]] && V11_RUN="$(tr -d '[:space:]' <"${V11_HANDOFF}")"
+
+# The title's own claim, and the one a 200 on :8080 does NOT prove: quickstart
+# and the operator's compose stack publish the same port.
+V11_RUNNER="$(curl -fsS --max-time 10 "${V11_API}/healthz" 2>/dev/null | jq -r '.runner // "-"' 2>/dev/null || echo '-')"
+[[ "${V11_RUNNER}" == "k8s" ]] && ok "${V11_API} is the k8s install (runner=k8s) — the substrate the video claims" \
+  || bad "${V11_API}/healthz reports runner=${V11_RUNNER}, not k8s — this take did not film a cluster"
+
+if [[ -z "${V11_RUN}" ]]; then
+  bad "no run id at ${V11_HANDOFF} — the beats never got past preflight, so there is nothing this video could have filmed"
+elif [[ -z "${V11_TOK}" ]]; then
+  bad "no admin token (WARDYN_ADMIN_TOKEN, or Secret wardyn-auth in ${V11_CTX}/${V11_NS}) — the trail on a k8s install cannot be read without one"
+else
+  ok "run ${V11_RUN} (from the handoff the beats wrote)"
+  V11_OWNER="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${V11_TOK}" "${V11_API}/api/v1/runs/${V11_RUN}" 2>/dev/null | jq -r '.created_by // "-"')"
+  V11_AUD="$(curl -fsS --max-time 20 -H "Authorization: Bearer ${V11_TOK}" "${V11_API}/api/v1/audit?run_id=${V11_RUN}&limit=1000" 2>/dev/null || echo '[]')"
+  v11q() { jq "[ (.items? // .)[] | $1 ] | length" <<<"${V11_AUD}" 2>/dev/null || echo 0; }
+
+  # 1 · beat 3: the Pod answered, over the k8s exec lane.
+  N="$(v11q 'select(.action == "ssh.exec" and .outcome == "success" and .data.argv == "hostname" and .data.exit == 0)')"
+  [[ "${N}" -ge 1 ]] && ok "${N} ssh.exec row(s) for argv 'hostname', exit 0 — beat 3 really reached the Pod" \
+    || bad "no successful ssh.exec row for argv 'hostname' — beat 3's shell never ran inside the sandbox"
+
+  # 2 · beat 4/5: the ONE number this video films twice, in the shell and on
+  # the trail. k8s carries an exec's status out of band, so this row is the
+  # substrate claim as much as the audit one.
+  N="$(v11q 'select(.action == "ssh.exec" and .data.exit == 37)')"
+  [[ "${N}" -ge 1 ]] && ok "${N} ssh.exec row(s) recording exit 37 — the code crossed the cluster intact" \
+    || bad "no ssh.exec row carrying exit 37 — beat 4 echoed a number the trail does not have"
+
+  # 3 · beat 5: every connection attributed to the run's owner. sshAuth is
+  # owner-only, so a success under any other actor would mean the gateway let
+  # somebody else in — the opposite of what the closing line says.
+  N="$(v11q 'select(.action == "ssh.auth" and .outcome == "success")')"
+  M="$(v11q "select(.action == \"ssh.auth\" and .outcome == \"success\" and .actor == \"${V11_OWNER}\")")"
+  [[ "${N}" -ge 1 && "${N}" == "${M}" ]] && ok "all ${N} ssh.auth successes attributed to the run's owner (${V11_OWNER})" \
+    || bad "${N} ssh.auth success(es), ${M} of them the run's owner (${V11_OWNER}) — a connection this video does not account for"
+fi
+}
+
 case "${WARDYN_DEMO_VIDEO:-}" in
   ""|05) check_video_02 ;;
   02) check_video_02_workspace ;;
@@ -832,18 +892,30 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   08) check_video_08_policies ;;
   09) check_video_09 ;;
   10) check_video_10 ;;
+  11) check_video_11 ;;
   01|04)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..10, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..11, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
 
 head_ "Narration"
-TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video}/narration.json"
+# Per-video by default, exactly as record-demo.sh resolves DEMO_OUT_DIR — a bare
+# demo-video/ is the no---video walkthrough's directory and nothing else's.
+TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video${WARDYN_DEMO_VIDEO:+-${WARDYN_DEMO_VIDEO}}}/narration.json"
+# A video with no ui/e2e/demo/<nn>-*.spec.ts has no browser lane and no
+# narration.json to have — its cues are the terminal lane's. Same rule
+# record-demo.sh resolves RUN_DRIVER=0 by, so the two cannot drift. Anything
+# WITH a spec keeps being checked against narration.json: a hybrid take whose
+# browser half went silent must still fail, and V09/V10 assert their terminal
+# timeline separately for exactly that reason.
+if [[ -n "${WARDYN_DEMO_VIDEO:-}" ]] && ! compgen -G "${REPO_ROOT}/ui/e2e/demo/${WARDYN_DEMO_VIDEO}-*.spec.ts" >/dev/null; then
+  TL="${TL%/narration.json}/narration-terminal.json"
+fi
 if [[ -s "${TL}" ]]; then
   python3 - "${TL}" <<'PY'
 import json, sys

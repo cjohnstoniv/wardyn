@@ -37,6 +37,11 @@ var envDocAllow = map[string]bool{
 	// registry of every test-only WARDYN_* var, not just the ones the mechanical
 	// scan happens to reach.
 	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
+	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
+	// the console's and the UI-sandbox gateway's, which must differ. Shell-only
+	// like the block below, but test scaffolding rather than operator config, so
+	// they belong here.
+	"WARDYN_E2E_ADDR": true, "WARDYN_E2E_UI_ADDR": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and

@@ -194,9 +194,20 @@ stops serving with a 409 naming its state, not a hang.
 
 **Resource bounds.** At most 8 concurrent relay connections per run — each one
 is a live `socat` exec in the sandbox, so this is the sibling of the SSH
-gateway's per-run channel cap — and idle pooled connections (with their execs)
-are reaped after 90s, so a closed browser tab does not park execs until the run
-stops.
+gateway's per-run channel cap — and idle pooled connections are closed after
+90s, so a closed browser tab does not keep opening new ones.
+
+Closing a relay connection is not the same as ending the exec behind it, and
+the difference is a stated residual, not a bug we hid: neither substrate offers
+"kill this exec", so all Wardyn can do is close the exec's streams. `socat`
+exits when it sees both halves end, and a `socat` whose app-side half is still
+held open by the relayed app can therefore outlive its relay connection and be
+reaped only when the sandbox stops. The connection cap bounds how many the
+relay can be *using* at once; it does not bound how many linger, so a very long
+editing session on an app with a generous keep-alive can leave a handful of
+idle `socat` processes in its own sandbox. `scripts/run-e2e-ui-sandbox.sh`
+asserts the bound this actually promises (20 relayed requests must not become
+20 execs), and prints what remains rather than claiming zero.
 
 **Idle auto-stop.** Relayed requests reset the run's idle clock (`TouchRun`,
 debounced 30s), exactly like an attach keepalive: a human reading code in an

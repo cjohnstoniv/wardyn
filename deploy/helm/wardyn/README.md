@@ -451,6 +451,33 @@ Runs still have to declare `ui_apps` in policy
 matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on
 its own opens nothing.
 
+### What is actually proven on Kubernetes
+
+The relay is not a new network path: it is `Runner.ExecStream` carrying bytes to
+a port the sandbox is already listening on inside its own netns, so on this
+substrate it needs **no NetworkPolicy change and no new Pod ingress**. That
+claim is gated, not asserted — `test/conformance`'s `ExecStreamLoopbackRelay`
+case dials an in-sandbox loopback listener over `ExecStream` and reads the
+response back with stdin still open (the full-duplex behavior an editor's
+WebSocket needs), and it runs on **both** substrates: `make
+test-conformance-docker` and `make test-conformance-k8s` against a real
+kind + Calico cluster.
+
+What is **not** run on Kubernetes is the browser-level lane. The live e2e
+(`make test-e2e-ui-sandbox`) drives a real ticket → cookie → code-server HTML
+round trip, the `ui.*` audit rows, the 403s and the header strips — and it
+brings up a **compose** stack to do it. There is no k8s equivalent and the
+script does not pretend otherwise: it is Docker-gated and self-skips without
+`WARDYN_TEST_DOCKER=1`. The gap is the harness, not the substrate — the parity
+case above covers the one layer that differs between them, and everything the
+live e2e adds (tickets, cookies, header hygiene, the audit trail) is
+substrate-independent control-plane code.
+
+So on Kubernetes, treat the transport as proven and the *deployment* shape —
+your ingress, your hostname split, your TLS — as the part only your own smoke
+test can confirm. Open one app, and check that the relayed page's origin is not
+the console's.
+
 ## Values
 
 See `values.yaml` for all options. Key settings:

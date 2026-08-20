@@ -29,7 +29,10 @@ make record-demo ARGS="--video 09 --terminal-script scripts/demo-beats/09-ci-and
 ## The series harness (0.5)
 
 The 0.5 story is not one video, it is ten. Same rig throughout — same driver,
-same overlay, same narration, same verifier — with one spec per video:
+same overlay, same narration, same verifier — with one spec per video. 0.6 adds
+an eleventh, **V11 (your terminal, our cluster)**, which has no spec at all: it
+is terminal-only and shot against a Kubernetes cluster rather than the compose
+stack (see "The terminal lane" below).
 
 ```sh
 scripts/record-demo.sh --video 03    # records ui/e2e/demo/03-*.spec.ts, and only that
@@ -121,11 +124,12 @@ silently, or recorded at the wrong size.
 
 ### The terminal lane: `--terminal-script`
 
-Two videos of the series have no page to film. **V09 (CI & headless)** is a
+Three videos of the series have no page to film. **V09 (CI & headless)** is a
 policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
 and its artifacts; **V10 (audit & attach)** is three terminals each holding
-`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key. Playwright cannot drive
-either of them.
+`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key; **V11 (your terminal,
+our cluster)** is `kubectl`, `wardyn ssh` and one `ssh` session against a
+Kubernetes sandbox. Playwright cannot drive any of them.
 
 ```sh
 scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
@@ -189,6 +193,42 @@ Two things to know before rolling:
   `--no-record` dry run of the beat script (or simply the previous take) makes
   the real one warm.
 
+### V11 is shot against a cluster, not the compose stack
+
+| | |
+|---|---|
+| **Beats** | `kubectl get pods -n wardyn` → `wardyn ssh --print <run-id>` → `ssh <run-id>@127.0.0.1 -p 2222 hostname` → `'exit 37'` and `echo $?` → `wardyn audit <run-id> --action-prefix ssh.` |
+| **Script** | [`scripts/demo-beats/11-terminal-to-the-cluster.sh`](../scripts/demo-beats/11-terminal-to-the-cluster.sh) — terminal-only, one pane, no tmux (V10 needs three because its subject is three identities; this one's is one operator and one cluster) |
+| **Stack** | the `make kind-quickstart` cluster, **not** `make setup`'s compose stack. Preflight asserts `/healthz` reports `runner=k8s`, because both publish `127.0.0.1:8080` and a 200 says nothing about who answered |
+| **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
+| **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V10's subject, not this one's |
+| **Verifier** | `WARDYN_DEMO_VIDEO=11` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.auth` success attributed to the run's owner |
+
+Staging, once, before rolling — `preflight` checks every item and films nothing:
+
+```sh
+make kind-quickstart                                  # if the cluster is not up
+kubectl config use-context kind-wardyn-quickstart     # beat 1 types a bare kubectl
+export WARDYN_ADMIN_TOKEN="$(kubectl -n wardyn get secret wardyn-auth \
+  -o jsonpath='{.data.admin-token}' | base64 -d)"
+# one idle interactive run — interactive means no agent task is exec'd, so no
+# model credential is involved and the sandbox just sits there
+curl -sS -X POST http://127.0.0.1:8080/api/v1/runs \
+  -H "Authorization: Bearer ${WARDYN_ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"agent":"claude-code","repo":"local:demo","confinement_class":"CC1","interactive":true,
+       "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny",
+       "min_confinement_class":"CC1","auto_stop_after_sec":-1}}'
+scripts/demo-beats/11-terminal-to-the-cluster.sh --preflight
+scripts/record-demo.sh --video 11 \
+  --terminal-script scripts/demo-beats/11-terminal-to-the-cluster.sh
+```
+
+The beat script never launches, kills or reconfigures a run — it picks the
+newest `RUNNING` one (or `WARDYN_DEMO_RUN_ID`) and stops with that `curl` in the
+error if there is none. A **retake wants a fresh run**: the audit trail is
+append-only, so the previous take's rows are still on the old one and beat 5
+would film them.
+
 ## Before the first take
 
 ```sh
@@ -227,7 +267,7 @@ mattering: see "The video is captured from TWO sources" below.
 |---|---|---|
 | Acts 1–6 — the console | **the browser recording itself** (Playwright `recordVideo`) | **always** → `…/Videos/wardyn-demo-<ts>.mp4` |
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
-| Host-shell beats (V09, V10) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
+| Host-shell beats (V09, V10, V11) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot

@@ -92,7 +92,10 @@ describe("ConnectSSHCard — visibility", () => {
     expect(
       screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`)),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Off on this deployment/)).toBeInTheDocument();
+    // Anchored on the SSH lane's own continuation: the UI-apps lane below it
+    // opens with the same "Off on this deployment." sentence, so the bare
+    // prefix now matches two elements.
+    expect(screen.getByText(/Off on this deployment\. It gives you/)).toBeInTheDocument();
     expect(screen.getByText(/WARDYN_SSH_LISTEN/)).toBeInTheDocument();
     // The ssh command itself must NOT appear — there is no gateway to reach.
     expect(screen.queryByText(/^ssh run_1@/)).toBeNull();
@@ -179,5 +182,66 @@ describe("ConnectSSHCard — content", () => {
 
     await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1`)).toBeInTheDocument();
+  });
+});
+
+// ── the UI-apps lane (D3.1) ────────────────────────────────────────────────
+// Every string below is quoted from docs/design/ui-sandboxes-prompt.md §7's
+// frozen table. If a copy edit lands in the component without landing there
+// too, these fail — which is the point: the mock is the source of truth, and
+// two of these strings (new-tab, no-recording) carry the threat model.
+const UI_APPS_RUN: Partial<AgentRun> = {
+  ui_apps: [{ name: "vscode", port: 8080, path: "/" }],
+};
+
+describe("ConnectSSHCard — UI apps lane", () => {
+  it("names WARDYN_UI_SANDBOX_LISTEN when the gateway is off", async () => {
+    healthMock.mockResolvedValue({}); // no ui_sandbox block at all
+    listKeysMock.mockResolvedValue([]);
+    renderCard(UI_APPS_RUN);
+    await waitFor(() => expect(screen.getByText("UI apps")).toBeTruthy());
+    expect(
+      screen.getByText(/^Off on this deployment\. It relays a declared loopback port inside the sandbox/),
+    ).toBeTruthy();
+    expect(screen.getByText("WARDYN_UI_SANDBOX_LISTEN")).toBeTruthy();
+    // Off means off: no Open button anywhere.
+    expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
+  });
+
+  it("names the ui_apps policy field when the gateway is on but the run declares none", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.test/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ ui_apps: [] });
+    await waitFor(() => expect(screen.getByText("UI apps")).toBeTruthy());
+    expect(
+      screen.getByText(/^On for this deployment, but this run's policy declares no UI apps\./),
+    ).toBeTruthy();
+    expect(screen.getByText("ui_apps")).toBeTruthy();
+  });
+
+  it("renders a row per declared app, with the origin and recording notices", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.test/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    renderCard(UI_APPS_RUN);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open vscode" })).toBeTruthy());
+    expect(screen.getByText("localhost:8080/")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Opens in a new tab, on a different address than this console. That separation is deliberate: the app is the sandbox's own code, and it must never be able to read your console session.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that you opened and closed the app, never what you did in it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("stays hidden when the run is not RUNNING, whatever the gateway says", async () => {
+    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.test/e?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    const { container } = renderCard({ ...UI_APPS_RUN, state: "COMPLETED" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.querySelector("section")).toBeNull();
   });
 });

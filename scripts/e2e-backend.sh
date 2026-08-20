@@ -43,6 +43,12 @@ ADDR="${WARDYN_E2E_ADDR:-:8088}"
 # written under — the boot-key fail-closed path is never hit.
 # Override to pin your own (e.g. to keep a hand-seeded DB readable).
 AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
+# The UI-sandbox gateway's SECOND listener (docs/UI-SANDBOXES.md). On by
+# default here so ui-sandbox.spec.ts drives the run-detail lane's real
+# enabled states against a real /healthz instead of a stubbed one; it must
+# differ from ADDR or wardynd refuses to boot. The per-screen fanout gives
+# each instance its own ports, so override this alongside WARDYN_E2E_ADDR.
+UI_ADDR="${WARDYN_E2E_UI_ADDR:-:8089}"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # Derive the URL port by splitting on the LAST colon, so every documented ADDR
@@ -151,6 +157,8 @@ cmd_up() {
     "${BIN_DIR}/wardynd" \
       -runner none \
       -listen "${ADDR}" \
+      -ui-sandbox-listen "${UI_ADDR}" \
+      -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
       -ui-dir "${REPO_ROOT}/ui/dist" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 &
@@ -172,7 +180,14 @@ cmd_down_quiet() {
   # Free ONLY this instance's listen port (do NOT broad-kill every .e2e-bin/wardynd
   # — that would tear down sibling instances during the per-screen e2e fanout).
   local port="${ADDR#*:}"
-  if command -v fuser >/dev/null 2>&1; then fuser -k "${port}/tcp" >/dev/null 2>&1 || true; fi
+  # Both listeners: the UI-sandbox gateway's port has the same lifecycle as the
+  # console's, so leaving it held would make the NEXT `up` fail to bind exactly
+  # the way the console port used to (see the wait loop below).
+  local ui_port="${UI_ADDR##*:}"
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+    fuser -k "${ui_port}/tcp" >/dev/null 2>&1 || true
+  fi
 
   # WAIT for the port to actually be free, rather than guessing.
   #
@@ -242,6 +257,18 @@ SQL
   # this is what the API itself now returns for every workspace, and what the
   # UI's workspace-wizard/picker render against.
   api POST /api/v1/workspaces '{"name":"payments","sources":[{"type":"local_dir","path":"/home/me/projects/payments"}]}' >/dev/null 2>&1 || true
+  # Run detail's UI-apps lane (docs/UI-SANDBOXES.md) reads ui_apps off the
+  # run.policy.effective envelope DISPATCH records (effectiveUIApps) — and the
+  # `none` runner never dispatches, so the envelope goes in here exactly as
+  # dispatch would write it. Attached to the RUNNING fixture rather than a new
+  # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
+  # count is load-bearing for other specs (runs, recording).
+  psql_e2e >/dev/null 2>&1 <<'SQL' || true
+INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
+SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.effective', id::text, 'success',
+       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
+FROM agent_runs WHERE task = 'e2e fixture 2';
+SQL
   log "Seed complete: $(psql_e2e -tAc 'SELECT count(*) FROM agent_runs') runs"
 }
 

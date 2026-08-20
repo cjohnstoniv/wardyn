@@ -25,8 +25,9 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { KeyRound } from "lucide-react";
-import type { AgentRun, SSHPublicKey } from "../../lib/types";
+import type { AgentRun, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
+import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
@@ -46,6 +47,12 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     advertise_addr?: string;
     host_key_fingerprint?: string;
   } | null>(null);
+  // The UI-sandbox gateway's own healthz block. null = off or not loaded; the
+  // lane treats both as off, which is the fail-closed reading.
+  const [uiSandbox, setUISandbox] = React.useState<{
+    enabled?: boolean;
+    enter_url_template?: string;
+  } | null>(null);
   // null = not loaded yet (treated as "assume keys exist" below, so a human
   // who HAS keys never sees the no-keys lead-in flash before the real answer
   // arrives).
@@ -55,7 +62,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     if (!owned || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
     healthApi.health().then((h) => {
-      if (alive) setSSH(h.ssh ?? null);
+      if (!alive) return;
+      setSSH(h.ssh ?? null);
+      setUISandbox(h.ui_sandbox ?? null);
     });
     sshKeysApi
       .listKeys()
@@ -183,7 +192,104 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
           Manage SSH keys
         </Link>
       )}
+
+      <UIAppsLane run={run} enabled={!!uiSandbox?.enabled} template={uiSandbox?.enter_url_template ?? ""} />
     </SectionCard>
+  );
+}
+
+// The UI-apps lane: the third block in this card, after Wardyn CLI and SSH.
+// Strings are frozen in docs/design/ui-sandboxes-prompt.md §7 and asserted
+// byte-for-byte in run-detail-ssh.test.tsx — two of them (the new-tab line and
+// the no-recording line) state the threat model rather than describe the UI,
+// so softening either is a threat-model change, not copy editing.
+//
+// Never an <iframe>: embedding the app on this origin is the exact attack the
+// gateway's second listener exists to prevent. Open is always a new tab on the
+// origin the SERVER advertises (enter_url_template), never one built here.
+function UIAppsLane({ run, enabled, template }: { run: AgentRun; enabled: boolean; template: string }) {
+  const apps: UIApp[] = run.ui_apps ?? [];
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const [failed, setFailed] = React.useState<{ app: string; message: string } | null>(null);
+
+  async function open(app: UIApp) {
+    setBusy(app.name);
+    setFailed(null);
+    try {
+      const ticket = await runsApi.attachTicket(run.id);
+      const url = template
+        .replace("{run}", encodeURIComponent(run.id))
+        .replace("{app}", encodeURIComponent(app.name))
+        .replace("{ticket}", encodeURIComponent(ticket));
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      setFailed({ app: app.name, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <p className="text-[0.75rem] font-medium text-foreground">UI apps</p>
+      {!enabled && (
+        <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev
+          server — to your browser through Wardyn. An operator turns it on by setting{" "}
+          <Mono className="text-foreground">WARDYN_UI_SANDBOX_LISTEN</Mono> where wardynd starts.
+        </p>
+      )}
+      {enabled && apps.length === 0 && (
+        <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in
+          the policy's <Mono className="text-foreground">ui_apps</Mono> list — an app is a name, a loopback port
+          and a path.
+        </p>
+      )}
+      {enabled && apps.length > 0 && (
+        <>
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            Wardyn relays a port the sandbox is already listening on to your browser. The sandbox gets no network
+            of its own — the relay rides the same exec lane the terminal does.
+          </p>
+          {apps.map((app) => (
+            <div key={app.name}>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.75rem] text-foreground">{app.name}</p>
+                  <Mono className="text-[0.7188rem] text-muted-foreground">
+                    localhost:{app.port}
+                    {app.path || "/"}
+                  </Mono>
+                </div>
+                <Button size="sm" disabled={busy === app.name} onClick={() => void open(app)}>
+                  {busy === app.name ? "Opening…" : `Open ${app.name}`}
+                </Button>
+              </div>
+              {failed?.app === app.name && (
+                <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+                  <p className="text-[0.75rem] font-medium text-foreground">Couldn't start {app.name}</p>
+                  <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+                    This image has no <Mono className="text-foreground">/usr/local/bin/wardyn-ui-{app.name}</Mono>.
+                    Use an image that ships the launcher (
+                    <Mono className="text-foreground">deploy/images/vscode/</Mono>), or add one to your own image.
+                  </p>
+                  <p className="mt-1 text-[0.7188rem] leading-relaxed text-muted-foreground">{failed.message}</p>
+                </div>
+              )}
+            </div>
+          ))}
+          <p className="mt-2.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            Opens in a new tab, on a different address than this console. That separation is deliberate: the app is
+            the sandbox's own code, and it must never be able to read your console session.
+          </p>
+          <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that
+            you opened and closed the app, never what you did in it.
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 
