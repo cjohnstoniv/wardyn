@@ -10,6 +10,7 @@ wizard and `/demos` are the first-run path. Everything here is the next question
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
 | SSH / sftp / port-forward / VS Code Remote-SSH into a run | [SSH.md](SSH.md) |
+| Relay a UI app inside a run — a code editor, a dev server — to your browser | [UI-SANDBOXES.md](UI-SANDBOXES.md) |
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
 | Back up, restore, or upgrade a running deployment, or put it behind a corporate proxy | [OPERATIONS.md](OPERATIONS.md) |

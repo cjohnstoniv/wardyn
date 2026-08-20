@@ -278,7 +278,7 @@ BYOI one — can serve a declared app by shipping a launcher at that path:
 |---|---|
 | Path | `/usr/local/bin/wardyn-ui-vscode` (app name `vscode`, matching the policy's `ui_apps[].name`) |
 | Invocation | No args, no tty; reads nothing from stdin, discards stdout/stderr |
-| Must bind | `127.0.0.1:<declared port>` (`8080` here) within `WARDYN_UI_SANDBOX` polling window — the gateway polls up to 20s before giving up |
+| Must bind | `127.0.0.1:<declared port>` (`8080` here) within the gateway's polling window — it polls up to 20s before giving up |
 | Lifetime | Foreground process; the caller backgrounds it (`&`) and it is reparented to the sandbox's PID 1 — it must not `setsid`/daemonize itself, or it outlives the poll with nothing tracking it |
 | `--help` | Exits 0 (not part of the runtime contract — kept only so the image is sanity-checkable standalone: `docker run --rm --entrypoint /usr/local/bin/wardyn-ui-vscode <image> --help`) |
 | Missing binary | Not this image's concern — the gateway's own probe exits 3 and the console shows a frozen "no UI launcher in this image" error naming the path (`docs/design/ui-sandboxes-prompt.md` §7) |

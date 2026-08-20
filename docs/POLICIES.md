@@ -493,7 +493,9 @@ convention `/usr/local/bin/wardyn-ui-<name>` inside the image. The relay serves
 
 Declaring an app grants nothing on its own: the gateway is off unless the
 deployment sets `WARDYN_UI_SANDBOX_LISTEN`, and every relay session still needs
-an owner-or-admin single-use ticket.
+an owner-or-admin single-use ticket. See
+[UI-SANDBOXES.md](UI-SANDBOXES.md) for the gateway itself — how a session is
+opened, what the image has to ship, and what is (and is not) recorded.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
