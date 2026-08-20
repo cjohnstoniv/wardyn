@@ -112,12 +112,12 @@ test("V00 — why govern agents (the primer)", async () => {
   // --- S3 · the exhibit -------------------------------------------------------
   await show(page, "s3");
   await spotlight(page, page.locator("#exhibit"));
-  await caption(page, "This is a real frame from later in this series — a coding agent's egress panel: everything trying to LEAVE its box.");
+  await caption(page, "This is a real frame from episode six of this series — a coding agent's egress panel: everything trying to LEAVE its box.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-pending"));
   await caption(page, "Its own tooling reached for a telemetry endpoint — its usage reporting. Nobody asked for that; it is just what the tool does.");
   await beat(page, PACE.read);
-  await caption(page, "Harmless-looking, today. But anything that leaves, leaves through this same door — code, credentials, your data.");
+  await caption(page, "Harmless-looking, today. But every attempt to leave crosses this same door — and every attempt is written down.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-quote"));
   await caption(page, "Caught at the door and held — parked until a human decides. Most setups never even see it leave.");
@@ -125,11 +125,14 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Who decides, how far a yes reaches, and the record it all leaves — episodes ten and twelve.");
   await beat(page, PACE.read);
   await spotlight(page, null);
-  await caption(page, "That is the uncomfortable truth: you cannot list what a tool will need up front — and you rarely know everything it does.");
-  await beat(page, PACE.read);
 
   // --- S4 · trust it all, or block it all -------------------------------------
+  // The truth line opens S4 rather than closing S3: spoken over the exhibit it
+  // left the ring dark on a spent image for ~8s (Dana, round 2) — here it is
+  // the setup the two cards answer.
   await show(page, "s4");
+  await caption(page, "That is the uncomfortable truth: you cannot list what a tool will need up front — and you rarely know everything it does.");
+  await beat(page, PACE.read);
   await spotlight(page, page.locator("#card-trust"));
   await caption(page, "Trust it all — every script and agent works beside your keys, and the traffic goes unwatched.");
   await beat(page, PACE.read);
@@ -143,7 +146,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "There is a third answer, and it starts with three old words.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#d-room"));
-  await caption(page, "A sandbox is a locked room: the work happens inside, and the room holds nothing worth stealing.");
+  await caption(page, "A sandbox is a locked room: the work happens inside, and no keys live in the room — nothing for a thief to reuse.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#d-door"));
   await caption(page, "Egress is anything trying to leave — and it gets exactly one door.");
@@ -161,7 +164,7 @@ test("V00 — why govern agents (the primer)", async () => {
   // was Sam's "missed beat"; the loop is the product idea and earns its rhythm.
   await show(page, "s6");
   await spotlight(page, page.locator("#steps > .card").nth(0));
-  await caption(page, "So don't guess. Run the job once, watched.");
+  await caption(page, "So don't guess. Run the job once, watched — inside that same locked room.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#steps > .card").nth(1));
   await caption(page, "See every host it actually reached — evidence, not a wishlist.");
@@ -183,6 +186,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#roadmap"));
   await caption(page, "Eleven more episodes, about three minutes each. Here is the map.");
   await beat(page, PACE.read + 800);
+  await spotlight(page, page.locator("#ep05"));
   await caption(page, "In a hurry? Episode five — what it stops — is the payoff to jump to.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#next"));
