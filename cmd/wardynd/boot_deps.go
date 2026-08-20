@@ -208,6 +208,10 @@ type optionalFeatures struct {
 	// "empty = off = no listener, no new surface" all the way down to never
 	// minting the secret in the first place.
 	sshHostKey ed25519.PrivateKey
+	// uiSessionKey signs the UI-sandbox gateway's relay cookie, loaded/generated
+	// ONLY when -ui-sandbox-listen is set — nil otherwise, the same
+	// never-mint-a-secret-for-a-disabled-feature discipline as sshHostKey.
+	uiSessionKey []byte
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -406,6 +410,28 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		slog.Info("wardynd: ssh gateway enabled", slog.String("listen", *f.sshListen), slog.String("advertise", *f.sshAdvertise))
 		if *f.sshAdvertise == "" {
 			slog.Warn("wardynd: WARDYN_SSH_ADVERTISE is unset — the run-detail SSH pane has no reachable host[:port] to show; set it to this deployment's externally-reachable address")
+		}
+	}
+
+	// UI-sandbox gateway (pillar 4), optional: the relay cookie's HMAC key is
+	// minted ONLY when the gateway is enabled, the same discipline as the SSH
+	// host key above.
+	if *f.uiListen != "" {
+		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, secrets)
+		if kerr != nil {
+			return of, kerr
+		}
+		of.uiSessionKey = uiKey
+		slog.Info("wardynd: ui-sandbox gateway enabled",
+			slog.String("listen", *f.uiListen),
+			slog.String("advertise", *f.uiAdvertise),
+			slog.Bool("host_mode", *f.uiOriginTemplate != ""),
+		)
+		if *f.uiAdvertise == "" && *f.uiOriginTemplate == "" {
+			slog.Warn("wardynd: WARDYN_UI_SANDBOX_ADVERTISE is unset — /healthz will advertise the raw bind address, which is wrong for any deployment whose bind is not its reachable address; set it (or WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) whenever the gateway is enabled")
+		}
+		if *f.uiOriginTemplate == "" {
+			slog.Warn("wardynd: ui-sandbox gateway is in SHARED-ORIGIN mode — every run's app is served from one origin, separated only by a path-scoped cookie; set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (wildcard DNS) to give each run its own origin")
 		}
 	}
 

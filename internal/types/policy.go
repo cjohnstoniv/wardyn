@@ -182,6 +182,16 @@ type RunPolicySpec struct {
 	// pointer-means-unset idiom. It is a guardrail + visibility layer, NOT
 	// exfiltration prevention (see internal/contentscan + threatmodel §5.1).
 	LLMInspection *LLMInspectionSpec `json:"llm_inspection,omitempty"`
+	// UIApps declares the in-sandbox loopback HTTP apps the UI gateway may relay
+	// to a browser (a code editor, a dev server). OPERATOR-AUTHORED, the same
+	// trust boundary as WorkspaceMounts: an app is a NAME, a loopback PORT and a
+	// PATH — never a command string, so a policy can never choose what runs
+	// inside the sandbox (the launcher is a convention,
+	// /usr/local/bin/wardyn-ui-<name>). The gateway serves ONLY a declared port
+	// and refuses anything else naming this field; `ssh -L` stays the
+	// undeclared-port escape hatch. Empty (the default) = this run has no UI
+	// apps, which is what every policy authored before this field said.
+	UIApps []UIApp `json:"ui_apps,omitempty"`
 	// Resources caps sandbox CPU/memory/PIDs/disk. Nil, or a zero field, means
 	// "use the platform default": the dispatch path fills conservative defaults so
 	// EVERY run is capped even when a policy sets nothing. These are the basic
@@ -210,6 +220,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.EligibleGrants = append([]GrantSpec(nil), s.EligibleGrants...)
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
+	out.UIApps = append([]UIApp(nil), s.UIApps...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
 		// Deep-copy the nested slice fields too, or this "clone" still aliases
@@ -354,6 +365,32 @@ type WorkspaceRepo struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target,omitempty"`
 	Ref    string `json:"ref,omitempty"`
+}
+
+// UIApp is one declared in-sandbox HTTP app the UI gateway may relay to
+// (RunPolicySpec.UIApps). Three fields, no command string:
+//
+//   - Name identifies the app to the operator and to the launcher convention
+//     (/usr/local/bin/wardyn-ui-<name>), so it is constrained to a short
+//     lower-case slug — it reaches a filesystem path and a URL query, and
+//     neither may ever see a slash, a space or "..".
+//   - Port is the port the app listens on INSIDE the sandbox, on 127.0.0.1.
+//     The sandbox has no other reachable address (invariant 3) and the relay
+//     dials nothing else.
+//   - Path is where the app's UI lives, used as the landing path after the
+//     gateway's ticket handoff. Empty means "/".
+type UIApp struct {
+	Name string `json:"name"`
+	Port int    `json:"port"`
+	Path string `json:"path,omitempty"`
+}
+
+// PathOrRoot is Path with the empty default applied.
+func (a UIApp) PathOrRoot() string {
+	if a.Path == "" {
+		return "/"
+	}
+	return a.Path
 }
 
 // ResourceLimits caps a sandbox's resource consumption. A ZERO field means "use

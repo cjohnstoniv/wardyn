@@ -1,0 +1,236 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Static mock for docs/design/ui-sandboxes-prompt.md — the "UI apps" third lane
+  of run detail's "Attach from your terminal" card. Every visible string here is
+  the frozen canonical string from that doc's table; D3's vitest byte-matches
+  against it. No build step, no assets, no script: open the file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — UI apps lane (mock)</title>
+<style>
+  :root {
+    --background: #ffffff; --foreground: #171717;
+    --card: #ffffff; --muted-foreground: #737373;
+    --primary: #0f766e; --primary-foreground: #ffffff;
+    --border: #e5e5e5; --muted: #f4f4f5;
+    --warning: #92400e; --warning-subtle: rgba(245, 158, 11, 0.13);
+    --radius: 0.625rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #0a0a0a; --foreground: #ededed;
+      --card: #111111; --muted-foreground: #a3a3a3;
+      --primary: #14b8a6; --primary-foreground: #0a0a0a;
+      --border: #262626; --muted: #1f1f1f;
+      --warning: #f59e0b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    background: var(--background); color: var(--foreground);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.125rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted-foreground); font-size: .8125rem; margin: 0 0 2rem; max-width: 46rem; }
+  .grid { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+  .state { width: 24rem; max-width: 100%; }
+  .state > figcaption {
+    font-size: .75rem; font-weight: 600; margin: 0 0 .5rem; color: var(--muted-foreground);
+  }
+  .state > figcaption b { color: var(--foreground); }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem;
+  }
+  .card-title { font-size: .875rem; font-weight: 600; margin: 0 0 .5rem; }
+  .lane { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .75rem; }
+  .lane:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .lane-title { font-size: .75rem; font-weight: 500; margin: 0; }
+  p.body {
+    font-size: .7188rem; line-height: 1.6; color: var(--muted-foreground); margin: .125rem 0 0;
+  }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .95em; color: var(--foreground);
+  }
+  .block {
+    background: var(--muted); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+    padding: .5rem .625rem; margin-top: .5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .7188rem;
+  }
+  .app-row {
+    display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+    margin-top: .625rem;
+  }
+  .app-name { font-size: .75rem; font-weight: 500; }
+  .btn {
+    font: inherit; font-size: .75rem; font-weight: 500; line-height: 1;
+    padding: .4375rem .75rem; border-radius: calc(var(--radius) - 4px);
+    background: var(--primary); color: var(--primary-foreground); border: 0; cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .notice {
+    border: 1px solid rgba(245, 158, 11, .3); background: var(--warning-subtle);
+    border-radius: calc(var(--radius) - 2px); padding: .5rem .75rem; margin-top: .625rem;
+  }
+  .notice-title { font-size: .75rem; font-weight: 500; margin: 0; }
+  .ghost {
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 1rem; color: var(--muted-foreground); font-size: .7188rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>UI apps — run detail, third lane</h1>
+<p class="sub">
+  Mock for <code>docs/design/ui-sandboxes-prompt.md</code>. State S3 is drawn in
+  full card context; the rest show the lane alone. Strings are frozen — if this
+  page and the app disagree, the app is wrong.
+</p>
+
+<div class="grid">
+
+  <figure class="state">
+    <figcaption><b>S3</b> — enabled, apps declared (full card)</figcaption>
+    <div class="card">
+      <p class="card-title">Attach from your terminal</p>
+
+      <div class="lane">
+        <p class="lane-title">Wardyn CLI</p>
+        <p class="body">Works on every deployment — no gateway to enable, no key to register.</p>
+        <div class="block">wardyn attach run_8f21c4a9</div>
+      </div>
+
+      <div class="lane">
+        <p class="lane-title">SSH</p>
+        <div class="block">ssh run_8f21c4a9@wardyn.internal -p 2222</div>
+      </div>
+
+      <div class="lane">
+        <p class="lane-title">UI apps</p>
+        <p class="body">Wardyn relays a port the sandbox is already listening on to your browser. The sandbox gets no network of its own — the relay rides the same exec lane the terminal does.</p>
+
+        <div class="app-row">
+          <div>
+            <div class="app-name">vscode</div>
+            <div class="body mono">localhost:8080/</div>
+          </div>
+          <button class="btn" type="button">Open vscode</button>
+        </div>
+
+        <div class="app-row">
+          <div>
+            <div class="app-name">docs</div>
+            <div class="body mono">localhost:3000/</div>
+          </div>
+          <button class="btn" type="button">Open docs</button>
+        </div>
+
+        <p class="body" style="margin-top:.75rem">Opens in a new tab, on a different address than this console. That separation is deliberate: the app is the sandbox's own code, and it must never be able to read your console session.</p>
+        <p class="body" style="margin-top:.5rem">Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that you opened and closed the app, never what you did in it.</p>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>S1</b> — gateway off (the compose default)</figcaption>
+    <div class="card">
+      <div class="lane">
+        <p class="lane-title">UI apps</p>
+        <p class="body">Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev server — to your browser through Wardyn. An operator turns it on by setting <span class="mono">WARDYN_UI_SANDBOX_LISTEN</span> where wardynd starts.</p>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>S2</b> — enabled, policy declares no apps</figcaption>
+    <div class="card">
+      <div class="lane">
+        <p class="lane-title">UI apps</p>
+        <p class="body">On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in the policy's <span class="mono">ui_apps</span> list — an app is a name, a loopback port and a path.</p>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>S4</b> — open in flight (ticket mint → new tab)</figcaption>
+    <div class="card">
+      <div class="lane">
+        <p class="lane-title">UI apps</p>
+        <div class="app-row">
+          <div>
+            <div class="app-name">vscode</div>
+            <div class="body mono">localhost:8080/</div>
+          </div>
+          <button class="btn" type="button" disabled>Opening…</button>
+        </div>
+        <div class="app-row">
+          <div>
+            <div class="app-name">docs</div>
+            <div class="body mono">localhost:3000/</div>
+          </div>
+          <button class="btn" type="button">Open docs</button>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>S5</b> — BYOI image ships no launcher (502)</figcaption>
+    <div class="card">
+      <div class="lane">
+        <p class="lane-title">UI apps</p>
+        <div class="app-row">
+          <div>
+            <div class="app-name">vscode</div>
+            <div class="body mono">localhost:8080/</div>
+          </div>
+          <button class="btn" type="button">Open vscode</button>
+        </div>
+        <div class="notice">
+          <p class="notice-title">Couldn't start vscode</p>
+          <p class="body">This image has no <span class="mono">/usr/local/bin/wardyn-ui-vscode</span>. Use an image that ships the launcher (<span class="mono">deploy/images/vscode/</span>), or add one to your own image.</p>
+          <p class="body mono" style="margin-top:.375rem">no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found</p>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>S0</b> — not the owner, or run not RUNNING</figcaption>
+    <div class="ghost">
+      Nothing renders — the whole card is absent, as it already is for SSH. The
+      console does not show a control the server would refuse. Note this is one
+      notch tighter than the ticket endpoint (owner-or-admin): an admin viewing
+      someone else's run sees no lane.
+    </div>
+  </figure>
+
+  <figure class="state">
+    <figcaption><b>Policies</b> — read-only detail row</figcaption>
+    <div class="card">
+      <p class="card-title">vscode-dev</p>
+      <div class="app-row" style="margin-top:0">
+        <div class="app-name">UI apps</div>
+        <div class="body mono" style="text-align:right">vscode → localhost:8080/</div>
+      </div>
+      <div class="app-row">
+        <div class="app-name">UI apps</div>
+        <div class="body">None declared</div>
+      </div>
+      <p class="body" style="margin-top:.75rem">Both values shown together for review; a real policy renders one. No editor control in 0.6 — <span class="mono">ui_apps</span> is operator-authored.</p>
+    </div>
+  </figure>
+
+</div>
+</body>
+</html>

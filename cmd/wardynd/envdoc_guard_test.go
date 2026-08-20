@@ -47,6 +47,10 @@ var envDocAllow = map[string]bool{
 var envDocShellOnly = map[string]bool{
 	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
 	"WARDYN_CI_PROJECT": true, "WARDYN_REGISTRY_PORT": true, "WARDYN_SSH_PORT": true,
+	// The compose host-port mapping for the UI-sandbox gateway — WARDYN_SSH_PORT's
+	// sibling, and a mapping only: what enables the gateway is
+	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
+	"WARDYN_UI_SANDBOX_PORT": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
