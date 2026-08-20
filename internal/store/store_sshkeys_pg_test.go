@@ -26,6 +26,7 @@ func TestPG_SSHKeys_AddListGetDelete(t *testing.T) {
 		Principal:   "alice@example.com",
 		Name:        "laptop",
 		PublicKey:   "ssh-ed25519 AAAAtest alice@laptop",
+		Role:        "admin",
 		CreatedAt:   time.Now().UTC(),
 	}
 	added, err := st.AddSSHKey(ctx, k)
@@ -44,6 +45,11 @@ func TestPG_SSHKeys_AddListGetDelete(t *testing.T) {
 	}
 	if got.Principal != k.Principal {
 		t.Errorf("get by fingerprint principal = %q, want %q", got.Principal, k.Principal)
+	}
+	// The 0043 role column is what the gateway's admin override reads — it must
+	// survive the real INSERT/SELECT, not only the in-memory fake.
+	if got.Role != "admin" {
+		t.Errorf("get by fingerprint role = %q, want admin to round-trip", got.Role)
 	}
 
 	// A second AddSSHKey with the SAME fingerprint (even a different principal)

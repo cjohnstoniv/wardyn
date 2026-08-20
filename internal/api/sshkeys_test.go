@@ -223,3 +223,52 @@ func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 		t.Errorf("Principal = %q, want the human's OIDC sub (alice-sub)", added.Principal)
 	}
 }
+
+// TestSSHKeysREST_RoleStampedAtRegistration pins F1's stamp (migration 0043):
+// POST /me/ssh-keys records the REGISTERING session's own role on the key, and
+// that is the only role the SSH gateway will ever see for it (sshAuth's
+// owner-OR-admin check). An admin's key is stamped admin — the override — and
+// a member's is stamped member, so a member cannot mint themselves a reach
+// they do not have.
+func TestSSHKeysREST_RoleStampedAtRegistration(t *testing.T) {
+	h := newHarness(t)
+	st := newSSHMemStore()
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	// Two DISTINCT keys: the fingerprint PK is global, so the same key
+	// material cannot be re-registered under a second principal.
+	const adminKey = `{"name":"root laptop","public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBl3jvXfmZbBd3q5aLKZTv3rIcvKlfz2eYQpuYSGfCPT root@laptop"}`
+	const memberKey = `{"name":"mallory laptop","public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICPBGRHmSiTfPXjTuZFDoiXHOLIoIY2VJx1CDPKzB6Ry mallory@laptop"}`
+
+	for _, tc := range []struct {
+		name, sub, email, sessionRole, body, wantRole string
+	}{
+		{"admin session stamps admin", "root-sub", "root@example.com", oidc.RoleAdmin, adminKey, oidc.RoleAdmin},
+		{"member session stamps member", "mallory-sub", "mallory@example.com", oidc.RoleMember, memberKey, oidc.RoleMember},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", ssoSession(t, tc.sub, tc.email, tc.sessionRole), tc.body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("add key: code = %d, want 201; body=%s", w.Code, w.Body.String())
+			}
+			var added types.SSHPublicKey
+			if err := json.Unmarshal(w.Body.Bytes(), &added); err != nil {
+				t.Fatal(err)
+			}
+			if added.Role != tc.wantRole {
+				t.Errorf("stamped Role = %q, want %q", added.Role, tc.wantRole)
+			}
+			// And it is the STORED row that carries it — the gateway never
+			// reads the response body.
+			stored, err := st.GetSSHKeyByFingerprint(context.Background(), added.Fingerprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Role != tc.wantRole {
+				t.Errorf("stored Role = %q, want %q", stored.Role, tc.wantRole)
+			}
+		})
+	}
+}

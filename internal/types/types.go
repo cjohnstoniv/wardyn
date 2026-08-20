@@ -645,19 +645,26 @@ type AuditEvent struct {
 // cloning — see GrantSSHKey). This type is the gateway's own trust root: a
 // human self-registers a public key against their principal, and the gateway
 // authenticates an incoming SSH connection ONLY against rows here, then
-// authorizes it owner-only (AgentRun.CreatedBy == Principal — see
-// internal/api/sshgateway.go).
+// authorizes it owner-OR-admin (AgentRun.CreatedBy == Principal, or Role ==
+// oidc.RoleAdmin — see internal/api/sshgateway.go).
 //
 // Fingerprint is the SHA256 form (ssh.FingerprintSHA256: "SHA256:<base64>"),
 // computed SERVER-SIDE from the parsed key — never client-supplied — so it is
 // both the natural primary key (a key's fingerprint is intrinsic to its bytes;
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
+//
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// stamped at registration by handleAddSSHKey (migration 0043). It is a STAMP,
+// not a live check — SSH carries no session for requireOperator to read — so a
+// demoted admin's key keeps its override until the key is deleted or
+// re-registered (docs/SSH.md §Bounds).
 type SSHPublicKey struct {
 	Fingerprint string    `json:"fingerprint"`
 	Principal   string    `json:"principal"`
 	Name        string    `json:"name"`
 	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
+	Role        string    `json:"role"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
