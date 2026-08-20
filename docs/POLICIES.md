@@ -30,6 +30,7 @@ write time. A guard test fails if a field here drifts from the struct.
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop. `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack (egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle; the `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30); `0` = never reaped; `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle). Idleness is `updated_at` age — an attach or an egress call resets it, local CPU/disk work does not (`internal/lifecycle`). |
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
+| `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -480,6 +481,25 @@ are ever consulted.
 | `repo` | `string` | — (required) | Repo slug or URL, validated like a run's `--repo`. |
 | `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set. Unset defers to the `~/work/<name>` convention. |
 | `ref` | `string` | (unset) | Branch, tag, or commit SHA to clone. Unset clones the remote's default branch (shallow, `git clone --depth 1`). A branch/tag clones shallow directly (`--branch`); an arbitrary SHA falls back to a shallow fetch of that exact ref plus checkout. |
+
+## `ui_apps[]` — `UIApp`
+
+The in-sandbox loopback HTTP apps Wardyn's UI gateway may relay to a browser (a
+code editor, a dev server). **Operator-authored, and never a command string** —
+an app is a name, a port and a path; what actually starts is the launcher
+convention `/usr/local/bin/wardyn-ui-<name>` inside the image. The relay serves
+**only** a declared port; anything else is refused naming this field, and `ssh
+-L` stays the escape hatch for an undeclared port. At most 8 apps per policy.
+
+Declaring an app grants nothing on its own: the gateway is off unless the
+deployment sets `WARDYN_UI_SANDBOX_LISTEN`, and every relay session still needs
+an owner-or-admin single-use ticket.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
+| `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
+| `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
 
