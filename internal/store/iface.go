@@ -153,6 +153,30 @@ type Store interface {
 	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
+
+	// Capability grants and the per-kind enforcement switch (migration 0042,
+	// store_capabilities.go). These ARE part of Store — unlike RunLayoutStore /
+	// Pager, which stayed out of it precisely so an embedded-nil test double
+	// would not route to a nil interface — because the resolver runs on the
+	// REQUEST PATH of routes every one of those doubles already serves. A
+	// type-assert-and-degrade seam there would mean "this fake does not
+	// implement capabilities, therefore allow", which is a fail-OPEN authz
+	// gate hiding in a test-only branch. Widening Store makes a store that
+	// cannot answer a permission question a COMPILE error instead.
+	UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error)
+	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error
+	ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error)
+	// ListCapabilityGrantsFor returns the grants that could apply to one caller:
+	// the `all` rows plus the `user` rows naming any of users (sub AND email)
+	// plus the `group` rows naming any of groups. Not filtered by capability —
+	// see the implementation's doc comment.
+	ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error)
+	// GetCapabilityEnforcement returns the sparse per-kind switch map; an absent
+	// key means NOT enforced, which is the zero-config back-compat default.
+	GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error)
+	// PutCapabilityEnforcement replaces the WHOLE map (a capability the caller
+	// omits loses its row) and returns the stored result.
+	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the

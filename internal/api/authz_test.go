@@ -824,6 +824,35 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
 
+// ─── capability grants (migration 0042) ───────────────────────────────────
+//
+// authzStore is the one NON-embedding store.Store double in the tree (see this
+// type's doc comment on why it implements every method rather than embedding),
+// so widening Store lands here as six compile errors until they are stubbed.
+//
+// The stubs are honest EMPTY state, not permissive shortcuts: no grants and no
+// enforcement rows is exactly a freshly-upgraded 0.5 deployment, so every route
+// this matrix walks resolves precisely as it did before 0042 existed. That is
+// the state the back-compat proof wants under the authorization matrix; the
+// resolver's own allow/deny/precedence matrix lives in capabilities_test.go
+// with a store double that can actually hold rows.
+func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
+	return g, nil
+}
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error { return store.ErrNotFound }
+func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
+	return enabled, nil
+}
+
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
 
 // authzApprovals is a minimal approval FSM backed by an in-memory map, PLUS
