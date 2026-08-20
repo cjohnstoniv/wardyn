@@ -110,11 +110,13 @@ const (
 )
 
 // uiGatewayEnabled reports whether the gateway is configured. Empty listen
-// address = off = no listener at all (ServeUIGateway/UIGatewayHandler both
-// no-op), and without a session key no cookie could be signed, so both are
-// required.
+// address = off = no listener at all (UIGatewayHandler returns nil), and
+// without a session key no cookie could be signed — so all three of listen
+// address, key and store are required. The store is not optional plumbing
+// here: every request redeems a ticket, loads a run, or reads a policy
+// envelope, so a gateway without one could only fail.
 func (s *Server) uiGatewayEnabled() bool {
-	return s.cfg.UIListenAddr != "" && len(s.cfg.UISessionKey) >= 32
+	return s.cfg.UIListenAddr != "" && len(s.cfg.UISessionKey) >= 32 && s.cfg.Store != nil
 }
 
 // uiSandboxHealthz is /healthz's "ui_sandbox" field: nil (disabled) when the
@@ -693,7 +695,8 @@ func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
 // probe, launch, poll — because every extra round trip here is a full exec
 // into the sandbox; its exit code is the answer:
 //
-//	0   already listening, or listening after the launch
+//	0   already listening — nothing was started
+//	5   the launcher ran and the port came up (this is what ui.start records)
 //	3   the image has no launcher at the convention path (the BYOI case)
 //	4   the launcher ran but nothing opened the port in time
 //
@@ -740,8 +743,13 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	}
 
 	switch code {
-	case 0:
+	case 0: // already listening; nothing was started, so nothing to record
 		s.markUIAppReady(key)
+		return nil
+	case 5:
+		s.markUIAppReady(key)
+		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.start", sess.App, "success",
+			map[string]any{"app": sess.App, "port": sess.Port, "launcher": launcher})
 		return nil
 	case 3:
 		// FROZEN string: the console prints this verbatim under its
@@ -776,7 +784,7 @@ socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
 i=0
 while [ "$i" -lt %d ]; do
   sleep 0.5
-  socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+  socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 5
   i=$((i+1))
 done
 exit 4

@@ -630,6 +630,22 @@ func TestUIGateway_MissingLauncherIs502WithTheFrozenMessage(t *testing.T) {
 	}
 }
 
+// TestUIGateway_LaunchIsAudited: exit 5 means the probe actually STARTED the
+// app (exit 0 means it was already listening), which is the only case that has
+// anything to record — ui.start names an app that was launched, never one that
+// was merely reached.
+func TestUIGateway_LaunchIsAudited(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	cookie := h.openSession()
+	h.launcher = 5
+	if rec := h.relay("/ide", cookie, nil); rec.Code != http.StatusOK {
+		t.Fatalf("relay: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.start/success") {
+		t.Fatalf("audit %q missing ui.start/success", got)
+	}
+}
+
 // TestUIGateway_LauncherTimeoutIs502: the launcher ran but nothing opened the
 // port — a clean 502 naming the port and the wait, never a hung request.
 func TestUIGateway_LauncherTimeoutIs502(t *testing.T) {
@@ -652,7 +668,7 @@ func TestUIGateway_LauncherScriptShape(t *testing.T) {
 	if probeAt < 0 || launchAt < 0 || probeAt > launchAt {
 		t.Fatalf("probe must precede launch:\n%s", script)
 	}
-	for _, want := range []string{"exit 3", "exit 4", `[ -x "$b" ]`} {
+	for _, want := range []string{"exit 3", "exit 4", "exit 5", `[ -x "$b" ]`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q:\n%s", want, script)
 		}
