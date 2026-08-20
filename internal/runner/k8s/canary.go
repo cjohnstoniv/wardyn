@@ -96,7 +96,13 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 		// allow policy for wardyn.managed=true": allows are additive and BOTH
 		// the agent and proxy pods carry that label (naming.go wardynLabels),
 		// so such a policy widens every run past sandbox.go's per-run deny.
-		return canaryIndeterminate, fmt.Errorf("egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver reachability (reached_running=%v exit_code=%d) — if this namespace already has a default-deny NetworkPolicy from elsewhere (unrelated to Wardyn), that is the likely cause: use a namespace with no ambient default-deny, or exempt Wardyn's pods from THAT policy's own podSelector (a matchExpressions entry with key wardyn.managed, operator NotIn, values [\"true\"]). Do NOT add a separate allow policy for wardyn.managed=true — NetworkPolicy allows are additive and both the agent and proxy pods carry that label, so it would widen every sandbox pod's egress past Wardyn's own per-run deny+proxy-only rule: %w",
+		return canaryIndeterminate, fmt.Errorf("egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver "+
+			"reachability (reached_running=%v exit_code=%d) — if this namespace already has a default-deny NetworkPolicy from "+
+			"elsewhere (unrelated to Wardyn), that is the likely cause: use a namespace with no ambient default-deny, or exempt "+
+			"Wardyn's pods from THAT policy's own podSelector (a matchExpressions entry with key wardyn.managed, operator NotIn, "+
+			"values [\"true\"]). Do NOT add a separate allow policy for wardyn.managed=true — NetworkPolicy allows are additive "+
+			"and both the agent and proxy pods carry that label, so it would widen every sandbox pod's egress past Wardyn's own "+
+			"per-run deny+proxy-only rule: %w",
 			a.reachedRunning, a.exitCode, errCanaryIndeterminate)
 	}
 
