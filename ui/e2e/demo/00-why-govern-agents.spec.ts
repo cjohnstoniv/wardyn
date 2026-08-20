@@ -73,6 +73,9 @@ test("V00 — why govern agents (the primer)", async () => {
   await expect(page.locator("#roadmap div")).toHaveCount(11);
 
   await chapter(page, "Why govern agents", "Episode one — the problem, before any product");
+  // The deck starts with every slide hidden so the chapter card opens on
+  // black, not on a ghost of S1's text (persona round 1, Dana).
+  await show(page, "s1");
 
   // --- S1 · strangers' code, already ----------------------------------------
   await caption(page, "Start before agents — with code your machines already run every day.");
@@ -86,11 +89,15 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#t-ci"));
   await caption(page, "And CI runs all of it unattended, with the deploy keys nearby.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
-  await caption(page, "Supply-chain attacks live exactly there — one compromised package, reading your environment and shipping it out.");
+  await spotlight(page, page.locator("#s1-supply"));
+  await caption(page, "Supply-chain attacks live exactly here — one compromised package, reading your environment and shipping it out.");
   await beat(page, PACE.read);
+  await caption(page, "It has names — SolarWinds, event-stream, XZ Utils. It keeps happening.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.locator("#s1-predates"));
   await caption(page, "That risk predates AI. Most teams simply never watch the traffic.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // --- S2 · agents raise the stakes ------------------------------------------
   await show(page, "s2");
@@ -106,12 +113,15 @@ test("V00 — why govern agents (the primer)", async () => {
   // --- S3 · the exhibit -------------------------------------------------------
   await show(page, "s3");
   await spotlight(page, page.locator("#exhibit"));
-  await caption(page, "This is a real frame from later in this series — a coding agent, mid ordinary job.");
+  await caption(page, "This is a real frame from later in this series — a coding agent's egress panel: everything trying to LEAVE its box.");
   await beat(page, PACE.read);
-  await caption(page, "Its own tooling reached for a telemetry endpoint. Nobody asked for that — it is just what the tool does.");
+  await spotlight(page, page.locator("#exhibit-pending"));
+  await caption(page, "Its own tooling reached for a telemetry endpoint — its usage reporting. Nobody asked for that; it is just what the tool does.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-quote"));
-  await caption(page, "Caught at the door, held, and a human decided. Most setups never even see it leave.");
+  await caption(page, "Caught at the door and held — parked until a human decides. Most setups never even see it leave.");
+  await beat(page, PACE.read);
+  await caption(page, "Who decides, how far a yes reaches, and the record it all leaves — episodes ten and twelve.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await caption(page, "That is the uncomfortable truth: you cannot list what a tool will need up front — and you rarely know everything it does.");
@@ -119,8 +129,6 @@ test("V00 — why govern agents (the primer)", async () => {
 
   // --- S4 · trust it all, or block it all -------------------------------------
   await show(page, "s4");
-  await caption(page, "So teams get offered two bad answers.");
-  await beat(page, PACE.read);
   await spotlight(page, page.locator("#card-trust"));
   await caption(page, "Trust it all — every script and agent works beside your keys, and the traffic goes unwatched.");
   await beat(page, PACE.read);
@@ -140,7 +148,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Egress is anything trying to leave — and it gets exactly one door.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#d-proxy"));
-  await caption(page, "A proxy is the checkpoint at that door. It stands outside the room — and it holds the keys, not the room.");
+  await caption(page, "A proxy is the checkpoint at that door. It stands outside the room, it holds the keys — and it attaches them on the way out.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#d-rule"));
   await caption(page, "Deny by default. Decide the exceptions. Write every attempt down.");
@@ -149,22 +157,23 @@ test("V00 — why govern agents (the primer)", async () => {
 
   // --- S6 · observe, then decide ------------------------------------------------
   await show(page, "s6");
-  await caption(page, "And because nobody can predict a tool's needs, you do not guess.");
-  await beat(page, PACE.read);
   await spotlight(page, page.locator("#steps"));
-  await caption(page, "Run the job once, watched. See every host it actually reached. Then decide — on evidence.");
+  await caption(page, "So don't guess. Run the job once, watched. See every host it actually reached. Then decide — on evidence.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
+  await spotlight(page, page.locator("#s6-thesis"));
   await caption(page, "One boundary, the same discipline — for your builds, your pipelines, and your agents.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // --- S7 · the series map --------------------------------------------------------
   await show(page, "s7");
-  await caption(page, "The rest of this series stands that answer up for real — a tool called Wardyn, every claim proved on camera.");
+  await caption(page, "The rest of this series stands that answer up for real — Wardyn: open source, on your own machine, every claim proved on camera.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#roadmap"));
-  await caption(page, "Eleven more short episodes. Here is the map.");
+  await caption(page, "Eleven more episodes, about three minutes each. Here is the map.");
   await beat(page, PACE.read + 800);
+  await caption(page, "In a hurry? Episode five — what it stops — is the payoff to jump to.");
+  await beat(page, PACE.read);
   await spotlight(page, page.locator("#next"));
   await caption(page, "Next: set up the host — one command to a governed machine, and the guardrails proved before an agent touches your code.");
   await beat(page, PACE.read + 400);

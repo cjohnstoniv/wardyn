@@ -96,14 +96,17 @@
     flex: 0 0 auto; font-size: 15px; font-weight: 650; letter-spacing: .14em; color: #a1a1aa;
     text-transform: uppercase; text-align: center; padding: 0 6px;
   }
+  /* Same neutral border as the room — the amber accent belonged to the ring
+     alone, and a permanently-orange box read as a highlight before the word
+     "proxy" was ever spoken (persona round 1, ×2). */
   #d-proxy {
-    width: 380px; background: #11141b; border: 2px solid rgba(245,158,11,.6);
+    width: 380px; background: #11141b; border: 2px solid rgba(255,255,255,.22);
     border-radius: 18px; padding: 26px 30px;
   }
   #d-proxy .what { font-size: 23px; }
   #d-proxy .keys { margin-top: 14px; font-size: 21px; color: #f59e0b; }
-  #d-out { width: 300px; padding: 26px 30px; border: 2px dashed rgba(255,255,255,.16); border-radius: 18px; }
-  #d-out .what { font-size: 22px; color: #a1a1aa; }
+  #d-out { width: 340px; padding: 26px 30px; border: 2px dashed rgba(255,255,255,.16); border-radius: 18px; }
+  #d-out .what { font-size: 24px; color: #d4d4d8; }
   #d-rule { font-size: 27px; margin-top: 6px; }
   #d-rule b { color: #f59e0b; font-weight: 650; }
 
@@ -126,7 +129,7 @@
 </head>
 <body>
 
-<section id="s1" class="on">
+<section id="s1">
   <div class="kicker">The floor we all stand on</div>
   <h1>Your machines already run strangers&rsquo; code, every day.</h1>
   <div class="row">
@@ -137,7 +140,10 @@
     <div class="card" id="t-ci"><b>CI jobs</b>
       <span class="muted">All of the above, unattended, with the deploy keys nearby.</span></div>
   </div>
-  <div class="muted" style="font-size:25px">Supply-chain attacks live exactly here &mdash; one compromised package, quietly reading and shipping out.</div>
+  <div class="muted" id="s1-supply" style="font-size:25px">Supply-chain attacks live exactly here &mdash; one compromised
+    package, quietly reading and shipping out. <span class="mono" style="color:#f59e0b">SolarWinds &middot; event-stream &middot; XZ Utils</span></div>
+  <div id="s1-predates" style="font-size:27px"><b style="color:#f59e0b">That risk predates AI.</b>
+    <span class="muted">Most teams never watch the traffic.</span></div>
 </section>
 
 <section id="s2">
@@ -156,8 +162,14 @@
   <div class="kicker">A real frame from this series</div>
   <h1>Even the honest tools phone home.</h1>
   <div class="row">
-    <div id="exhibit-wrap">
+    <div id="exhibit-wrap" style="position:relative">
       <img id="exhibit" src="primer-datadog.png" alt="Egress panel: allow rows for api.anthropic.com and one pending row for http-intake.logs.us5.datadoghq.com">
+      <!-- Ring target for the one row the narration singles out. The exhibit is
+           a flat image, so the row gets its own transparent hitbox — the whole-
+           panel ring reading as "pointing at all six rows" cost the beat in
+           persona round 1. Percentages track the crop (row 3 of primer-datadog
+           .png); recompute if the exhibit is ever recropped. -->
+      <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:44.5%;height:13.5%"></div>
       <div id="exhibit-note" class="muted">A coding agent, mid ordinary job &mdash; unedited.</div>
     </div>
     <div id="exhibit-quote">
@@ -202,7 +214,7 @@
     <div class="arrow"></div>
     <div id="d-out">
       <div class="label" style="color:#a1a1aa">The internet</div>
-      <div class="what">only what was allowed, only with what the checkpoint attached</div>
+      <div class="what">only what was allowed &mdash; carrying what the checkpoint attached</div>
     </div>
   </div>
   <div id="d-rule"><b>Deny by default.</b> Decide the exceptions. Write every attempt down.</div>
@@ -219,7 +231,8 @@
     <div class="card"><b>3 &middot; DECIDE</b><div class="big">Decide what&rsquo;s allowed</div>
       <span class="muted">Yes, no, or ask me &mdash; and it&rsquo;s on the record.</span></div>
   </div>
-  <div class="muted" style="font-size:25px">One boundary, same discipline &mdash; builds, pipelines, and agents.</div>
+  <div id="s6-thesis" style="font-size:29px"><b style="color:#f59e0b">One boundary, same discipline</b>
+    <span class="muted">&mdash; builds, pipelines, and agents.</span></div>
 </section>
 
 <section id="s7">
