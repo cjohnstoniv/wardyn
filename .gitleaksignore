@@ -41,3 +41,10 @@ a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
 # public by construction — that is what a recipient is for. Kept verbatim so an
 # operator can match the message they actually see.
 fb3117ab9f1a4b4f2c037ce22a29c38ab195d1e6:docs/OPERATIONS.md:generic-api-key:1377
+
+# The Helm chart's age-key preflight FAIL MESSAGE quotes the values flag that
+# opts out of it — `secrets.allowEphemeralAgeKey=true` — as remediation text an
+# operator can copy. It is a chart value NAME in a template comment, not key
+# material; the message is the whole point of the guard (an ephemeral age
+# identity against a persistent Postgres crash-loops on the second boot).
+cabdaf793a0c628f3be6abfba613ae3efbeee554:deploy/helm/wardyn/templates/secret.yaml:generic-api-key:53
