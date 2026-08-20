@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Sun,
   UserCog,
+  Users,
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip, ConfinementChip } from "../wardyn/primitives";
@@ -123,6 +124,11 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/policies", label: "Policies", icon: UserCog },
+  // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
+  // allowed here", one for runs and one for the humans launching them. It is
+  // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
+  // behind it is operatorOnly server-side.
+  { to: "/permissions", label: "Permissions", icon: Users },
   { to: "/secrets", label: "Secrets", icon: Lock },
   { to: "/audit", label: "Audit", icon: ScrollText },
 ];
