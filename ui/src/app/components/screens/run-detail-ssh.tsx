@@ -153,6 +153,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       {sshOn && (
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
         <CodeBlock text={command} />
+        <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          Or skip retyping it: <Mono className="text-foreground">wardyn ssh {run.id}</Mono>
+        </p>
 
         <details className="mt-2.5">
           <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">

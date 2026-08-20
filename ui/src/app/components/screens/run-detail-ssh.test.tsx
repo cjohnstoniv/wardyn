@@ -123,6 +123,8 @@ describe("ConnectSSHCard — content", () => {
 
     await screen.findByText("Attach from your terminal");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`)).toBeInTheDocument();
+    // C3.2b: the wardyn ssh <run-id> shortcut line sits above "ssh config".
+    expect(screen.getByText((t) => t.includes(`wardyn ssh ${baseRun.id}`))).toBeInTheDocument();
     expect(screen.getByText(/ED25519 SHA256:abc123/)).toBeInTheDocument();
     expect(screen.getByText("ssh config")).toBeInTheDocument();
     expect(screen.getByText("VS Code Remote-SSH")).toBeInTheDocument();
