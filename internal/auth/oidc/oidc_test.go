@@ -1108,9 +1108,10 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 	var got writoidc.Session
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got = writoidc.Session{
-			Sub:   writoidc.PrincipalFromContext(r.Context()),
-			Email: writoidc.EmailFromContext(r.Context()),
-			Role:  writoidc.RoleFromContext(r.Context()),
+			Sub:    writoidc.PrincipalFromContext(r.Context()),
+			Email:  writoidc.EmailFromContext(r.Context()),
+			Role:   writoidc.RoleFromContext(r.Context()),
+			Groups: writoidc.GroupsFromContext(r.Context()),
 		}
 	})
 	checkReq := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -136,6 +137,30 @@ type Session struct {
 	Email  string    `json:"email"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
+	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity: the
+	// normalized union of the ID token's "roles" and "groups" claims (see
+	// sessionGroups). It is what a `group`-subject capability grant matches
+	// against — folding Entra App Roles in for free, since those arrive on
+	// "roles" and are the claim an Entra admin can actually assign.
+	//
+	// It is a SNAPSHOT and nothing refreshes it: a group added at the IdP
+	// reaches Wardyn on the human's next login, and that ceiling is published
+	// rather than hidden (grants themselves resolve per request from the DB, so
+	// only MEMBERSHIP is stale, never the grant list).
+	//
+	// NO omitempty, deliberately. nil and empty must stay distinguishable
+	// across the cookie round trip: a PRE-0.6 cookie has no groups key at all
+	// and decodes to nil ("we never asked"), while a 0.6 login with no groups
+	// encodes `[]` and decodes to an empty non-nil slice ("we asked, there were
+	// none"). That is the ONLY signal for groups_snapshot_stale — with
+	// omitempty both cases would encode identically and a member holding a
+	// pre-upgrade cookie would be told their group grants simply do not apply.
+	// The cost is 12 bytes of cookie.
+	//
+	// decodeSession is deliberately NOT widened to require this field: a
+	// pre-0.6 cookie stays VALID and nobody is forced to re-login by an
+	// upgrade.
+	Groups []string `json:"groups"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -387,12 +412,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// (6) Create a Wardyn session.
+	// (6) Create a Wardyn session. Groups is stamped from the SAME two
+	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
+	// enough to contribute nothing to the role contributes nothing here either,
+	// and never fails the login.
 	sess := Session{
 		Sub:    idToken.Subject,
 		Email:  claims.Email,
 		Role:   role,
 		Expiry: idToken.Expiry,
+		Groups: sessionGroups(rc.Roles, gc.Groups),
 	}
 	if sess.Expiry.IsZero() {
 		// Default to 1 hour if the IdP didn't set an expiry.
@@ -468,6 +497,24 @@ func EmailFromContext(ctx context.Context) string {
 func RoleFromContext(ctx context.Context) string {
 	r, _ := ctx.Value(roleCtxKey{}).(string)
 	return r
+}
+
+// GroupsFromContext returns the login-time group snapshot of the session
+// Middleware verified — the subjects a `group` capability grant matches.
+//
+// NIL AND EMPTY MEAN DIFFERENT THINGS and callers must keep them apart. Empty
+// non-nil: this session was minted by 0.6+, the IdP sent no usable group
+// identity, and group grants genuinely do not apply. Nil: either there is no
+// SSO session at all, or the human is holding a PRE-0.6 cookie that predates
+// the field — group grants cannot be evaluated for them until they log in
+// again, which is what internal/api surfaces as groups_snapshot_stale rather
+// than silently reporting "no groups".
+//
+// Same DERIVES-not-ENFORCES split as RoleFromContext: this package carries the
+// snapshot, internal/api decides what it permits.
+func GroupsFromContext(ctx context.Context) []string {
+	g, _ := ctx.Value(groupsCtxKey{}).([]string)
+	return g
 }
 
 // ─── session encoding ────────────────────────────────────────────────────────
@@ -682,6 +729,82 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 	}
 }
 
+// maxSessionGroupsBytes bounds what Session.Groups may contribute to the JSON
+// payload — NOT to the cookie, which is a bigger number by a factor that is
+// easy to forget:
+//
+//	cookie ≈ len("wardyn_session=") + ceil(4/3 · payload) + 1 + 44
+//
+// The base64 in encodeSession expands the payload by a THIRD before the dot
+// and the 32-byte HMAC (44 base64 chars) are appended. A browser drops a
+// cookie over ~4096 bytes ENTIRELY — no error, no truncation, just a human who
+// cannot stay signed in — so budgeting the payload as if it were the cookie
+// overshoots by ~1100 bytes and breaks login for exactly the group-heavy
+// directory this field exists to serve.
+//
+// 2048 for groups plus a few hundred for sub/email/role/expiry lands the whole
+// cookie near 3100, with headroom for an unusually long sub or email. That
+// still carries ~100 typical group names; a human in more groups than that is
+// one where per-group grants were never the workable answer anyway (grant the
+// user directly, or prefer Entra App Roles, which arrive on the much smaller
+// "roles" claim). TestSessionGroupsCapKeepsTheCookieUsable measures the real
+// encoded cookie rather than trusting this arithmetic.
+const maxSessionGroupsBytes = 2048
+
+// sessionGroups normalizes the ID token's roles+groups claims into the group
+// identity a `group`-subject capability grant matches against: the union of
+// both claims, trimmed, lowercased, printable-ASCII only, deduped, sorted, and
+// truncated to maxSessionGroupsBytes.
+//
+// NEVER returns nil — an empty result is the empty non-nil slice, because nil
+// is reserved for "this cookie predates 0.6" (see Session.Groups).
+//
+// Printable-ASCII only, for the same reason deriveRole's loop skips non-ASCII
+// claim values (asciiOnly): a grant subject is an operator-authored ASCII
+// string, and Unicode case folding lets a crafted claim fold ONTO one. Control
+// characters are dropped with the rest — they cannot appear in a real group
+// name, and excluding them keeps the byte budget below exact.
+//
+// SORTED, then truncated FROM THE END: the drop must be deterministic, so the
+// same human with the same claims loses the same groups on every login. An
+// admin debugging "why does this grant not apply" gets a stable answer instead
+// of a coin flip. (Ordering is lexical, so a truncated human loses their
+// alphabetically-last groups — arbitrary, but arbitrary and REPEATABLE.)
+func sessionGroups(rolesClaim, groupsClaim []string) []string {
+	seen := make(map[string]bool, len(rolesClaim)+len(groupsClaim))
+	uniq := make([]string, 0, len(rolesClaim)+len(groupsClaim))
+	for _, v := range slices.Concat(rolesClaim, groupsClaim) {
+		g := strings.ToLower(strings.TrimSpace(v))
+		if g == "" || !printableASCII(g) || seen[g] {
+			continue
+		}
+		seen[g] = true
+		uniq = append(uniq, g)
+	}
+	slices.Sort(uniq)
+
+	out := make([]string, 0, len(uniq))
+	used := 0
+	for _, g := range uniq {
+		// Exact JSON cost: two quotes, a comma, and one extra byte for each
+		// character the encoder escapes. Control characters (the only other
+		// escapes) are already filtered out above.
+		cost := len(g) + 3 + strings.Count(g, `"`) + strings.Count(g, `\`)
+		if used+cost > maxSessionGroupsBytes {
+			break
+		}
+		used += cost
+		out = append(out, g)
+	}
+	return out
+}
+
+// printableASCII reports whether every rune of s is a printable ASCII
+// character (U+0020..U+007E). Stricter than asciiOnly — see sessionGroups.
+func printableASCII(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < ' ' || r > '~' }) < 0
+}
+
 // emailInList reports whether email case-insensitively matches an entry in
 // list (mirrors the operator-allowlist match in internal/api's isOperator).
 // email is trimmed here too (each list entry is trimmed below, at the point
@@ -786,12 +909,18 @@ func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
 	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
-// contextWithPrincipal stores the verified session's sub, email, and role on
-// the context (read back via PrincipalFromContext / EmailFromContext /
-// RoleFromContext).
+// contextWithPrincipal stores the verified session's sub, email, role, and
+// group snapshot on the context (read back via PrincipalFromContext /
+// EmailFromContext / RoleFromContext / GroupsFromContext).
+//
+// Groups is stored even when nil, and that is not a wasted WithValue: a nil
+// value and an absent key both read back as nil, so this line costs nothing to
+// get right and keeps contextWithPrincipal free of a special case that would
+// only ever be re-added later.
 func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
+	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	return context.WithValue(ctx, roleCtxKey{}, sess.Role)
 }
 
@@ -815,6 +944,10 @@ type emailCtxKey struct{}
 // roleCtxKey is the context key for the session's derived role.
 // Unexported: use RoleFromContext.
 type roleCtxKey struct{}
+
+// groupsCtxKey is the context key for the session's login-time group snapshot.
+// Unexported: use GroupsFromContext.
+type groupsCtxKey struct{}
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────
 
