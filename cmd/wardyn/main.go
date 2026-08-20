@@ -168,6 +168,7 @@ func rootCmd() *cobra.Command {
 		sourceCmd(client),
 		secretCmd(client),
 		attachCmd(client),
+		sshCmd(client),
 		recordCmd(client),
 		subscriptionCmd(client),
 		setupCmd(client),
