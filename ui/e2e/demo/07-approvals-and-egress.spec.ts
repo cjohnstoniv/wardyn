@@ -76,12 +76,23 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { test, expect, type Locator } from "@playwright/test";
-import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
+import {
+  act,
+  beat,
+  caption,
+  centerInFrame,
+  ffwdEnd,
+  ffwdStart,
+  PACE,
+  spotlight,
+  typeInTerminal,
+} from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide } from "./funnel";
+import { sweepStaleState } from "./sweep";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -116,7 +127,15 @@ const TELEMETRY_HOST = "ingest.sentry.io";
 // approval lands while the request is still parked and the SAME curl completes.
 // Beats 6 and 8 reuse the exact string on purpose — "same command" is a line
 // the narrator says out loud.
-const REACH_HELD = `curl -sSI --max-time 60 https://${HELD_HOST}`;
+//
+// NOT `-sSI` (a bare HEAD): crates.io answers a HEAD with 403 even when the
+// tunnel is allowed, so three separate "success" beats used to print 403 as
+// their headline (persona round 1's #1 finding — it read as three failures).
+// `-o /dev/null -w '%{http_code}\n'` prints just the one number that matters.
+// The `\n` here is TWO characters (backslash, n), not a JS newline escape —
+// curl's own -w parser is what turns it into a line break; typing an actual
+// newline mid-command would submit the line early.
+const REACH_HELD = `curl -sS --max-time 60 -o /dev/null -w '%{http_code}\\n' https://${HELD_HOST}/api/v1/crates/serde`;
 const REACH_TELEMETRY = `curl -sSI --max-time 60 https://${TELEMETRY_HOST}`;
 
 /** Beat 6's run title. Beat 8's is separate so the board shows two rows. */
@@ -130,11 +149,12 @@ const SANDBOX_UP = 180_000;
 
 /**
  * A response actually came back, rather than the proxy refusing the tunnel.
- * NOT a bare /HTTP/ match: the proxy's own refusal renders as `HTTP/1.1 403`
- * in curl -sSI output, which is precisely the frame this assertion exists to
- * refuse to narrate over. 2xx/3xx only.
+ * `-w '%{http_code}\n'` writes ONLY the status code (the body is discarded to
+ * /dev/null), so the bare digits `200` are unambiguous here — a proxy refusal
+ * would print `403`, which is precisely the frame this assertion exists to
+ * refuse to narrate over.
  */
-const RESPONDED = /HTTP\/[\d.]+ [23]\d\d/;
+const RESPONDED = /\b200\b/;
 
 // ---------------------------------------------------------------------------
 // WAIT_UNLESS_GONE — the one shape every wait in this video is written in.
@@ -204,8 +224,8 @@ async function waitUnlessGone(
 //      on that rather than clicking a dead button for 45s.
 //   2. The stack has NOT been reset since the earlier videos (record-demo.sh
 //      --video 07 already defaults DO_RESET=0; never pass --reset here).
-//   3. Both hosts are reachable from this machine's egress path — crates.io
-//      must answer a HEAD with a 2xx/3xx, or beat 2's payoff assertion fails.
+//   3. Both hosts are reachable from this machine's egress path — crates.io's
+//      /api/v1/crates/serde must answer 200, or beat 2's payoff assertion fails.
 //   4. No model needed. This video is keyless end to end.
 // ---------------------------------------------------------------------------
 
@@ -293,6 +313,10 @@ async function restageWorkspace(): Promise<void> {
 // standing between a developer's stack and that.
 test.beforeAll(async () => {
   if (!process.env.WARDYN_DEMO) return;
+  // S6: deny stale pending approvals / kill stale runs first — the Approvals
+  // badge otherwise carries a prior take's number (as high as 10) through the
+  // whole video, and the on-camera tick from 0 to 1 in beat 1 is the receipt.
+  await sweepStaleState([WORKSPACE]);
   await restageWorkspace();
 });
 
@@ -329,6 +353,15 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await caption(page, "An agent reaches for a host nobody allow-listed. Who decides, and for how long?");
   await beat(page, PACE.read);
   await spotlight(page, null);
+
+  // S7: the card's own printed steps still say example.com/wikipedia.org —
+  // own the swap before anything is typed, or the mismatch fumbles the first
+  // 30 seconds.
+  await caption(
+    page,
+    "The card's script uses example.com — we'll reach for crates.io instead, a host this workspace wants for good.",
+  );
+  await beat(page, PACE.read);
 
   const startDemo = card.getByTestId("demo-start-held-at-the-door");
   // The barrier gate, named. Without a ready barrier this button is disabled
@@ -368,6 +401,10 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
 
   // ---- B1 · Held ----------------------------------------------------------
   await typeInTerminal(page, REACH_HELD, card);
+  // Ring only once the terminal has something to show — the command now
+  // hanging — never the idle pane before it (S3: point at content, not
+  // emptiness).
+  await spotlight(page, card.locator(".xterm-screen").first());
   await caption(page, "The command is hanging. Nothing failed — the connection is parked at the proxy.");
 
   // The strip's header is the wait_for_review flavour (isHeld → anyHeld), which
@@ -406,6 +443,8 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // decides a NAMED host, never .first(): approving something you did not mean
   // to approve is the worst possible frame in a governance video.
   await decide(card, "Approve", "Plain Approve is one scope: This run.", HELD_HOST);
+  await caption(page, "That plain click was the default — This run. The caret is where the other sizes live.");
+  await beat(page, PACE.read);
 
   // THE PAYOFF. The narration claims the same in-flight request finishes with
   // no retry; without this assertion a take stays green while narrating success
@@ -416,15 +455,22 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
     expect(card.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
     demoOver(card),
     60_000,
-    `the held ${HELD_HOST} request never completed with a 2xx/3xx — the proxy's ~30s hold ` +
+    `the held ${HELD_HOST} request never completed with a 200 — the proxy's ~30s hold ` +
       `(defaultHoldTimeout) expired before the approval landed, so the curl had already 403'd`,
   );
   await caption(page, "The same in-flight command completes. No retry — it was never refused.");
   await beat(page, PACE.read + 600);
+  // THE RECEIPT ITSELF: distinguish a real answer from the 403 this whole
+  // beat exists to stop narrating over.
+  await caption(
+    page,
+    "Two hundred — the tunnel opened and the host answered. A blocked one dies with connect failed.",
+  );
+  await beat(page, PACE.read);
 
   // ---- B3 · Unwanted host -------------------------------------------------
   await typeInTerminal(page, REACH_TELEMETRY, card);
-  await caption(page, "A second host: the agent's own telemetry. Nobody asked for it.");
+  await caption(page, "A second host — the call a harness makes on its own. Here, we play the agent.");
   const telemetryRow = card.getByTestId("live-approval-row").filter({ hasText: TELEMETRY_HOST });
   await waitUnlessGone(
     expect(telemetryRow).toBeVisible({ timeout: APPROVAL_APPEARS }),
@@ -445,7 +491,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await act(
     page,
     telemetryRow.getByRole("button", { name: "More options" }).first(),
-    "The caret opens the other three.",
+    "The caret holds all four.",
   );
   // Radix portals the menu content, so it is NOT a descendant of the row — and
   // scoping to the open menu (rather than the page) keeps /^Once/ from also
@@ -463,12 +509,11 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
 
   // "Until…" swaps the menu for its preset list (untilMode) rather than
   // deciding — the four presets and a datetime picker, with "← Back" out.
-  await act(
-    page,
-    menu.getByRole("button", { name: /^Until…/ }),
-    "Until is time-boxed — fifteen minutes, an hour, or a time you pick.",
-  );
+  // CLICK FIRST, narrate second: naming the presets before the submenu that
+  // shows them is a claim with no receipt yet (S1).
+  await act(page, menu.getByRole("button", { name: /^Until…/ }));
   await expect(menu.getByRole("button", { name: "15 minutes" })).toBeVisible();
+  await caption(page, "Until is time-boxed — fifteen minutes, an hour, or a time you pick.");
   await beat(page, PACE.read + 600);
   await act(page, menu.getByRole("button", { name: "← Back" }));
 
@@ -490,6 +535,27 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
 
+  // THE FAIL-CLOSED BEAT. The proxy's ~30s hold cannot outlast the ~35s ladder
+  // tour above it — by the time the menu closes the window has almost
+  // certainly lapsed and curl has already died with its own connection error.
+  // Wait for that line and say what it proves, instead of letting it die
+  // silently under a strip that still reads WAITING (Dana: it failed closed;
+  // that is a selling point, not a glitch). The row itself still saying
+  // WAITING after its connection died is a product gap, not this beat's to fix.
+  await waitUnlessGone(
+    expect(card.locator(".xterm-screen").first()).toContainText(/curl: \(56\)/, { timeout: 45_000 }),
+    demoOver(card),
+    45_000,
+    `${TELEMETRY_HOST}'s held request never lapsed with its own curl: (56) — the fail-closed beat has nothing to point at`,
+  );
+  await spotlight(page, card.locator(".xterm-screen").first());
+  await caption(
+    page,
+    "While we read the menu, the window lapsed — nobody answered, so it failed closed. Refused, never granted.",
+  );
+  await beat(page, PACE.read + 600);
+  await spotlight(page, null);
+
   // ---- B5 · Deny ----------------------------------------------------------
   // The ~30s hold may well have expired during the ladder walk — the request
   // 403s and the row STAYS pending and decidable, which is why this beat is
@@ -497,7 +563,18 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   //
   // decide() clicks the bare Deny, confirms in the alertdialog (Deny always
   // confirms, whatever the scope), and asserts the row is GONE afterwards.
-  await decide(card, "Deny", "Telemetry gets nothing. Deny always confirms first.", TELEMETRY_HOST);
+  //
+  // Cheap, and true without opening it: the row's Deny button carries the same
+  // caret as Approve's. VERIFY the deny scope set at rehearsal (Once/This
+  // run/Until/Always, or a narrower list) before this line airs as fact.
+  await caption(page, "Deny carries a caret too — a no can be sized the same way.");
+  await beat(page, PACE.read);
+  await decide(
+    card,
+    "Deny",
+    "The ask is still parked for the record — Deny clears it, and the refusal is the row the trail keeps.",
+    TELEMETRY_HOST,
+  );
 
   // THE RETRY, and it is load-bearing rather than decoration.
   //
@@ -516,7 +593,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // shows an instant refusal instead of a 60-second hang, and THAT is the
   // egress.deny the panel is about.
   await typeInTerminal(page, REACH_TELEMETRY, card);
-  await caption(page, "Denied. Who decided, and at what scope, lands in the audit trail.");
+  await caption(page, "Denied — and the refusal is a row now, beside the allow.");
   const auditPanel = card.getByTestId("demo-audit-panel");
   await spotlight(page, auditPanel);
   // The claim, asserted: a deny row for THIS host, not merely the pending row
@@ -558,8 +635,11 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   const titleBox = page.getByLabel("Title");
-  await spotlight(page, titleBox);
+  // Fill BEFORE ringing: a ring that lands before the fill sits on an empty
+  // box for its whole visible span — .fill() is instant, so "ring then fill"
+  // never actually shows content inside it (S3: point at content).
   await titleBox.fill(ALWAYS_RUN_TITLE);
+  await spotlight(page, titleBox);
   await spotlight(page, null);
 
   // Terminal, not the agent: this video is keyless, and a shell is all a curl
@@ -607,7 +687,11 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
     "the default unlisted-hosts rule is no longer deny_with_review — beat 6's narration says it is",
   ).toHaveAttribute("aria-checked", "true");
 
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await act(
+    page,
+    page.getByRole("button", { name: "Launch run" }),
+    "Same form as video four — workspace egress-lab, the model host only, ask for the rest. Vault is just this host's default.",
+  );
 
   // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go:
   // "dispatch is invoked synchronously from the create-run handler"), so the
@@ -651,6 +735,8 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   );
   await caption(page, "Real workspace now, and the default ask policy. Refused — and it raised an approval.");
   await beat(page, PACE.read);
+  await caption(page, "Different from the hold you just saw — this default refuses first, then asks.");
+  await beat(page, PACE.read);
 
   // `always` is the whole point of the video. It is only clickable because THIS
   // run resolves to a workspace (run-detail passes hasWorkspace=runHasWorkspace
@@ -661,9 +747,10 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await decide(
     page,
     "Approve",
-    "This time, Always. And where allow and deny collide, deny wins.",
+    "This time, Always — the widest yes, saved to the workspace.",
     HELD_HOST,
     "always",
+    "Once, this run, until a time — or always.",
   );
   await beat(page, PACE.read + 600);
 
@@ -681,10 +768,16 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // and the receipt would be someone else's.
   const allowed = page.getByText("Allowed hosts · 1");
   await expect(allowed).toBeVisible({ timeout: 30_000 });
-  await spotlight(page, allowed);
-  await caption(page, "The receipt: crates.io is on the workspace's own Allowed hosts list now.");
-  await expect(page.getByText(HELD_HOST, { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("approved for this workspace")).toBeVisible();
+  // Ring the ROW, not the "Allowed hosts" heading above it — Morgan: "the
+  // single most important frame in the video is obscured by its own
+  // subtitle." Center it first (S2): a bottom-of-list row sits exactly under
+  // the caption bar otherwise, and a short caption clears the bar sooner too.
+  const receiptRow = page.getByRole("listitem").filter({ hasText: HELD_HOST });
+  await expect(receiptRow).toBeVisible();
+  await expect(receiptRow).toContainText("approved for this workspace");
+  await centerInFrame(receiptRow);
+  await spotlight(page, receiptRow);
+  await caption(page, "The receipt: crates.io, approved for this workspace.");
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 });
@@ -702,8 +795,9 @@ test("beat 8 — a new run, and nothing to click", async () => {
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   const titleBox = page.getByLabel("Title");
-  await spotlight(page, titleBox);
+  // Fill before ringing — see beat 6's identical fix (S3: point at content).
   await titleBox.fill(PROOF_RUN_TITLE);
+  await spotlight(page, titleBox);
   await spotlight(page, null);
 
   await act(page, page.getByRole("radio", { name: /^Terminal/ }));
@@ -713,8 +807,18 @@ test("beat 8 — a new run, and nothing to click", async () => {
   // Network is DELIBERATELY untouched — that omission IS the beat. The
   // workspace's approved_egress is unioned into this run's allowlist
   // server-side (unionWorkspaceEgress, runs_create.go), so there is nothing to
-  // configure.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  // configure. The rail itself only counts the POLICY's hosts, so say the
+  // true thing about what it's showing (product gap logged separately).
+  await caption(
+    page,
+    "The rail counts the policy's hosts — the workspace's standing allows ride along, and land in the log.",
+  );
+  await beat(page, PACE.read);
+  await act(
+    page,
+    page.getByRole("button", { name: "Launch run" }),
+    "Same workspace, same command — the only thing that changed is what the workspace remembers.",
+  );
 
   // FAST-FORWARD, for beat 6's reason: this create dispatches synchronously too.
   await beat(page, 200);
