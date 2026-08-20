@@ -148,6 +148,32 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 	return !enforced, nil
 }
 
+// capSeamAllowed is capAllowed AT AN ENFORCEMENT SEAM — same answer, plus the
+// one case a seam has and the resolver deliberately refuses to guess at: a
+// deployment with no Store cannot hold a grant OR an enforcement row, so there
+// is nothing to enforce and the seam behaves exactly as 0.5 did.
+//
+// capAllowed itself keeps erroring on a nil Store, because a RESOLVER that
+// answered "allowed" for a question it could not resolve is the failure mode
+// this file is built against. The difference is that the resolver is asked
+// about a deployment that has capability state and cannot reach it, while a
+// seam is running in a build that has none at all (this package's own
+// harnesses; wardynd always wires PG). Those are not the same situation and
+// must not fail the same way.
+//
+// ponytail: one call per value, so a seam asking about N values pays 2N indexed
+// reads on a small table. N is a handful everywhere it is used today (a run's
+// egress allowlist, a deployment's secret names). If one grows, resolve the
+// caller's grants + enforcement ONCE and match in-process — capValueMatches is
+// already the whole matcher — rather than caching across requests, which is the
+// HA blocker capAllowed's own comment names.
+func (s *Server) capSeamAllowed(ctx context.Context, kind, value string) (bool, error) {
+	if s.cfg.Store == nil {
+		return true, nil
+	}
+	return s.capAllowed(ctx, kind, value)
+}
+
 // capEnforced reports whether kind's switch is on. An absent row is off — the
 // zero-config default that keeps an upgraded 0.5 deployment unchanged.
 func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
