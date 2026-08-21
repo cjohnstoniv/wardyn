@@ -192,10 +192,13 @@ test("V05a act 1 — back to the funnel", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  // A fresh browser session starts the funnel over at step 1. The barrier
-  // pick and Secrets carry over from this host's own state (video two proved
-  // them); Network does not — steps.ts's CorpNetworkState is deliberately
-  // SESSION-only ("never a stale 'reached' surviving a page reload").
+  // A fresh browser session lands on the first-light hero, not inside the
+  // funnel — the steps only mount behind "Get started" (episode 02 clicked it
+  // on camera; here it is silent, no owner line covers it). Past that, the
+  // barrier pick and Secrets carry over from this host's own state (video two
+  // proved them); Network does not — steps.ts's CorpNetworkState is
+  // deliberately SESSION-only ("never a stale 'reached' surviving a reload").
+  await act(page, page.getByRole("button", { name: /Get started/ }));
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(
     page,
