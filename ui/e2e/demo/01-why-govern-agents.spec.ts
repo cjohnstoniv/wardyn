@@ -113,8 +113,16 @@ test("V00 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#agent-caps"));
   await caption(page, "Anything your shell can do, it can do.");
   await beat(page, PACE.read);
+  // Owner direction: this case is NOT about malice — it is what an
+  // uncontrolled agent can reach and break. On a developer's machine that
+  // reach is everything the developer's own account can touch.
+  await unhide(page, "s2-access");
+  await spotlight(page, page.locator("#s2-access"));
+  await caption(page, "And on your machine, it runs as you — every file you can read, every credential you hold, it can reach.");
+  await beat(page, PACE.read);
+  await unhide(page, "s2-eager");
   await spotlight(page, page.locator("#s2-eager"));
-  await caption(page, "Not malicious — eager, fast, unsupervised at two in the morning.");
+  await caption(page, "Not malicious — eager, fast, unsupervised at two in the morning. Without controls, one wrong step can read, ship out, or delete what it never should have touched.");
   await beat(page, PACE.read);
   // The one term that is genuinely NEW with agents gets an on-screen home —
   // spoken-only at pace, it was the single un-glossed word three round-6
