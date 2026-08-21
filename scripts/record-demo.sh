@@ -439,10 +439,25 @@ if [[ "${DO_RESET}" == 1 ]] || ! curl -fsS --max-time 5 "http://localhost:${WARD
   log "workspaces root: ${WORKSPACES_ROOT}"
   # WARDYN_UP_NO_BROWSER: up.sh otherwise fires wslview and an uncontrolled window
   # lands in frame. The driver opens the browser itself, at the moment it wants it.
+  if [[ "${VIDEO}" == "02" ]]; then
+    # Episode 02 opens on THIS install, replayed: capture make setup as a real
+    # shell recording (util-linux script + timing) and convert it to an
+    # asciicast the take's browser lane plays back. The pty gets a fixed
+    # geometry so the player's cols/rows match the converter's.
+    step "Act 0 · make setup (recorded for the take)"
+    rm -f "${DEMO_OUT_DIR}/setup.typescript" "${DEMO_OUT_DIR}/setup.timing" "${DEMO_OUT_DIR}/setup.cast"
+    script -qe --timing="${DEMO_OUT_DIR}/setup.timing" -c \
+      "stty cols 110 rows 30 2>/dev/null; WARDYN_SETUP_MODE=container WARDYN_WORKSPACES_ROOT='${WORKSPACES_ROOT}' WARDYN_UP_NO_BROWSER=1 make setup" \
+      "${DEMO_OUT_DIR}/setup.typescript" || die "make setup failed (recorded)"
+    python3 "${REPO_ROOT}/scripts/cast-convert.py" \
+      "${DEMO_OUT_DIR}/setup.typescript" "${DEMO_OUT_DIR}/setup.timing" \
+      "${DEMO_OUT_DIR}/setup.cast" || die "cast conversion failed — the install replay would film an empty player"
+  else
   WARDYN_SETUP_MODE=container \
   WARDYN_WORKSPACES_ROOT="${WORKSPACES_ROOT}" \
   WARDYN_UP_NO_BROWSER=1 \
     make setup || die "make setup failed"
+  fi
 else
   step "Act 0 · stack already up"
   log "healthz answered on :${WARDYN_UP_PORT:-8080} and no reset was asked for — reusing it"

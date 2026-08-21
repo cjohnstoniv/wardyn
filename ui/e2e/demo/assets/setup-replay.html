@@ -1,0 +1,104 @@
+<!doctype html>
+<!-- Copyright 2025 The Wardyn Authors
+     SPDX-License-Identifier: Apache-2.0
+
+     Episode 02's opening beat: the REAL `make setup` shell recording, replayed.
+     Driven over file:// by 02-set-up-the-host.spec.ts, filmed like any console
+     take. The cast is captured by record-demo.sh during THIS take's own Act 0
+     (util-linux `script` around make setup) and injected by the spec via
+     window.__loadCast — no fetch, so file:// CORS never applies. The player is
+     the same asciinema-player the product itself ships (player/NOTICE). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set up the host — the install</title>
+<link rel="stylesheet" href="player/asciinema-player.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: #0b0d12; color: #fafafa;
+    font: 400 24px/1.5 ui-sans-serif, system-ui, sans-serif;
+    padding: 64px 110px 190px; /* bottom band belongs to the caption bar */
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  #topline { display: flex; align-items: center; gap: 22px; }
+  #cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 30px; color: #fafafa;
+    background: #11141b; border: 1px solid rgba(255,255,255,.14);
+    border-radius: 12px; padding: 12px 22px;
+  }
+  #cmd .dollar { color: #71717a; margin-right: 12px; }
+  #cmd b { color: #f59e0b; font-weight: 650; }
+  #chip {
+    margin-left: auto; font-size: 17px; font-weight: 650; letter-spacing: .08em;
+    color: #f59e0b; border: 1px solid rgba(245,158,11,.5); border-radius: 999px;
+    padding: 7px 16px; text-transform: uppercase;
+  }
+  #main { display: flex; gap: 26px; min-height: 0; flex: 1; }
+  #playerbox {
+    flex: 1; min-width: 0; background: #0d0f14;
+    border: 1px solid rgba(255,255,255,.12); border-radius: 14px;
+    padding: 10px; overflow: hidden;
+  }
+  /* The player sizes to its cols/rows; keep it filling the box. */
+  #player .ap-player { max-height: 100%; }
+  #pre {
+    flex: 0 0 360px; align-self: flex-start;
+    background: #11141b; border: 1px solid rgba(255,255,255,.09);
+    border-radius: 14px; padding: 22px 26px;
+  }
+  #pre .label { font-size: 15px; font-weight: 650; letter-spacing: .16em;
+    color: #f59e0b; text-transform: uppercase; margin-bottom: 12px; }
+  #pre ul { list-style: none; font-size: 21px; color: #d4d4d8; }
+  #pre li { padding: 5px 0; }
+  #pre li::before { content: "· "; color: #f59e0b; }
+</style>
+</head>
+<body>
+  <div id="topline">
+    <div id="cmd"><span class="dollar">$</span><b>make setup</b></div>
+    <div id="chip">recorded shell &middot; sped up, nothing cut</div>
+  </div>
+  <div id="main">
+    <div id="playerbox"><div id="player"></div></div>
+    <div id="pre">
+      <div class="label">What it needs</div>
+      <ul>
+        <li>Docker, running</li>
+        <li>the Wardyn repo</li>
+        <li>a normal user account</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="player/asciinema-player.min.js"></script>
+  <script>
+    // Spec contract: __loadCast(castText, targetSeconds) builds the player at
+    // a speed that lands the whole recording in ~targetSeconds (never below
+    // 2x, never above 25x), paused; __play() starts it; __castEnded flips
+    // when playback finishes. All state on window — the driver polls it.
+    window.__castEnded = false;
+    window.__castSpeed = 0;
+    window.__loadCast = function (castText, targetSeconds) {
+      var last = 0;
+      castText.split("\n").forEach(function (line) {
+        if (!line || line[0] !== "[") return;
+        try { last = Math.max(last, JSON.parse(line)[0]); } catch (e) {}
+      });
+      var speed = Math.min(25, Math.max(2, Math.round(last / Math.max(1, targetSeconds))));
+      window.__castSpeed = speed;
+      var p = AsciinemaPlayer.create(
+        { data: castText },
+        document.getElementById("player"),
+        { speed: speed, idleTimeLimit: 1.0, controls: false, fit: "width", theme: "asciinema" },
+      );
+      p.addEventListener("ended", function () { window.__castEnded = true; });
+      window.__player = p;
+      return { durationS: last, speed: speed };
+    };
+    window.__play = function () { window.__player && window.__player.play(); };
+  </script>
+</body>
+</html>
