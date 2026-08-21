@@ -48,3 +48,17 @@ fb3117ab9f1a4b4f2c037ce22a29c38ab195d1e6:docs/OPERATIONS.md:generic-api-key:1377
 # material; the message is the whole point of the guard (an ephemeral age
 # identity against a persistent Postgres crash-loops on the second boot).
 cabdaf793a0c628f3be6abfba613ae3efbeee554:deploy/helm/wardyn/templates/secret.yaml:generic-api-key:53
+
+# The k8s day-2 runbook now QUOTES that same chart fail message (the paragraph
+# explaining that the age-key reset is refused at render). Same finding, same
+# reasoning as the entry above — a values-flag name inside remediation copy.
+cd72049ecaaa91d7d7d3797d6901c2d149e13868:docs/OPERATIONS.md:generic-api-key:1422
+
+# V10's demo beat types a deliberately INERT sentinel token at the camera: the
+# string a sandbox holds INSTEAD of a credential (the proxy injects the live
+# one; the value spells out "wardyn-inert-sentinel"). The beat's whole point is
+# that curling with it from outside the boundary answers 401 — it is not a key,
+# it is the demo's evidence.
+# Reachable only from main, but `gitleaks git` scans every ref, so the gate
+# needs the entry regardless of which branch the commit sits on.
+81c0984168857a706ed2884b7f8cf22bd80df4fd:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556
