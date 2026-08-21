@@ -1261,9 +1261,10 @@ wardyn: the public API would 401 every request. Set auth.adminToken.secretRef.na
 env.WARDYN_OIDC_ISSUER for SSO — [...]
 ```
 
-A refusal is the good case. `secrets.ageKeyFromSecret` has no such guard — it
-is a valid `false`, which is the shipped default — so a reset that drops it
-renders cleanly and takes the pod down at boot instead (see
+A refusal is the good case, and dropping `secrets.ageKeyFromSecret` earns one
+too: on an external-DSN install the chart refuses any render with no age
+identity wired, rather than letting the reset render cleanly and take the pod
+down at boot (see
 [the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
 below). `--reuse-values` is what keeps both cases from arising. Better still,
 keep the install's values in a file under version control and pass `-f` every
@@ -1392,7 +1393,7 @@ a failed rollout, not a surprise at first use — which is the next section.
 
 ### The age key is a Secret, and the default loses your secrets on boot 2
 
-Two supported wirings, and the chart refuses the confusable third
+Two supported wirings, and the chart refuses both ways of getting it wrong
 (`deploy/helm/wardyn/templates/secret.yaml`):
 
 | `postgres.dsn` mode | age key value | What injects `WARDYN_AGE_KEY` |
@@ -1400,14 +1401,32 @@ Two supported wirings, and the chart refuses the confusable third
 | inline (`dsn.value`) | `secrets.ageKey` | the Secret the chart creates |
 | external (`dsn.secretRef.name`) | an `age-key` entry in **that** Secret | `secrets.ageKeyFromSecret=true` |
 | external | `secrets.ageKey` | **render fails** — it would be silently dropped |
+| external | none wired at all | **render fails** — unless `secrets.allowEphemeralAgeKey=true` |
 
-`secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so a
-stock install gets **no** stable identity: wardynd mints an ephemeral one per
-boot. That install works perfectly once. Its second boot cannot decrypt what
-its first boot wrote, and because the control plane loads its own keys during
-startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`) it fails closed there,
-before serving — a `CrashLoopBackOff`, not a degraded pod. Flipping
-`ageKeyFromSecret` off on the quickstart cluster reproduces it exactly:
+`secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so an
+external-DSN install wiring neither would get **no** stable identity: wardynd
+mints an ephemeral one per boot. That install works perfectly once. Its second
+boot cannot decrypt what its first boot wrote, and because the control plane
+loads its own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`)
+it fails closed there, before serving — a `CrashLoopBackOff`, not a degraded
+pod. That is the fourth row: a guaranteed outage is not a default worth
+shipping, so the chart stops the install at render, before it touches a
+cluster.
+
+```console
+$ helm template wardyn ./deploy/helm/wardyn \
+    --set postgres.dsn.secretRef.name=wardyn-db --set auth.adminToken.value=t
+Error: execution error at (wardyn/templates/secret.yaml:53:4): wardyn:
+postgres.dsn.secretRef.name="wardyn-db" is a PERSISTENT Postgres, but no age
+identity is wired, so wardynd generates an ephemeral one at every boot. [...]
+Throwaway install where losing every stored secret on restart is fine:
+secrets.allowEphemeralAgeKey=true renders anyway.
+```
+
+Taking that escape hatch — `--set secrets.allowEphemeralAgeKey=true` — is what
+it takes to render the broken install today, and it then fails exactly as
+described. This is what flipping `ageKeyFromSecret` off on the quickstart
+cluster produced back when the render still permitted it:
 
 ```console
 $ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
