@@ -31,6 +31,7 @@ var secretNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 var reservedSecretNames = map[string]bool{
 	"wardyn-signing-key":             true,
 	"wardyn-session-key":             true,
+	"wardyn-ssh-host-key":            true,
 	"wardyn-ui-session-key":          true,
 	"wardyn-harness-anthropic-oauth": true,
 }
@@ -50,6 +51,16 @@ func reservedSecret(name string) bool {
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
 }
 
+// ReservedPlatformSecret reports whether name is one of this package's
+// platform-internal reserved keys — the base set both the generic-secrets-API
+// guard and every credential sink build on, so a true here means refused at all
+// of them.
+//
+// Exported for ONE caller: cmd/wardynd's TestPlatformSecretsAreReservedEverywhere,
+// the only place that can see both this set and the daemon's own platform-key
+// constants (a `package main` cannot be imported, so the test cannot live here).
+func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
+
 // sinkReservedSecret is the reserved-name guard at the credential SINKS — the
 // api_key injection resolver (handleInternalInjection), the git_pat/ssh_key
 // broker mints, and the policy write-time checks that mirror them. It is
@@ -68,11 +79,16 @@ func reservedSecret(name string) bool {
 // (mintGitPAT/mintSSHKey). Those return a secret's raw VALUE into the sandbox
 // (unlike api_key, whose value never leaves the broker), so they need a
 // STRICTLY WIDER guard — internal/broker.reservedBrokerSecretNames — that also
-// refuses github-app-key/github-app-id, wardyn-ssh-host-key, and
-// bedrock-api-key (W12-B-1). The broker cannot import this package, so the two
-// lists are related but deliberately not identical; do not "fix" that by
-// widening sinkReservedSecret itself — the api_key path is fine with the
-// narrower set.
+// refuses github-app-key/github-app-id and bedrock-api-key (W12-B-1). Those two
+// pairs are operator-PROVIDED credentials the generic secrets API must stay able
+// to Put, which is exactly why they are sealed on the broker side only. The
+// broker cannot import this package, so the two lists are related but
+// deliberately not identical; do not "fix" that by widening sinkReservedSecret
+// itself — the api_key path is fine with the narrower set. What the two sets
+// MUST agree on is the daemon-GENERATED platform keys (cmd/wardynd's
+// loadOrCreateSecret names, wardyn-ssh-host-key among them): nobody authors
+// those, so neither guard has a reason to let one through — see
+// TestPlatformSecretsAreReservedEverywhere (cmd/wardynd).
 func sinkReservedSecret(name string) bool {
 	return reservedSecret(name) ||
 		name == bedrockAccessKeyIDSecret ||

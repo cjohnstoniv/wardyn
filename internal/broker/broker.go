@@ -708,6 +708,14 @@ func reservedBrokerSecret(name string) bool {
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
 }
 
+// ReservedSecretName reports whether name is a key the broker must never
+// resolve into a sandbox. Exported for the same single caller
+// api.ReservedPlatformSecret is: cmd/wardynd's
+// TestPlatformSecretsAreReservedEverywhere, which ties the daemon's platform-key
+// constants to BOTH reserved sets so a future key cannot be added to one and
+// missed in the other.
+func ReservedSecretName(name string) bool { return reservedBrokerSecret(name) }
+
 // mintGitPAT resolves a stored Personal Access Token and returns its VALUE to
 // the git credential helper as username/password for a matched non-GitHub host.
 //
