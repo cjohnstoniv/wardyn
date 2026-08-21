@@ -419,7 +419,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `admin_surface` | a member requested an admin-only route | `403` |
 | `not_owner` | a member reached a run/approval/recording that exists but isn't theirs | `404` (byte-identical to missing) |
 | `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | `403` |
-| `capability_workspace` | a member named a workspace they aren't granted | `403` |
+| `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | `403`, or a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | `403`, or a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | drop |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | drop |
