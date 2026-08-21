@@ -83,6 +83,10 @@ _SUBS = [
     ("attacks live exactly here", "attacks liv exactly here"),
     ("no keys live in the room", "no keys liv in the room"),
     ("keys live inside", "keys liv inside"),
+    ("keys don't live in the room", "keys don't liv in the room"),
+    # The owner's script uses three-dot trailing ellipses ("useful...") — read
+    # as a breath, not dots. Must precede nothing (plain literal).
+    ("...", ", "),
     # Specific hosts BEFORE the generic .com/.org rules.
     ("api.anthropic.com", "the Anthropic eh pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),

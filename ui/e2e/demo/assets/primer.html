@@ -153,10 +153,10 @@
        slide-open: three personas across two rounds read every payoff ~30s
        before it was said and waited for the voice to catch up. visibility
        (not display) so layout and ring boxes are stable. -->
-  <div class="muted" id="s1-supply" style="font-size:25px;visibility:hidden">Supply-chain attacks live exactly here &mdash; one compromised
-    package, quietly reading and shipping out. <span class="mono" style="color:#f59e0b">event-stream &middot; ua-parser-js &middot; Codecov</span></div>
-  <div id="s1-predates" style="font-size:27px;visibility:hidden"><b style="color:#f59e0b">That risk predates AI.</b>
-    <span class="muted">Most teams never watch the traffic.</span></div>
+  <div class="muted" id="s1-supply" style="font-size:25px;visibility:hidden">Supply-chain attacks have been exploiting this for
+    years. <span class="mono" style="color:#f59e0b">event-stream &middot; ua-parser-js &middot; Codecov</span></div>
+  <div id="s1-predates" style="font-size:27px;visibility:hidden"><b style="color:#f59e0b">It didn&rsquo;t start with AI.</b>
+    <span class="muted">AI just gives it a new set of hands.</span></div>
 </section>
 
 <section id="s2">
@@ -168,12 +168,10 @@
     <div><code>+</code>installs packages</div>
     <div><code>&#8599;</code>calls APIs</div>
   </div>
-  <div id="s2-access" style="font-size:26px;visibility:hidden">On your machine it runs as <b style="color:#f59e0b">you</b>
-    <span class="muted">&mdash; every file you can read, every credential you hold, it can reach.</span></div>
-  <div class="muted" id="s2-eager" style="font-size:25px;visibility:hidden">Not malicious &mdash; eager, fast, unsupervised at two in the morning.
-    Without controls, one wrong step can read, ship out, or delete what it never should have touched.</div>
+  <div id="s2-access" style="font-size:26px;visibility:hidden">It often does those things as <b style="color:#f59e0b">you</b>
+    <span class="muted">&mdash; every file you can read, every credential your environment can reach, it may reach too.</span></div>
   <div id="s2-pi" style="font-size:23px;visibility:hidden"><span class="mono" style="color:#f59e0b">prompt injection</span>
-    <span class="muted">&mdash; instructions hidden in a page or file the agent reads. It steers those same hands.</span></div>
+    <span class="muted">&mdash; a dependency, a web page, or a file the agent reads can carry someone else&rsquo;s instructions.</span></div>
 </section>
 
 <section id="s3">
@@ -193,8 +191,8 @@
         <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:46%;height:10.5%"></div>
       </div>
       <div id="exhibit-note" class="muted">A coding agent, mid ordinary job &mdash; unedited. <span style="color:#f59e0b">Egress:</span> traffic trying to leave the box.</div>
-      <div id="s3-truth" style="font-size:26px;margin-top:14px;visibility:hidden"><b style="color:#f59e0b">You cannot list what a tool will need up front</b>
-        <span class="muted">&mdash; and you rarely know everything it does.</span></div>
+      <div id="s3-truth" style="font-size:26px;margin-top:14px;visibility:hidden"><b style="color:#f59e0b">You can&rsquo;t always know what a tool is going to need</b>
+        <span class="muted">&mdash; or everything it&rsquo;s going to do.</span></div>
     </div>
     <div id="exhibit-quote">
       <div class="mono">APPROVAL NEEDED &mdash; OFF-POLICY EGRESS</div>
@@ -212,10 +210,11 @@
   <div class="kicker">The usual answers</div>
   <h1>Trust it all, or block it all.</h1>
   <div class="row">
-    <div class="card" id="card-trust"><b>Trust it</b>
-      <span class="muted">Every script and agent works beside your keys. The traffic goes unwatched. You find out afterward.</span></div>
-    <div class="card" id="card-block"><b>Block it</b>
-      <span class="muted">The security team wins the argument. The productivity never arrives. Everyone loses quietly.</span></div>
+    <!-- Staged (owner script): each card appears WITH its narration. -->
+    <div class="card" id="card-trust" style="visibility:hidden"><b>Trust it</b>
+      <span class="muted">Give the agent access to everything &mdash; and hope it behaves.</span></div>
+    <div class="card" id="card-block" style="visibility:hidden"><b>Block it</b>
+      <span class="muted">Lock everything down so tightly the agent can&rsquo;t do anything useful.</span></div>
   </div>
 </section>
 
@@ -246,7 +245,7 @@
       <div class="what">only what was allowed &mdash; carrying what the checkpoint attached</div>
     </div>
   </div>
-  <div id="d-rule" style="visibility:hidden"><b>Deny by default.</b> Decide the exceptions. Write every attempt down.</div>
+  <div id="d-rule" style="visibility:hidden"><b>Deny by default.</b> Allow what we understand. Keep a record of what happened.</div>
 </section>
 
 <section id="s6">
@@ -254,15 +253,13 @@
   <h1>Nobody can predict a tool&rsquo;s needs. So don&rsquo;t guess &mdash; observe.</h1>
   <div id="steps">
     <div class="card"><b>1 &middot; RUN</b><div class="big">Run the job once, watched</div>
-      <span class="muted">One deliberate open run, on work you trust, everything logged.</span></div>
+      <span class="muted">One watched run, in a controlled environment, everything logged.</span></div>
     <div class="card"><b>2 &middot; SEE</b><div class="big">See what it actually reached</div>
-      <span class="muted">Every host, every attempt &mdash; evidence, not a wishlist.</span></div>
-    <div class="card"><b>3 &middot; DECIDE</b><div class="big">Decide what&rsquo;s allowed</div>
-      <span class="muted">Yes, no, or ask me &mdash; and it&rsquo;s on the record.</span></div>
+      <span class="muted">Which hosts, which services, which destinations &mdash; evidence, not a guess.</span></div>
+    <div class="card"><b>3 &middot; DECIDE</b><div class="big">Turn that evidence into policy</div>
+      <span class="muted">Allow, deny, or ask for approval &mdash; and keep the decision on the record.</span></div>
   </div>
-  <div id="s6-ep9" class="mono" style="font-size:22px;color:#f59e0b;visibility:hidden">one watched run &rarr; a policy you keep &mdash; ep 9</div>
-  <div id="s6-thesis" style="font-size:29px;visibility:hidden"><b style="color:#f59e0b">One boundary, same discipline</b>
-    <span class="muted">&mdash; builds, pipelines, and agents.</span></div>
+  <div id="s6-ep9" class="mono" style="font-size:22px;color:#f59e0b;visibility:hidden">one safe, watched run &rarr; a policy you can keep &mdash; ep 9</div>
 </section>
 
 <section id="s7">

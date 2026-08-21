@@ -888,7 +888,8 @@ KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "U
 # Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
 EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
 MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
-               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside")
+               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside",
+               "keys don't live in the room")
 warns = set()
 for x in c:
     t = x["text"]
