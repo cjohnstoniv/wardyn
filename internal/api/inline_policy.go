@@ -269,6 +269,47 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, spec *types.RunPo
 	}
 	spec.EligibleGrants = keptGrants
 
+	// Workspace repos. denyMemberRequest gates the req.workspace_id door, but an
+	// inline workspace_repos entry naming an ONBOARDED repo is a second door to
+	// the same room: composer.Clamp drops only WorkspaceMounts, referencedWorkspaces
+	// matches the entry by URL, and applyWorkspaceRequirements then folds that
+	// workspace's admin-authored egress, operator_set secret grants and base image
+	// into the member's run. Gated here rather than at either call site because
+	// resolveRunPolicy is the chokepoint launch AND the preflight dry-run share, so
+	// Review can never preview a workspace launch would refuse.
+	//
+	// Repos only: a member's WorkspaceMounts are already nil by the time this runs
+	// (composer.Clamp drops every proposed mount unconditionally), so a second loop
+	// over them would be filtering an empty slice.
+	//
+	// A repo NO workspace owns is left alone — validateWorkspaceSources 422s it as
+	// un-onboarded a few lines later, and dropping it here would turn that clear
+	// refusal into a silently smaller run.
+	if len(spec.WorkspaceRepos) > 0 && s.cfg.Store != nil {
+		all, err := s.cfg.Store.ListWorkspaces(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("api: list workspaces: %w", err)
+		}
+		idx := indexWorkspacesBySource(all)
+		keptRepos := spec.WorkspaceRepos[:0:0]
+		for _, wr := range spec.WorkspaceRepos {
+			ws, onboarded := idx.repo[wr.Repo]
+			if onboarded {
+				ok, err := s.capSeamAllowed(ctx, capWorkspace, ws.ID.String())
+				if err != nil {
+					return nil, nil, err
+				}
+				if !ok {
+					warns = append(warns, fmt.Sprintf("dropped repo %q: workspace %s is not granted to you", wr.Repo, ws.ID))
+					drops = append(drops, capDrop{reason: "capability_" + capWorkspace, detail: wr.Repo})
+					continue
+				}
+			}
+			keptRepos = append(keptRepos, wr)
+		}
+		spec.WorkspaceRepos = keptRepos
+	}
+
 	return warns, drops, nil
 }
 
