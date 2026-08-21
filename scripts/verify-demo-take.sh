@@ -885,12 +885,16 @@ print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard
 # viewer hears it. Warnings, not failures: a human decides the pronunciation.
 import re
 KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
-MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live", "blocked live")
+# Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
+EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
+MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
+               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside")
 warns = set()
 for x in c:
     t = x["text"]
     for m in re.findall(r"\b[A-Z]{2,5}s?\b", t):
-        if m.rstrip("s").upper() not in KNOWN:
+        base = m.rstrip("s").upper()
+        if base not in KNOWN and base not in EMPHASIS:
             warns.add(f"unmapped initialism {m!r}")
     for lw in re.finditer(r"\blive\b", t, re.I):
         lo = t.lower()

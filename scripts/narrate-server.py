@@ -79,6 +79,10 @@ _SUBS = [
     ("held live", "held lyve"),
     ("caught it live", "caught it lyve"),
     ("blocked live", "blocked lyve"),
+    # ...and the VERB sense (/lɪv/) where the scripts use it:
+    ("attacks live exactly here", "attacks liv exactly here"),
+    ("no keys live in the room", "no keys liv in the room"),
+    ("keys live inside", "keys liv inside"),
     # Specific hosts BEFORE the generic .com/.org rules.
     ("api.anthropic.com", "the Anthropic ay pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),
