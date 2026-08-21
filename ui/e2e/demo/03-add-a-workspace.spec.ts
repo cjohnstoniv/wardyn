@@ -307,8 +307,13 @@ test("V02 beat 3 — what it remembers", async () => {
 
   // Persona round 1: this red banner owned the page for 25-90s here, unnamed
   // — every persona flagged it. Name it once, then move on to the ledger.
-  await spotlight(page, page.getByText(/Open recording on Fence/).locator(".."));
-  await caption(page, "That red panel is Record Mode printing its own worst case — episode nine's subject.");
+  // By testid, not the "Open recording on Fence" text the adjudication quoted:
+  // f6bf20c5 made the banner tier-derived — the weakest-barrier wording only
+  // renders under real CC1, and this host builds all three tiers. The caption
+  // stays true either way (the banner states the open-egress worst case on
+  // every tier; it is danger-red only on Fence).
+  await spotlight(page, page.getByTestId("record-open-egress-banner"));
+  await caption(page, "That warning panel is Record Mode printing its own worst case — episode nine's subject.");
   await beat(page, PACE.read);
   await caption(page, "Nothing records until you start it.");
   await beat(page, PACE.read);
