@@ -83,6 +83,11 @@ def speakable(text: str) -> str:
     out = text
     for a, b in _SUBS:
         out = out.replace(a, b)
+    # Initialisms Kokoro reads as words ("CI" came out wrong on camera; CLI/AI
+    # are the same trap): letter-space them so the voice spells them out while
+    # the on-screen caption keeps the normal form. Word-bounded and uppercase-
+    # only, so "api.anthropic.com", "deciding" etc. never match.
+    out = re.sub(r"\b(CI|CLI|API|APIs|AI)\b", lambda m: " ".join(m.group(1)), out)
     # Drop anything that is decoration rather than words (the recorder's captions
     # are plain, but chapter subtitles and future copy may not be).
     out = re.sub(r"[*_`#]", "", out)

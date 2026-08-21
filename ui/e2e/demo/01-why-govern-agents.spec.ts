@@ -79,7 +79,7 @@ test("V00 — why govern agents (the primer)", async () => {
     .toBeGreaterThan(0);
   await expect(page.locator("#roadmap div")).toHaveCount(11);
 
-  await chapter(page, "Why govern agents", "Episode one — the problem, before any product");
+  await chapter(page, "Why govern agents", "Episode one — understanding the problem, before the solution");
   // The deck starts with every slide hidden so the chapter card opens on
   // black, not on a ghost of S1's text (persona round 1, Dana).
   await show(page, "s1");
@@ -88,7 +88,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "Start before agents — with code your machines already run every day.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-dep"));
-  await caption(page, "Every dependency install executes code you never read — beside your credentials.");
+  await caption(page, "Every dependency install executes code you never read — and that code runs alongside your documents, your credentials, your data.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-script"));
   await caption(page, "Build scripts and install hooks run with everything your shell can reach — the command line every program on your machine answers to.");
@@ -214,7 +214,7 @@ test("V00 — why govern agents (the primer)", async () => {
   await caption(page, "The rest of this series stands that answer up for real — Wardyn: open source, one command on your own machine, every claim proved on camera.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#roadmap"));
-  await caption(page, "Eleven more episodes, about three minutes each. Here is the map.");
+  await caption(page, "Eleven more episodes, a few minutes each. Here is the map.");
   await beat(page, PACE.read + 800);
   await spotlight(page, page.locator("#ep05"));
   await caption(page, "In a hurry? Episode five — what it stops — is the payoff to jump to.");
