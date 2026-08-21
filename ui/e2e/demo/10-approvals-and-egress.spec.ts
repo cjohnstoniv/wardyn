@@ -485,13 +485,30 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // over a terminal showing a 403 and a fresh pending row. NOT fast-forwarded:
   // this is the frame the whole beat exists for, and the approve-to-response
   // gap is about a second anyway.
-  await waitUnlessGone(
-    expect(card.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
-    demoOver(card),
-    60_000,
-    `the held ${HELD_HOST} request never completed with a 200 — the proxy's ~30s hold ` +
-      `(defaultHoldTimeout) expired before the approval landed, so the curl had already 403'd`,
-  );
+  //
+  // expect.poll over innerText, NOT toContainText: two rehearsals (08-21)
+  // failed here with the 200 demonstrably on screen and in the a11y tree at
+  // failure time, while the same toContainText on the same locator matched
+  // instantly in an isolated probe — whatever take-context detail starves it,
+  // innerText is the exact signal the viewer sees. On timeout, dump what the
+  // page actually held so the next failure explains itself.
+  const term200 = card.locator(".xterm-screen").first();
+  try {
+    await expect
+      .poll(async () => (await term200.innerText().catch(() => "<no .xterm-screen>")), {
+        timeout: 60_000,
+        message: `the held ${HELD_HOST} request never completed with a 200`,
+      })
+      .toMatch(RESPONDED);
+  } catch (e) {
+    const screens = await card.locator(".xterm-screen").count().catch(() => -1);
+    const over = await demoOver(card).isVisible().catch(() => false);
+    const txt = await term200.innerText().catch(() => "<unreadable>");
+    console.warn(
+      `[v10] payoff diagnostic: screens=${screens} demoOver=${over} innerText=${JSON.stringify(txt.slice(0, 200))}`,
+    );
+    throw e;
+  }
   await caption(page, "The request that was already waiting completes.");
   await beat(page, PACE.read);
   await caption(page, "No retry.");
