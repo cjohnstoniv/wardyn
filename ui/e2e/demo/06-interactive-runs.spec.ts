@@ -89,6 +89,9 @@ const SENTINEL = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-toke
 /** The injection event beat 5 reads (audit.tsx gives it a verb now). */
 const INJECT_ACTION = "run.llm.subscription_inject";
 
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
+
 // Product ceilings — pacing comes from overlay.ts, never from these.
 const SANDBOX_UP = 240_000;
 const COMMAND_ECHOES = 60_000;
@@ -177,7 +180,7 @@ test.beforeAll(async () => {
 // Beat 1 — the form again, but only the choices that change
 // ---------------------------------------------------------------------------
 
-test("V04 beat 1 — an agent, and a hand on the wheel", async () => {
+test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
   test.setTimeout(180_000);
   const page = stage();
   await page.goto("/runs/new");
@@ -189,49 +192,63 @@ test("V04 beat 1 — an agent, and a hand on the wheel", async () => {
   await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Interactive runs", "Drive the agent yourself — inside the boundary");
-  await caption(page, "Last video's run needed nobody. This one is the opposite: you, live, inside the box.");
+  await caption(page, "So far, we've watched commands run on their own.");
   await beat(page, PACE.read);
-  await caption(page, "Same form — only the choices change.");
-  await beat(page, PACE.read);
+  await caption(page, "Now let's put ourselves inside the loop.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Same run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Same boundaries.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But this time, you have the keyboard.");
+  await beat(page, BEAT_SHORT + 400);
 
   const title = page.getByLabel("Title");
   await title.fill(RUN_TITLE);
 
   // Agent task this time — and Interactive, which is the video.
-  await act(page, page.getByRole("radio", { name: /Agent task/ }), "An agent task, run by Claude Code — Anthropic's coding agent.");
-  await act(page, page.getByRole("radio", { name: /^Interactive/ }), "Interactive: the sandbox comes up idle, and you drive it over this terminal.");
+  await act(page, page.getByRole("radio", { name: /Agent task/ }), "Agent task.");
+  await caption(page, "This is a Claude Code task.");
+  await beat(page, BEAT_SHORT);
+  await act(page, page.getByRole("radio", { name: /^Interactive/ }), "Interactive.");
+  await caption(page, "Interactive means the sandbox starts up and gives us a terminal.");
+  await beat(page, PACE.read);
+  await caption(page, "We're the ones driving.");
+  await beat(page, BEAT_SHORT);
 
   // Start in a SHELL, not in the agent's own TUI. The default drops you
   // inside Claude Code's prompt box; the shell start is what lets a human
   // inspect the box and launch the agent themselves — which is this video.
+  // No owner line covers this click — the choreography still needs it (the
+  // agent's own TUI is the wrong start for a hand-driven shell) — so it plays
+  // silent rather than inventing dialog (see the report).
   const startWith = page.getByRole("radiogroup", { name: "Start with" });
   await startWith.scrollIntoViewIfNeeded().catch(() => {});
-  await act(page, startWith.getByRole("radio", { name: /^Terminal/ }), "Start with a plain shell — we will launch the agent ourselves, from inside.");
-  await caption(page, "And the contract panel keeps up — attaching now drops you into a terminal.");
-  await beat(page, PACE.read);
+  await act(page, startWith.getByRole("radio", { name: /^Terminal/ }));
 
   // The workspace, and the envelope: exactly one host, the model's.
   const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
-  await act(page, wsPicker, "The workspace again — slugify, the folder from video two.");
-  await act(
-    page,
-    page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(),
-    "The blast radius doesn't change with the mode.",
-  );
-
-  await act(page, page.getByRole("radio", { name: /^Confined/ }));
-  // Barrier never named in V04's original take — it rides along as this
-  // host's default, unremarked. Wording is tier-agnostic on purpose: true
-  // whichever of Fence/Wall/Vault the host defaults to.
-  await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
-  await caption(page, "The barrier is this host's default — the credential story ahead holds on any tier.");
+  await act(page, wsPicker, "Attach the workspace.");
+  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first());
+  await caption(page, "Same workspace as before.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And notice something important:");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "changing the mode doesn't change the blast radius.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
-  await act(page, page.getByRole("radio", { name: /^Just the model provider/ }), "Confined again — but an agent needs its model, so this run gets exactly one host.");
-  await caption(page, "api.anthropic.com, and nothing else. The panel on the right — what this run can do — holds the whole contract.");
+  await caption(page, "The agent still gets the same workspace.");
+  await beat(page, BEAT_SHORT + 400);
+
+  await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined.");
+  await caption(page, "And the network is still default-deny.");
+  await beat(page, PACE.read);
+  await caption(page, "The model needs one destination, so we'll allow one.");
+  await beat(page, PACE.read);
+  await act(page, page.getByRole("radio", { name: /^Just the model provider/ }), "Add api.anthropic.com.");
+  await caption(page, "That's the entire network contract for this run.");
   await beat(page, PACE.read);
 
-  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — the same envelope, now with you inside it.");
+  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
 });
 
@@ -239,21 +256,23 @@ test("V04 beat 1 — an agent, and a hand on the wheel", async () => {
 // Beat 2 — the terminal is the run
 // ---------------------------------------------------------------------------
 
-test("V04 beat 2 — inside the box", async () => {
+test("V06 beat 2 — inside the box", async () => {
   test.setTimeout(SANDBOX_UP + 120_000);
   const page = stage();
 
-  await caption(page, "The cockpit's terminal is not a viewer — it is the sandbox's own shell.");
+  await caption(page, "This terminal isn't a video of the sandbox.");
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
   // A real prompt has to land before typing into it films as typing.
   await beat(page, PACE.read + 2000);
-
-  await caption(page, "First, the question every security review asks: what credentials does this box hold?");
+  await caption(page, "It is the sandbox.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "So let's ask the obvious question.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "What credentials are actually inside?");
   await beat(page, PACE.read);
 
   await typeInTerminal(page, "env | grep -i -E 'anthropic|claude'");
-  await caption(page, "No API key here. A real base URL, one base sixty-four blob.");
 
   // The payoff, in the order the line claims it (lifted from the retired
   // model-access spec, assertions intact — see the file header).
@@ -263,6 +282,9 @@ test("V04 beat 2 — inside the box", async () => {
   // "No API key" is a claim about an ABSENCE — asserted only after the grep's
   // output demonstrably landed, or an empty screen satisfies it trivially.
   await expect(screen).not.toContainText("ANTHROPIC_API_KEY");
+  await caption(page, "No API key.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "There is a credential-shaped value here, but let's look at what it actually is.");
   await beat(page, PACE.read + 1200);
 });
 
@@ -270,12 +292,12 @@ test("V04 beat 2 — inside the box", async () => {
 // Beat 3 — the decoy
 // ---------------------------------------------------------------------------
 
-test("V04 beat 3 — the decoy", async () => {
+test("V06 beat 3 — the decoy", async () => {
   test.setTimeout(300_000);
   const page = stage();
   const screen = page.locator(".xterm-screen").first();
 
-  await caption(page, "That blob decodes into the credentials file Claude Code reads at startup.");
+  await caption(page, "This is the file Claude Code expects to find.");
   await beat(page, PACE.read);
 
   await typeInTerminal(page, "cat $CLAUDE_CONFIG_DIR/.credentials.json");
@@ -283,44 +305,41 @@ test("V04 beat 3 — the decoy", async () => {
   // The FULL token — a Go constant, matched whole.
   await expect(screen).toContainText(SENTINEL, { timeout: COMMAND_ECHOES });
   await spotlightTerminalRow(page, "sk-ant-oat01-wardyn-inert-sentinel");
-  await caption(page, "The token names itself an inert sentinel: the shape a harness demands, carrying nothing.");
-  await beat(page, PACE.read + 1400);
-
-  // The attacker framing (owner note): the decoy's value is what it makes
-  // WORTHLESS. Verified before scripting it — the proxy terminates the
-  // sandbox's TLS, so the sentinel is all that ever travels on the sandbox
-  // side; the live token exists only in proxy memory and on the proxy's own
-  // leg to Anthropic. The honest ceiling is stated as the barrier, exactly as
-  // video one taught it: nothing IN the box can read the key, so getting it
-  // means getting OUT of the box.
-  // S3 hygiene: clear the sentinel-token ring HERE (moved up from the end of
-  // this stretch) — left parked, it sliced the `cat` command line for 35s
-  // while five unrelated captions played over it.
+  await caption(page, "And the value inside is a decoy.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It has the shape the tool expects.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But it isn't a live credential.");
+  await beat(page, BEAT_SHORT);
+  // S3 hygiene: clear the sentinel-token ring HERE — left parked, it slices
+  // the `cat` command line for the whole attacker-framing stretch below.
   await spotlight(page, null);
-  await caption(page, "So play the attacker. Compromise this container, find the credential, exfiltrate it.");
+  await caption(page, "So let's pretend we're the attacker.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "We compromise this container.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "We find the credential.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And we steal it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "What did we get?");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A decoy.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Anthropic has never seen it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The real credential is still outside the sandbox, at the proxy.");
   await beat(page, PACE.read);
-  await caption(page, "You have stolen a decoy. Anthropic has never heard of it.");
+  await caption(page, "That means the proxy is also the point where the credential can be attached to the request.");
   await beat(page, PACE.read);
-  // Forward promise: the proof needs a shell OUTSIDE the sandbox (an in-box
-  // curl would be upgraded by the proxy, which terminates TLS here) — video
-  // ten's host-terminal lane carries it.
-  await caption(page, "Video twelve steals it for real — watches Anthropic refuse it.");
+  await caption(page, "The sandbox never needs to hold the real key.");
   await beat(page, PACE.read);
-  const credentialsCard = page
-    .getByRole("heading", { name: "Credentials", level: 2 })
-    .locator("xpath=ancestor::section[1]");
-  await spotlight(page, credentialsCard);
-  await caption(page, "The live token exists only in the proxy, outside the box — even this shell's own traffic carries the decoy.");
-  await beat(page, PACE.read);
-  await caption(page, "Yes — that means the proxy terminates the sandbox's TLS. The boundary reads what crosses it; that is its job.");
-  await beat(page, PACE.read);
-  await caption(page, "Reaching the real one means breaking out of the sandbox itself.");
-  await beat(page, PACE.read);
-  const barrierBadge = page.getByText(/^(Fence|Wall|Vault)$/).first();
-  await spotlight(page, barrierBadge);
-  await caption(page, "And that is exactly the wall you sized in video two — Fence, Wall, or Vault.");
-  await beat(page, PACE.read + 600);
-  await spotlight(page, null);
+  await caption(page, "And if an attacker wants the real one?");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "They have to get past the boundary itself.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's why the barrier matters.");
+  await beat(page, BEAT_SHORT + 400);
 
   // The injection is ALREADY on the record — it fired at sandbox startup,
   // when the credential was minted, never on traffic. Asserted here, BEFORE
@@ -340,21 +359,21 @@ test("V04 beat 3 — the decoy", async () => {
 // Beat 4 — the boundary (the quota beat)
 // ---------------------------------------------------------------------------
 
-test("V04 beat 4 — the boundary", async () => {
+test("V06 beat 4 — drive the agent", async () => {
   test.setTimeout(600_000);
   const page = stage();
   const screen = page.locator(".xterm-screen").first();
 
-  await caption(page, "Now drive the agent — a real model call, from a shell holding nothing but that decoy.");
+  await caption(page, "Now let's actually use the agent.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real model call.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "From inside a sandbox that doesn't have the real credential.");
   await beat(page, PACE.read);
 
   // A REAL, quota-consuming Anthropic call. Deliberately no fallback: a take
   // where this fails films the opposite of the video's claim.
   await typeInTerminal(page, 'claude -p "name three primary colors"');
-  await spotlight(page, page.getByText("EGRESS", { exact: false }).locator(".."));
-  await caption(page, "The proxy strips what the sandbox sent, and attaches the live token at the boundary.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
 
   // \b matters: "credentials" from beat 3 is still in scrollback and contains
   // "red". A word-bounded colour proves an actual answer arrived — and the
@@ -371,15 +390,19 @@ test("V04 beat 4 — the boundary", async () => {
       `A weekly-limit refusal cannot be fixed by a retake; wait for the reset (the message names it) ` +
       `or connect a different subscription token, then re-shoot.`,
   ).toBe(true);
-  await caption(page, "A real answer, in a box that could not have paid for it. The key stayed outside.");
-  await beat(page, PACE.read + 1000);
+  await caption(page, "The model answered.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The sandbox never held the key.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's the whole trick.");
+  await beat(page, BEAT_SHORT + 400);
 });
 
 // ---------------------------------------------------------------------------
 // Beat 4b — the unscripted hold (conditional: not every take raises it)
 // ---------------------------------------------------------------------------
 
-test("V04 beat 4b — the unscripted hold", async () => {
+test("V06 beat 4b — the unscripted hold", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -396,17 +419,29 @@ test("V04 beat 4b — the unscripted hold", async () => {
 
   await centerInFrame(telemetryRow);
   await spotlight(page, telemetryRow);
-  await caption(page, "And look — Claude Code just tried to phone its own telemetry. Unlisted host, so it is held, not sent.");
-  await beat(page, PACE.read);
+  await caption(page, "And look at this.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The tool just tried to contact another host.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It's not on our list.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "So Wardyn stopped it.");
+  await beat(page, BEAT_SHORT);
   await spotlight(page, null);
-  await decide(page, "Deny", "Nobody planted this — the boundary caught it live. Denied, on the record.", "datadoghq");
+  await decide(page, "Deny", "Deny.", "datadoghq");
+  await caption(page, "Nobody had to script that into the demo.");
+  await beat(page, PACE.read);
+  await caption(page, "The boundary caught something the tool actually tried to do.");
+  await beat(page, PACE.read);
+  await caption(page, "And now there's a record of the decision.");
+  await beat(page, PACE.read + 400);
 });
 
 // ---------------------------------------------------------------------------
 // Beat 5 — on the record
 // ---------------------------------------------------------------------------
 
-test("V04 beat 5 — on the record", async () => {
+test("V06 beat 5 — on the record", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -414,12 +449,13 @@ test("V04 beat 5 — on the record", async () => {
   // raw action strings, while /audit renders the event through its
   // ACTION_VERB map — and the verb row is the frame this beat is about.
   await page.goto("/audit");
-  await caption(page, "And the injection itself is on the record.");
+  await caption(page, "And the credential injection itself is recorded.");
   await beat(page, PACE.read);
+  await caption(page, "Let's find it.");
+  await beat(page, BEAT_SHORT);
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await expect(search).toBeVisible({ timeout: 30_000 });
   // S5: the query is the teaching — type it visibly rather than filling silently.
-  await caption(page, "Search the injection's action name.");
   await search.click();
   await page.keyboard.type("subscription_inject", { delay: 45 });
   // audit.tsx's ACTION_VERB row for the event — the credential story, named.
@@ -428,20 +464,15 @@ test("V04 beat 5 — on the record", async () => {
   });
   await spotlight(page, page.getByText("Injected the subscription credential at the proxy").first());
   // S6's beforeAll sweep keeps this to exactly one row — a stale run still
-  // holding slugify would mint a second injection and make "One event" false.
-  await caption(page, "One event: the proxy injected the credential. The sandbox never appears in that sentence.");
-  await beat(page, PACE.read + 600);
-  await spotlight(page, null);
-
-  // GroundTruthChip (audit.tsx) reads "unavailable" (no sensor ever reported)
-  // or "degraded" (a stale PERSISTED heartbeat — a host that ever ran the
-  // sensor keeps saying degraded after a bounce). "Dark" is true for both —
-  // the same wording V10's finale settled on (babe5355) — so the line cannot
-  // be falsified by whichever state this stack is in at take time.
-  const groundTruthChip = page.getByText(/Ground truth · (unavailable|degraded)/);
-  await spotlight(page, groundTruthChip);
-  await caption(page, "Ground truth dark is the kernel sensor being honest on this barrier — video twelve's subject.");
+  // holding slugify would mint a second injection and make "There it is" a lie.
+  await caption(page, "There it is.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Wardyn injected the credential at the boundary.");
   await beat(page, PACE.read);
+  await caption(page, "The sandbox doesn't appear as the owner of that credential because it never held it.");
+  await beat(page, PACE.read);
+  await caption(page, "That's the distinction we're proving.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -449,19 +480,27 @@ test("V04 beat 5 — on the record", async () => {
 // Conclusion
 // ---------------------------------------------------------------------------
 
-test("V04 conclusion", async () => {
+test("V06 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
-  await chapter(page, "What you just saw", "An agent driven by hand, and the key it never held");
-  await caption(page, "An interactive run is a sandbox with you inside — same envelope, same record.");
+  await chapter(page, "What you just saw", "An agent driven by hand — and the key it never held");
+  await caption(page, "Interactive runs put you inside the sandbox.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But the security model doesn't change.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The workspace is still limited.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The network is still controlled.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The real credential stays outside.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And everything important leaves a record.");
   await beat(page, PACE.read);
-  await caption(page, "The box held a decoy. The proxy held the key. The model answered anyway.");
+  await caption(page, "Next, we'll take our hands off the keyboard.");
   await beat(page, PACE.read);
-  await caption(page, "So a compromised agent has nothing to steal — which was the promise from video two.");
+  await caption(page, "Let's see what happens when the agent works on its own.");
   await beat(page, PACE.read + 400);
-  await caption(page, "Next: take your hands off the wheel — an autonomous agent, doing real work.");
-  await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 07: Autonomous agent");
 });

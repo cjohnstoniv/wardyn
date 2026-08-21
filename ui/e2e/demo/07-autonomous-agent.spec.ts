@@ -60,9 +60,9 @@
  */
 
 import { mkdirSync, readFileSync } from "node:fs";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { DEMO_TASK, HELD_HOST, MODEL_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { act, beat, caption, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
@@ -77,6 +77,9 @@ test.describe.configure({ mode: "serial" });
 // Waiting on the PRODUCT, not on the viewer. A real agent run on a real
 // sandbox is minutes; the pacing the viewer sees comes from overlay.ts.
 const RUN_FINISHES = 900_000;
+
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
 
 /**
  * This run's TITLE, and the key everything downstream finds it by.
@@ -243,7 +246,7 @@ test.beforeAll(async () => {
 // before it starts.
 // ---------------------------------------------------------------------------
 
-test("beats 1-6 — name it, aim it, fence it", async () => {
+test("V07 beats 1-6 — name it, aim it, fence it", async () => {
   test.setTimeout(600_000);
   const page = stage();
 
@@ -257,14 +260,19 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  // COLD OPEN. No chapter card: the script gives this video two spoken opening
-  // lines and no title, and chapter() would speak words that are not in it.
-  await caption(page, "Last video we stood up Wardyn, a workspace, and a model.");
-  await beat(page, PACE.read);
-  await caption(page, "Drills so far — demos, an inventory, a hand-driven shell. Now the first real job goes in.");
-  await beat(page, PACE.read + 600);
+  await chapter(page, "The autonomous agent", "Real work, without a human at the keyboard");
+  await caption(page, "We've built the pieces.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Now let's put them together.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real workspace.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real model.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And an agent that works without us sitting here driving it.");
+  await beat(page, PACE.read + 400);
 
-  await act(page, page.getByRole("button", { name: "New run" }));
+  await act(page, page.getByRole("button", { name: "New run" }), "New run.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   // --- B1 Name the run ----------------------------------------------------
@@ -275,14 +283,15 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   const titleBox = page.getByLabel("Title");
   await spotlight(page, titleBox);
   await titleBox.fill(RUN_TITLE);
-  await caption(page, "The title is how you find this later — same title, same work.");
-  await beat(page, PACE.read);
+  await caption(page, "Give it a name.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Then choose Agent Task.");
+  await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 
+  // No owner line names the Description field, so it fills silently.
   const descBox = page.getByLabel("Description");
-  await spotlight(page, descBox);
   await descBox.fill(RUN_DESCRIPTION);
-  await spotlight(page, null);
   await beat(page, 900);
 
   // --- B2 What to run -----------------------------------------------------
@@ -293,13 +302,13 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   // named; the Agent select is SPOTLIT rather than opened, because opening a
   // Select to re-pick the value it already holds is two extra clicks and a
   // portal for no visible gain.
-  await act(page, page.getByRole("radio", { name: "Agent task" }));
+  await act(page, page.getByRole("radio", { name: "Agent task" }), "Agent task.");
   // By id, not getByLabel("Agent"): the trigger is a <button>, and a label/for
   // pointing at a button is not the form-control association getByLabel
   // resolves. #nr-agent is the SelectTrigger's own id (new-run-screen.tsx).
   await spotlight(page, page.locator("#nr-agent"));
-  await caption(page, "Agent task, run by Claude Code. A shell command is governed identically.");
-  await beat(page, PACE.read);
+  await caption(page, "Claude Code will do the work.");
+  await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
   // ORDER IS LOAD-BEARING, twice over.
@@ -314,26 +323,23 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   //
   // B-DEPENDENT (flagged in the script, and REAL as of today): the option in
   // ui/src renders "Batch — run it unattended" (new-run-screen.tsx:478) while
-  // the caption below — verbatim from the script — says "Autonomous". copy.ts's
-  // RUN_MODE.autonomous.label is already "Autonomous" and Track B's BB2 renames
-  // the option to match; the alternation here survives that rename instead of
-  // killing a shoot-day take. Until B lands, the narration and the button
-  // disagree ON CAMERA — see the report.
-  await act(
-    page,
-    page.getByRole("radio", { name: /^(Autonomous|Batch)/ }),
-    "Autonomous: it works unattended, and I appear only when policy stops it.",
-  );
+  // the click caption below — verbatim from the script — says "Autonomous".
+  // copy.ts's RUN_MODE.autonomous.label is already "Autonomous" and Track B's
+  // BB2 renames the option to match; the alternation here survives that
+  // rename instead of killing a shoot-day take. Until B lands, the button
+  // label and the narration disagree ON CAMERA — see the report.
+  await act(page, page.getByRole("radio", { name: /^(Autonomous|Batch)/ }), "Autonomous.");
+  await caption(page, "Autonomous means the agent keeps working until it finishes...");
+  await beat(page, PACE.read);
+  await caption(page, "or until policy gets in the way.");
+  await beat(page, PACE.read);
+  await caption(page, "And today, we're going to deliberately give it something to hit.");
+  await beat(page, PACE.read + 400);
 
   // "Hold in Wardyn" is the biggest governance dial on this screen and the
   // series has never once named it — today's default ("Auto") keeps the
-  // sandbox itself as the only boundary; a pilot could flip this and hold
-  // every tool call too. Named, not clicked: the sandbox-only default is what
-  // the rest of this video's claims depend on.
-  await spotlight(page, page.getByRole("radiogroup", { name: "Tool approvals" }));
-  await caption(page, "Below it, a bigger dial — hold every tool call for a human. Today, the sandbox is the boundary.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
+  // sandbox itself as the only boundary. No owner line covers it this pass,
+  // so it goes unremarked and unrung (see the report).
 
   // Fill first, THEN ring it: both captions below are spoken with the box
   // already full and ringed, not over an empty, unspotlit field (persona
@@ -346,14 +352,18 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   // agent-run execs `claude -p "$task"` ONCE (deploy/images/claude-code/agent-run)
   // — there is no second turn, no follow-up, no way to add a sentence later.
   // Everything the agent will ever know about the job is in the box below.
-  await caption(page, "The task is the whole briefing — the only prompt this agent will ever get.");
+  // task.ts's retry loop (the operator-may-be-approving nudge) is settled,
+  // load-bearing choreography that keeps the take shootable.
+  await caption(page, "The task itself is the entire briefing.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "No second set of instructions waiting behind the scenes.");
   await beat(page, PACE.read);
-  // Reads the task in ITS ORDER (task.ts): the host first, then the code. Owns
-  // the coaching on camera instead of calling it "plain English" — task.ts's
-  // retry loop (the operator-may-be-approving nudge) is settled, load-bearing
-  // choreography that keeps the take shootable, not something to hide.
-  await caption(page, "The brief pokes one off-list host on purpose — so you can watch the boundary work — then codes.");
-  await beat(page, PACE.read + 1400);
+  await caption(page, "It gets the workspace.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It gets the policy.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And it gets the job.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   // --- B3 Workspace -------------------------------------------------------
@@ -364,12 +374,14 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   // getByRole("combobox", {name}) can never match it. Filtering on the
   // placeholder text is the honest workaround until the control gets a label —
   // an unnamed combobox is a real a11y gap, not just a test inconvenience.
-  await act(
-    page,
-    page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }),
-    "Attach the slugify workspace — real code, mounted writable, or nothing lands.",
-  );
+  await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
+  await caption(page, "Same workspace as before.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Real code.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Writable because we granted it.");
+  await beat(page, PACE.read + 400);
 
   // --- B4 Confinement -----------------------------------------------------
   //
@@ -379,50 +391,41 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   // prefix-match the title. Note this is a DIFFERENT component from the
   // Add-workspace dialog's OptionCard, which is an aria-pressed <button>. Same
   // look, two roles: check the a11y snapshot rather than assuming.
-  await act(
-    page,
-    page.getByRole("radio", { name: /^Confined/ }),
-    "Confined means default-deny: nothing reaches the network unless we allow it.",
-  );
+  await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined.");
+  await caption(page, "Network starts closed.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "We'll give it the destinations it needs and let everything else ask.");
+  await beat(page, PACE.read + 400);
 
-  // --- B5 Network ---------------------------------------------------------
+  // --- B5 Network -----------------------------------------------------
+  //
+  // No owner line covers the dialog's contents — the script's next line is
+  // the Save click itself — so the model-host chip and the unlisted-host
+  // radio are set silently; the choreography still has to happen for beats
+  // 7-8 to have anything to hold.
   await act(page, page.getByRole("button", { name: /Edit hosts/ }));
   const net = page.getByRole("dialog");
   await expect(net.getByText("Network for this run")).toBeVisible();
-  await beat(page, PACE.read);
 
   // Host chips are aria-pressed TOGGLES, and the wizard SEEDS this one on
   // (initialWizardState's allowedDomains: ["api.anthropic.com"]). Clicking it
   // therefore REMOVES it — on camera the ✓ vanishes and the header ticks to
-  // "0 hosts" while the narration says it is allowed. Point at it when it is
-  // already on; only click when it is genuinely off.
+  // "0 hosts". Only click when it is genuinely off.
   const modelChip = net.getByRole("button", { name: new RegExp(MODEL_HOST.replace(/\./g, "\\.")) }).first();
-  const modelLine = `Only one host is allowed: ${MODEL_HOST}. Without it, no model.`;
-  if ((await modelChip.getAttribute("aria-pressed")) === "true") {
-    await caption(page, modelLine);
-    await spotlight(page, modelChip);
-    await beat(page, PACE.read);
-    await spotlight(page, null);
-  } else {
-    await act(page, modelChip, modelLine);
+  if ((await modelChip.getAttribute("aria-pressed")) !== "true") {
+    await act(page, modelChip);
   }
-  // "Only one host" is a CLAIM, and the dialog counts for us: the section
-  // header reads "Hosts this run can reach · N" (network-dialog.tsx). Assert
-  // the N, so a seeded preset that quietly carries more never gets narrated as
-  // one.
+  // "Only one host" is asserted, not narrated: the section header reads
+  // "Hosts this run can reach · N" (network-dialog.tsx). A seeded preset that
+  // quietly carries more must never be allowed through silently.
   await expect(net.getByRole("heading", { name: /Hosts this run can reach\s*·\s*1\b/ })).toBeVisible({
     timeout: 15_000,
   });
 
   // The unlisted-host rules ARE radios, but each card's accessible name
   // includes its explanatory body copy — prefix-match the title.
-  await act(
-    page,
-    net.getByRole("radio", { name: /^Hold it for approval/ }),
-    "Anything unlisted is held for approval — stopped live, never refused quietly.",
-  );
-  await beat(page, PACE.read);
-  await act(page, net.getByRole("button", { name: "Save hosts" }));
+  await act(page, net.getByRole("radio", { name: /^Hold it for approval/ }));
+  await act(page, net.getByRole("button", { name: "Save hosts" }), "Save hosts.");
   await expect(net).toBeHidden({ timeout: 30_000 });
 
   // --- B6 The rail is the contract ----------------------------------------
@@ -440,15 +443,14 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
   ).toHaveCount(0);
 
   await spotlight(page, rail);
-  await caption(page, "The rail is the contract — what this run can do, before it runs.");
-  await beat(page, PACE.read);
-  // The ring stays on the WHOLE rail for the first claim, then narrows to the
-  // one block the second claim is actually about — reusing one ring for two
-  // different claims is exactly what persona round 1 caught here.
-  const credentialsBlock = rail.getByText("Credentials", { exact: true }).locator("xpath=..");
-  await spotlight(page, credentialsBlock);
-  await caption(page, "Minted means made fresh at launch — a short-lived token, injected by the proxy, never written inside.");
-  await beat(page, PACE.read + 600);
+  await caption(page, "This panel is the contract.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "What can this run do?");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "What can't it do?");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's decided before we launch it.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -456,13 +458,13 @@ test("beats 1-6 — name it, aim it, fence it", async () => {
 // Beats 7-9 — the run itself: unattended, held once, finished with a diff.
 // ---------------------------------------------------------------------------
 
-test("beats 7-9 — launch, held at the boundary, files changed", async () => {
+test("V07 beats 7-9 — launch, held at the boundary, files changed", async () => {
   // Real agent, real sandbox, a human decision in the middle. Minutes.
   test.setTimeout(2_700_000);
   const page = stage();
 
   // --- B7 Launch, let it work ---------------------------------------------
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   // So the closing recap (beat 10) can navigate back to this run rather than
   // speaking over the throwaway proof run's page.
@@ -489,11 +491,13 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // a row that could no longer exist. These three lines are all B7 keeps; the
   // "watch the tape" promise moved into the post-approval tour, where the run's
   // pace no longer races the narration.
-  await caption(page, "Launch. Headless by design — no terminal exists. You read this run; you don't type into it.");
-  await beat(page, PACE.read + 600);
-  await caption(page, "Only policy can interrupt it: an egress hold, a secret to approve.");
-  await beat(page, PACE.read);
-  await caption(page, "If a job needs more of you than that, it's an interactive run, not this.");
+  await caption(page, "And now we walk away.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "There is no terminal to drive.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "No human typing commands.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The agent works inside the envelope we just defined.");
   // No trailing beat and no dead-air allowance: beat 8's own wait carries the
   // spin-up, with the strip already under the camera's eye — and FAST-FORWARDED
   // (owner, 2026-08-18): the ~30-50s of sandbox boot + the agent reaching its
@@ -552,10 +556,14 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // spoken, so the hold and the decision play at human speed in the final cut.
   await ffwdEnd(page);
 
-  await caption(page, `The agent just reached for ${HELD_HOST}. It's not on the list.`);
+  await caption(page, "And there it is.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The agent reached a destination that wasn't allowed.");
   await beat(page, PACE.read);
-  await caption(page, "So it's held at the proxy, waiting on me. Nothing left the box.");
+  await caption(page, "So the request is waiting at the boundary.");
   await beat(page, PACE.read);
+  await caption(page, "Nothing has gone out.");
+  await beat(page, BEAT_SHORT + 400);
 
   // decide() takes the host BY NAME, never .first(). A real agent run raises
   // approvals nobody asked for — Claude Code reaches for its own telemetry
@@ -570,27 +578,33 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // write example.com onto the workspace and kill V05's own hold beat.
   // decide() proves the decision landed by waiting for the row to clear, so a
   // rejected decision can never be narrated over.
-  await decide(
-    page,
-    "Approve",
-    "Approve, scoped to this run — allowed until the run ends, then it asks again.",
-    HELD_HOST,
-  );
+  await decide(page, "Approve", "Approve for this run.", HELD_HOST);
   await beat(page, PACE.read + 900);
-  await caption(
-    page,
-    "That was the plain Approve — good for the rest of this run, not a day longer; the caret holds narrower and wider.",
-  );
-  await beat(page, PACE.read);
+  await caption(page, "That approval lasts for this run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Not tomorrow.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Not the next run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Just this one.");
+  await beat(page, PACE.read + 400);
 
   // The unscripted second hold: Claude Code reaching for its own telemetry
   // under this same policy. Nobody planted it — the best evidence in the
   // series when it fires. A live agent's own behavior is never guaranteed, so
   // this stays conditional and skips silently when it doesn't happen.
   if (await page.getByTestId("live-approval-row").filter({ hasText: /datadoghq/ }).count()) {
-    await caption(page, "And a second hold nobody scripted — the harness phoning its own telemetry. Not on the list.");
+    await caption(page, "And here's another request we didn't script.");
     await beat(page, PACE.read);
-    await decide(page, "Deny", "Deny. It parks, it never leaves, and the deny is a row too.", "datadoghq");
+    await caption(page, "The tool's own telemetry.");
+    await beat(page, BEAT_SHORT);
+    await caption(page, "It's not on the list.");
+    await beat(page, BEAT_SHORT);
+    await decide(page, "Deny", "Deny.", "datadoghq");
+    await caption(page, "Denied.");
+    await beat(page, BEAT_SHORT);
+    await caption(page, "And that decision is recorded too.");
+    await beat(page, PACE.read + 400);
   }
 
   // --- B8b The rail, while it works ---------------------------------------
@@ -608,31 +622,18 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // cannot accidentally resolve to a wrapper that happens to sort first.
   const egressCard = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
   const filesCard = page.getByRole("heading", { name: "Files changed" }).locator("xpath=ancestor::section[1]");
-  const identityCard = page.getByRole("heading", { name: "Identity" }).locator("xpath=ancestor::section[1]");
 
-  await spotlight(page, egressCard);
-  await caption(page, "Receipts arrive as it works: every call to the model, allowed and logged.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "While that was happening, the agent kept working.");
+  await beat(page, PACE.read);
   await spotlight(page, filesCard);
-  await caption(page, "Files change on the right as the agent works — no terminal needed to supervise.");
-  await beat(page, PACE.read + 900);
-
-  // Five videos on screen and never once named — the run's own identity,
-  // minted at start and revoked at the end, sitting quietly in the rail.
-  await spotlight(page, identityCard);
-  await caption(page, "And the run's own identity — minted at start, revoked at the end. Video twelve reads it back.");
-  await beat(page, PACE.read);
-
-  // The "watch the tape" promise, moved here from B7 (where its leisure once
-  // cost a take — see the sprint comment above): with the decision already
-  // made, the run's pace no longer races the narration. Beat 9b keeps it.
-  // Spotlight the hero pane itself rather than its button: a fast run may
-  // already have flipped the pane from the notice to the in-place replay,
-  // and the pane is the stable frame both states share.
-  await spotlight(page, page.getByTestId("run-terminal-pane"));
-  await caption(page, "And everything it does is captured — we'll watch the tape when it's done.");
-  await beat(page, PACE.read);
+  await caption(page, "The files changed.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, egressCard);
+  await caption(page, "The model calls were recorded.");
+  await beat(page, BEAT_SHORT);
   await spotlight(page, null);
+  await caption(page, "And when the run finishes, we can see exactly what it touched.");
+  await beat(page, PACE.read + 400);
 
   // --- B9 Files changed ---------------------------------------------------
   //
@@ -675,7 +676,8 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   await beat(page, PACE.afterClick);
   await expect(filesCard).toContainText("src/slug.js", { timeout: 120_000 });
   await spotlight(page, filesCard);
-  await caption(page, "Done. Files changed lists exactly what it touched: source, test, and notes.");
+  await caption(page, "Source.");
+  await beat(page, BEAT_SHORT);
 
   // ASSERT THE REST OF THE PAYOFF. The narration names three files; if the
   // workspace mounted read-only, or the agent stopped after the curl, the
@@ -684,18 +686,22 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
   // is written by steps 1 and 3 both) against the demo-node fixture, which
   // ships src/slug.js and test/slug.test.js for the agent to MODIFY.
   await expect(filesCard).toContainText("test/slug.test.js");
+  await caption(page, "Tests.");
+  await beat(page, BEAT_SHORT);
   await expect(filesCard).toContainText("NOTES.md");
+  await caption(page, "Notes.");
+  await beat(page, BEAT_SHORT);
   // …and the diffstat itself: "+N" proves real counted edits rather than a row
   // that rendered with absent counts.
   await expect(filesCard).toContainText(/\+\d+/);
-  await beat(page, PACE.read + 900);
+  await caption(page, "Real changes on the workspace.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  // "every boundary crossing left a receipt" — the Egress widget is where that
-  // receipt is read, and example.com is the specific crossing this video just
+  // "receipts for the boundary crossings" — the Egress widget is where that
+  // receipt is read, and HELD_HOST is the specific crossing this video just
   // decided on camera.
   await spotlight(page, egressCard);
-  await caption(page, "Real edits on my disk — and every boundary crossing left a receipt.");
 
   // ASSERTED FROM THE TRAIL, NOT FROM THE TILE. EgressWidget renders only the 8
   // NEWEST decisions (widgets/egress.tsx's MAX_ROWS) and a real Claude Code run
@@ -713,6 +719,7 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
     (await trail.text()).includes(HELD_HOST),
     `no egress.allow receipt for ${HELD_HOST} on run ${runId} — the approval on camera never reached the trail`,
   ).toBe(true);
+  await caption(page, "And receipts for the boundary crossings that made the work possible.");
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 
@@ -738,7 +745,7 @@ test("beats 7-9 — launch, held at the boundary, files changed", async () => {
 // stage() hands back the same page, so nothing is reset between them.
 // ---------------------------------------------------------------------------
 
-test("beat 9b — the run kept its own tape", async () => {
+test("V07 beat 9b — the run kept its own tape", async () => {
   test.setTimeout(600_000);
   const page = stage();
   const headers = process.env.WARDYN_DEMO_TOKEN
@@ -781,15 +788,19 @@ test("beat 9b — the run kept its own tape", async () => {
   // Autonomous runs have no PTY to type into (B7's own "Output" notice) — the
   // tape is the agent's terminal OUTPUT, never its keystrokes. "Every
   // keystroke" is an overclaim the run mode itself contradicts.
-  await caption(page, "The run kept its own tape — the agent's terminal output, replayable after the fact.");
-  await beat(page, PACE.read + 600);
+  await caption(page, "There's another useful piece here.");
+  await beat(page, PACE.read);
+  await caption(page, "The run keeps its own terminal recording.");
+  await beat(page, PACE.read);
+  await caption(page, "So supervision doesn't have to mean sitting here for the entire job.");
+  await beat(page, PACE.read + 400);
 
   // SPEED FIRST, THEN PLAY. `speed` is a creation-time option in
   // asciinema-player v3, so TerminalPlayer rebuilds the player whenever it
   // changes (terminal-player.tsx's effect deps) — picking 4x after pressing
   // play would throw away the playback the viewer just watched start.
   const fourX = speeds.getByRole("radio", { name: "4x speed" });
-  await act(page, fourX, "Four-times speed, and the idle gaps are already squeezed out.");
+  await act(page, fourX, "Play at four times speed.");
   // Prove the control the caption just named is the one actually holding — a
   // rebuild race must never leave the words describing a speed the player
   // silently reverted from.
@@ -808,15 +819,19 @@ test("beat 9b — the run kept its own tape", async () => {
   // viewer is supposed to see working. Total dwell on the player capped at
   // 12s (down from ~45s) — the two long silent holds were the single
   // worst-reviewed stretch in the video.
-  await beat(page, 5_000);
+  await beat(page, 3_000);
   // The agent flags its own gap mid-session — every persona rated it better
   // advertising than the narration. Best-effort: a live agent's own words are
   // never a hard requirement of the take, so this points at it only if it
   // actually printed.
   const asciiCaveat = hero.getByText(/ascii/i).first();
   if (await asciiCaveat.count()) await spotlight(page, asciiCaveat);
-  await caption(page, "Real work, watched after the fact — supervision without the sitting around.");
-  await beat(page, 7_000);
+  await caption(page, "We can watch it afterward.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The agent did the work.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The system kept the tape.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await caption(page, "");
 });
@@ -830,15 +845,17 @@ test("beat 9b — the run kept its own tape", async () => {
 // see the nouns block for why this must not ride the agent run above.
 // ---------------------------------------------------------------------------
 
-test("V05 beat 10 — borrowed, never held", async () => {
+test("V07 beat 10 — borrowed, never held", async () => {
   test.setTimeout(300_000);
   const page = stage();
   const headers = process.env.WARDYN_DEMO_TOKEN
     ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
     : undefined;
 
-  await caption(page, "One more claim from video three to close out: a secret a run borrows, but never holds.");
+  await caption(page, "And let's close the loop on something from episode three.");
   await beat(page, PACE.read);
+  await caption(page, "A run can borrow a secret without owning it.");
+  await beat(page, PACE.read + 400);
 
   // Launched via the API — the form was this series' videos three and five;
   // what this beat teaches is the WIRING, not the clicks.
@@ -880,43 +897,42 @@ test("V05 beat 10 — borrowed, never held", async () => {
   expect(proofRunId.length > 0, "proof-run create returned no id").toBe(true);
 
   await page.goto(`/runs/${proofRunId}`);
-  await caption(page, "A background run. Its workspace carries the grant — the run just names the secret.");
+  await caption(page, "This background run gets access to one credential.");
   await beat(page, PACE.read);
+  await caption(page, "But what it receives is a short-lived value created by the broker.");
+  await beat(page, PACE.read + 400);
   await expect(page.getByText(/Running|Completed/).first()).toBeVisible({ timeout: 180_000 });
 
   // Vault carried the agent run above; this one quietly downgrades to Fence —
-  // an echo with no model call needs nothing stronger.
+  // an echo with no model call needs nothing stronger. No owner line names
+  // the tier here, so this stays a silent correctness check.
   const fenceBadge = page.getByText("Fence", { exact: true }).first();
   await expect(fenceBadge).toBeVisible({ timeout: 30_000 });
-  await spotlight(page, fenceBadge);
-  await caption(page, "Fence this time — a tiny echo job doesn't need a microVM.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
 
   // The Credentials widget: minted at sandbox startup, never on traffic — so
-  // even this instantly-finished run earns its count.
+  // even this instantly-finished run earns its count. No owner line names it
+  // either, so this too stays a silent correctness check.
   const credHeading = page.getByRole("heading", { name: "Credentials" }).first();
   await credHeading.scrollIntoViewIfNeeded().catch(() => {});
-  await spotlight(page, credHeading);
   await expect(page.getByText(/1 eligible · 1 minted/).first()).toBeVisible({ timeout: 120_000 });
-  await caption(page, "One credential eligible, one minted — a short-lived stand-in, made by the broker at start.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
 
   // "On the record" is said three times in this video and the Audit tab is
   // never once opened — Sam/Dana: a label asserting a security property is
   // not the property. Open it and point at the actual row instead of the
   // widget's own claim about itself.
-  await act(page, page.getByRole("tab", { name: "Audit" }));
+  await act(page, page.getByRole("tab", { name: "Audit" }), "Audit.");
   const requirementRow = page.getByText(new RegExp(PROOF_SECRET)).first();
   await expect(requirementRow).toBeVisible({ timeout: 30_000 });
   await spotlight(page, requirementRow);
-  await caption(page, "Host, decision, scope, time — the same rows an auditor gets.");
+  await caption(page, "The audit tells us who received it, why, when, and under what scope.");
   await beat(page, PACE.read);
+  await caption(page, "But the value itself never appears in the shell.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   // Both halves on the record (the retired workspaces-and-secrets spec's own
-  // verified event pair): the workspace granted it, Wardyn read it.
+  // verified event pair): the workspace granted it, Wardyn read it. No owner
+  // line names this pair explicitly this pass, so it stays a silent check.
   const reqEvents = await (
     await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}&action=run.workspace.requirement.secret`, { headers })
   ).text();
@@ -924,30 +940,31 @@ test("V05 beat 10 — borrowed, never held", async () => {
     reqEvents.includes(PROOF_SECRET),
     `no run.workspace.requirement.secret event for ${PROOF_SECRET} on ${proofRunId}`,
   ).toBe(true);
-  await caption(page, "Both halves are on the record: the workspace granted it, and Wardyn read it —");
-  await beat(page, PACE.read);
-  await caption(page, "read by the run's identity, at start. The value crossed no screen and no shell.");
-  await beat(page, PACE.read);
 
   // The deterministic negative, searched for ON CAMERA rather than only
   // asserted against the API: video two's canary value — the secret's actual
   // content — appears NOWHERE, not on this page and not in the trail.
-  await act(page, page.getByRole("link", { name: "open full Audit" }));
+  await act(page, page.getByRole("link", { name: "open full Audit" }), "Open full Audit.");
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await expect(search).toBeVisible({ timeout: 30_000 });
   await spotlight(page, search);
   await search.click();
   await spotlight(page, null);
   await page.keyboard.type(PROOF_CANARY, { delay: 40 });
-  await caption(page, "Search the trail for the value you watched go in during video three — nothing. That is the design.");
+  await caption(page, "We can search for the credential we watched go in earlier.");
   await beat(page, PACE.read);
   await expect(page.getByText("No events match these filters.")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).not.toContainText(PROOF_CANARY);
+  await caption(page, "Nothing.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's intentional.");
+  await beat(page, BEAT_SHORT);
 
   const fullTrail = await (
     await page.request.get(`/api/v1/audit?run_id=${encodeURIComponent(proofRunId)}`, { headers })
   ).text();
   expect(fullTrail.includes(PROOF_CANARY), "the canary VALUE leaked into the audit trail").toBe(false);
+  await caption(page, "The system can prove that the credential was used without turning the credential itself into another secret sitting in the logs.");
   await beat(page, PACE.read + 600);
 
   // The recap must play over the run it describes, not this beat's throwaway
@@ -958,17 +975,44 @@ test("V05 beat 10 — borrowed, never held", async () => {
 
   // --- OUTRO --------------------------------------------------------------
   //
-  // A RECAP, not a sign-off. The old single line named the beats; three lines
-  // name what the viewer now knows, in the order they watched it happen —
-  // handover, decision, evidence. Each half of each line is something this
-  // take asserted on camera, so the summary cannot outrun the footage.
-  await caption(page, "One governed run, end to end: a task handed over in plain English, a sandbox it never left.");
+  // No chapter card here: the script goes straight from this recap into the
+  // silent "Next" card — see silentCard() below.
+  await caption(page, "So that's an autonomous run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real task.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real workspace.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A real agent.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Two decisions at the boundary — one allowed, one denied.");
+  await beat(page, PACE.read);
+  await caption(page, "Real changes on disk.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And a complete record of the run.");
+  await beat(page, PACE.read);
+  await caption(page, "The next question is obvious:");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Do we really want to configure all of that every single time?");
+  await beat(page, PACE.read);
+  await caption(page, "Or can we write the rules once?");
   await beat(page, PACE.read + 400);
-  await caption(page, "Two holds at the door — one approved, one refused. Both on the record.");
-  await beat(page, PACE.read + 400);
-  await caption(page, "A diff on your disk, receipts in the audit trail, and the whole session on tape.");
-  await beat(page, PACE.read + 600);
-  await caption(page, "Next: stop configuring every run by hand — a policy, written once, that every later run inherits.");
-  await beat(page, PACE.chapter);
   await caption(page, "");
+  await silentCard(page, "Next — 08: Policies & confinement");
 });
+
+/** The unspoken outro card, per the series convention video 01 set. */
+async function silentCard(page: Page, text: string): Promise<void> {
+  const set = (t: string) =>
+    page
+      .evaluate((s: string) => {
+        const d = (window as unknown as Record<string, Record<string, (...x: unknown[]) => void>>).__demo;
+        d?.chapter?.(s, "");
+      }, t)
+      .catch(() => {
+        /* overlay absent — cosmetic, never fatal */
+      });
+  await set(text);
+  await page.waitForTimeout(PACE.chapter);
+  await set("");
+}
