@@ -160,7 +160,7 @@ test.beforeAll(async () => {
 // Cold open + Beat 1 — the form, taught while nothing is moving
 // ---------------------------------------------------------------------------
 
-test("V03 beat 1 — name it, aim it", async () => {
+test("V04 beat 1 — name it, aim it", async () => {
   test.setTimeout(180_000);
   const page = stage();
   await page.goto("/runs/new");
@@ -175,7 +175,7 @@ test("V03 beat 1 — name it, aim it", async () => {
 
   // Two ring moves across the cold-open lines (no text changes) — the static
   // form otherwise sits still with nothing pointing at it.
-  const formCard = page.getByRole("heading", { name: "This run", level: 2 }).locator("xpath=ancestor::section[1]");
+  const formCard = page.getByRole("heading", { name: "This run", level: 3 }).locator("xpath=ancestor::section[1]");
   const rail = page.getByText("What this run can do");
   await spotlight(page, formCard);
   await caption(page, "Everything Wardyn does starts with a run.");
@@ -242,8 +242,8 @@ test("V03 beat 1 — name it, aim it", async () => {
 // Beat 2 — the workspace, the envelope, the rail
 // ---------------------------------------------------------------------------
 
-test("V03 beat 2 — the envelope", async () => {
-  test.setTimeout(120_000);
+test("V04 beat 2 — the envelope", async () => {
+  test.setTimeout(180_000);
   const page = stage();
 
   // The workspace video 02 built. The combobox's option carries the name.
@@ -320,7 +320,10 @@ test("V03 beat 2 — the envelope", async () => {
   await beat(page, PACE.read);
   await caption(page, "Before launch, we can see what this run is allowed to do.");
   await beat(page, PACE.read);
-  await spotlight(page, wsPicker);
+  // NOT wsPicker: its hasText filter matched the pre-selection placeholder,
+  // and once slugify is chosen no combobox carries that text — ring the
+  // Workspace card itself, which is the better frame for the line anyway.
+  await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 3 }).locator("xpath=ancestor::section[1]"));
   await caption(page, "The workspace defines what it can touch.");
   await beat(page, PACE.read);
   await spotlight(page, rail);
@@ -338,7 +341,7 @@ test("V03 beat 2 — the envelope", async () => {
 // Beat 3 — launch, and let it be a background run
 // ---------------------------------------------------------------------------
 
-test("V03 beat 3 — launch, walk away", async () => {
+test("V04 beat 3 — launch, walk away", async () => {
   test.setTimeout(RUN_FINISHES + 120_000);
   const page = stage();
 
@@ -405,7 +408,7 @@ test("V03 beat 3 — launch, walk away", async () => {
 // Beat 4 — the receipts
 // ---------------------------------------------------------------------------
 
-test("V03 beat 4 — the receipts", async () => {
+test("V04 beat 4 — the receipts", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -481,7 +484,7 @@ test("V03 beat 4 — the receipts", async () => {
 // Conclusion
 // ---------------------------------------------------------------------------
 
-test("V03 conclusion", async () => {
+test("V04 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
