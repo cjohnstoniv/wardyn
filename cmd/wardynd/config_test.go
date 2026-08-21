@@ -525,6 +525,8 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		listen         string
 		sshListen      string
 		originTemplate string
+		posture        tlsPosture
+		allowPlaintext bool
 		wantErr        string // substring; empty = must succeed
 	}{
 		{name: "off is always fine", listen: ":8080"},
@@ -558,10 +560,46 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			name: "origin template with a run placeholder", uiListen: ":8081", listen: ":8080",
 			originTemplate: "https://run-{run}.ui.example.com",
 		},
+		{
+			// The console's plaintext gate has to cover THIS listener too: the
+			// relay cookie is an 8h bearer credential for a run, Secure=false
+			// in this posture, and a specific-routable bind puts it on the wire
+			// for every LAN peer. Refusing only -listen left the second
+			// listener serving exactly what the first one refuses to.
+			name:     "plaintext UI gateway on a specific-routable bind is refused",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			wantErr: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+		},
+		{
+			name:     "plaintext UI gateway names its own flag in the refusal",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			wantErr: "-ui-sandbox-listen",
+		},
+		{
+			name:     "routable UI bind is fine with built-in TLS",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			posture: tlsPosture{tlsEnabled: true, secureCookies: true},
+		},
+		{
+			name:     "routable UI bind is fine behind an upstream terminator",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			posture: tlsPosture{secureCookies: true},
+		},
+		{
+			name:     "routable UI bind is fine with the explicit override",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			allowPlaintext: true,
+		},
+		{
+			// Same warn-only carve-outs as the console: compose binds the
+			// unspecified address from inside a container.
+			name:     "unspecified UI bind stays warn-only",
+			uiListen: ":8081", listen: "127.0.0.1:8080",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate)
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.posture, tc.allowPlaintext)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)

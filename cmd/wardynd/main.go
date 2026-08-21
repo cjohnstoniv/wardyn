@@ -105,7 +105,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 
@@ -363,16 +363,37 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 		return tlsPosture{}, errors.New("TLS misconfigured: set BOTH -tls-cert/WARDYN_TLS_CERT and -tls-key/WARDYN_TLS_KEY, or neither")
 	}
 	tlsEnabled := tlsCert != "" && tlsKey != ""
-	if !tlsEnabled && !tlsTerminated && !allowPlaintextListen && listenBindsSpecificRoutable(listen) {
-		return tlsPosture{}, fmt.Errorf("refusing to start: serving plaintext HTTP but the listen address %q binds a specific non-loopback interface — "+
-			"every credential and cookie the control plane speaks would travel in cleartext to any LAN/WAN peer; "+
-			"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
-			"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", listen)
-	}
-	return tlsPosture{
+	posture := tlsPosture{
 		tlsEnabled:    tlsEnabled,
 		secureCookies: tlsEnabled || tlsTerminated,
-	}, nil
+	}
+	if err := refusePlaintextListen("-listen", listen, posture, allowPlaintextListen); err != nil {
+		return tlsPosture{}, err
+	}
+	return posture, nil
+}
+
+// refusePlaintextListen is the plaintext-on-a-specific-routable-bind rule
+// itself, shared because wardynd serves TWO listeners off ONE TLS posture: the
+// console (-listen) and the UI-sandbox gateway (-ui-sandbox-listen, which
+// reuses the same cert/key or the same upstream terminator). A deployment with
+// neither makes BOTH cleartext, and the gateway's `wardyn_ui_sess` cookie is a
+// bearer credential for a run exactly as the console's session is for the
+// control plane — 8h, `Secure=false` in that posture, and readable off the wire
+// by any LAN peer. Guarding only the console would leave the second listener
+// serving the very thing the first one refuses to.
+//
+// The carve-outs are deliberately identical for both: loopback and the
+// unspecified bind (the compose 0.0.0.0-in-container topology) stay warn-only,
+// and WARDYN_ALLOW_PLAINTEXT_LISTEN is the one explicit escape hatch.
+func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPlaintextListen bool) error {
+	if posture.secureCookies || allowPlaintextListen || !listenBindsSpecificRoutable(listen) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: serving plaintext HTTP but the %s address %q binds a specific non-loopback interface — "+
+		"every credential and cookie it speaks would travel in cleartext to any LAN/WAN peer; "+
+		"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
+		"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", flagName, listen)
 }
 
 // validateUISandboxConfig is the UI-sandbox gateway's boot-time fail-closed
@@ -391,9 +412,16 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 // The origin template, when set, must carry {run} — a template without it would
 // hand EVERY run the same host, silently turning per-run isolation back into
 // the shared origin it exists to replace.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string) error {
+//
+// The TLS posture is taken rather than re-derived so this listener answers to
+// the SAME plaintext refusal the console does (refusePlaintextListen): the
+// relay session cookie is a bearer credential, and it travels on this address.
+func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string, posture tlsPosture, allowPlaintextListen bool) error {
 	if uiListen == "" {
 		return nil // off: nothing to validate, no listener, no new surface
+	}
+	if err := refusePlaintextListen("-ui-sandbox-listen", uiListen, posture, allowPlaintextListen); err != nil {
+		return err
 	}
 	if sameListenAddress(uiListen, listen) {
 		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -listen — "+
