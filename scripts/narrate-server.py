@@ -67,6 +67,18 @@ _SUBS = [
     ("—", ", "),
     ("–", ", "),
     ("…", ", "),
+    # HETERONYMS, phrase-scoped on purpose: "live" the adjective is /laɪv/
+    # ("a live run") while "lives" the verb is /lɪv/ ("where a yes lives") —
+    # a bare word sub would break the verb, so only known adjective phrases
+    # are respelled. Add phrases here as scripts grow them; the verifier's
+    # pronunciation watch flags unmapped occurrences for review.
+    ("watch it live", "watch it lyve"),
+    ("live run", "lyve run"),
+    ("live decision", "lyve decision"),
+    ("live strip", "lyve strip"),
+    ("held live", "held lyve"),
+    ("caught it live", "caught it lyve"),
+    ("blocked live", "blocked lyve"),
     # Specific hosts BEFORE the generic .com/.org rules.
     ("api.anthropic.com", "the Anthropic ay pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),

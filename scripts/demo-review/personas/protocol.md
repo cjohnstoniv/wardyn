@@ -36,6 +36,13 @@ persona is the audience, not an auditor.
   used; every claim you don't see proven; every stretch where you are bored or
   lost (long stillness, or watching something meaningless to you).
 - **Skepticism**: claims you don't buy yet, and what would convince you.
+- **Say it aloud (script reviews)**: the captions ARE the narration — read
+  every line as the TTS will speak it and flag pronunciation traps:
+  initialisms that must be spelled (CI, CLI, API…), heteronyms whose reading
+  depends on sense (live/lives, record noun-vs-verb, read present-vs-past),
+  digits, versions, and hostnames. A trap is a finding even when the wording
+  is fine on the page; the fix lands in narrate-server.py's speakable(), not
+  by mangling the on-screen caption.
 
 ## Close with
 

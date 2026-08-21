@@ -876,6 +876,30 @@ d = json.load(open(sys.argv[1])); c = d.get("cues", [])
 ov = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"] - 1500)
 slid = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"])
 print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard overlaps: {ov}   (mux-slid: {slid - ov})")
+
+# Pronunciation watch (owner directive 2026-08-20): warn-only. The TTS reads
+# captions verbatim, and two trap classes have shipped wrong on camera —
+# initialisms spoken as words ("CI"), and heteronyms picked wrong ("live").
+# narrate-server.py's speakable() carries the fixes; this flags anything a
+# caption speaks that has NO mapping there yet, so the gap is seen before a
+# viewer hears it. Warnings, not failures: a human decides the pronunciation.
+import re
+KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
+MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live", "blocked live")
+warns = set()
+for x in c:
+    t = x["text"]
+    for m in re.findall(r"\b[A-Z]{2,5}s?\b", t):
+        if m.rstrip("s").upper() not in KNOWN:
+            warns.add(f"unmapped initialism {m!r}")
+    for lw in re.finditer(r"\blive\b", t, re.I):
+        lo = t.lower()
+        if not any(p in lo for p in MAPPED_LIVE):
+            warns.add(f"heteronym 'live' outside mapped phrases: ...{t[max(0,lw.start()-24):lw.end()+16]!r}")
+    # 'record' noun/verb: Kokoro handles post-article nouns so far; add a
+    # mapped-phrase check here the first time it is heard wrong.
+for w in sorted(warns):
+    print(f"  pronunciation-watch: {w}")
 sys.exit(0 if (c and ov == 0) else 1)
 PY
   [[ $? -eq 0 ]] && ok "timeline complete, no overlapping lines" || bad "narration timeline has overlaps or is empty"
