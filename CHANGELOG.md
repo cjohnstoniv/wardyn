@@ -34,6 +34,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Deployment: `uiSandbox.*` in the Helm chart (its own port, and its own
   hostname — the README says why), and a loopback-only compose mapping on
   `WARDYN_UI_SANDBOX_PORT` that stays inert until the gateway is enabled.
+  On the console, a run's "Attach from your terminal" card gains a third lane
+  beside the Wardyn CLI and SSH: off, no-apps-declared, or one row per declared
+  app with an Open button that mints an attach ticket and opens the relay's own
+  origin in a new tab (`window.open(…, "noopener")`, never an iframe — an
+  iframe is precisely the same-origin risk the second listener exists to
+  avoid). The policy detail sheet shows `ui_apps` read-only; there is no
+  in-console editor in 0.6.
 - **`wardyn/agent-vscode` image variant** (`make agent-image-vscode`,
   `deploy/images/vscode/`): the claude-code image plus a pinned,
   sha256-verified `code-server` bound to `127.0.0.1:8080` and a
@@ -94,6 +101,82 @@ and does not yet follow semantic versioning (interfaces are not stable).
   [docs/SSH.md](docs/SSH.md) → "Bounds" and `threatmodel/THREAT-MODEL.md`
   residual #15.
 
+- **One command from a bare host to a real Kubernetes cluster.** `make
+  kind-quickstart` ([`deploy/kind/quickstart.sh`](deploy/kind/quickstart.sh))
+  builds `wardynd` locally, stands up a `kind` cluster with a version-pinned
+  Calico CNI and the k8s runner substrate on, `helm install`s the chart, and
+  waits for a healthy control plane — the exact path CI's `helm-install-test`
+  and `conformance-k8s` jobs already prove, now runnable by an operator in one
+  command, printing the URL and admin token it minted. Both host port mappings
+  bind `127.0.0.1` explicitly rather than `0.0.0.0`, so a leftover compose stack
+  on the same ports fails loudly at cluster-create instead of silently
+  absorbing the quickstart's traffic; the healthz proof names *who* answered,
+  because both stacks publish `127.0.0.1:8080` and a 200 says nothing about
+  which one replied. `make kind-down` tears it back down. The chart README now
+  leads with this path before the full production install walkthrough, and
+  [docs/README.md](docs/README.md) links the Helm deployment lane at all.
+  Day-2 operations on Kubernetes are documented from commands run against a
+  live cluster ([docs/OPERATIONS.md](docs/OPERATIONS.md)).
+- **`GET /readyz` — a real readiness probe.** `/healthz` reports "ok"
+  unconditionally with no Postgres check, but the chart used it for readiness,
+  so a dead database read healthy and never left the Service's endpoint list.
+  `/readyz` pings the store with a 3s timeout (503 on failure) and is what the
+  chart's `readinessProbe` now targets; liveness and startup stay on `/healthz`
+  so a transient DB blip does not restart-loop an otherwise-fine pod. The probe
+  path is a chart value (`readinessProbe.path`), pinnable back to `/healthz`
+  for images at or below 0.5.0, which predate `/readyz` and would otherwise
+  stall every rollout at "not ready".
+- **`/metrics` can see a dead store and a backed-up audit spool.** Every
+  existing counter only moves on success, so a Postgres outage looked identical
+  to an idle control plane on the scrape surface. Two gauges close it:
+  `wardyn_store_up` (the same bounded ping `/readyz` makes) and
+  `wardyn_audit_spool_lines` — a failed durable audit write spools to local
+  JSONL for a background drain loop to replay, and a spool that never returns
+  to 0 means that loop is not working, a condition that previously had no
+  operator-visible signal at all.
+- **`wardyn ssh <run-id>` — no more copy-pasting the connect string.** It
+  reaches a run over the SSH gateway directly, exec'ing the local `ssh(1)`
+  binary against the address read off the gateway's own `/healthz` — the same
+  one the console's SSH card surfaces. It is a deliberately separate command
+  from `attach`, not a flag on it: `attach` carries the admin bearer over a
+  WebSocket, `ssh` carries a registered public key over the real SSH protocol,
+  and collapsing the two would silently swap which credential a run session
+  used. `--print` emits the raw command and `--config` an `ssh_config` Host
+  block, both identical to what the run-detail card renders for the same run;
+  the card now names the shortcut inline, above the raw command it replaces.
+  The lane is proven end to end against a Pod on the k8s substrate
+  (`make test-e2e-ssh-k8s`), not only against Docker. See
+  [docs/SSH.md](docs/SSH.md).
+- **`wardyn logs <run-id> [-f]`** tails a run's audited event trail (dispatch,
+  egress, credential mints, completion) by reusing the existing audit-events
+  pipeline. There is no raw agent stdout/stderr capture for exec-mode runs, so
+  the command is honestly scoped to what actually gets audited, and it reports
+  an unknown or unauthorized run id immediately instead of polling forever.
+- **`approvals list`/`get` gain run and host visibility.** `approvals list
+  --run <id>` filters by run — the SDK's `ListApprovals` now actually sends
+  `?run_id=`, dead since decision scopes shipped it server-side — a `HOST`
+  column is parsed from `requested_scope`, and a `HOLD` column flags a live
+  `wait_for_review` egress hold with its remaining window. `approvals get <id>
+  --run <run-id>` fills the gap left by there being no `GET /approvals/{id}`.
+- **The default ceiling policy is viewable — UI, CLI and API.** `GET
+  /policies/default` exposes the ceiling every policy-less run gets (the same
+  one a member's inline policy is clamped against), previously unexposed on any
+  surface. Reachable as `wardyn policy default`, the SDK's `GetDefaultPolicy`,
+  and an expandable card on the Policies screen.
+- **A Permissions screen, and inline why-denied moments for members.** Admins
+  get a seventh sidebar entry showing the doctrine, each of the four capability
+  kinds with a live sentence naming what it currently does or does not enforce,
+  the grant table and an add form — a grant renders amber with no success
+  toast, and an unenforced kind is labelled "Advisory until enforced"
+  throughout, so the screen never implies a bound it is not applying. Members
+  get three inline deltas driven by `GET /me/capabilities`: an `egress_domain`
+  approval whose host they were not granted disables both decisions with the
+  reason beside them; New Run *annotates* — never hides — the workspaces a
+  member cannot launch against, because hiding would make the refusal
+  undiscoverable; and the Secrets list says outright that it is showing only
+  the names that member holds. All of it is advisory: the server remains the
+  enforcement point.
+
 ### Changed
 
 - **`image` moves from admin-only to grantable, and `workspace` becomes
@@ -118,6 +201,124 @@ and does not yet follow semantic versioning (interfaces are not stable).
   before its first exec) and merged rather than replaced, with entries
   outliving their container by 15 minutes so a lagging tail still correlates.
 
+- **A persistent-Postgres install with the default ephemeral age key now
+  refuses to render, instead of crash-looping on its second restart.**
+  External-DSN installs pair with the default ephemeral age identity —
+  regenerated every boot — so a second restart cannot decrypt what the first
+  boot encrypted. That combination previously installed cleanly and only failed
+  later, unrecoverably. The chart refuses it outright
+  (`secrets.allowEphemeralAgeKey=true` is the explicit "I accept losing every
+  stored secret on restart" opt-out, the same shape as `allowMultiReplica`),
+  and the README's own external-DSN install commands — which walked operators
+  into the same trap — now pass `secrets.ageKeyFromSecret=true` throughout.
+- **The egress canary names the ambient-NetworkPolicy trap — and stops
+  recommending a fix that would have widened every sandbox's egress.** A
+  pre-existing default-deny `NetworkPolicy` in the runs namespace, unrelated to
+  Wardyn, blocks the canary's baseline-reachability phase and produced an
+  `INDETERMINATE` boot refusal with no documented cause. The error and the
+  chart docs now name it directly, and the originally-suggested remediation (an
+  allow-rule for `wardyn.managed=true`) is corrected: that rule is additive and
+  both the agent and proxy pods carry the label, so it would have widened every
+  run's egress past its per-run deny+proxy-only policy and flipped the canary
+  to "CNI does not enforce". The documented fix is to exempt Wardyn's pods from
+  the *ambient* policy's own `podSelector`, or to use a clean namespace.
+- **`make reset` warns before destroying the corporate baseline it shares with
+  `make reset-all`.** Plain `reset` took the upstream proxy, artifact mirrors
+  and SCM host configuration down with no warning and no capture command. Both
+  paths now print one shared hint — and only while `wardynd` is actually
+  running, because the capture command runs inside it, so the hint is withheld
+  exactly when it could not work.
+- **`make doctor` is read-only again, and honours `WARDYN_PG_PORT`.** Its
+  socket-mountability probe silently pulled `alpine:3.20` from the network; it
+  now runs `--pull=never` and skips outright when the image is not already
+  local. Its Postgres port check respects the same `WARDYN_PG_PORT` override
+  its api/registry/ssh siblings already did.
+- **A typo'd `site-config apply` key fails on the host instead of deleting the
+  setting.** `apply` replaces the whole stored document, so a misspelled field
+  was silently dropped by a lenient decode and the real setting erased with it.
+  The CLI now decodes strictly and reports how many `Integrations` entries a
+  round-trip silently dropped, rather than exiting 0 as though nothing were
+  lost.
+- **`wardyn setup wall|vault` stops exiting 0 when nothing was enabled.** An
+  unsupported host, a plan-only run, a declined confirm, or a non-interactive
+  empty stdin all silently "succeeded" at doing nothing. Every such path now
+  exits 1 naming the reason, and a successful `--run` re-probes `docker info`
+  for the runtime actually in effect rather than trusting the install script's
+  exit code alone.
+- **A paste over 32 KiB no longer kills the web attach terminal.** The attach
+  WebSocket had no explicit read limit, so `coder/websocket`'s default 32 KiB
+  cutoff closed the whole session — rather than truncating — the moment an
+  operator pasted a long patch or log. The limit is now explicit at 1 MiB.
+- **A long attach session's recording is truncated, not thrown away.** The live
+  asciicast was buffered unbounded in the daemon's heap and written once at
+  close, so a long session hit the recording store's 64 MiB cap and was
+  rejected *whole* — the entire session's evidence lost at the moment it should
+  have been persisted. The buffer is capped at 8 MiB and an over-long session
+  is saved truncated (audited with `truncated:true`) rather than not saved at
+  all. A redundant per-keystroke `agent_runs` UPDATE went with it: a 30s
+  keepalive already covers liveness.
+- **`ci-run.sh` survives a failed refetch and a job cancel.** A failed post-run
+  refetch used to truncate the already-captured `run.json` via shell
+  redirection before the fetch ran; it now refetches to a temp file and
+  replaces the real one only on success. A hard cancel (SIGTERM) skipped
+  teardown entirely because cleanup ran only on the `EXIT` trap — TERM/INT now
+  route through it too — and the run's own terminal recording is collected into
+  the CI output directory instead of being dropped with the recordings volume.
+- **`--dry-run` preflight stops flagging a false "missing model access" blocker
+  for exec runs.** The preflight checklist called the same model-access
+  resolver as the real launch path unconditionally, but launch itself exempts
+  `task_mode=exec` — so every CI exec job's dry-run preview showed a blocker
+  launch would never raise.
+- **A duplicate policy name is a 409, not a raw 500.** Creating a policy with a
+  name already in use returned a blanket server error carrying the raw database
+  message; it now maps to a 409 whose message the create-policy dialog surfaces
+  directly.
+- **A member can start a demo again.** Redacting setup status for members
+  zeroed the confinement-classes field along with genuine diagnostic detail —
+  but the demo screen's Start-button readiness check reads that same field, so
+  no member could start a keyless demo regardless of the runner's real state.
+  The field survives redaction now; the driver name and per-class substrate
+  detail still do not.
+- **A credential approval that simply expired no longer wedges the run
+  permanently.** `ensureApproval` kept re-finding the same aged-out `EXPIRED`
+  approval on every retry, and minting maps `EXPIRED` to a denial — so a run
+  blocked on an approval nobody reached in time was stuck forever. Both lookups
+  skip expired rows, so the next attempt raises a fresh pending request; a
+  genuine human denial still stays terminal.
+- **A malformed verify-egress approval audits its own no-op.** Approving a
+  request with an empty or malformed host in `requested_scope` silently wrote
+  nothing to the workspace's requirements contract — a green UI with no durable
+  effect. The guard now emits an audit event on the miss, matching the
+  merge-failure path beside it.
+- **A member's empty Audit feed, the link into it, and its truncation now tell
+  the truth.** A member's unfiltered `/audit` is always empty by design — the
+  server scopes non-admins to `?run_id=` of a run they own — but the copy read
+  this as "you have no runs yet". The copy is fixed, the run-detail Audit tab's
+  link into the full feed carries `?run_id=` so the filter is actually
+  reachable (and survives a reload via URL state), and the tab notes when it is
+  capped at the server's 1000-row default.
+- **The console stops polling the expensive setup-status endpoint twice, and
+  warns before an SSO session dies mid-work.** The top bar's barrier chip ran
+  its own poll of `/setup/status` on top of the app shell's separate poll of
+  the same endpoint — which runs a full run list plus a host sweep that shells
+  out. The two collapsed into one, then the heartbeat need itself moved to the
+  cheap, unauthenticated `/healthz`. A warning now appears before an SSO
+  session's ID token expires, instead of a silent 401 wiping the console back
+  to sign-in.
+- **Console honesty fixes.** The setup footer's gate action button is
+  operator-gated, matching its sibling inline Test buttons. Container-login
+  success text names the provider actually connected instead of always claiming
+  a Claude subscription. The welcome screen stops reading an unreachable daemon
+  as a real "needs setup" state and shows the same "Checking…" state the rest
+  of the app uses. The operator-only refusal text names *admin*, not a role
+  that does not exist. The confined-review card honours approvals recorded on
+  the requirements contract, not just the legacy `approved_egress` list, so a
+  host approved live during a confined replay stops rendering blocked behind a
+  duplicate-writing Approve button. The live-hold badge stops treating any
+  pending `wait_for_review` approval as an active hold — the proxy's real hold
+  times out in 30s while the approval can stay pending for up to 24h — and a
+  failed poll stops rendering as "all clear".
+
 ### Security
 
 - **A member's dropped secret pairing is now audited, not just warned about.**
@@ -132,6 +333,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
   audit the same way (`capability_egress_host`, `capability_secret`), and a
   capability refusal at launch or at an approval decision audits as
   `capability_workspace`, `capability_egress_host`, or `byoi_member`.
+
+- **`k8s.enabled` refuses `serviceAccount.create=false` with no explicit
+  name.** That combination let the k8s-runner RBAC role — `pods/exec`,
+  `secrets` create/delete, `networkpolicies` create/delete — silently bind to
+  the namespace's `default` ServiceAccount, and therefore to every other pod in
+  the namespace using it. The chart fails the render for that exact
+  combination; an explicit `serviceAccount.name` still renders fine.
+- **The `?ticket=` attach lane audits its own refusals.** This route is the
+  only path to a live terminal that bypasses `humanOrAdminAuth`, and it
+  recorded no denials at all — a scan against it with guessed tickets left no
+  trace, unlike the SSH gateway's `ssh.auth`. Both refusal shapes now emit
+  `session.attach`/`failure` with the source IP.
+- **Plaintext run credentials no longer live for the daemon's lifetime.**
+  `wardynd` held every run's plaintext secrets in memory indefinitely, so a
+  long-uptime daemon accumulated the credentials of every run it had ever
+  dispatched with no eviction path in production. A background sweep evicts a
+  run's secret corpus one hour after it goes terminal, on a 15-minute ticker,
+  and fails closed: a store error or an unresolvable run id keeps the secrets
+  rather than guessing them safe to drop.
+- **A member could read a colleague's run telemetry on a shared workspace.**
+  `GET /workspaces/{id}/observed-egress` aggregated denied-egress targets from
+  every run that had touched the workspace with no per-caller filter, leaking
+  telemetry from the very runs `/runs/{id}` itself 404s that member out of. The
+  endpoint applies the same owner-or-admin scoping as the runs list.
+- **The react-router pnpm-audit suppression is gone — the advisory it covered
+  was already patched.** `GHSA-qwww-vcr4-c8h2` patches at both 7.18.2 and
+  8.3.0, not only at the 8.x major the suppression's comment claimed; a stale
+  "no patch exists on 7.x" note kept `ignoreGhsas` alive well past the release
+  that refuted it. `react-router-dom` moves `^7.18.1` → `^7.18.2` and the
+  suppression is deleted outright — `make npm-audit` passes against the real
+  advisory set with **nothing** ignored. The 7 → 8 major stays a named gap in
+  [ROADMAP.md](ROADMAP.md), now on its actual merits: every stable 8.x
+  peer-depends on React >=19.2.7 against this console's 18.3.1, and
+  `react-router-dom` has no 8.x release at all — a React 19 decision for a UI
+  owner, not an advisory deadline.
 
 ## [0.5.0] — 2026-08-18
 
