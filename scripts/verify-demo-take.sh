@@ -349,8 +349,8 @@ fi
 }
 
 # --- video 07: approvals & egress scopes ----------------------------------------
-# The take decides FOUR things on camera: crates.io approved at the default
-# scope inside a demo sandbox, ingest.sentry.io denied there, crates.io approved
+# The take decides FOUR things on camera: example.org approved at the default
+# scope inside a demo sandbox, ingest.sentry.io denied there, example.org approved
 # with `always` on the real `egress-lab` workspace, and then a fresh run that
 # reaches the same host with nothing to click. The two hosts are this video's
 # alone (DA5), so a stack-wide approval.decide query is unambiguous.
@@ -358,7 +358,7 @@ check_video_07_approvals() {
 head_ "Video 07 · the decisions"
 V07_API="http://localhost:${WARDYN_UP_PORT:-8080}"
 V07_WS="${WARDYN_DEMO_EGRESS_WS_NAME:-egress-lab}"
-V07_HELD="crates.io"
+V07_HELD="example.org"
 V07_TELE="ingest.sentry.io"
 V07_PROOF_TITLE="${WARDYN_DEMO_V07_PROOF_TITLE:-Same host, no approval}"
 V07_DEC=$(curl -fsS "${V07_API}/api/v1/audit?action=approval.decide&limit=1000" 2>/dev/null || echo '[]')
