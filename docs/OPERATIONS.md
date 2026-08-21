@@ -602,8 +602,6 @@ at a corporate IdP that isn't hand-curated the same way.
 
 ## Workspaces: three tiers
 
-[Watch — Add a workspace (~4:00)](README.md#v02--add-a-workspace)
-
 A workspace is not one unit of configuration. Wardyn splits it into three:
 
 1. **Source** (tier 1) — a repo or local directory configured ONCE, in a
@@ -795,8 +793,6 @@ integration that delivers no credential header (a data store reachable on
 `db.corp.internal:5432`, egress only, is exactly the shape this is for).
 
 ### Model access resolves — it does not default to none
-
-[Watch — Interactive runs (~3:00)](README.md#v04--interactive-runs)
 
 A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):

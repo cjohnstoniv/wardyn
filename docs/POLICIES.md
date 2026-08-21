@@ -1,7 +1,5 @@
 # Policy reference (`RunPolicySpec`)
 
-[Watch — Policies & confinement (1:30–2:00)](README.md#v08--policies--confinement)
-
 Every governed run resolves to one `RunPolicySpec` — the whole configuration
 surface. This is the field list; [`examples/policies/`](../examples/policies/) is
 the worked set, and `wardyn policy render -f <file>` converts YAML→JSON and
@@ -366,8 +364,6 @@ already holds, from that button or from before this migration, is still
 unioned into a confined replay's allowlist.
 
 ## Approval decision scopes
-
-[Watch — Approvals & egress (2:30–3:00)](README.md#v07--approvals--egress)
 
 An approve/deny decision on an `egress_domain` approval carries a **scope** —
 how far that one decision reaches. It travels as `decision_scope` (plus

@@ -1,7 +1,5 @@
 # Wardyn CI — governed sandboxes in your pipeline
 
-[Watch — CI & headless (2:00–2:30)](README.md#v09--ci--headless)
-
 Run a sandboxed job from a CI/CD pipeline (GitHub Actions, Azure DevOps, or
 anything with a docker daemon) with **no pre-running Wardyn, no UI, and no
 human**. One script brings up a fresh control plane, launches one governed

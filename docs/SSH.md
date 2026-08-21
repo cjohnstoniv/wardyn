@@ -76,6 +76,15 @@ command for a run you own while it is RUNNING:
 ssh <run-id>@<advertise-host> -p <port>
 ```
 
+Or let the CLI assemble it: `wardyn ssh <run-id>` reads the gateway's
+address off `/healthz` and execs your local `ssh(1)` against it, so there is
+no connect string to copy. `wardyn ssh --print <run-id>` emits that command
+instead of running it (for a script or a demo) and `--config` emits the
+`ssh_config` block below — both byte-identical to what the card renders. It
+is a separate command from `wardyn attach`, deliberately: `attach` carries
+the admin bearer over a WebSocket, `ssh` carries your registered public key
+over the real SSH protocol.
+
 `<run-id>` **is** the SSH username — the gateway has no session cookie to
 carry it any other way, so the run id is the addressing, the same way a
 hostname addresses a machine. `<advertise-host>` is whatever the operator set

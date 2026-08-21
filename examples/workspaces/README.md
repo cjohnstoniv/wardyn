@@ -1,7 +1,5 @@
 # Wardyn Sample Workspaces
 
-[Watch — Add a workspace (~4:00)](../../docs/README.md#v02--add-a-workspace)
-
 This directory is a catalog of small, self-contained workspaces that let an
 operator exercise every major Wardyn governance control without writing code.
 Each subdirectory is a minimal but runnable project paired with a `TASK.md`
