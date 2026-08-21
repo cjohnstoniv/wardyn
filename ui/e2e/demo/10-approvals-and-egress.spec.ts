@@ -614,12 +614,16 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // a strip that still reads WAITING (Dana: it failed closed; that is a
   // selling point, not a glitch). The row itself still saying WAITING after
   // its connection died is a product gap, not this beat's to fix.
-  await waitUnlessGone(
-    expect(card.locator(".xterm-screen").first()).toContainText(/curl: \(56\)/, { timeout: 45_000 }),
-    demoOver(card),
-    45_000,
-    `${TELEMETRY_HOST}'s held request never lapsed with its own curl: (56) — the fail-closed beat has nothing to point at`,
-  );
+  // Same innerText-poll shape as the payoffs — this exact toContainText passed
+  // this morning and starved in a sibling beat an hour later; uniform shape,
+  // no bets on which polls survive take context.
+  const lapseTerm = card.locator(".xterm-screen").first();
+  await expect
+    .poll(async () => (await lapseTerm.innerText().catch(() => "<no .xterm-screen>")), {
+      timeout: 45_000,
+      message: `${TELEMETRY_HOST}'s held request never lapsed with its own curl: (56) — the fail-closed beat has nothing to point at`,
+    })
+    .toMatch(/curl: \(56\)/);
   // SCREEN: Window expires.
   await spotlight(page, card.locator(".xterm-screen").first());
   await caption(page, "Nobody answered.");
@@ -899,12 +903,22 @@ test("beat 8 — a new run, and nothing to click", async () => {
   // would mean the permanent grant never reached this run's policy, and the
   // closing line's "the decision outlived the run that raised it" would be
   // false.
-  await waitUnlessGone(
-    expect(page.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
-    page.getByText(RUN_OVER).first(),
-    60_000,
-    `${HELD_HOST} did not answer on the proof run — the workspace grant never reached this run's allowlist`,
-  );
+  // expect.poll over innerText, same reason as B2's payoff: toContainText
+  // starved here with the 200 visibly on screen (08-21 rehearsal).
+  const proofTerm = page.locator(".xterm-screen").first();
+  try {
+    await expect
+      .poll(async () => (await proofTerm.innerText().catch(() => "<no .xterm-screen>")), {
+        timeout: 60_000,
+        message: `${HELD_HOST} did not answer on the proof run — the workspace grant never reached this run's allowlist`,
+      })
+      .toMatch(RESPONDED);
+  } catch (e) {
+    const over = await page.getByText(RUN_OVER).first().isVisible().catch(() => false);
+    const txt = await proofTerm.innerText().catch(() => "<unreadable>");
+    console.warn(`[v10] proof-run diagnostic: runOver=${over} innerText=${JSON.stringify(txt.slice(0, 200))}`);
+    throw e;
+  }
   await expect(
     page.getByTestId("live-approvals-idle"),
     "the proof run RAISED an approval — the permanent grant did not carry into it",
