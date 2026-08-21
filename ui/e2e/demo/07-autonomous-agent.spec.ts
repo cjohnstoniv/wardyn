@@ -601,20 +601,29 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
     await beat(page, BEAT_SHORT);
     await caption(page, "It's not on the list.");
     await beat(page, BEAT_SHORT);
-    // Re-check after ~8s of narration: a live hold has a lifetime, and this
-    // one lapsed mid-beat once (2026-08-21 rehearsal) — the row was alive at
-    // the guard, gone at the click, and decide() burned its whole timeout
-    // waiting for a dialog that could never come. A lapsed hold self-resolves
-    // as a refusal, so "It's not on the list." remains true on camera; only
-    // the decide and its two closing lines are skipped.
-    if (await telemetryRow.count()) {
+    // BEST-EFFORT, deliberately: a telemetry hold is fire-and-forget on the
+    // agent side, and it can resolve at ANY point in this beat — both 08-21
+    // rehearsals lost it at a different step (once before the confirm dialog,
+    // once with the dialog OPEN: live-approvals.tsx early-returns to its idle
+    // hint when `pending` empties, unmounting the open dialog under the
+    // driver). A lapsed hold self-resolves as a refusal, so the spoken setup
+    // stays true; on any failure the dialog is dismissed and only the two
+    // closing lines are skipped. decide()'s own landed-proof still gates the
+    // success path, so "Denied." can never be narrated over a failed deny.
+    let denied = false;
+    try {
       await decide(page, "Deny", "Deny.", "datadoghq");
+      denied = true;
+    } catch {
+      console.warn("[v07] telemetry hold resolved mid-beat — Deny not filmed this take");
+      await page.keyboard.press("Escape").catch(() => {});
+      await spotlight(page, null);
+    }
+    if (denied) {
       await caption(page, "Denied.");
       await beat(page, BEAT_SHORT);
       await caption(page, "And that decision is recorded too.");
       await beat(page, PACE.read + 400);
-    } else {
-      console.warn("[v07] telemetry hold lapsed mid-beat — Deny not filmed this take");
     }
   }
 
