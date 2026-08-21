@@ -247,6 +247,13 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get capability enforcement: "+err.Error())
 		return
 	}
+	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
+	// needs to know WHAT they hold, never which colleague signed it — and the
+	// field is `omitempty`, so blanking it drops it from the body rather than
+	// shipping an empty string. GET /permissions (operatorOnly) still carries it.
+	for i := range grants {
+		grants[i].CreatedBy = ""
+	}
 	writeJSON(w, http.StatusOK, meCapabilitiesResponse{
 		Grants:              grants,
 		Enforcement:         enf,

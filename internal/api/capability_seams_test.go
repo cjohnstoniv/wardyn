@@ -813,3 +813,36 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 		}
 	})
 }
+
+// ─── D5: what a member is told about their own grants ─────────────────────────
+
+// TestMeCapabilities_HidesCreatedBy: /me/capabilities answers "what do I hold",
+// and the answer does not include which admin signed the row. GET /permissions
+// (operatorOnly) is where that belongs.
+func TestMeCapabilities_HidesCreatedBy(t *testing.T) {
+	g := grant(types.CapabilitySubjectUser, capEmail, capSecret, "anthropic-api-key", types.CapabilityAllow)
+	g.CreatedBy = "admin@corp.example"
+
+	h := newHarness(t)
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.Store = &capStore{grants: []types.CapabilityGrant{g}, enf: map[string]bool{capSecret: true}}
+	h.srv.router = h.srv.routes()
+
+	w := doSSO(t, h.srv, http.MethodGet, "/api/v1/me/capabilities",
+		ssoSession(t, capSub, capEmail, oidc.RoleMember), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /me/capabilities = %d: %s", w.Code, w.Body.String())
+	}
+	// Asserted on the RAW body: created_by is `omitempty`, so a correct response
+	// drops the key entirely rather than sending it empty.
+	if strings.Contains(w.Body.String(), "created_by") || strings.Contains(w.Body.String(), "admin@corp.example") {
+		t.Fatalf("body names the granting admin: %s", w.Body.String())
+	}
+	var got meCapabilitiesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Grants) != 1 || got.Grants[0].Value != "anthropic-api-key" {
+		t.Fatalf("grants = %+v, want the member's own row, minus the author", got.Grants)
+	}
+}
