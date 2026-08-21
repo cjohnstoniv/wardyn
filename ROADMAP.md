@@ -190,7 +190,9 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   substrate too — `make test-e2e-ssh-k8s` drives it against kind, not only
   Compose — and demo **V11 ("your terminal, our cluster")** films it end to end
   against the `kind-quickstart` cluster, graded against that install's own audit
-  trail rather than an exit code ([docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md)).
+  trail rather than an exit code. That beat and its grader are wired and were
+  exercised on a live cluster once; the take itself is a release-cut act and is
+  not published yet ([docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md)).
   The gateway also gained an **admin override**: a registered key now carries
   the role it was registered under (`role` column, migration
   `0043_ssh_key_role.sql`) and `sshAuth` authorizes `run.CreatedBy == the key's

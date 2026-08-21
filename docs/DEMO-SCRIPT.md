@@ -237,21 +237,26 @@ knows exactly what it owes:
 
 | Video | What 0.6 changed | Re-take at the cut? |
 |---|---|---|
-| **V11** — your terminal, our cluster | **New.** Terminal-only ([`scripts/demo-beats/11-terminal-to-the-cluster.sh`](../scripts/demo-beats/11-terminal-to-the-cluster.sh)), shot against the `make kind-quickstart` cluster | **Yes — first take.** No footage exists at all |
+| **V11** — your terminal, our cluster | **New.** Terminal-only ([`scripts/demo-beats/11-terminal-to-the-cluster.sh`](../scripts/demo-beats/11-terminal-to-the-cluster.sh)), shot against the `make kind-quickstart` cluster | **Yes.** One take was shot and graded during the campaign, but nothing is published to `/demos` and neither the take nor its verify report is on this branch — the cut re-shoots it |
 | **V01–V08** (the browser lane) | No spec and no caption changed, but the **console did**: `Permissions` is a new fifth sidebar entry, so every take on file films a six-entry sidebar the shipped console no longer has | **Yes — restaging only.** The narration is still true; the chrome is stale |
 | **V06** — record a run | Source comments only. The frozen-counter note the spec carried is retired (0.6 fixed the correlation index), but **no caption, no on-screen string and no beat changed** | Only as part of the V01–V08 restaging above |
 | **V10** — audit & attach | Untouched. Its one ground-truth line — "dark here, because that sensor is opt-in" — stays true: the counter fix does not make the `groundtruth` compose profile any less opt-in | No |
 | **V09** — CI & headless | Untouched, terminal-only, films no sidebar | No |
 
-**V11's wiring is static-checked on this branch, not shot**: `verify-demo-take.sh`
-gained `check_video_11` and the `11)` dispatch arm, the beat script and the
-verifier agree byte-for-byte on the handoff path
+**What can be checked on this branch is V11's wiring, and it holds**:
+`verify-demo-take.sh` gained `check_video_11` and the `11)` dispatch arm, the
+beat script and the verifier agree byte-for-byte on the handoff path
 (`${WARDYN_DEMO_WORK_DIR:-…/demo-video-11}/v11-run-id.txt`), and the verifier's
 three audit assertions — `ssh.exec` for argv `hostname` at exit 0, an
 `ssh.exec` row carrying exit 37, and every `ssh.auth` success attributed to the
-run's owner — are exactly the beats the script films. There is no dry-run mode:
-`check_video_11` reads a live cluster's audit trail, so the take itself is the
-first end-to-end exercise.
+run's owner — are exactly the beats the script films.
+
+`check_video_11` has been exercised end to end once: the campaign's live lane
+recorded a take against its `kind-quickstart` cluster and graded it with the
+verifier's report. That is why this row says "re-shoot", not "first take". But
+there is no dry-run mode — the check reads a live cluster's audit trail — and
+that cluster, the take, and the report are all gone. So the cut re-creates the
+cluster and re-shoots, and until it does, the series has no V11 to publish.
 
 ## Before the first take
 
