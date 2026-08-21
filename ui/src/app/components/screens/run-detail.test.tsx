@@ -235,7 +235,11 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
 // (server: auditPerRunDefaultLimit) and returned oldest-first — a chatty run's
 // later events can silently fall off the end. A capped page must say so; a
 // page under the cap must not.
-describe("RunDetailScreen — Audit tab truncation cue", () => {
+// 15s suite default, not vitest's 5s: the capped case renders a 1000-row audit
+// list and then drives a userEvent click through it — under a second alone, but
+// deterministically over the 5s ceiling when all 79 files run in parallel.
+// Same rationale (and the same 1000-row feed) as audit.test.tsx's suite timeout.
+describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, () => {
   function auditEvent(i: number) {
     return {
       id: `e${i}`,
