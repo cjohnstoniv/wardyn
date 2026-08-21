@@ -889,7 +889,9 @@ KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "U
 EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
 MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
                "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside",
-               "keys don't live in the room")
+               "keys don't live in the room",
+               # verb after a modal — G2P-verified /lɪv/ by default (2026-08-21), no _SUBS pin needed:
+               "credentials can live")
 warns = set()
 for x in c:
     t = x["text"]
