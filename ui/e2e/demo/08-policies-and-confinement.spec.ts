@@ -136,8 +136,8 @@
  * run-detail/widgets/identity.tsx).
  */
 
-import { test, expect, type Locator } from "@playwright/test";
-import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { test, expect, type Locator, type Page } from "@playwright/test";
+import { act, beat, caption, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
@@ -182,6 +182,9 @@ const POLICY_SPEC = {
  */
 const POLICY_FLOOR_LABEL = "Wall";
 const POLICY_EGRESS_SUMMARY = "2 domains allowed";
+
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
 
 /**
  * B3's run. A Shell command, not an Agent task — see the file header's KEYLESS
@@ -376,7 +379,9 @@ test("B1 — barrier honesty", async () => {
   // holdouts, but a red "Run failed" card has no delete API (sweep.ts) — the
   // only true board wipe is V01's reset. Name it once, on camera, rather than
   // let it sit unremarked through these opening captions (~8s, all four
-  // personas flagged the silent stretch).
+  // personas flagged the silent stretch). Conditional, and outside the owner's
+  // dialog track entirely — it only fires against a leftover a prior take's
+  // sweep could not clear.
   const staleFailed = page.getByText("Run failed — review what happened").first();
   if (await staleFailed.isVisible().catch(() => false)) {
     await spotlight(page, staleFailed);
@@ -388,38 +393,44 @@ test("B1 — barrier honesty", async () => {
     await spotlight(page, null);
   }
 
-  await caption(page, "Every run so far, you configured by hand.");
+  await caption(page, "Up to now, we've been configuring every run by hand.");
   await beat(page, PACE.read);
-  await caption(page, "A policy makes governance reusable, and reviewable.");
+  await caption(page, "That works.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But it doesn't scale.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A policy lets us take those decisions and make them reusable.");
   await beat(page, PACE.read);
 
-  // Silent nav — the SAY lines below narrate what is now on screen, not the
-  // click that got here. The chip's aria-label is the STRONGEST-available form
-  // (app-shell.tsx:543); the "No sandbox barrier" variant is impossible after
-  // beforeAll's assertion.
-  await act(page, page.getByRole("link", { name: "Sandbox barrier — open Settings" }));
+  // The chip's aria-label is the STRONGEST-available form (app-shell.tsx:543);
+  // the "No sandbox barrier" variant is impossible after beforeAll's assertion.
+  await act(page, page.getByRole("link", { name: "Sandbox barrier — open Settings" }), "Open Settings.");
   await expect(page.getByRole("heading", { name: "Host", level: 3, exact: true })).toBeVisible({ timeout: 30_000 });
 
   const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
   await expect(matrix).toBeVisible({ timeout: 30_000 });
 
-  await caption(page, "This card names the barriers this machine can actually build.");
   // S3: ring the card, not the heading — the same heading→ancestor fix V01
   // already applies to its own "Doesn't stop:" row.
   await spotlight(
     page,
     page.getByRole("heading", { name: "Host", level: 3, exact: true }).locator("xpath=ancestor::section[1]"),
   );
+  await caption(page, "First, Wardyn tells us what this machine can actually support.");
+  await beat(page, PACE.read);
+  await caption(page, "Fence.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Wall.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Vault.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And importantly, it tells us what each one does — and what it doesn't.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
   // THE HONESTY BEAT, said WITHOUT a verdict. The plan's line here named a
   // specific three-way answer ("Fence, ready. Wall, needs setup. Vault,
   // incompatible here") that this host contradicts today — see the file header.
-  // The vocabulary is the teachable part and is true on every host; the verdict
-  // is asserted below against what the host itself reports.
-  await caption(page, "Fence, Wall, Vault — and each column says whether this machine can build it.");
-
   // ASSERT THE PAYOFF, dynamically. Every available class shows StatusChip
   // "Ready" (copy.ts:56); every unavailable one shows "Needs setup" or
   // "Incompatible here" (copy.ts:57,59) — tierState() has no fourth outcome
@@ -438,28 +449,13 @@ test("B1 — barrier honesty", async () => {
   // The header row IS the three columns' state blocks (radio + status chip),
   // so one ring covers whatever verdict this host happens to give.
   await spotlight(page, matrix.getByRole("row").first());
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
-
-  await caption(page, "Fence shares your kernel. Wall gives the agent a software kernel. Vault, its own machine.");
-  await spotlight(page, page.getByRole("row", { name: /^Mechanism/ }));
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
-
-  // S2: the honesty row sits low enough in the matrix to land under the
-  // caption bar if it's rung wherever it happens to be — center it first, the
-  // same fix V01 already applies to its own copy of this row.
-  const doesntStopRow = page.getByRole("row", { name: /^Doesn't stop:/ });
-  await centerInFrame(doesntStopRow);
-  await spotlight(page, doesntStopRow);
-  await caption(page, "And what each tier doesn't stop — the same honesty row, right here on Settings.");
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
-
-  // Same complaint as V01: rewrite to what three green "Ready" columns can
-  // actually show, not a verdict this take can't prove.
-  await caption(page, "A tier this host couldn't build would show it here, disabled — this machine passed all three.");
+  await caption(page, "On this machine, all three are available.");
   await beat(page, PACE.read);
+  await caption(page, "On another machine, one might not be.");
+  await beat(page, PACE.read);
+  await caption(page, "That's a capability check, not a configuration preference.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -470,7 +466,7 @@ test("B2 — create a policy", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  await act(page, page.getByRole("link", { name: "Policies" }));
+  await act(page, page.getByRole("link", { name: "Policies" }), "Open Policies.");
   await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible({ timeout: 30_000 });
 
   // The operator gate, named. A member's button is disabled (policies.tsx:141)
@@ -482,32 +478,26 @@ test("B2 — create a policy", async () => {
     "the New policy button is disabled — this session is not an operator (shoot in local mode)",
   ).toBeEnabled({ timeout: 30_000 });
 
-  await act(page, newPolicyBtn, "New policy — opens straight into the spec.");
+  await act(page, newPolicyBtn, "New policy.");
   const dlg = page.getByRole("dialog");
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
+  await caption(page, "A policy is an actual specification.");
+  await beat(page, PACE.read);
   // Sam: "the modal's own body text is the most interesting thing on screen."
   // VERIFY the inline-floor clause against the server's confinement_floor
   // behavior (composer/clamp.go's EffectiveConfinementFloor and risk.go's
   // RequiredConfinementFloor both gate an inline spec exactly like a saved
   // one — runs_create.go:437-450 — but re-check before speaking it as fact).
   await spotlight(page, dlg.getByText(/admin-gated config/));
-  await caption(
-    page,
-    "Admin-gated, validated server-side — and an inline spec is still bound by the host's own floor.",
-  );
-  await beat(page, PACE.read + 400);
+  await caption(page, "It's validated on the server before it gets saved.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await caption(page, "Name it. The spec is JSON — four fields, written once by an admin.");
-  await beat(page, PACE.read);
-  await caption(page, "Most people never touch this page — you pick the result from a dropdown later.");
-  await beat(page, PACE.read);
   const nameBox = dlg.getByLabel("Name");
   await spotlight(page, nameBox);
   await nameBox.fill(POLICY_NAME);
   await spotlight(page, null);
-  await beat(page, PACE.read);
 
   // PASTE, never edit the CC2-floored STARTER_SPEC in place — friction (3) in
   // the file header. fill() replaces the textarea's whole value in one call,
@@ -515,27 +505,31 @@ test("B2 — create a policy", async () => {
   // prefilled starter, so no intermediate half-edited spec is ever on screen.
   const specBox = dlg.getByLabel("Spec (JSON)");
   await spotlight(page, specBox);
-  await caption(page, "The dialog starts you on a template — we paste our own spec over it.");
-  await beat(page, PACE.read);
   await specBox.fill(JSON.stringify(POLICY_SPEC, null, 2));
+  await caption(page, "We'll give this one two allowed hosts.");
+  await beat(page, PACE.read);
+  await caption(page, "Everything else should require a decision.");
   await beat(page, PACE.read);
 
-  await caption(page, "Two hosts allowed. Anything unlisted is held for your approval.");
+  // SCREEN: Policy JSON — camera stays on the spec box for the field walk.
+  await caption(page, "This setting controls that behavior.");
   await beat(page, PACE.read);
-  await caption(page, "wait_for_review is the hold you watched in episode seven — and the CCs are Fence, Wall, Vault, by number.");
-  await beat(page, PACE.read + 300);
-  await caption(page, "Min confinement class is the floor — the weakest barrier this policy accepts.");
+  await caption(page, "And this one sets the minimum confinement level.");
+  await beat(page, PACE.read);
+  await caption(page, "Think of it as the floor.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The policy can require a stronger barrier than the machine's default.");
   await beat(page, PACE.read);
   // The plan said "Set it to Wall, and this run refuses to start here." Wall is
   // installed on this host, so that sentence is false here — and any tier we
   // named instead could go false the next time a runtime is added or removed.
   // The RULE is what is always true (resolveEnforcedConfinement, runs.go:153:
   // the runner must advertise the exact enforced class, or the create fails).
-  await caption(page, "Raise the floor past what a host can build, and the run refuses to start there.");
-  await beat(page, PACE.read + 500);
+  await caption(page, "But it can't ask a machine to provide a barrier it doesn't support.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  await act(page, dlg.getByRole("button", { name: "Create policy" }), "Create — validated server-side before it saves.");
+  await act(page, dlg.getByRole("button", { name: "Create policy" }), "Create.");
   await expect(dlg).toBeHidden({ timeout: 30_000 });
 
   const row = page.getByRole("row", { name: new RegExp(POLICY_NAME) });
@@ -565,7 +559,11 @@ test("B2 — create a policy", async () => {
   // (there is no name beyond the one already on the row), so the fix is to
   // hold on it long enough to read, and pay it off later at the run page.
   await spotlight(page, row);
-  await caption(page, "Saved — two of two. That row's ID is what every run will cite as its receipt.");
+  await caption(page, "Saved.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And now this policy has an identity.");
+  await beat(page, PACE.read);
+  await caption(page, "Every run that uses it can point back to the exact rules that governed it.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
@@ -578,7 +576,7 @@ test("B3 — use it", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  await act(page, page.locator("header").getByRole("button", { name: "New run" }));
+  await act(page, page.locator("header").getByRole("button", { name: "New run" }), "New run.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   const titleBox = page.getByLabel("Title");
@@ -587,25 +585,18 @@ test("B3 — use it", async () => {
   await spotlight(page, null);
 
   // KEYLESS (file header): a Shell command needs no agent, no model and no
-  // Credentials-rail warning. Deliberately SILENT — it is the one SCREEN action
-  // the plan's own B3 line does not narrate, the same convention B4 uses for the
-  // cut "Launch." caption. The wizard's default is an interactive AGENT run, so
-  // this click swaps the "Run type" segment and the Task field becomes "Command".
-  await act(page, page.getByRole("radio", { name: "Shell command" }));
+  // Credentials-rail warning. The wizard's default is an interactive AGENT run,
+  // so this click swaps the "Run type" segment and the Task field becomes
+  // "Command".
+  await act(page, page.getByRole("radio", { name: "Shell command" }), "Shell command.");
   const cmdBox = page.getByLabel("Command");
   await spotlight(page, cmdBox);
   await cmdBox.fill(DEMO_COMMAND);
   await spotlight(page, null);
 
-  await act(
-    page,
-    page.getByRole("radio", { name: /^Saved policy/ }),
-    "New run, Confinement, Saved policy — pick it.",
-  );
+  await act(page, page.getByRole("radio", { name: /^Saved policy/ }), "Select saved policy.");
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
-
-  await caption(page, "Barrier is the wall around the box; confinement is the rules at its door. The policy carries both.");
 
   // FRICTION (2), NOW FIXED — and this is the beat the plan could not have: the
   // rail no longer describes wizard state a saved-policy launch would drop. It
@@ -617,27 +608,30 @@ test("B3 — use it", async () => {
   await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
   const railPolicy = rail.getByText(/^The stored spec governs this run/);
   await expect(railPolicy).toBeVisible();
-  // The stored spec's OWN facts, echoed by the rail — not the wizard's.
+  // The stored spec's OWN facts, echoed by the rail — not the wizard's. Not
+  // narrated directly (the owner's B3 line stays at the higher-level
+  // distinction below), but still proven: a claim silently dropped from the
+  // rail would otherwise ship undetected.
   await expect(railPolicy).toContainText(`barrier floor ${POLICY_FLOOR_LABEL}`);
   await expect(railPolicy).toContainText("2 hosts allowed");
   await expect(railPolicy).toContainText("The network edits on this page do not apply to it.");
-  await spotlight(page, railPolicy);
-  await caption(page, "Read the note: with a saved policy, the network edits on this page stop applying.");
-  await beat(page, PACE.read + 600);
-  await spotlight(page, null);
 
+  await spotlight(page, rail);
+  await caption(page, "And here's the important distinction.");
+  await beat(page, PACE.read);
   // INERT-BUT-LIT (Sam/Priya/Dana, product finding (d) for the ledger): the
   // LEFT form still shows Network radios and Barrier chips selected/enabled
-  // here too. Network truly is dead once a policy is attached (the note
-  // above); Barrier is NOT — it still sets this run's requested class, which
-  // B4 proves by deliberately picking a weaker one. This beat only owes the
-  // header reconcile: the rail's OWN Barrier chip (this host's default, still
-  // untouched at this point in the take) sits ABOVE the policy's Wall floor,
-  // which is the point — a floor is a minimum, not the setting.
+  // here too. Barrier still sets this run's requested class, which B4 proves
+  // by deliberately picking a weaker one.
   const barrierRail = rail.getByText("Barrier", { exact: true }).locator("xpath=..");
   await spotlight(page, barrierRail);
-  await caption(page, "Vault clears the Wall floor — a floor is a minimum, not the setting.");
+  await caption(page, "The sandbox is the wall around the workload.");
   await beat(page, PACE.read);
+  await spotlight(page, railPolicy);
+  await caption(page, "The policy is the set of rules governing what happens around that wall.");
+  await beat(page, PACE.read);
+  await caption(page, "The policy brings those rules with it.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -681,7 +675,9 @@ test("B4 — launch, effective policy", async () => {
   // need this beat's exploration to end with the run still governed by
   // createdPolicyId, not an inline stand-in.
   const fenceRadio = page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: "Fence" });
-  await act(page, fenceRadio, "Pick the weaker Fence explicitly — with nightly-triage still attached.");
+  await act(page, fenceRadio, "Select Fence.");
+  await caption(page, "Now we'll deliberately choose a barrier below the policy's minimum.");
+  await beat(page, PACE.read);
 
   const stillAttached = await rail
     .getByText(POLICY_NAME, { exact: true })
@@ -689,19 +685,33 @@ test("B4 — launch, effective policy", async () => {
     .catch(() => false);
 
   if (stillAttached) {
-    await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — below the floor, on purpose.");
+    await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
     await spotlight(page, launchError);
     await expect(
       launchError,
       "the contradiction reached Launch but the control plane let it through",
     ).toBeVisible({ timeout: 30_000 });
-    await caption(page, "And the control plane says no — the 422, rendered right here.");
+    await caption(page, "And Wardyn refuses to start it.");
+    await beat(page, PACE.read);
+    await caption(page, "The policy requires a stronger floor.");
+    await beat(page, PACE.read);
+    await caption(page, "So the control plane says no.");
     await beat(page, PACE.read + 400);
     await spotlight(page, null);
   } else {
     await spotlight(page, fenceRadio);
-    await caption(page, "And the policy let go — this page won't hold a barrier below what it requires.");
+    // ADAPTED (clamp branch): owner line was "And Wardyn refuses to start it."
+    // On this host the Fence click detaches the policy client-side (patch()
+    // drops selectedPolicyId on any confinementClass edit, new-run-screen.tsx)
+    // instead of reaching Launch with the contradiction intact, so there is no
+    // refused Launch to film — the clamp itself IS the refusal.
+    await caption(page, "And Wardyn won't hold that combination — the policy just let go of the run.");
     await beat(page, PACE.read);
+    await caption(page, "The policy requires a stronger floor.");
+    await beat(page, PACE.read);
+    // ADAPTED (clamp branch): owner line was "So the control plane says no."
+    await caption(page, "Below that floor, this form won't even launch it governed.");
+    await beat(page, PACE.read + 400);
     await spotlight(page, null);
   }
 
@@ -712,14 +722,12 @@ test("B4 — launch, effective policy", async () => {
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
   await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
-  await caption(page, "Below the floor, the control plane refuses the launch. Pick at or above it, and it runs.");
-  await beat(page, PACE.read + 400);
+  await caption(page, "Now choose a barrier that meets the floor.");
+  await beat(page, PACE.read);
 
-  // SV15: "Launch." was cut from the ORIGINAL script as redundant — but a
-  // silent click read as an unexplained jump to all four personas (S5), so
-  // one short line covers the act itself now. SPRINT: still nothing spoken
-  // between here and the wait, because everything from here IS the wait.
-  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch — this time, at or above the floor.");
+  // SPRINT: nothing spoken between here and the wait, because everything from
+  // here IS the wait.
+  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
 
   // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go: "dispatch
   // is invoked synchronously from the create-run handler"), so the navigate does
@@ -759,6 +767,9 @@ test("B4 — launch, effective policy", async () => {
     await ffwdEnd(page);
   }
 
+  await caption(page, "This time it runs.");
+  await beat(page, PACE.read);
+
   // THE PAYOFF, READ OFF THE WIRE FIRST. Everything narrated below is a claim
   // about what the CONTROL PLANE recorded, so it is checked there before it is
   // checked on screen: this run must carry OUR policy's id, not some inline or
@@ -786,42 +797,70 @@ test("B4 — launch, effective policy", async () => {
   const main = page.locator("#main-content");
   const headerBarrier = main.getByText(enforcedLabel, { exact: true }).first();
   await expect(headerBarrier).toBeVisible({ timeout: 30_000 });
-  await caption(page, "The barrier in the header. The policy it ran under, on Identity.");
-  await spotlight(page, headerBarrier);
-  await beat(page, PACE.read);
-  await spotlight(page, null);
 
-  // THE ALLOWLIST, EXERCISED. Sam: "an echo doesn't test an allowlist… the
-  // policy's main clause was never on trial." DEMO_COMMAND now actually
-  // reaches a policy-listed host, so this run's ledger carries more than the
-  // implicit wardynd control-channel allow every run gets.
-  const egressPanel = main.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
-  await spotlight(page, egressPanel);
-  await caption(page, "And the ledger shows the policy at work — npmjs.org allowed, nothing else asked for.");
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
+  await caption(page, "And now the record tells us two things:");
+  await beat(page, PACE.read);
+  await spotlight(page, headerBarrier);
+  await caption(page, "which barrier actually ran...");
+  await beat(page, PACE.read);
 
   // The Identity widget's Policy row (identity.tsx:78-85) renders only when the
   // run HAS a policy_id — which is exactly the claim. Both cockpit presets place
   // the widget (widget-registry.ts:155-162), and this run is terminal by now, so
   // it is the `finished` one; spotlight() scrolls the row into view inside the
-  // tile's own overflow container.
+  // tile's own overflow container. The ring flies straight from the header
+  // chip to this row — both are on screen at once, and that flight IS "two
+  // things".
   const policyRow = main.getByText(createdPolicyId, { exact: true });
   await expect(policyRow).toBeVisible({ timeout: 30_000 });
-  await caption(page, "Not what you typed. What the control plane enforced.");
   await spotlight(page, policyRow);
+  await caption(page, "and which policy governed it.");
   await beat(page, PACE.read);
-  await caption(page, "That ID is nightly-triage's — the Policies page resolves it.");
+
+  await caption(page, "That's the important part.");
   await beat(page, PACE.read);
+  await caption(page, "Not what we happened to select on the form.");
+  await beat(page, PACE.read);
+  await caption(page, "What the control plane actually enforced.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  // ---- Outro ---------------------------------------------------------------
-  await caption(page, "One policy. Every run after it, already governed.");
+  await caption(page, "One policy.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Every run that uses it gets the same governance.");
   await beat(page, PACE.read + 600);
-  // The plan's outro said "Next: Record Mode" under the OLD numbering, where
-  // this was V06. Under the restructure this is 08 and Record Mode already
-  // shipped as 06 — 09 is ci-and-headless, so the hand-off goes there.
-  await caption(page, "Next: stop writing the policy at all — record a run, and let it write itself.");
-  await beat(page, PACE.chapter);
-  await caption(page, "");
+
+  // ---- Conclusion ------------------------------------------------------------
+  await caption(page, "We've gone from manually configuring every run...");
+  await beat(page, PACE.read);
+  await caption(page, "to writing the rules once.");
+  await beat(page, PACE.read);
+  await caption(page, "But there's still a problem.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "How do you know what the right rules should be in the first place?");
+  await beat(page, PACE.read);
+  await caption(page, "That's what episode nine is about.");
+  await beat(page, PACE.read + 400);
+  await silentCard(page, "Next — 09: Record a run into a policy");
 });
+
+/**
+ * A chapter card that is NOT spoken — the outro card convention episode 01
+ * set (and episode 03 copies). overlay.ts's chapter() always speaks what it
+ * renders; this drives the same overlay primitive directly for the one card
+ * that must stay silent.
+ */
+async function silentCard(page: Page, text: string): Promise<void> {
+  const set = (t: string) =>
+    page
+      .evaluate((s: string) => {
+        const d = (window as unknown as Record<string, Record<string, (...x: unknown[]) => void>>).__demo;
+        d?.chapter?.(s, "");
+      }, t)
+      .catch(() => {
+        /* overlay absent — a card is cosmetic, never fatal */
+      });
+  await set(text);
+  await page.waitForTimeout(PACE.chapter);
+  await set("");
+}

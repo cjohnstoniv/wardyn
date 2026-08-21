@@ -75,12 +75,13 @@
  */
 
 import { mkdirSync, rmSync } from "node:fs";
-import { test, expect, type Locator } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   act,
   beat,
   caption,
   centerInFrame,
+  chapter,
   ffwdEnd,
   ffwdStart,
   PACE,
@@ -155,6 +156,9 @@ const SANDBOX_UP = 180_000;
  * refuse to narrate over.
  */
 const RESPONDED = /\b200\b/;
+
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
 
 // ---------------------------------------------------------------------------
 // WAIT_UNLESS_GONE — the one shape every wait in this video is written in.
@@ -339,29 +343,35 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
     })
     .toBe("object");
 
+  await chapter(page, "Approval scopes", "How far should one “yes” reach?");
+
   // ---- B0 · Start ---------------------------------------------------------
   // The catalog stacks every demo on one page, so `demo-card-<id>` is a real
   // scope here (it is NOT on the funnel path, where each step renders the bare
   // DemoRunControls — see funnel.ts's note). Everything below is scoped to
   // this card: the page holds six other terminals' worth of controls.
+  //
+  // S7 (unnarrated, mechanics only): the card's own printed steps still say
+  // example.com/wikipedia.org, but the commands typed below reach crates.io —
+  // a host this workspace wants for good. No caption owns the swap; it is not
+  // in the owner's dialog.
   const card = page.getByTestId("demo-card-held-at-the-door");
   await expect(card.getByRole("heading", { name: "Held at the door" })).toBeVisible({
     timeout: 60_000,
   });
 
   await spotlight(page, card);
-  await caption(page, "An agent reaches for a host nobody allow-listed. Who decides, and for how long?");
+  await caption(page, "An agent reaches for a host that's not on the allowlist.");
+  await beat(page, PACE.read);
+  await caption(page, "We know what happens next.");
+  await beat(page, PACE.read);
+  await caption(page, "Wardyn stops it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But now comes the interesting question:");
+  await beat(page, PACE.read);
+  await caption(page, "What exactly does our approval mean?");
   await beat(page, PACE.read);
   await spotlight(page, null);
-
-  // S7: the card's own printed steps still say example.com/wikipedia.org —
-  // own the swap before anything is typed, or the mismatch fumbles the first
-  // 30 seconds.
-  await caption(
-    page,
-    "The card's script uses example.com — we'll reach for crates.io instead, a host this workspace wants for good.",
-  );
-  await beat(page, PACE.read);
 
   const startDemo = card.getByTestId("demo-start-held-at-the-door");
   // The barrier gate, named. Without a ready barrier this button is disabled
@@ -372,7 +382,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   );
   // SPRINT: nothing is spoken between the click and the wait, because
   // everything from here IS the wait.
-  await act(page, startDemo, "Wardyn stops it at the proxy and asks. Every answer carries a scope.");
+  await act(page, startDemo, "Trigger the request.");
 
   // FAST-FORWARD. Sandbox spin-up is 30s-3min of a spinner nobody needs to sit
   // through (a cold first take also pulls the image). act() above already held
@@ -405,7 +415,10 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // hanging — never the idle pane before it (S3: point at content, not
   // emptiness).
   await spotlight(page, card.locator(".xterm-screen").first());
-  await caption(page, "The command is hanging. Nothing failed — the connection is parked at the proxy.");
+  await caption(page, "The command is waiting.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It hasn't failed.");
+  await beat(page, BEAT_SHORT);
 
   // The strip's header is the wait_for_review flavour (isHeld → anyHeld), which
   // is the entire difference between this demo and "Fail, then approve". If it
@@ -432,9 +445,10 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // that hold for it. Without this the next caption starts ~2s in and the mux
   // plays both lines over each other. The floor is subsumed by the residual
   // speech, so the cost against the proxy's ~30s hold is ~3s, not 2.2+speech.
+  await caption(page, "Nothing has left the sandbox.");
   await beat(page, PACE.read);
   await spotlight(page, heldRow);
-  await caption(page, "Nothing left the box — it is held, waiting on a human.");
+  await caption(page, "It's sitting at the boundary, waiting for a decision.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -442,8 +456,12 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // The bare split-button click — "This run", today's default scope. decide()
   // decides a NAMED host, never .first(): approving something you did not mean
   // to approve is the worst possible frame in a governance video.
-  await decide(card, "Approve", "Plain Approve is one scope: This run.", HELD_HOST);
-  await caption(page, "That plain click was the default — This run. The caret is where the other sizes live.");
+  await decide(card, "Approve", "Approve.", HELD_HOST);
+  await caption(page, "The simplest approval is:");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "this run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It works for this run, and then it disappears.");
   await beat(page, PACE.read);
 
   // THE PAYOFF. The narration claims the same in-flight request finishes with
@@ -458,19 +476,17 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
     `the held ${HELD_HOST} request never completed with a 200 — the proxy's ~30s hold ` +
       `(defaultHoldTimeout) expired before the approval landed, so the curl had already 403'd`,
   );
-  await caption(page, "The same in-flight command completes. No retry — it was never refused.");
-  await beat(page, PACE.read + 600);
-  // THE RECEIPT ITSELF: distinguish a real answer from the 403 this whole
-  // beat exists to stop narrating over.
-  await caption(
-    page,
-    "Two hundred — the tunnel opened and the host answered. A blocked one dies with connect failed.",
-  );
+  await caption(page, "The request that was already waiting completes.");
   await beat(page, PACE.read);
+  await caption(page, "No retry.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It was never refused.");
+  await beat(page, PACE.read + 600);
 
   // ---- B3 · Unwanted host -------------------------------------------------
+  // Silent: the owner's next SAY-ON-CLICK ("Open the scope menu.") is the
+  // first spoken line of this beat — typing the second host is unnarrated.
   await typeInTerminal(page, REACH_TELEMETRY, card);
-  await caption(page, "A second host — the call a harness makes on its own. Here, we play the agent.");
   const telemetryRow = card.getByTestId("live-approval-row").filter({ hasText: TELEMETRY_HOST });
   await waitUnlessGone(
     expect(telemetryRow).toBeVisible({ timeout: APPROVAL_APPEARS }),
@@ -478,7 +494,6 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
     APPROVAL_APPEARS,
     `${TELEMETRY_HOST} never raised an approval row — the ladder beat has nothing to open`,
   );
-  await beat(page, PACE.read);
 
   // ---- B4 · The scope ladder ----------------------------------------------
   // A pure LOOK — nothing is decided here, the row stays pending for beat 5.
@@ -488,72 +503,98 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // /approve/i query elsewhere in the suite would match two buttons. DOM order
   // is Approve, Approve-caret, Deny, Deny-caret — .first() is Approve's, the
   // same disambiguation e2e/approvals.spec.ts and funnel.ts's decide() use.
-  await act(
-    page,
-    telemetryRow.getByRole("button", { name: "More options" }).first(),
-    "The caret holds all four.",
-  );
+  await act(page, telemetryRow.getByRole("button", { name: "More options" }).first(), "Open the scope menu.");
   // Radix portals the menu content, so it is NOT a descendant of the row — and
   // scoping to the open menu (rather than the page) keeps /^Once/ from also
   // matching the "Once, or for good" card sitting further down this catalog.
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
+  const onceBtn = menu.getByRole("button", { name: /^Once\b/ });
+  const thisRunBtn = menu.getByRole("button", { name: /^This run\b/ });
+  const untilBtn = menu.getByRole("button", { name: /^Until…/ });
+  const alwaysOption = menu.getByRole("button", { name: /^Always\b/ });
 
-  await spotlight(page, menu.getByRole("button", { name: /^Once\b/ }));
-  await caption(page, "Once: this one connection. The next attempt asks you again.");
+  // FAST TOUR — just naming the four rungs, ring flying between them.
+  await caption(page, "And here's the ladder.");
   await beat(page, PACE.read);
+  await spotlight(page, onceBtn);
+  await caption(page, "Once.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, thisRunBtn);
+  await caption(page, "This run.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, untilBtn);
+  await caption(page, "Until a specific time.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, alwaysOption);
+  await caption(page, "Or always.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Each one makes the decision last a little longer.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
 
-  await spotlight(page, menu.getByRole("button", { name: /^This run\b/ }));
-  await caption(page, "This run: every attempt until the run ends. That is the default.");
+  // SLOW PASS — one at a time, in the same order, now explained.
+  await spotlight(page, onceBtn);
+  await caption(page, "Once means exactly what it sounds like.");
+  await beat(page, PACE.read);
+  await caption(page, "One connection.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The next request asks again.");
+  await beat(page, PACE.read);
+  await spotlight(page, thisRunBtn);
+  await caption(page, "This run lasts until this run ends.");
   await beat(page, PACE.read);
 
   // "Until…" swaps the menu for its preset list (untilMode) rather than
   // deciding — the four presets and a datetime picker, with "← Back" out.
   // CLICK FIRST, narrate second: naming the presets before the submenu that
   // shows them is a claim with no receipt yet (S1).
-  await act(page, menu.getByRole("button", { name: /^Until…/ }));
+  await act(page, untilBtn);
   await expect(menu.getByRole("button", { name: "15 minutes" })).toBeVisible();
-  await caption(page, "Until is time-boxed — fifteen minutes, an hour, or a time you pick.");
+  await caption(page, "Until gives you a time limit.");
   await beat(page, PACE.read + 600);
   await act(page, menu.getByRole("button", { name: "← Back" }));
 
-  const alwaysOption = menu.getByRole("button", { name: /^Always\b/ });
   await spotlight(page, alwaysOption);
-  await caption(page, "Always saves it to the workspace, so future runs start with it.");
-  await beat(page, PACE.read);
-  await caption(page, "Greyed out here — a demo sandbox has no workspace.");
+  await caption(page, "And Always saves the decision to the workspace.");
   // THE PAYOFF of this beat, and the setup for beat 6's contrast. A REAL
   // disabled attribute, not aria-disabled (ScopeMenu renders plain <button>s
-  // precisely so this is true) — and the hint that replaces the normal one is
-  // the sentence the narrator just spoke.
+  // precisely so this is true). Unnarrated (not in the owner's script), but
+  // still proven: a claim silently dropped from the menu would otherwise ship
+  // undetected.
   await expect(alwaysOption).toBeDisabled();
   await expect(menu.getByText("Always needs a workspace — this run isn't attached to one.")).toBeVisible();
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  // Close without picking: this approval has to survive into beat 5.
+  await caption(page, "Let's let one approval window expire.");
+  await beat(page, PACE.read);
+
+  // Close without picking: this approval has to survive to lapse on its own.
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
 
-  // THE FAIL-CLOSED BEAT. The proxy's ~30s hold cannot outlast the ~35s ladder
-  // tour above it — by the time the menu closes the window has almost
-  // certainly lapsed and curl has already died with its own connection error.
-  // Wait for that line and say what it proves, instead of letting it die
-  // silently under a strip that still reads WAITING (Dana: it failed closed;
-  // that is a selling point, not a glitch). The row itself still saying
-  // WAITING after its connection died is a product gap, not this beat's to fix.
+  // THE FAIL-CLOSED BEAT. The proxy's ~30s hold cannot outlast the ladder tour
+  // above it — by the time the menu closes the window has almost certainly
+  // lapsed and curl has already died with its own connection error. Wait for
+  // that line and say what it proves, instead of letting it die silently under
+  // a strip that still reads WAITING (Dana: it failed closed; that is a
+  // selling point, not a glitch). The row itself still saying WAITING after
+  // its connection died is a product gap, not this beat's to fix.
   await waitUnlessGone(
     expect(card.locator(".xterm-screen").first()).toContainText(/curl: \(56\)/, { timeout: 45_000 }),
     demoOver(card),
     45_000,
     `${TELEMETRY_HOST}'s held request never lapsed with its own curl: (56) — the fail-closed beat has nothing to point at`,
   );
+  // SCREEN: Window expires.
   await spotlight(page, card.locator(".xterm-screen").first());
-  await caption(
-    page,
-    "While we read the menu, the window lapsed — nobody answered, so it failed closed. Refused, never granted.",
-  );
-  await beat(page, PACE.read + 600);
+  await caption(page, "Nobody answered.");
+  await beat(page, PACE.read);
+  await caption(page, "So it fails closed.");
+  await beat(page, PACE.read);
+  await caption(page, "The request was never granted.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   // ---- B5 · Deny ----------------------------------------------------------
@@ -567,25 +608,25 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // Cheap, and true without opening it: the row's Deny button carries the same
   // caret as Approve's. VERIFY the deny scope set at rehearsal (Once/This
   // run/Until/Always, or a narrower list) before this line airs as fact.
-  await caption(page, "Deny carries a caret too — a no can be sized the same way.");
+  await caption(page, "And deny has a scope too.");
   await beat(page, PACE.read);
-  await decide(
-    card,
-    "Deny",
-    "The ask is still parked for the record — Deny clears it, and the refusal is the row the trail keeps.",
-    TELEMETRY_HOST,
-  );
+  await caption(page, "A no can be just as deliberate as a yes.");
+  await beat(page, PACE.read);
+  await decide(card, "Deny", "Deny.", TELEMETRY_HOST);
+
+  await caption(page, "The request is refused.");
+  await beat(page, PACE.read);
 
   // THE RETRY, and it is load-bearing rather than decoration.
   //
   // The audit panel projects egress.allow/deny/pending ONLY (egressFromAudit,
   // lib/api/audit.ts) — an approval.decide is not in it. And the deny above
   // almost certainly landed AFTER the proxy's ~30s hold expired (the ladder
-  // walk is six spoken lines), by which point the held connection had already
+  // walk is many spoken lines), by which point the held connection had already
   // been released as `pending` and curl was gone. Nothing re-evaluates the host
   // on its own, so with no second attempt the panel shows a PENDING chip while
-  // the narrator says "Denied … lands in the audit trail" — the exact class of
-  // dishonest frame this driver exists to refuse.
+  // the narrator says "that refusal becomes part of the record" — the exact
+  // class of dishonest frame this driver exists to refuse.
   //
   // Typing the same command again is what makes the line true: the deny is
   // scoped to this run, so the proxy refuses it from cache with no human in the
@@ -593,7 +634,6 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // shows an instant refusal instead of a 60-second hang, and THAT is the
   // egress.deny the panel is about.
   await typeInTerminal(page, REACH_TELEMETRY, card);
-  await caption(page, "Denied — and the refusal is a row now, beside the allow.");
   const auditPanel = card.getByTestId("demo-audit-panel");
   await spotlight(page, auditPanel);
   // The claim, asserted: a deny row for THIS host, not merely the pending row
@@ -611,6 +651,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
     60_000,
     `no egress.deny for ${TELEMETRY_HOST} reached the demo's audit panel`,
   );
+  await caption(page, "And that refusal becomes part of the record.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -631,7 +672,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // ---- B6 · Always, real workspace ---------------------------------------
   // "New run" lives in the app shell's top bar, so it is reachable from /demos
   // without a detour through the Runs board.
-  await act(page, page.getByRole("button", { name: "New run" }));
+  await act(page, page.getByRole("button", { name: "New run" }), "Create a new run using the real workspace.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   const titleBox = page.getByLabel("Title");
@@ -657,10 +698,9 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // required field here (new-run-screen's `problem`: needsTask is false for an
   // interactive agent run), so Launch is live the moment the title is in.
   //
-  // Deliberately UNNARRATED, along with the launch and the boot below: this
-  // beat's two spoken lines both describe the refusal, and the script's silence
-  // ledger pays for the form-filling. Speaking "Refused" over a form that has
-  // not been submitted yet is the exact dishonesty this driver exists to avoid.
+  // Deliberately UNNARRATED from here through the launch and the boot below:
+  // the owner's B6 line names only the FIRST click ("Create a new run…"),
+  // and the next spoken line waits until there is something to decide.
   await act(page, page.getByRole("radio", { name: /^Terminal/ }));
 
   // The workspace trigger has NO accessible name (the Agent select beside it is
@@ -674,32 +714,27 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // host allow-listed (allowedDomains: ["api.anthropic.com"]), unlisted hosts on
   // "Deny, but ask" (deny_with_review) — the shipped defaults. So crates.io
   // fails FAST here rather than hanging, which is a visible difference from the
-  // demo sandbox above and exactly what the narration says ("Refused — and it
-  // raised an approval").
+  // demo sandbox above.
   //
   // The unlisted-hosts rule now sits ON THE CARD FACE (new-run-screen's
-  // "Unlisted hosts" Seg, not buried in "Edit hosts…"), so it is in frame while
-  // the narrator calls it "the default ask policy" — asserted rather than
-  // assumed, because a changed default would make that line false while the
-  // take still went green.
+  // "Unlisted hosts" Seg, not buried in "Edit hosts…"), so it is in frame —
+  // asserted rather than assumed, because a changed default would make the
+  // approval below never fire while the take still went green.
   await expect(
     page.getByRole("radio", { name: "Deny, but ask" }),
-    "the default unlisted-hosts rule is no longer deny_with_review — beat 6's narration says it is",
+    "the default unlisted-hosts rule is no longer deny_with_review",
   ).toHaveAttribute("aria-checked", "true");
 
-  await act(
-    page,
-    page.getByRole("button", { name: "Launch run" }),
-    "Same form as video four — workspace egress-lab, the model host only, ask for the rest. Vault is just this host's default.",
-  );
+  // Silent launch, same reasoning as the Terminal click above.
+  await act(page, page.getByRole("button", { name: "Launch run" }));
 
   // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go:
   // "dispatch is invoked synchronously from the create-run handler"), so the
   // navigate to /runs/<id> does not happen until the container is provisioned:
   // the URL change and the terminal mount are ONE stretch of dead air, and the
   // URL wait therefore carries SANDBOX_UP, not a minute. Nothing is spoken
-  // inside the span — this whole beat is deliberately unnarrated until the
-  // refusal, and the script's silence ledger pays for it.
+  // inside the span — this whole beat stays unnarrated until there is an
+  // approval to decide.
   await beat(page, 200);
   await ffwdStart(page);
   try {
@@ -733,10 +768,8 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
     APPROVAL_APPEARS,
     `${HELD_HOST} never raised an approval on the real-workspace run`,
   );
-  await caption(page, "Real workspace now, and the default ask policy. Refused — and it raised an approval.");
-  await beat(page, PACE.read);
-  await caption(page, "Different from the hold you just saw — this default refuses first, then asks.");
-  await beat(page, PACE.read);
+  await caption(page, "Now we'll make the decision permanent for this workspace.");
+  await beat(page, PACE.read + 400);
 
   // `always` is the whole point of the video. It is only clickable because THIS
   // run resolves to a workspace (run-detail passes hasWorkspace=runHasWorkspace
@@ -744,15 +777,11 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // than narrate over a greyed option. decide() then asserts the row cleared —
   // a 400 from the scope rules would otherwise leave it pending while the
   // narrator says "Always".
-  await decide(
-    page,
-    "Approve",
-    "This time, Always — the widest yes, saved to the workspace.",
-    HELD_HOST,
-    "always",
-    "Once, this run, until a time — or always.",
-  );
-  await beat(page, PACE.read + 600);
+  await decide(page, "Approve", "Always.", HELD_HOST, "always");
+  await caption(page, "That's the widest yes.");
+  await beat(page, PACE.read);
+  await caption(page, "And now we can see it on the workspace itself.");
+  await beat(page, PACE.read + 400);
 
   // ---- B7 · Receipt -------------------------------------------------------
   // The sidebar is reachable from the cockpit: focus mode (app-shell.tsx) is
@@ -777,7 +806,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await expect(receiptRow).toContainText("approved for this workspace");
   await centerInFrame(receiptRow);
   await spotlight(page, receiptRow);
-  await caption(page, "The receipt: crates.io, approved for this workspace.");
+  await caption(page, "The workspace remembers.");
   await beat(page, PACE.read + 900);
   await spotlight(page, null);
 });
@@ -791,8 +820,12 @@ test("beat 8 — a new run, and nothing to click", async () => {
   const page = stage();
 
   // Launched from the workspace page we are standing on — same top-bar button.
-  await act(page, page.getByRole("button", { name: "New run" }));
+  await act(page, page.getByRole("button", { name: "New run" }), "Create another run.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
+  await caption(page, "Same workspace.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Same command.");
+  await beat(page, BEAT_SHORT);
 
   const titleBox = page.getByLabel("Title");
   // Fill before ringing — see beat 6's identical fix (S3: point at content).
@@ -807,18 +840,9 @@ test("beat 8 — a new run, and nothing to click", async () => {
   // Network is DELIBERATELY untouched — that omission IS the beat. The
   // workspace's approved_egress is unioned into this run's allowlist
   // server-side (unionWorkspaceEgress, runs_create.go), so there is nothing to
-  // configure. The rail itself only counts the POLICY's hosts, so say the
-  // true thing about what it's showing (product gap logged separately).
-  await caption(
-    page,
-    "The rail counts the policy's hosts — the workspace's standing allows ride along, and land in the log.",
-  );
-  await beat(page, PACE.read);
-  await act(
-    page,
-    page.getByRole("button", { name: "Launch run" }),
-    "Same workspace, same command — the only thing that changed is what the workspace remembers.",
-  );
+  // configure. Silent: the owner's lines for this beat land before the form
+  // and after the run answers, not on the form or the launch itself.
+  await act(page, page.getByRole("button", { name: "Launch run" }));
 
   // FAST-FORWARD, for beat 6's reason: this create dispatches synchronously too.
   await beat(page, 200);
@@ -836,12 +860,12 @@ test("beat 8 — a new run, and nothing to click", async () => {
   }
   await beat(page, PACE.read);
   await typeInTerminal(page, REACH_HELD);
-  await caption(page, "New run, same workspace, same command. Nothing to click.");
 
   // BOTH halves of the claim, asserted. The response proves it got through;
   // the idle hint proves nothing was raised to decide — a pending row here
   // would mean the permanent grant never reached this run's policy, and the
-  // outro's "the decision outlived the run that raised it" would be false.
+  // closing line's "the decision outlived the run that raised it" would be
+  // false.
   await waitUnlessGone(
     expect(page.locator(".xterm-screen").first()).toContainText(RESPONDED, { timeout: 60_000 }),
     page.getByText(RUN_OVER).first(),
@@ -852,14 +876,50 @@ test("beat 8 — a new run, and nothing to click", async () => {
     page.getByTestId("live-approvals-idle"),
     "the proof run RAISED an approval — the permanent grant did not carry into it",
   ).toBeVisible({ timeout: 15_000 });
-  await beat(page, PACE.read + 600);
-  await caption(page, "Governance that remembers: the decision outlived the run that raised it.");
-  await beat(page, PACE.read + 900);
 
-  // ---- Outro --------------------------------------------------------------
-  await caption(page, "Once, this run, until, always. You choose the blast radius.");
+  // SCREEN: No approval prompt — the idle assertion above IS this beat's proof.
+  await caption(page, "And this time, nothing to click.");
+  await beat(page, PACE.read);
+  await caption(page, "The decision outlived the run that created it.");
+  await beat(page, PACE.read);
+  await caption(page, "That's what governance that remembers looks like.");
   await beat(page, PACE.read + 600);
-  await caption(page, "Next: the same guarantees with nobody watching — a pipeline has no hands.");
-  await beat(page, PACE.chapter);
-  await caption(page, "");
+
+  // ---- Conclusion -------------------------------------------------------------
+  await caption(page, "Once.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "This run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Until.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Always.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "You choose how far one decision is allowed to travel.");
+  await beat(page, PACE.read);
+  await caption(page, "Next, we're removing the human entirely.");
+  await beat(page, PACE.read);
+  await caption(page, "Because a CI pipeline can't click Approve.");
+  await beat(page, PACE.read + 400);
+  await silentCard(page, "Next — 11: CI & headless");
 });
+
+/**
+ * A chapter card that is NOT spoken — the outro card convention episode 01
+ * set (and episode 03 copies). overlay.ts's chapter() always speaks what it
+ * renders; this drives the same overlay primitive directly for the one card
+ * that must stay silent.
+ */
+async function silentCard(page: Page, text: string): Promise<void> {
+  const set = (t: string) =>
+    page
+      .evaluate((s: string) => {
+        const d = (window as unknown as Record<string, Record<string, (...x: unknown[]) => void>>).__demo;
+        d?.chapter?.(s, "");
+      }, t)
+      .catch(() => {
+        /* overlay absent — a card is cosmetic, never fatal */
+      });
+  await set(text);
+  await page.waitForTimeout(PACE.chapter);
+  await set("");
+}
