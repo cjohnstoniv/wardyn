@@ -31,6 +31,7 @@ var secretNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 var reservedSecretNames = map[string]bool{
 	"wardyn-signing-key":             true,
 	"wardyn-session-key":             true,
+	"wardyn-ui-session-key":          true,
 	"wardyn-harness-anthropic-oauth": true,
 }
 
