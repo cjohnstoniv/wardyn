@@ -68,7 +68,7 @@ _SUBS = [
     ("–", ", "),
     ("…", ", "),
     # Specific hosts BEFORE the generic .com/.org rules.
-    ("api.anthropic.com", "the Anthropic A P I"),
+    ("api.anthropic.com", "the Anthropic ay pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),
     ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4"),
     ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1"),
@@ -84,10 +84,12 @@ def speakable(text: str) -> str:
     for a, b in _SUBS:
         out = out.replace(a, b)
     # Initialisms Kokoro reads as words ("CI" came out wrong on camera; CLI/AI
-    # are the same trap): letter-space them so the voice spells them out while
-    # the on-screen caption keeps the normal form. Word-bounded and uppercase-
+    # are the same trap). Phonetic respellings, not bare letter-spacing: a
+    # standalone "A" reads as the ARTICLE (uh/eh — "A I" came out "Ehh Eye"),
+    # so each one is spelled the way it is said. Word-bounded and uppercase-
     # only, so "api.anthropic.com", "deciding" etc. never match.
-    out = re.sub(r"\b(CI|CLI|API|APIs|AI)\b", lambda m: " ".join(m.group(1)), out)
+    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "ay pee eye", "APIs": "ay pee eyes", "AI": "ay eye"}
+    out = re.sub(r"\b(CI|CLI|APIs|API|AI)\b", lambda m: _SAY[m.group(1)], out)
     # Drop anything that is decoration rather than words (the recorder's captions
     # are plain, but chapter subtitles and future copy may not be).
     out = re.sub(r"[*_`#]", "", out)
