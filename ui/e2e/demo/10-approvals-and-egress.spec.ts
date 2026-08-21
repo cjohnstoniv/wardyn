@@ -32,7 +32,7 @@
  * deletes and re-onboards the workspace, off camera, every take (DA5).
  *
  * OWNERSHIP OF NOUNS. This video owns the workspace `egress-lab` and the two
- * hosts crates.io and ingest.sentry.io, and touches nothing else. Video 2 owns
+ * hosts example.org and ingest.sentry.io, and touches nothing else. Video 2 owns
  * `slugify` and example.com; sharing either would let one video's permanent
  * grant silently disarm the other's hold beat. Nothing here types
  * example.com — not even the example.com pill the demo card offers.
@@ -59,7 +59,7 @@
  * sandboxes — the hermetic `-runner none` e2e backend cannot start one at all.
  *
  * Driven by `scripts/record-demo.sh --video 10`, which globs this exact filename
- * and names the take wardyn-07-approvals-and-egress-<stamp>.mp4 — so this
+ * and names the take wardyn-10-approvals-and-egress-<stamp>.mp4 — so this
  * FILENAME IS LOAD-BEARING. It self-skips without WARDYN_DEMO=1 so a bare
  * `pnpm e2e` can never point a browser at a developer's live stack and start
  * deleting workspaces.
@@ -118,7 +118,7 @@ const WORKSPACE_PATH =
   process.env.WARDYN_DEMO_EGRESS_WORKSPACE || `${process.env.HOME}/wardyn-demo/egress-lab`;
 
 /** The host the whole video is about: held, approved, then permanently granted. */
-const HELD_HOST = "crates.io";
+const HELD_HOST = "example.org";
 
 /** The host nobody asked for — an agent's own telemetry endpoint. Denied. */
 const TELEMETRY_HOST = "ingest.sentry.io";
@@ -129,14 +129,19 @@ const TELEMETRY_HOST = "ingest.sentry.io";
 // Beats 6 and 8 reuse the exact string on purpose — "same command" is a line
 // the narrator says out loud.
 //
-// NOT `-sSI` (a bare HEAD): crates.io answers a HEAD with 403 even when the
-// tunnel is allowed, so three separate "success" beats used to print 403 as
-// their headline (persona round 1's #1 finding — it read as three failures).
+// The host is example.org (IANA), deliberately boring: crates.io answered
+// this same beat's OPENED tunnel with its own 403 twice on 2026-08-21
+// (Cloudflare/UA caprice), which on camera is indistinguishable from the
+// proxy refusing — the beat's truth cannot depend on a third party's bot
+// policy. Not example.com: the Always beat writes HELD_HOST permanently onto
+// the real workspace, and example.com is the demo cards' printed noun —
+// distinct host, zero cross-episode state.
+//
 // `-o /dev/null -w '%{http_code}\n'` prints just the one number that matters.
 // The `\n` here is TWO characters (backslash, n), not a JS newline escape —
 // curl's own -w parser is what turns it into a line break; typing an actual
 // newline mid-command would submit the line early.
-const REACH_HELD = `curl -sS --max-time 60 -o /dev/null -w '%{http_code}\\n' https://${HELD_HOST}/api/v1/crates/serde`;
+const REACH_HELD = `curl -sS --max-time 60 -o /dev/null -w '%{http_code}\\n' https://${HELD_HOST}/`;
 const REACH_TELEMETRY = `curl -sSI --max-time 60 https://${TELEMETRY_HOST}`;
 
 /** Beat 6's run title. Beat 8's is separate so the board shows two rows. */
@@ -228,8 +233,8 @@ async function waitUnlessGone(
 //      on that rather than clicking a dead button for 45s.
 //   2. The stack has NOT been reset since the earlier videos (record-demo.sh
 //      --video 10 already defaults DO_RESET=0; never pass --reset here).
-//   3. Both hosts are reachable from this machine's egress path — crates.io's
-//      /api/v1/crates/serde must answer 200, or beat 2's payoff assertion fails.
+//   3. Both hosts are reachable from this machine's egress path — example.org
+//      must answer 200, or beat 2's payoff assertion fails.
 //   4. No model needed. This video is keyless end to end.
 // ---------------------------------------------------------------------------
 
@@ -352,7 +357,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // this card: the page holds six other terminals' worth of controls.
   //
   // S7 (unnarrated, mechanics only): the card's own printed steps still say
-  // example.com/wikipedia.org, but the commands typed below reach crates.io —
+  // example.com/wikipedia.org, but the commands typed below reach example.org —
   // a host this workspace wants for good. No caption owns the swap; it is not
   // in the owner's dialog.
   const card = page.getByTestId("demo-card-held-at-the-door");
@@ -723,7 +728,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
 
   // EVERYTHING ELSE IS LEFT ALONE, and that is the beat: Confined, the model
   // host allow-listed (allowedDomains: ["api.anthropic.com"]), unlisted hosts on
-  // "Deny, but ask" (deny_with_review) — the shipped defaults. So crates.io
+  // "Deny, but ask" (deny_with_review) — the shipped defaults. So example.org
   // fails FAST here rather than hanging, which is a visible difference from the
   // demo sandbox above.
   //
