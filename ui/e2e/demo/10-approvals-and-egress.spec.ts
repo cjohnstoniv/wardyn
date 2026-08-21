@@ -411,14 +411,6 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
 
   // ---- B1 · Held ----------------------------------------------------------
   await typeInTerminal(page, REACH_HELD, card);
-  // Ring only once the terminal has something to show — the command now
-  // hanging — never the idle pane before it (S3: point at content, not
-  // emptiness).
-  await spotlight(page, card.locator(".xterm-screen").first());
-  await caption(page, "The command is waiting.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "It hasn't failed.");
-  await beat(page, BEAT_SHORT);
 
   // The strip's header is the wait_for_review flavour (isHeld → anyHeld), which
   // is the entire difference between this demo and "Fail, then approve". If it
@@ -427,14 +419,33 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   //
   // RACED (see waitUnlessGone): the strip lives inside the card's `running`
   // branch, so a demo that dies here takes the header with it.
-  await waitUnlessGone(
+  //
+  // STARTED, NOT AWAITED: the proxy holds this connection for only ~30s
+  // (defaultHoldTimeout, no production knob), and the owner's B1 stanza run
+  // is longer than the old two-line version — a serial header-wait here plus
+  // the narration blew the window once (08-21 rehearsal: the curl had 403'd
+  // before the Approve landed). Let the poll run UNDER the two captions and
+  // collect it after; the failure still surfaces at the await.
+  const headerUp = waitUnlessGone(
     expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
       timeout: APPROVAL_APPEARS,
     }),
     demoOver(card),
     APPROVAL_APPEARS,
     `${HELD_HOST} never surfaced as a HELD request`,
-  );
+  ).catch((e: unknown) => e);
+  // Ring only once the terminal has something to show — the command now
+  // hanging — never the idle pane before it (S3: point at content, not
+  // emptiness).
+  await spotlight(page, card.locator(".xterm-screen").first());
+  await caption(page, "The command is waiting.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It hasn't failed.");
+  await beat(page, BEAT_SHORT);
+  {
+    const r = await headerUp;
+    if (r instanceof Error) throw r;
+  }
   // No race below: the header only renders when the strip has a pending row
   // (LiveApprovals returns the idle hint otherwise), so this resolves at once.
   const heldRow = card.getByTestId("live-approval-row").filter({ hasText: HELD_HOST });
