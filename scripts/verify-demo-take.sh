@@ -847,14 +847,14 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # 06 interactive (old 04), 07 autonomous (old 05), 08 policies, 09 record
   # (old 06), 10 scopes (old 07), 11 CI (old 09), 12 audit+attach (old 10).
   ""|07) check_video_02 ;;
-  03) check_video_02_workspace ;;
-  04) check_video_03_first_run ;;
+  04) check_video_02_workspace ;;
+  05) check_video_03_first_run ;;
   09) check_video_06_record ;;
   10) check_video_07_approvals ;;
   08) check_video_08_policies ;;
   11) check_video_09 ;;
   12) check_video_10 ;;
-  02|05|06)
+  02|03|06)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;

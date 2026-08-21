@@ -178,7 +178,7 @@ async function silentCard(page: Page, text: string): Promise<void> {
 // Act 1 — back into the funnel
 // ---------------------------------------------------------------------------
 
-test("V05a act 1 — back to the funnel", async () => {
+test("V03 act 1 — back to the funnel", async () => {
   test.setTimeout(240_000);
   const page = stage();
   await page.goto("/setup");
@@ -237,7 +237,7 @@ test("V05a act 1 — back to the funnel", async () => {
 // opposite.
 // ---------------------------------------------------------------------------
 
-test("V05a act 2 — four ways the boundary holds", async () => {
+test("V03 act 2 — four ways the boundary holds", async () => {
   test.setTimeout(1_200_000);
   const page = stage();
 
@@ -444,7 +444,7 @@ test("V05a act 2 — four ways the boundary holds", async () => {
 // later commit).
 // ---------------------------------------------------------------------------
 
-test("V05a act 3 — conclusion", async () => {
+test("V03 act 3 — conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -463,10 +463,13 @@ test("V05a act 3 — conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "They were real requests, inside real sandboxes, under real policies.");
   await beat(page, PACE.read);
-  await caption(page, "Next, we'll put an actual agent inside one.");
-  await beat(page, PACE.read);
-  await caption(page, "And this time, we'll drive it ourselves.");
+  await caption(page, "And we're ready to give it some actual work.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 06: Interactive runs");
+  await silentCard(page, "Next — 04: Add a workspace");
+  await caption(page, "Next, we'll give a run something real to work on.");
+  await beat(page, PACE.read);
+  await caption(page, "A workspace.");
+  await beat(page, BEAT_SHORT + 400);
+  await caption(page, "");
 });

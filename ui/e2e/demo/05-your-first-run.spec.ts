@@ -33,7 +33,7 @@
  *
  * STATE IT INHERITS. Video 02's finished stack: the slugify workspace exists,
  * onboarded WRITABLE on camera (the write grant is what lets this run's file
- * reach the host). record-demo.sh --video 04 does not reset. If the workspace
+ * reach the host). record-demo.sh --video 05 does not reset. If the workspace
  * is missing (a fresh stack, or 02 was never shot here) the beforeAll fails
  * loudly with the staging instruction instead of filming a broken form.
  *
@@ -47,7 +47,7 @@
  * product is broken. It runs against the REAL compose stack on :8080 with a
  * real sandbox.
  *
- * Driven by `scripts/record-demo.sh --video 04`, which globs this exact
+ * Driven by `scripts/record-demo.sh --video 05`, which globs this exact
  * filename and names the take wardyn-03-your-first-run-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
@@ -160,7 +160,7 @@ test.beforeAll(async () => {
 // Cold open + Beat 1 — the form, taught while nothing is moving
 // ---------------------------------------------------------------------------
 
-test("V04 beat 1 — name it, aim it", async () => {
+test("V05 beat 1 — name it, aim it", async () => {
   test.setTimeout(180_000);
   const page = stage();
   await page.goto("/runs/new");
@@ -242,7 +242,7 @@ test("V04 beat 1 — name it, aim it", async () => {
 // Beat 2 — the workspace, the envelope, the rail
 // ---------------------------------------------------------------------------
 
-test("V04 beat 2 — the envelope", async () => {
+test("V05 beat 2 — the envelope", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -341,7 +341,7 @@ test("V04 beat 2 — the envelope", async () => {
 // Beat 3 — launch, and let it be a background run
 // ---------------------------------------------------------------------------
 
-test("V04 beat 3 — launch, walk away", async () => {
+test("V05 beat 3 — launch, walk away", async () => {
   test.setTimeout(RUN_FINISHES + 120_000);
   const page = stage();
 
@@ -408,7 +408,7 @@ test("V04 beat 3 — launch, walk away", async () => {
 // Beat 4 — the receipts
 // ---------------------------------------------------------------------------
 
-test("V04 beat 4 — the receipts", async () => {
+test("V05 beat 4 — the receipts", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -484,7 +484,7 @@ test("V04 beat 4 — the receipts", async () => {
 // Conclusion
 // ---------------------------------------------------------------------------
 
-test("V04 conclusion", async () => {
+test("V05 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -505,12 +505,12 @@ test("V04 conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "And we have the receipts to prove what happened.");
   await beat(page, PACE.read);
-  await caption(page, "Next, we're going to stop being polite.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "We're going to see what the boundary actually stops.");
+  await caption(page, "Next, we'll put an actual agent inside one.");
+  await beat(page, PACE.read);
+  await caption(page, "And this time, we'll drive it ourselves.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 05: What it stops");
+  await silentCard(page, "Next — 06: Interactive runs");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

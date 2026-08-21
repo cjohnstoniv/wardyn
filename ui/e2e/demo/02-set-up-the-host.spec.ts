@@ -447,14 +447,12 @@ test("V02 act 3 — what you just saw", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "That's the governed machine.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "And we're ready to give it some actual work.");
+  await caption(page, "Next, we're going to stop being polite.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "We're going to see what the boundary actually stops.");
   await beat(page, PACE.read);
 
-  await silentChapter(page, "Next — 03: Add a workspace", "");
-  await caption(page, "Next, we'll give a run something real to work on.");
-  await beat(page, PACE.read);
-  await caption(page, "A workspace.");
-  await beat(page, PACE.read);
+  await silentChapter(page, "Next — 03: What it stops", "");
   await caption(page, "");
   await clearChapter(page);
 });

@@ -367,8 +367,8 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Each one tackles a piece of the problem.");
   await beat(page, PACE.read);
-  await spotlight(page, page.locator("#ep05"));
-  await caption(page, "If you're in a hurry, jump to episode five.");
+  await spotlight(page, page.locator("#ep03"));
+  await caption(page, "If you're in a hurry, jump to episode three.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's where we get into what the system actually stops.");
   await beat(page, PACE.read);

@@ -4,7 +4,7 @@
  */
 
 /*
- * Episode 03 of the series — "Add a workspace".
+ * Episode 04 of the series — "Add a workspace".
  *
  * WHAT THIS FILMS. Episode 02 ended on a governed host with nothing to work
  * on. This episode hands it something: what a workspace IS (the one directory
@@ -33,7 +33,7 @@
  * neutral name no resolver will ever claim.
  *
  * STATE IT INHERITS. Episode 02's finished stack: model connected, funnel
- * demos done, NO workspaces and NO secrets. record-demo.sh --video 03 does
+ * demos done, NO workspaces and NO secrets. record-demo.sh --video 04 does
  * not reset, and re-materializes the slugify fixture on disk every take.
  * resetFixtures() below deletes whatever a PRIOR take of THIS episode left
  * (the slugify workspace row, the demo secret) so the take always films a
@@ -53,8 +53,8 @@
  * when to advance; a failure here means the recording is wrong, not that the
  * product is broken. It runs against the REAL compose stack on :8080.
  *
- * Driven by `scripts/record-demo.sh --video 03`, which globs this exact
- * filename and names the take wardyn-03-add-a-workspace-<stamp>.mp4. It
+ * Driven by `scripts/record-demo.sh --video 04`, which globs this exact
+ * filename and names the take wardyn-04-add-a-workspace-<stamp>.mp4. It
  * self-skips without WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a
  * headed browser at a developer's live stack and start deleting workspaces.
  */
@@ -150,7 +150,7 @@ test.beforeAll(async () => {
 // Cold open + Beat 1 — what a workspace is, and the list as the blast radius
 // ---------------------------------------------------------------------------
 
-test("V03 beat 1 — the blast radius", async () => {
+test("V04 beat 1 — the blast radius", async () => {
   test.setTimeout(120_000);
   const page = stage();
   await page.goto("/workspaces");
@@ -167,7 +167,7 @@ test("V03 beat 1 — the blast radius", async () => {
   await expect(heading).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Add a workspace", "The one directory a run may touch");
-  await caption(page, "Last episode, we turned this machine into a governed one.");
+  await caption(page, "In episode two, we turned this machine into a governed one.");
   await beat(page, PACE.read);
   await caption(page, "But there was still nothing for an agent to work on.");
   await beat(page, PACE.read);
@@ -198,7 +198,7 @@ test("V03 beat 1 — the blast radius", async () => {
 // Beat 2 — the Add-workspace dialog, every choice explained
 // ---------------------------------------------------------------------------
 
-test("V03 beat 2 — onboard the project", async () => {
+test("V04 beat 2 — onboard the project", async () => {
   test.setTimeout(150_000);
   const page = stage();
 
@@ -330,7 +330,7 @@ test("V03 beat 2 — onboard the project", async () => {
 // Beat 3 — what the workspace remembers
 // ---------------------------------------------------------------------------
 
-test("V03 beat 3 — what it remembers", async () => {
+test("V04 beat 3 — what it remembers", async () => {
   test.setTimeout(90_000);
   const page = stage();
 
@@ -387,7 +387,7 @@ test("V03 beat 3 — what it remembers", async () => {
 // Beat 4 — write-only secrets
 // ---------------------------------------------------------------------------
 
-test("V03 beat 4 — write-only secrets", async () => {
+test("V04 beat 4 — write-only secrets", async () => {
   test.setTimeout(120_000);
   const page = stage();
 
@@ -466,7 +466,7 @@ test("V03 beat 4 — write-only secrets", async () => {
 // Conclusion — same shape episode 01 locked: say what you saw, tease the next.
 // ---------------------------------------------------------------------------
 
-test("V03 conclusion", async () => {
+test("V04 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -488,7 +488,7 @@ test("V03 conclusion", async () => {
   await caption(page, "And something real for it to work on.");
   await beat(page, BEAT_SHORT + 400);
   await caption(page, "");
-  await silentCard(page, "Next — 04: Your first run");
+  await silentCard(page, "Next — 05: Your first run");
 });
 
 /**

@@ -852,7 +852,7 @@ test("V07 beat 10 — borrowed, never held", async () => {
     ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
     : undefined;
 
-  await caption(page, "And let's close the loop on something from episode three.");
+  await caption(page, "And let's close the loop on something from episode four.");
   await beat(page, PACE.read);
   await caption(page, "A run can borrow a secret without owning it.");
   await beat(page, PACE.read + 400);
