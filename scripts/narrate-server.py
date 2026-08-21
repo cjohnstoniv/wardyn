@@ -84,7 +84,7 @@ _SUBS = [
     ("no keys live in the room", "no keys liv in the room"),
     ("keys live inside", "keys liv inside"),
     # Specific hosts BEFORE the generic .com/.org rules.
-    ("api.anthropic.com", "the Anthropic ay pee eye"),
+    ("api.anthropic.com", "the Anthropic eh pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),
     ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4"),
     ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1"),
@@ -104,7 +104,11 @@ def speakable(text: str) -> str:
     # standalone "A" reads as the ARTICLE (uh/eh — "A I" came out "Ehh Eye"),
     # so each one is spelled the way it is said. Word-bounded and uppercase-
     # only, so "api.anthropic.com", "deciding" etc. never match.
-    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "ay pee eye", "APIs": "ay pee eyes", "AI": "ay eye"}
+    # Respellings VALIDATED against the venv's own phonemizer (the exact G2P
+    # kokoro-onnx uses): "eh"→/eɪ/ is the letter A ("ay" is /aɪ/ — it shipped
+    # as "eye eye" once), "see"→/siː/, "ell"→/ɛl/, "pee"→/piː/. To re-check a
+    # candidate: phonemizer_fork + espeakng_loader, language en-us.
+    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye"}
     out = re.sub(r"\b(CI|CLI|APIs|API|AI)\b", lambda m: _SAY[m.group(1)], out)
     # Drop anything that is decoration rather than words (the recorder's captions
     # are plain, but chapter subtitles and future copy may not be).
