@@ -84,6 +84,10 @@ _SUBS = [
     ("no keys live in the room", "no keys liv in the room"),
     ("keys live inside", "keys liv inside"),
     ("keys don't live in the room", "keys don't liv in the room"),
+    # "record" the VERB (/rɪˈkɔːɹd/) where espeak would stress it as the noun:
+    ("Only record work you trust", "Only ruh-cord work you trust"),
+    # "PyPI" reads as "pie-pie" bare:
+    ("PyPI", "pie pee eye"),
     # The owner's script uses three-dot trailing ellipses ("useful...") — read
     # as a breath, not dots. Must precede nothing (plain literal).
     ("...", ", "),
