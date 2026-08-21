@@ -593,18 +593,29 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   // under this same policy. Nobody planted it — the best evidence in the
   // series when it fires. A live agent's own behavior is never guaranteed, so
   // this stays conditional and skips silently when it doesn't happen.
-  if (await page.getByTestId("live-approval-row").filter({ hasText: /datadoghq/ }).count()) {
+  const telemetryRow = page.getByTestId("live-approval-row").filter({ hasText: /datadoghq/ });
+  if (await telemetryRow.count()) {
     await caption(page, "And here's another request we didn't script.");
     await beat(page, PACE.read);
     await caption(page, "The tool's own telemetry.");
     await beat(page, BEAT_SHORT);
     await caption(page, "It's not on the list.");
     await beat(page, BEAT_SHORT);
-    await decide(page, "Deny", "Deny.", "datadoghq");
-    await caption(page, "Denied.");
-    await beat(page, BEAT_SHORT);
-    await caption(page, "And that decision is recorded too.");
-    await beat(page, PACE.read + 400);
+    // Re-check after ~8s of narration: a live hold has a lifetime, and this
+    // one lapsed mid-beat once (2026-08-21 rehearsal) — the row was alive at
+    // the guard, gone at the click, and decide() burned its whole timeout
+    // waiting for a dialog that could never come. A lapsed hold self-resolves
+    // as a refusal, so "It's not on the list." remains true on camera; only
+    // the decide and its two closing lines are skipped.
+    if (await telemetryRow.count()) {
+      await decide(page, "Deny", "Deny.", "datadoghq");
+      await caption(page, "Denied.");
+      await beat(page, BEAT_SHORT);
+      await caption(page, "And that decision is recorded too.");
+      await beat(page, PACE.read + 400);
+    } else {
+      console.warn("[v07] telemetry hold lapsed mid-beat — Deny not filmed this take");
+    }
   }
 
   // --- B8b The rail, while it works ---------------------------------------
