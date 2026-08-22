@@ -295,6 +295,17 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       // is decided live, below, while it is still hanging.
       if (demo.approve && i === 1) {
         await decide(page, "Approve", "Approve it.", "example.com", demo.scope);
+        if (demo.id === "fail-then-approve") {
+          await caption(page, "Now run the same command again.");
+          await beat(page, BEAT_SHORT);
+        }
+      }
+      // Owner note (2026-08-21): the first attempt used to fail MUTE and
+      // "Approve it." landed from nowhere — walk the viewer through the
+      // fail-then-approve arc at each visible moment.
+      if (demo.id === "fail-then-approve" && i === 0) {
+        await caption(page, "This command tries to get out.");
+        await beat(page, BEAT_SHORT);
       }
       await typeInTerminal(page, cmd);
       // Let the command actually RESOLVE before moving on. This is not pacing:
@@ -305,6 +316,16 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       // their curl is SUPPOSED to still be hanging when we decide it.
       const maxTime = demo.approve ? null : cmd.match(/--max-time (\d+)/);
       await beat(page, maxTime ? (Number(maxTime[1]) + 2) * 1000 : PACE.read + 800);
+
+      // The first attempt's on-screen refusal, narrated while it is visible —
+      // the raised approval row is what "a question waiting for us" points at,
+      // and decide()'s own ring lands on that row seconds later.
+      if (demo.id === "fail-then-approve" && i === 0) {
+        await caption(page, "The first time, it fails.");
+        await beat(page, BEAT_SHORT);
+        await caption(page, "But now there's a question waiting for us.");
+        await beat(page, PACE.read);
+      }
 
       // The retry after an approval MUST visibly succeed. This is the payoff of
       // fail-then-approve, and without the assertion a failed retry just raises
