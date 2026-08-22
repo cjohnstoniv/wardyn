@@ -327,6 +327,30 @@ test("V02 act 2 — first light through secrets", async () => {
   await caption(page, "prove the path before you rely on it.");
   await beat(page, PACE.read);
 
+  // Owner note (2026-08-22): the take skipped straight past the step's two
+  // sub-tabs — the surfaces that ANSWER the two hypotheticals above. Name the
+  // Host proxy tab, then open Egress redirection and say what it does; the
+  // token line is the field's own hint ("Injected proxy-side at fetch time —
+  // the sandbox never holds it."). Visiting the tab also feeds the step's
+  // gate proof (corpNetworkGate's egressVisited), never blocks it.
+  await caption(page, "And both of those cases live right here.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, page.getByRole("tab", { name: "Host proxy" }));
+  await caption(page, "A corporate proxy goes in the Host proxy tab.");
+  await beat(page, PACE.read);
+  await act(page, page.getByRole("tab", { name: /Egress redirection/ }), "Egress redirection is the other tab.");
+  await caption(page, "This is where a public endpoint gets mapped to your internal one.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByLabel("From", { exact: true }).first());
+  await caption(page, "A run reaches for the public name, and the proxy redirects it to yours.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByLabel(/Token secret name/).first());
+  await caption(page, "If your mirror needs a token, the proxy injects it at fetch time.");
+  await beat(page, PACE.read);
+  await caption(page, "The sandbox never holds it.");
+  await beat(page, BEAT_SHORT + 400);
+  await spotlight(page, null);
+
   await advance();
 
   // --- B5 · the model -------------------------------------------------------
