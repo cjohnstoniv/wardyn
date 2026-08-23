@@ -6,11 +6,19 @@
 /*
  * Video 09 of the series — RECORD MODE.
  *
- * The moat feature, filmed end to end: record one open session, let Wardyn
- * synthesize a least-privilege policy from what the kernel and the proxy
- * actually saw, approve the observed hosts, then replay the SAME session
- * confined and reach for a host the recording never saw — on camera, held at
- * the proxy, denied by a human.
+ * The moat feature, filmed end to end AND filmed CONVERGING: record one open
+ * session (one honest `pip install`, which reaches two hosts on its own), let
+ * Wardyn synthesize a least-privilege policy from what the proxy actually saw,
+ * approve only the host the operator RECOGNISES, then replay the SAME session
+ * confined — where two different things get caught: a host the recording never
+ * saw (denied by a human, on camera) and the download host that was left
+ * unchecked (held, then abandoned by pip's own timeout). Approve the second,
+ * leave the first, replay again: clean.
+ *
+ * That last leg is the whole reason the promote approves a SUBSET. Approving
+ * both recorded hosts up front leaves replay #1's only catch being the villain
+ * — and a villain must never be approved, so the approve→replay-again loop
+ * could never run on camera and the video stopped one step short of its point.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
@@ -32,10 +40,13 @@
  * host the whole series agrees means "not on any list" — only as the UNSEEN
  * host in the confined replay.
  *
- * PACING. Four stretches of this video are nothing but waiting on a container
- * or on a server-side reconcile: the recorded session's spin-up, its capture
- * settling after Done recording, the confined replay's spin-up, and that
- * replay's own capture. Each is wrapped in overlay.ts's ffwdStart/ffwdEnd and
+ * PACING. Six stretches of this video are nothing but waiting on a container or
+ * on a server-side reconcile: the recorded session's spin-up, its capture
+ * settling after Done recording, and then a spin-up + a capture for EACH of the
+ * two confined replays (the second one is the loop closing, so it pays the same
+ * two waits over again). The installs themselves are not spanned — `six` is an
+ * 11KB pure-python wheel and lands inside the >8s span threshold. Each span is
+ * wrapped in overlay.ts's ffwdStart/ffwdEnd and
  * squeezed 12x by scripts/demo-ffwd.py after assembly. NOTHING MAY SPEAK inside
  * a span — a line spoken over frames the encoder throws away lands 12x early
  * and drags every later cue with it — and each ffwdStart is preceded by a
@@ -111,25 +122,69 @@ const POLICY_NAME = "record-demo-build-test";
  * The canon pair. TWO hosts, and the second one is the beat: nobody hand-writes
  * files.pythonhosted.org into an allowlist, because nothing you type mentions
  * it — you only learn it by watching a real install resolve.
+ *
+ * ORDER IS LOAD-BEARING now. [0] is the host the operator RECOGNISES and
+ * approves in B5's promote confirm; [1] is the one they leave unchecked, which
+ * is what gives the confined replay something legitimate to catch and the
+ * approve→replay-again loop something honest to run on.
  */
 const RECORDED_HOSTS = ["pypi.org", "files.pythonhosted.org"] as const;
 
 /** The host the recording never saw — held, then denied, in the confined replay. */
 const UNSEEN_HOST = "example.com";
 
-/**
- * The two chips a confined replay can END on (STAGE_CHIP_META, record-pane.tsx).
+/*
+ * THE JOB. One command, and the whole two-hosts discovery falls out of it:
+ * pip resolves the package at pypi.org and downloads the wheel from
+ * files.pythonhosted.org. Nothing here narrates a pair into existence — the
+ * install does it, which is the entire point of the beat.
  *
- * Load-bearing for B5/B6: SessionCard renders the attached terminal, the
+ * `six` is the canonical zero-transitive-dep pure-python package (~11KB wheel)
+ * and it is genuinely ABSENT from the sandbox image, so the install really
+ * downloads rather than printing "already satisfied" and reaching nothing.
+ *
+ * --target is NOT decoration. Debian bookworm ships
+ * /usr/lib/python3.11/EXTERNALLY-MANAGED, so a bare `pip install six` refuses
+ * with a PEP-668 error and never opens a socket; --target installs outside the
+ * managed environment and works (verified on bookworm-slim + python3-pip).
+ * --no-cache-dir keeps a warm pip cache from skipping the download host.
+ */
+const PKG = "six";
+const INSTALL_CMD = `pip install --no-cache-dir --target /tmp/${PKG} ${PKG}`;
+/*
+ * The same job under confinement, with pip's own client-side give-up wired
+ * short. In replay #1 pypi.org flows (approved) and files.pythonhosted.org
+ * HOLDS at the proxy; --timeout 5 --retries 0 makes pip abandon that request in
+ * seconds, which RESOLVES the wait and lands the pending decision while the
+ * session is still alive. Without it the beat depends on a 30s hold expiry and
+ * films half a minute of nothing.
+ */
+const CONFINED_INSTALL_CMD = `pip install --no-cache-dir --timeout 5 --retries 0 --target /tmp/${PKG} ${PKG}`;
+
+/**
+ * Every chip a confined replay can END on (STAGE_CHIP_META + replayedChipMeta,
+ * record-pane.tsx).
+ *
+ * Load-bearing for B5-B7: SessionCard renders the attached terminal, the
  * LiveApprovals strip and the Done button ONLY while sessionStage() is
  * "replaying" (session-helpers.ts). The moment the server flips that capture to
  * recorded/record_failed, the whole branch UNMOUNTS and ConfinedReviewCard
  * takes its place — so every wait aimed at the live half is racing a target
- * that can stop existing. Racing against these two chips turns "poll five
- * minutes for a row that can no longer appear" into an immediate, named
- * failure. (V05 lost a take to exactly this shape, on the run-detail strip.)
+ * that can stop existing. Racing against these chips turns "poll five minutes
+ * for a row that can no longer appear" into an immediate, named failure. (V05
+ * lost a take to exactly this shape, on the run-detail strip.)
+ *
+ * WIDENED for Workstream B's B2: a settled confined replay no longer always
+ * reads "Replayed confined". It carries the server's verdict — "Replayed clean"
+ * or "Replayed — caught N" — and only a verdict-less legacy row keeps the old
+ * wording. All four are "the replay is over"; missing one would put this race
+ * back to polling for a node that can no longer exist. The em-dash is the same
+ * U+2014 record-pane.tsx emits.
  */
-const REPLAY_OVER = /^(Replayed confined|Replay failed)$/;
+const REPLAY_OVER = /^(Replayed clean|Replayed — caught \d+|Replayed confined|Replay failed)$/;
+
+/** The clean verdict, spotlighted at the end of B7. */
+const CLEAN_CHIP = "Replayed clean";
 
 /**
  * The credential-shaped file write, and it has to be credential-shaped.
@@ -169,7 +224,18 @@ const BEAT_SHORT = 1400;
  *     back, the capture lands EMPTY, and the review card renders the
  *     reachability warning instead of a recording.
  *
- *  3. REHEARSE ONCE with `--no-record` before burning a take. The one thing no
+ *  3. THE AGENT IMAGE HAS TO CARRY pip. `wardyn/agent-claude-code:local` —
+ *     what `make setup` builds and what the demo stack runs by default — has
+ *     python3 but NO pip and NO ensurepip (node:22-bookworm-slim +
+ *     git/curl/asciinema; verified inside a live sandbox). The whole B3 beat is
+ *     an install, so shoot with a multi-toolchain image:
+ *     `make agent-image-full`, then point the stack at it with
+ *     WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-full:local"}'.
+ *     beforeAll PREFLIGHTS this off /setup/status's own `agent_image` check and
+ *     refuses to roll without it — the alternative is finding out three minutes
+ *     in, at a terminal printing "pip: command not found" on camera.
+ *
+ *  4. REHEARSE ONCE with `--no-record` before burning a take. The one thing no
  *     preflight can settle is whether the CONTROL-PLANE HOST lands in the
  *     approvable set: the client excludes it by comparing observed hosts to
  *     window.location.hostname ("localhost"), while the sandbox reaches it at
@@ -297,6 +363,25 @@ test.beforeAll(async () => {
   // "Ground truth · unavailable — that sensor is opt-in."
   const gt = (await apiGet<{ ebpf_groundtruth?: { state?: string } }>("/healthz")).ebpf_groundtruth?.state ?? "unavailable";
   console.log(`[v06] ebpf_groundtruth state: ${gt} (informational — the kernel groups are not narrated)`);
+
+  // (4) THE AGENT IMAGE HAS TO CARRY pip — operator fact 3 above, PREFLIGHTED.
+  //
+  // The server cannot inspect image contents (no docker CLI in the distroless
+  // build), but it does not have to: agentImageCheck (internal/api/setup.go)
+  // knows the shipped claude-code convention images BY NAME and warns that they
+  // are Node-only. That warn is exactly "this image has no python toolchain",
+  // which is exactly "B3's install prints command-not-found on camera". Any
+  // other image answers "info" and the take rolls.
+  const checks = (await apiGet<{ checks?: { id?: string; status?: string; detail?: string }[] }>("/api/v1/setup/status"))
+    .checks ?? [];
+  const img = checks.find((c) => c?.id === "agent_image");
+  expect(
+    img?.status,
+    `the configured agent image has no Python toolchain, so \`${INSTALL_CMD}\` cannot run — ` +
+      `build the fat image (make agent-image-full) and set ` +
+      `WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-full:local"}' before shooting. ` +
+      `(/setup/status agent_image: ${img?.detail ?? "check missing"})`,
+  ).not.toBe("warn");
 });
 
 // ---------------------------------------------------------------------------
@@ -318,12 +403,17 @@ test("cold open + B1 — the card that learns", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  await caption(page, "Here's the uncomfortable part about allowlists.");
+  // OWNER SLOTS (drafted — local/episode-09-rework-proposal.md, "Cold open").
+  // The old opening conceded that allowlists are the problem; they aren't. When
+  // you know what a job needs, you write the policy and you're done — episode 08
+  // just filmed exactly that. Recording is the answer to NOT knowing, and saying
+  // so is what stops this episode reading as a retraction of the last one.
+  await caption(page, "Sometimes you know exactly what a job needs — write the policy, done.");
   await beat(page, PACE.read);
-  await caption(page, "If you haven't run the job yet, you don't really know what it needs.");
-  await beat(page, PACE.read);
-  await caption(page, "So don't guess.");
+  await caption(page, "But sometimes you don't.");
   await beat(page, BEAT_SHORT);
+  await caption(page, "That's where recording comes in.");
+  await beat(page, PACE.read);
   await caption(page, "Watch it first.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And turn what you observe into policy.");
@@ -465,44 +555,45 @@ test("B3 — honest small work", async () => {
   await caption(page, "A Git identity.");
   await beat(page, BEAT_SHORT);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
-  await caption(page, "Then two network destinations.");
+  await caption(page, "Then one honest install.");
   await beat(page, PACE.read);
 
-  // SCREEN-TYPE: First curl.
-  await typeInTerminal(page, `curl -sS -o /dev/null -w '%{http_code}\\n' https://${RECORDED_HOSTS[0]}/`, card);
-  await beat(page, PACE.read);
-  await caption(page, "This is one of the hosts the build actually needs.");
-  await beat(page, PACE.read + 400);
-
-  // SCREEN-TYPE: Second curl. Concurrent, not sequential: a caption spoken
-  // BEFORE this line typed (the original shape) put the punchline several
-  // seconds ahead of the second host actually existing on screen — Sam/Dana's
-  // "fires before it exists" finding. caption()'s own cue timestamp is
-  // stamped when it is CALLED, so firing it alongside the keystrokes (instead
-  // of awaiting it first) is what makes the line land while the second host
-  // is actually being typed.
+  // SCREEN-TYPE: THE JOB. One command — and this is the difference between the
+  // old take and this one. The two hosts used to be two hand-typed curls, one
+  // per host, with the "surprise" narrated over an arrangement the author made;
+  // now the install reaches both on its own and the narration only describes
+  // what already happened. Nothing on screen is staged for the punchline.
+  //
+  // Concurrent, not sequential: a caption spoken BEFORE the line is typed puts
+  // the words several seconds ahead of the thing they describe — Sam/Dana's
+  // "fires before it exists" finding. caption()'s cue timestamp is stamped when
+  // it is CALLED, so firing it alongside the keystrokes is what makes the line
+  // land while the command is actually appearing.
   await Promise.all([
-    caption(page, "And here's the kind of thing a hand-written allowlist gets wrong."),
-    typeInTerminal(page, `curl -sS -o /dev/null -w '%{http_code}\\n' https://${RECORDED_HOSTS[1]}/`, card),
+    caption(page, "One command. Watch how many hosts it takes."),
+    typeInTerminal(page, INSTALL_CMD, card),
   ]);
   await beat(page, PACE.read);
 
-  // BOTH hosts must actually answer. Counting bare status-code lines rather
-  // than matching "200": what this beat has to prove is that the request
-  // reached the host and came back through the proxy, and
-  // files.pythonhosted.org's bare root is entitled to answer 403/404 — a curl
-  // that never resolved prints no code line at all, records no egress, and
-  // B5's "Approve 2 observed hosts" then never appears at all. `-w
-  // '%{http_code}\n'` (not `-I`'s full header dump) so each reply is one
-  // line — the old header wall was long enough to bury the second host's own
-  // line underneath it.
+  // THE INSTALL HAS TO ACTUALLY LAND. pip's own success line is the honest
+  // signal: a resolve that never reached files.pythonhosted.org prints an error
+  // instead, records one host rather than two, and B5's "Approve 2 observed
+  // hosts" — the button the whole promote-a-subset beat is built on — never
+  // appears. `command not found` fails here too, which is the failure the
+  // beforeAll image preflight exists to catch three minutes earlier.
+  //
+  // expect.poll over innerText, never toContainText: the xterm locator starves
+  // under a take's load and the assertion times out on a terminal that has
+  // plainly already printed the string (the series' standing law).
   await expect
-    .poll(async () => ((await screen.innerText()).match(/^\d{3}$/gm) ?? []).length, { timeout: 90_000 })
-    .toBeGreaterThanOrEqual(2);
+    .poll(async () => (await screen.innerText()).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
+    .toBe(true);
 
-  // S2: both replies landed at the tail of a scrolling terminal — center it
-  // before speaking over it, or the second host's own line sits under the bar.
+  // S2: the install's tail landed at the bottom of a scrolling terminal —
+  // center it before speaking over it, or the lines sit under the caption bar.
   await centerInFrame(screen);
+  await caption(page, "And here's the kind of thing a hand-written allowlist gets wrong.");
+  await beat(page, PACE.read);
   await caption(page, "Python packages don't necessarily come from the host you first think of.");
   await beat(page, PACE.read);
   await caption(page, "You might reach PyPI to find the package...");
@@ -704,10 +795,10 @@ test("B4 — evidence becomes policy", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// B5 — replay confined
+// B5 — approve one, not both
 // ---------------------------------------------------------------------------
 
-test("B5 — replay confined", async () => {
+test("B5 — approve one, not both", async () => {
   test.setTimeout(900_000);
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
@@ -721,7 +812,11 @@ test("B5 — replay confined", async () => {
   await act(page, approveObserved, "Approve the observed hosts.");
 
   // Host names came from a session's observed traffic, so promotion routes
-  // through the shared untrusted-content confirm.
+  // through the shared untrusted-content confirm — which, since B2, is
+  // SELECTABLE on this path: requestPromoteEgress passes `selectable: true`
+  // (workspace-detail.tsx) and the dialog renders a checkbox per host wired to
+  // the server's own optional {"hosts":[…]} subset on promote. Everything the
+  // beat below does is a control that exists; nothing is left to implementation.
   const confirm = page.getByRole("alertdialog");
   await expect(confirm).toBeVisible({ timeout: 30_000 });
   await expect(confirm).toContainText(RECORDED_HOSTS[0]);
@@ -730,13 +825,50 @@ test("B5 — replay confined", async () => {
   await beat(page, PACE.read + 400);
   await caption(page, "That's why we're asked to approve them.");
   await beat(page, PACE.read);
+
+  // THE SUBSET. Both boxes start checked (the dialog seeds its selection from
+  // the full host list), so the action button opens on "Approve 2 hosts" and
+  // unchecking one is a visible, deliberate act — which is the point. The
+  // checkbox's accessible name is `Approve <host>` (record-pane/
+  // confirm-egress-dialog both use that aria-label shape).
+  const downloadHostBox = confirm.getByRole("checkbox", { name: `Approve ${RECORDED_HOSTS[1]}` });
+  await expect(confirm.getByRole("button", { name: /^Approve 2 hosts$/ })).toBeVisible({ timeout: 15_000 });
+  await caption(page, "And we don't have to take all of them.");
+  await beat(page, PACE.read);
+  await act(page, downloadHostBox);
+  await spotlight(page, downloadHostBox);
+  await caption(page, "PyPI we recognise.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The other one we've never heard of, so we leave it out.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // The button's own count is the receipt for the uncheck, BEFORE the click
+  // that depends on it: a checkbox that silently failed to toggle would promote
+  // both hosts, replay #1 would catch only the villain, and the whole
+  // approve-the-miss half of this video would have nothing to approve.
+  const approveOne = confirm.getByRole("button", { name: /^Approve 1 host$/ });
+  await expect(
+    approveOne,
+    `the promote confirm still offers both hosts — ${RECORDED_HOSTS[1]}'s checkbox did not clear, ` +
+      `and a full promote leaves B7's loop with nothing legitimate to approve`,
+  ).toBeVisible({ timeout: 15_000 });
   await caption(page, "This is the moment we turn evidence into permission.");
   await beat(page, PACE.read + 600);
-  await act(page, confirm.getByRole("button", { name: "Approve hosts" }));
-  // The receipt for the click, before the replay that depends on it: without a
-  // promoted set, confinedEgressDomains() for a local_dir workspace is EMPTY
-  // and both curls below would be held, not allowed.
-  await expect(card.getByText("Promoted", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await act(page, approveOne, "Approve the one we know.");
+
+  // The receipt for the click, before the replay that depends on it. A PARTIAL
+  // promote is reachable for the first time here (the client used to post the
+  // full set), and B2 made the promoted branch say so honestly: egress_promoted
+  // is a boolean the server flips on any promoted>0, so the card cannot claim
+  // "1 of 2" from memory — it counts what is STILL approvable right now and
+  // renders "Promoted — 1 still needs approval", with that remainder still
+  // listed and still approvable. That string IS this beat's proof.
+  await expect(
+    card.getByText("Promoted — 1 still needs approval", { exact: true }),
+    "the promote did not land as a PARTIAL — either both hosts went through or none did",
+  ).toBeVisible({ timeout: 60_000 });
+  await caption(page, "One approved. One still waiting.");
   await beat(page, PACE.read);
 
   // launchRecordRun's replay does NOT read the saved policy at all (no
@@ -780,7 +912,7 @@ test("B5 — replay confined", async () => {
   await ffwdEnd(page);
   expect(
     live,
-    "the confined replay never came up as a live session — it settled (or failed) before B5 could type into it; " +
+    "the confined replay never came up as a live session — it settled (or failed) before B6 could type into it; " +
       "check the workspace's base image and the runner, then re-run the take",
   ).toBe("replaying");
 
@@ -793,35 +925,28 @@ test("B5 — replay confined", async () => {
 
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up — typing here eats the first characters and the shell reports
-  // "command not found" on camera.
+  // "command not found" on camera. B6 opens by typing, so the settle is spent
+  // here, at the end of a beat nobody is watching for keystrokes.
   await beat(page, PACE.read);
-
-  // SCREEN-TYPE: First host.
-  await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[0]}`, card);
-  await beat(page, PACE.read);
-  await caption(page, "Allowed.");
-  await beat(page, BEAT_SHORT);
-
-  // SCREEN-TYPE: Second host.
-  await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[1]}`, card);
-  await expect
-    .poll(async () => ((await screen.innerText()).match(/HTTP\/[0-9.]+ \d{3}/g) ?? []).length, { timeout: 90_000 })
-    .toBeGreaterThanOrEqual(2);
-  await caption(page, "Also allowed.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Nothing else needed a decision.");
-  // "nothing else needed a decision" is the whole point of the beat, so prove
-  // it: the idle hint, not a pending row. A held host here would mean the
-  // promotion did not land, and the line would be narrating over a queue.
-  await expect(card.getByTestId("live-approvals-idle")).toBeVisible();
-  await beat(page, PACE.read + 900);
 });
 
 // ---------------------------------------------------------------------------
-// B6 — the unseen host, and the outro
+// B6 — the unseen host, and the one we skipped
+//
+// ORDER IS LOAD-BEARING AND IT IS NOT THE OBVIOUS ONE. The villain goes FIRST,
+// while the shell is free, and the job goes second. The shell is single-
+// threaded, so whatever is running when the operator clicks Done is the thing
+// that gets killed mid-flight — and a request killed mid-HOLD can LOSE its
+// pending decision, because the proxy only logs the decision when the wait
+// RESOLVES (internal/egress/proxy/approvals.go, decisions.go; delivery is
+// async-buffered). Running the install last, with pip's own --timeout 5
+// --retries 0, means pip itself resolves the wait — it gives up, the pending
+// lands, and it lands while the session is still alive. Villain-last would
+// have parked a held example.com request under the Done click and gambled the
+// catch count on a race.
 // ---------------------------------------------------------------------------
 
-test("B6 — the unseen host", async () => {
+test("B6 — the unseen host, and the one we skipped", async () => {
   test.setTimeout(900_000);
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
@@ -893,6 +1018,57 @@ test("B6 — the unseen host", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
+  // ---- and now the job itself, under a policy we knowingly left short ----
+  await caption(page, "Now the actual job.");
+  await beat(page, BEAT_SHORT);
+  await typeInTerminal(page, CONFINED_INSTALL_CMD, card);
+
+  // pypi.org was promoted in B5 and flows. files.pythonhosted.org was NOT, so
+  // it parks at the proxy exactly the way example.com just did — except this
+  // one is a host the workspace genuinely needs, which is the entire difference
+  // the next two beats are about. Same race-the-ending shape as the villain's
+  // hold: the strip lives inside SessionCard's `replaying` branch only.
+  const heldDownload = card.getByTestId("live-approval-row").filter({ hasText: RECORDED_HOSTS[1] }).first();
+  const missHeld = await Promise.race([
+    heldDownload.waitFor({ state: "visible", timeout: APPROVAL_APPEARS }).then(
+      () => "held" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByText(REPLAY_OVER)
+      .waitFor({ state: "visible", timeout: APPROVAL_APPEARS })
+      .then(
+        () => "over" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  expect(
+    missHeld,
+    `${RECORDED_HOSTS[1]} never surfaced as a held request — either B5's uncheck did not take ` +
+      `(both hosts got promoted, so nothing was left to catch) or the replay ended early. ` +
+      `Without this hold there is no miss to approve and B7 has no loop to close.`,
+  ).toBe("held");
+  await spotlight(page, heldDownload);
+  await caption(page, "PyPI goes through. We approved that one.");
+  await beat(page, PACE.read);
+  await caption(page, "The download host doesn't.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It's holding, waiting for a person.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  // DELIBERATELY UNDECIDED. Nobody clicks anything here — pip's own
+  // --timeout 5 --retries 0 gives up first, and pip giving up is what RESOLVES
+  // the held wait and lands the pending decision on the record while this
+  // session is still alive. Asserting pip's error before the Done click below
+  // is therefore not cosmetic: it is the proof that the second catch exists
+  // before the thing that could lose it (the kill) happens.
+  await expect
+    .poll(async () => /ERROR:|timed out/i.test(await screen.innerText()), { timeout: 90_000 })
+    .toBe(true);
+  await caption(page, "Nobody answers, and the install gives up.");
+  await beat(page, PACE.read + 400);
+
   await act(page, card.getByRole("button", { name: "Done", exact: true }));
 
   // FAST-FORWARD, for B3's reason: the confined run has to die and its capture
@@ -921,14 +1097,187 @@ test("B6 — the unseen host", async () => {
       "Same cause as B3's empty capture: shoot in containerized mode.",
   ).toBe("review");
 
-  // The two halves the closing line claims. The allowed count is a floor, not
-  // an equality: the control plane's own host is legitimately reachable from a
-  // confined replay and is counted here (it is only excluded from what an
-  // operator can APPROVE), so pinning it to 2 would fail on a truthful frame.
+  // The allowed count is a floor, not an equality: the control plane's own host
+  // is legitimately reachable from a confined replay and is counted here (it is
+  // only excluded from what an operator can APPROVE), so pinning it to 2 would
+  // fail on a truthful frame.
   await expect(review).toContainText(/[2-9]\d* hosts reached, all allowed/);
-  const blocked = card.getByTestId("verify-session-blocked");
-  await expect(blocked).toContainText(UNSEEN_HOST);
-  await expect(blocked).toContainText("blocked");
+
+  // TWO CATCHES, ONE LIST. B2 collapsed the old blocked/pending pair of
+  // sections into a single CaughtHosts list with a per-row label, so both
+  // outcomes are asserted on the same node: the villain reads "blocked" (a live
+  // approval:denied) and the miss reads "pending approval" (the hold pip
+  // abandoned). Getting only one of them means the beat above half-failed.
+  const caught = card.getByTestId("verify-session-blocked");
+  await expect(caught).toContainText(UNSEEN_HOST);
+  await expect(caught).toContainText("blocked");
+  await expect(caught).toContainText(RECORDED_HOSTS[1]);
+  await expect(caught).toContainText("pending approval");
+
+  // THE CHIP, AND IT IS A LITERAL 2. This is the take's smoke alarm for the
+  // whole restructure: 1 means one of the two catches went missing (a promote
+  // that took both hosts, or a pending lost to the Done kill), 3+ means the
+  // replay reached something nobody scripted. Green never fires here any more —
+  // B2's replayedChipMeta branches on the server's own verdict.
+  await expect(
+    card.getByText(/^Replayed — caught 2$/),
+    "the confined replay did not settle at exactly two catches (the denied villain + the held download host)",
+  ).toBeVisible({ timeout: 30_000 });
+});
+
+// ---------------------------------------------------------------------------
+// B7 — approve the miss, run it again, and the outro
+//
+// The step the old take stopped one short of. Everything here is B2 machinery:
+// the caught list is per-host SELECTABLE, a host denied live starts UNCHECKED
+// and a merely-held one starts checked, and the guided button approves the
+// selection and replays THAT session in one act. So the honest click — approve
+// what we genuinely missed, leave the thing we just refused — is the product's
+// own default, not a demo arrangement.
+// ---------------------------------------------------------------------------
+
+test("B7 — approve the miss, run it again", async () => {
+  test.setTimeout(900_000);
+  const page = stage();
+  const card = page.getByTestId(`session-${SESSION_KEY}`);
+  const screen = card.locator(".xterm-screen").first();
+  const caught = card.getByTestId("verify-session-blocked");
+
+  await caption(page, "Something was missed.");
+  await beat(page, PACE.read);
+
+  // THE DEFAULTS ARE THE BEAT. Asserted before they are narrated, because the
+  // line "that default is deliberate" is a claim about the product, and a demo
+  // that says it while ticking the boxes itself would be a lie told on camera.
+  const missBox = caught.getByRole("checkbox", { name: `Approve ${RECORDED_HOSTS[1]}` });
+  const villainBox = caught.getByRole("checkbox", { name: `Approve ${UNSEEN_HOST}` });
+  await expect(missBox, `${RECORDED_HOSTS[1]} was held, not denied, so it must default CHECKED`).toBeChecked();
+  await expect(
+    villainBox,
+    `${UNSEEN_HOST} was denied live (deny_count > 0), so it must default UNCHECKED — bulk-approving a ` +
+      `villain is the exact footgun the selector exists to prevent`,
+  ).not.toBeChecked();
+  await spotlight(page, caught);
+  await caption(page, "Two things were caught. Only one of them belongs here.");
+  await beat(page, PACE.read);
+  await caption(page, "The one we denied stays unchecked. That default is deliberate.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // ONE act: approve the selection, then replay the same session confined.
+  // The count in the label is the selection's own receipt.
+  const guided = card.getByRole("button", { name: /^Approve 1 selected host and replay again$/ });
+  await expect(guided).toBeVisible({ timeout: 30_000 });
+  await act(page, guided, "Approve it.");
+
+  // The untrusted-content confirm again — SINGLE host this time, so no
+  // checkboxes and the action reads "Approve host" (confirm-egress-dialog.tsx:
+  // checkboxes are bulk-only, and this caller passes no `selectable`). The
+  // negative assert is the one that matters: the villain must not have followed
+  // the selection into the write.
+  const confirm = page.getByRole("alertdialog");
+  await expect(confirm).toBeVisible({ timeout: 30_000 });
+  await expect(confirm).toContainText(RECORDED_HOSTS[1]);
+  await expect(confirm, `${UNSEEN_HOST} reached the approval confirm — the selection leaked the villain`).not.toContainText(
+    UNSEEN_HOST,
+  );
+  await act(page, confirm.getByRole("button", { name: "Approve host" }), "Run it again.");
+
+  // FAST-FORWARD, for B5's reason: requestApproveHosts chains the requirements
+  // PUT into doRecord(label, true), and that POST dispatches synchronously —
+  // the card does not flip to "Replaying confined…" until the second confined
+  // sandbox is up.
+  await beat(page, 200);
+  await ffwdStart(page);
+  const live = await Promise.race([
+    screen.waitFor({ state: "visible", timeout: SANDBOX_UP }).then(
+      () => "replaying" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByText(REPLAY_OVER)
+      .waitFor({ state: "visible", timeout: SANDBOX_UP })
+      .then(
+        () => "over" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  await ffwdEnd(page);
+  expect(
+    live,
+    "the second confined replay never came up — the guided button's approve→replay chain broke, " +
+      "or the approval PUT failed and doRecord was never reached",
+  ).toBe("replaying");
+
+  // THE JOB ONLY. No villain probe: the "reach for something unseen" moment
+  // already happened, and repeating it here would guarantee a catch and make
+  // "Replayed clean" unreachable. This replay exists to answer one question —
+  // is the approved set now enough for the work? — so it runs only the work.
+  await beat(page, PACE.read);
+  await caption(page, "Same command.");
+  await beat(page, BEAT_SHORT);
+  await typeInTerminal(page, CONFINED_INSTALL_CMD, card);
+  await expect
+    .poll(async () => (await screen.innerText()).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
+    .toBe(true);
+
+  // Nothing held, nothing denied — the idle hint, not an empty queue by luck.
+  await expect(
+    card.getByTestId("live-approvals-idle"),
+    "a host was still being held in the clean replay — the approval from the guided click did not land",
+  ).toBeVisible();
+  await caption(page, "Nothing to approve.");
+  await beat(page, PACE.read);
+
+  await act(page, card.getByRole("button", { name: "Done", exact: true }));
+
+  // FAST-FORWARD, for B3's reason: the run has to die and its capture has to be
+  // reconciled before the verdict exists.
+  await beat(page, 200);
+  await ffwdStart(page);
+  const review = card.getByTestId("verify-session-review");
+  const reviewOrFailed = await Promise.race([
+    review.waitFor({ state: "visible", timeout: CAPTURE_SETTLES }).then(
+      () => "review" as const,
+      () => "timeout" as const,
+    ),
+    card
+      .getByTestId("verify-session-failed")
+      .waitFor({ state: "visible", timeout: CAPTURE_SETTLES })
+      .then(
+        () => "failed" as const,
+        () => "timeout" as const,
+      ),
+  ]);
+  await ffwdEnd(page);
+  expect(reviewOrFailed, "the second confined replay captured no egress decisions — no verdict to show").toBe("review");
+
+  // THE PAYOFF. `Replayed clean` is a SERVER verdict (recordmode.CleanReplay:
+  // settled, zero denies, zero pendings, and nothing released by a live
+  // approval), which is why it is worth a beat at all — and why the loop's
+  // answer to a stale one is another replay rather than a re-render.
+  const cleanChip = card.getByText(CLEAN_CHIP, { exact: true });
+  await expect(
+    cleanChip,
+    "the replay did not settle CLEAN — something was still denied or held, so the loop has not converged on camera",
+  ).toBeVisible({ timeout: 30_000 });
+  // And the corollary: with nothing caught, the caught list is simply gone.
+  await expect(caught).toBeHidden();
+  await spotlight(page, cleanChip);
+  await caption(page, "Replayed clean.");
+  await beat(page, PACE.read + 400);
+
+  // BONUS BEAT, never load-bearing. B3's workspace-wide roll-up only renders
+  // once some session has replayed clean — which just became true — so ring it
+  // if it is there and say nothing extra for it. No assertion: a roll-up that
+  // has not repainted yet must never fail a take whose chip already proved the
+  // same fact one line above.
+  const rollup = page.getByTestId("record-last-clean-replay");
+  if (await rollup.isVisible().catch(() => false)) {
+    await spotlight(page, rollup);
+    await beat(page, BEAT_SHORT);
+  }
+  await spotlight(page, null);
 
   await spotlight(page, review);
   await caption(page, "That's the whole loop.");
@@ -940,6 +1289,10 @@ test("B6 — the unseen host", async () => {
   await caption(page, "Turn that evidence into policy.");
   await beat(page, PACE.read);
   await caption(page, "Then run it confined.");
+  await beat(page, PACE.read + 400);
+  // The fifth step, added with the beat that films it: the summary used to list
+  // four and the video now shows five.
+  await caption(page, "And when it catches something you actually needed, approve that, and run it again.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await caption(page, "You don't have to predict the future.");

@@ -285,6 +285,14 @@ confined = rr.get("verify:" + key) or {}
 print("V06_RECORDED", opened.get("status") == "recorded")
 print("V06_PROMOTED", bool(opened.get("egress_promoted")))
 print("V06_REPLAY_RUN", confined.get("run_id") or "-")
+# THE LOOP'S OWN VERDICT (Workstream B1/B2). The FINAL confined entry — the
+# second replay, after the guided approve — has to be the clean one:
+# recordmode.CleanReplay stamps clean=true only on a settled confined capture
+# with zero denies, zero pendings and nothing released by a live approval. This
+# is the single strongest check in this block: it is false unless the promote
+# was a genuine SUBSET, the first replay really caught the missing host, and the
+# guided approve really landed before the re-replay.
+print("V06_CLEAN", confined.get("clean") is True, confined.get("caught") or 0)
 # Promotion writes egress: REQUIREMENT rows on the workspace overlay
 # (handlePromoteRecordEgress) and leaves the legacy approved_egress lane
 # read-only — accept either, since a host either grants egress or it does not.
@@ -292,8 +300,19 @@ reqs = (ws or {}).get("effective_requirements") or (ws or {}).get("requirements"
 appr = set((ws or {}).get("approved_egress") or [])
 def granted(h):
     return h in appr or (reqs.get("egress:" + h) or {}).get("level") == "required"
+# The pip pair, granted by two DIFFERENT beats: pypi.org through B5's promote
+# confirm (the one host the operator recognised, the other deliberately
+# unchecked), files.pythonhosted.org through B7's guided "approve selected and
+# replay again". Both present at the end is the loop having closed; either one
+# missing means one of those two beats did not land.
 missing = [h for h in ("pypi.org", "files.pythonhosted.org") if not granted(h)]
 print("V06_HOSTS", not missing, ",".join(missing) or "-")
+# THE VILLAIN MUST NEVER HAVE BEEN APPROVED. example.com is denied live on
+# camera and then sits in the caught list with its checkbox deliberately
+# UNCHECKED (B2's deny_count>0 rule). A take that widened the workspace to it —
+# a stray click, a bulk approve-all, a regression in that default — is a
+# governance demo that approved the thing it just refused.
+print("V06_VILLAIN", not granted("example.com"))
 print("V06_POLICY", any((p or {}).get("name") == policy for p in pol_all))
 PYEOF
 V06_REPLAY="-"
@@ -301,17 +320,27 @@ while read -r k v extra; do
   case "$k" in
     V06_WS_EXISTS)  [[ "$v" == True ]] && ok "workspace ${V06_WS} exists" || bad "no ${V06_WS} workspace — the take never staged" ;;
     V06_RECORDED)   [[ "$v" == True ]] && ok "session '${V06_KEY}' status=recorded" || bad "no recorded session '${V06_KEY}' — the capture never settled (empty capture = shoot in containerized mode)" ;;
-    V06_PROMOTED)   [[ "$v" == True ]] && ok "observed hosts promoted onto the workspace" || bad "egress_promoted is not set — beat 5's 'Approve 2 observed hosts' never landed" ;;
-    V06_HOSTS)      [[ "$v" == True ]] && ok "pypi.org + files.pythonhosted.org granted on ${V06_WS}" || bad "canon hosts missing from ${V06_WS}: ${extra}" ;;
+    V06_PROMOTED)   [[ "$v" == True ]] && ok "observed hosts promoted onto the workspace" || bad "egress_promoted is not set — B5's 'Approve 2 observed hosts' never landed" ;;
+    V06_HOSTS)      [[ "$v" == True ]] && ok "pypi.org (B5 promote) + files.pythonhosted.org (B7 guided approve) granted on ${V06_WS}" || bad "canon hosts missing from ${V06_WS}: ${extra} — the promote-a-subset / approve-the-miss loop did not close" ;;
+    V06_VILLAIN)    [[ "$v" == True ]] && ok "example.com was never approved on ${V06_WS}" || bad "EXAMPLE.COM IS GRANTED ON ${V06_WS} — the take approved the host it denied on camera" ;;
+    V06_CLEAN)      [[ "$v" == True ]] && ok "the final confined replay settled CLEAN (server verdict)" || bad "the final confined replay is not clean (caught ${extra}) — B7's 'Replayed clean' chip is narrated over a warning chip" ;;
     V06_POLICY)     [[ "$v" == True ]] && ok "policy '${V06_POLICY}' saved" || bad "no '${V06_POLICY}' policy — beat 4's save failed on camera" ;;
     V06_REPLAY_RUN) V06_REPLAY="$v" ;;
   esac
 done < /tmp/_demo_v06.$$
 rm -f /tmp/_demo_v06.$$
 
-head_ "Video 06 · the confined replay"
+# The take runs TWO confined replays under ONE session name, and record_results
+# is keyed by name — so "verify:build-test" holds the SECOND one, the clean one,
+# and replay #1's run_id (the take with the denied villain and the held download
+# host) is overwritten. That is why the villain's deny is not audited here any
+# more: the run it lives on is no longer addressable from the workspace. It is
+# checked where it survives instead — V06_VILLAIN above proves example.com was
+# never approved, and the spec asserts the deny and the failed command on camera
+# (evidence history on re-record is a known Workstream-B out-of-scope item).
+head_ "Video 06 · the clean replay"
 if [[ "${V06_REPLAY}" == "-" ]]; then
-  bad "no confined replay on ${V06_WS} — beats 5/6 never ran"
+  bad "no confined replay on ${V06_WS} — B5/B6/B7 never ran"
 else
   ok "replay run ${V06_REPLAY}"
   V06_AUD=$(curl -fsS "${V06_API}/api/v1/audit?run_id=${V06_REPLAY}&limit=1000" 2>/dev/null || echo '[]')
@@ -327,21 +356,23 @@ def hits(host, *actions):
         if (dd.get("host") or e.get("target") or "").split(":")[0] != host: continue
         if e.get("action") in actions: out.append(e)
     return out
-# The unseen host was HELD and DENIED on camera. Either lane proves it: the
-# decision itself (approval.decide/DENIED) or the refusal the proxy logged.
-denied = [e for e in hits("example.com", "approval.decide") if ((e.get("data") or {}).get("decision") == "DENIED")]
-print("V06_UNSEEN_DENIED", bool(denied) or bool(hits("example.com", "egress.deny")))
+# B7's replay runs the JOB ONLY — no villain probe — so example.com should not
+# appear on this run's trail at all, in any direction. Kept as a safety net
+# rather than a beat: it costs nothing and it is the one shape that would make
+# "Replayed clean" a lie.
 print("V06_UNSEEN_ALLOWED", bool(hits("example.com", "egress.allow")))
-# "Default-deny now. Same commands, same two hosts, and nothing to approve."
+# "Same command. Nothing to approve." — the pip install reaches BOTH hosts and
+# neither one raises a decision, because pypi.org was promoted in B5 and
+# files.pythonhosted.org was approved through B7's guided click. An approval on
+# either host here means the guided approve did not land before the re-replay.
 both = all(hits(h, "egress.allow") for h in ("pypi.org", "files.pythonhosted.org"))
 asked = any(hits(h, "approval.decide") for h in ("pypi.org", "files.pythonhosted.org"))
 print("V06_CONFINED_OK", both and not asked)
 PYEOF
   while read -r k v; do
     case "$k" in
-      V06_UNSEEN_DENIED)  [[ "$v" == True ]] && ok "example.com denied in the confined replay" || bad "no deny for example.com — beat 6's on-camera refusal is not on the record" ;;
-      V06_UNSEEN_ALLOWED) [[ "$v" == False ]] && ok "example.com never allowed" || bad "EXAMPLE.COM WAS ALLOWED in a replay the video calls confined" ;;
-      V06_CONFINED_OK)    [[ "$v" == True ]] && ok "both recorded hosts reached with nothing to approve" || bad "the replay did not reach both canon hosts silently — the promotion never reached its policy" ;;
+      V06_UNSEEN_ALLOWED) [[ "$v" == False ]] && ok "example.com never allowed" || bad "EXAMPLE.COM WAS ALLOWED in a replay the video calls clean" ;;
+      V06_CONFINED_OK)    [[ "$v" == True ]] && ok "the install reached both pip hosts with nothing to approve" || bad "the clean replay did not reach both pip hosts silently — B7's approve-and-replay-again did not widen the set" ;;
     esac
   done < /tmp/_demo_v06b.$$
   rm -f /tmp/_demo_v06b.$$
