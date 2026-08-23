@@ -59,6 +59,11 @@ var envDocShellOnly = map[string]bool{
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
+	// The compose wardynd service's own image tag, so a job on a shared daemon
+	// can build its own instead of racing another job's write to the mutable
+	// :local tag (scripts/run-e2e-ssh.sh, run-e2e-ui-sandbox.sh). Its sibling
+	// WARDYN_PROXY_IMAGE is NOT here: Go reads that one (-proxy-image).
+	"WARDYN_WARDYND_IMAGE": true,
 	// Compose/runner plumbing and the `make setup` installer: read by
 	// docker-compose.yaml, scripts/setup.sh, scripts/up.sh and scripts/ci-run.sh,
 	// never by Go. Documented in ENV.md's "Compose / scripts" + "Setup / operator
@@ -139,7 +144,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 			continue // compose/scripts config; no Go reader by design
 		}
 		if !seen[v] {
-			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only)", v, envDocRoots)
+			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only, or envDocShellOnly if compose/scripts read it)", v, envDocRoots)
 		}
 	}
 }
