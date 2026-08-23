@@ -606,11 +606,24 @@ function replayedChipMeta(rr: RecordResult): { tone: "success" | "warning" | "ne
   const blind = rr.kernel_sensor_blind ? " " + KERNEL_BLIND_CAVEAT : "";
   if (rr.clean === true) return { tone: "success", label: "Replayed clean", title: CLEAN_SCOPE_CAVEAT + blind };
   if (rr.clean === false) {
+    // caught counts denied/held hosts only, but clean can also fail with ZERO
+    // of those: an allow released by a live mid-replay approval (the standing
+    // policy didn't earn it), or a truncated capture. "caught 0" would show a
+    // warning over an empty list — name the real causes instead.
+    if (!((rr.caught ?? 0) > 0)) {
+      return {
+        tone: "warning",
+        label: "Replayed — not clean",
+        title:
+          "No host was denied or held, but this replay isn't clean: an allow was released by a live approval during the replay (the standing policy didn't earn it), or the capture was truncated. Replay again without approving live." +
+          blind,
+      };
+    }
     return {
       tone: "warning",
-      label: `Replayed — caught ${rr.caught ?? 0}`,
+      label: `Replayed — caught ${rr.caught}`,
       title:
-        "Hosts were denied, held for approval, or released by a live approval during this replay — approve the ones this workspace legitimately needs and replay again." +
+        "Hosts were denied or held for approval during this replay — approve the ones this workspace legitimately needs and replay again." +
         blind,
     };
   }

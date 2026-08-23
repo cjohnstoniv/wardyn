@@ -112,11 +112,11 @@ export interface EgressPromotionDiff {
 }
 
 // approvedEgressSet — the ONE answer to "does this workspace already grant
-// egress to <host>?", mirroring the server's own three-lane union
-// (handlePromoteRecordEgress's `existing`): the legacy ApprovedEgress lane,
-// the scan profile's auto-allowed egress_domains, and the effective
-// egress:<host> requirement rows — the lane promote and the per-host approve
-// now BOTH write. Shared on purpose: egressPromotionDiff's alreadyApproved
+// egress to <host>?", mirroring the union a confined replay actually launches
+// with (the server's confinedEgressDomains — which is also a superset of
+// promote's two-lane dedupe set): the legacy ApprovedEgress lane, the scan
+// profile's auto-allowed egress_domains, and the effective egress:<host>
+// requirement rows — the lane promote and the per-host approve now BOTH write. Shared on purpose: egressPromotionDiff's alreadyApproved
 // bucket (below) and ConfinedReviewCard's caught bucket must subtract the SAME
 // set, or a host approved through the requirements lane keeps rendering as
 // off-policy under an Approve button that would fold in zero new rows.

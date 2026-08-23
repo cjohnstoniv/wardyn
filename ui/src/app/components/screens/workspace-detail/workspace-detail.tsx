@@ -208,7 +208,11 @@ export function WorkspaceDetailScreen() {
   // as the lane it replaces.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
-    const next = { ...(ws.requirements ?? {}) };
+    // Merge onto the FRESHEST overlay, not the one captured at click time — the
+    // confirm dialog can sit open for minutes, and the PUT is a full
+    // replacement. Shrinks the accepted last-write-wins window to fetch→PUT.
+    const fresh = (await workspacesApi.getWorkspace(ws.id)) ?? ws;
+    const next = { ...(fresh.requirements ?? {}) };
     for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
     try {
       setWs(await workspacesApi.setRequirements(ws.id, next));
