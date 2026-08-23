@@ -56,6 +56,9 @@ type scopeFixture struct {
 	approval *authzApprovals
 	runID    uuid.UUID
 	memberID string
+	// rec is the harness's audit recorder, kept so a test can assert what a
+	// decision WROTE and not only what it answered.
+	rec *recRecorder
 }
 
 func newScopeFixture(t *testing.T) *scopeFixture {
@@ -81,7 +84,7 @@ func newScopeFixture(t *testing.T) *scopeFixture {
 	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: memberSub, State: types.RunRunning}
 	ast.mu.Unlock()
 
-	return &scopeFixture{srv: srv, store: ast, approval: aap, runID: runID, memberID: memberSub}
+	return &scopeFixture{srv: srv, store: ast, approval: aap, runID: runID, memberID: memberSub, rec: h.audit}
 }
 
 func (f *scopeFixture) seedEgress(t *testing.T, host string) uuid.UUID {

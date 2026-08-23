@@ -917,6 +917,32 @@ corp-artifact-host trust boundary in `isMITMHost`).
   need a JVM/Deno client to reach a MITM'd host today should route it through a
   non-inspected lane or wait on the trust-store-import follow-up.
 
+### Four-eyes on egress approvals is bypassable by the admin token, by design
+
+`WARDYN_EGRESS_SECOND_HUMAN=1` (off by default) requires that the human who
+DECIDES an `egress_domain` approval is not the human who created the run —
+four-eyes on the one decision that widens what a running agent can reach. It is
+published here rather than in §4 because of the exemption it ships with.
+
+**A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is
+attributed `system`/`admin-token` (`actorFromRequest`, FIX #10) precisely
+because a shared token carries NO per-human identity — there is no second human
+to compare it against, and `X-Wardyn-Principal` is deliberately ignored off
+local mode so a token bearer cannot forge one. Refusing the token instead would
+lock an operator out of their own approval queue exactly when SSO is broken, so
+the bypass is the deliberate break-glass rather than an oversight.
+
+The residual is therefore precise: **anyone holding the admin token can
+single-handedly approve their own run's egress under a deployment that believes
+it has four-eyes.** What bounds it is disclosure, not prevention — every bypass
+writes an `approval.second_human.bypass` audit event beside the
+`actor_type=system` `approval.decide`, so a SIEM rule can alert on one, and the
+gate is only as strong as the operator's handling of that token: SSO configured,
+token held out of band. Local mode carries the same shape under a different
+label — the injected operator IS a verified human, so a self-decision there is
+refused like any other, which is why this switch is not one to turn on for a
+single-dev machine.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit silently in a
