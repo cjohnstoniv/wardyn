@@ -47,6 +47,13 @@ type dispatchParams struct {
 	// full accommodation set — "unknown" must not break the proven CI and
 	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
 	Toolchains *toolchainNeeds
+	// MemberMountRoots, when non-nil, marks this as a run against a MEMBER-OWNED
+	// workspace and carries the operator/MDM-set roots that member's local_dir
+	// binds must resolve inside (memberMountRoots, workspace_refs.go). It rides
+	// straight onto SandboxSpec.MemberMountRoots so the driver re-checks every
+	// bind against the canonicalized real path as late as this process can. nil
+	// for every operator run — the driver then takes exactly today's path.
+	MemberMountRoots []string
 	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
 	// ephemeral workspace source(s) declare — no host mount, no clone; the
 	// sandbox just needs the directory to exist. Surfaced as
@@ -305,6 +312,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
 		Mounts:           mounts,
+		// nil for an operator run (the driver then behaves exactly as it does
+		// today); non-nil marks a member-owned-workspace run whose every bind the
+		// driver re-checks against these roots — see runner/member_mount.go.
+		MemberMountRoots: p.MemberMountRoots,
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.

@@ -324,6 +324,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
 			Toolchains:         runToolchainNeeds(wsRefs),
+			// nil unless this run attaches a MEMBER-OWNED workspace, in which case
+			// the driver re-checks every bind against these roots immediately
+			// before ContainerCreate (memberMountRoots, workspace_refs.go).
+			MemberMountRoots: s.memberMountRoots(wsRefs),
 		})
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)

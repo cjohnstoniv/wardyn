@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -115,9 +116,19 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		if isBlessedSystemMount(wm) {
 			continue // operator-blessed system creds mount — exempt (H8: source-validated)
 		}
-		if _, ok := idx.localDir[wm.Source]; !ok {
+		ws, ok := idx.localDir[wm.Source]
+		if !ok {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
+		}
+		// MEMBER-OWNED source (0048): re-run the member-safe mount gate on the
+		// RESOLVED spec, not only at onboarding — the same reason the onboarding
+		// gate itself lives here rather than in one handler. It closes the case
+		// where the operator narrowed the roots (or the source was repointed at
+		// a symlink) AFTER the workspace was created. An operator-owned source
+		// (OwnedBy == "") is untouched.
+		if err := memberMountAllowed(s.cfg.MemberMounts, ws.OwnedBy, wm); err != nil {
+			return http.StatusUnprocessableEntity, err
 		}
 	}
 	for _, wr := range spec.WorkspaceRepos {
@@ -127,4 +138,44 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		}
 	}
 	return 0, nil
+}
+
+// memberMountAllowed re-checks ONE resolved mount against its owning member's
+// mount policy. owner=="" (operator-owned) is always fine — the member gate is
+// additive and never narrows an operator mount.
+func memberMountAllowed(policy runner.MemberMountPolicy, owner string, wm types.WorkspaceMount) error {
+	if owner == "" {
+		return nil
+	}
+	if err := policy.ValidateMemberMount(owner, wm.Source, !wm.ReadOnlyOrDefault()); err != nil {
+		return fmt.Errorf("member workspace mount: %w", err)
+	}
+	return nil
+}
+
+// memberMountRoots returns the roots a run's mounts must resolve inside, or nil
+// when the run has NO member-owned workspace — which is every operator run, and
+// which the driver reads as "do exactly what you do today"
+// (runner.SandboxSpec.MemberMountRoots).
+//
+// wsRefs is the already-resolved referencedWorkspaces list, so this costs no
+// extra store read. The FIRST member-owned workspace decides: a run cannot mix
+// two members' workspaces (each member only ever sees their own), so there is no
+// second owner to reconcile with — and if there somehow were, the first owner's
+// roots are the narrower answer, never a union.
+func (s *Server) memberMountRoots(wsRefs []types.Workspace) []string {
+	for _, ws := range wsRefs {
+		if ws.OwnedBy == "" {
+			continue
+		}
+		roots := s.cfg.MemberMounts.RootsFor(ws.OwnedBy)
+		if roots == nil {
+			// Non-nil, empty: "member run, no roots" must still reach the driver
+			// as a member run so every mount fails closed there, rather than
+			// silently degrading to the operator path.
+			roots = []string{}
+		}
+		return roots
+	}
+	return nil
 }

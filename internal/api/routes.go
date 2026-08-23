@@ -78,9 +78,11 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 29 direct registrations below +
+			// has gone stale before, W7-S1-1): 24 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) = 34. NOT the whole admin
+			// DEADCODE-1) = 29. Five workspace routes (create/update/delete/scan/
+			// build) LEFT this group in 0048 for the owner-or-admin tier — the
+			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
@@ -211,10 +213,24 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
 
 			// Workspace management (onboarding of local dirs + repos a run may
-			// attach), gated to authenticated humans (SSO session or admin token);
-			// every MUTATING route here is additionally operator-only, so a
-			// signed-in MEMBER (B1's derived role) can list/read workspaces but
-			// cannot CRUD them or widen what a run may do; an ADMIN can.
+			// attach), gated to authenticated humans (SSO session or admin token).
+			//
+			// OWNERSHIP TIER (0048, docs/design/member-role-desktop.md §b): the
+			// CRUD/scan/build routes are OWNER-OR-ADMIN rather than admin-only —
+			// a member creates workspaces they own (create stamps owned_by from
+			// the session) and may edit/delete/scan/build THEIR OWN. The check
+			// lives INSIDE each handler as getWorkspaceAuthorized (mutations) /
+			// getWorkspaceReadable (reads), exactly the way the /runs block does
+			// owner-or-admin on the plain `r` group — no second middleware group,
+			// no chi.Walk matrix churn beyond the reclassification. An
+			// operator-owned workspace (owned_by='', i.e. every pre-0.6 row) still
+			// answers a member's mutation with the same 403 requireOperator wrote.
+			//
+			// A route that WIDENS AN EGRESS CEILING, BINDS CREDENTIAL MATERIAL, or
+			// WRITES THE HOST stays operatorOnly below — approved/denied-egress,
+			// llm-cred, requirements, record + promote-egress, env-as-code/write.
+			// Owning a workspace does not make a member the operator of it.
+			//
 			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
@@ -225,17 +241,19 @@ func (s *Server) routes() chi.Router {
 			// mounted from sources.go, same posture as the workspaces block.
 			s.mountLibraryRoutes(r, operatorOnly)
 
-			operatorOnly.Post("/workspaces", s.handleCreateWorkspace)
+			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
 			r.Get("/workspaces/{id}", s.handleGetWorkspace)
-			operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
-			operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
-			operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+			r.Put("/workspaces/{id}", s.handleUpdateWorkspace)
+			r.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
+			r.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
 			// Workspace image build (the wizard's Build step): status is a
-			// member-tier read like the other workspace GETs; kicking a build
-			// is an operator action (workspace_build.go).
+			// member-tier read like the other workspace GETs; kicking a build is
+			// owner-or-admin — the builder runs WARDYN-GENERATED recipes from the
+			// scanned profile, never member free-text (contrast devcontainer_repo,
+			// which stays unconditionally operator-only).
 			r.Get("/workspaces/{id}/build", s.handleGetWorkspaceBuild)
-			operatorOnly.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
+			r.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)

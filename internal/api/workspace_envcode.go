@@ -119,7 +119,7 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceReadable(w, r, id)
 	if !ok {
 		return
 	}

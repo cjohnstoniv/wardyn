@@ -236,6 +236,15 @@ type Config struct {
 	// need the raw configured list for display (e.g. an admin-facing settings page),
 	// never to gate a request.
 	OperatorEmails []string
+	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
+	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
+	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
+	// — the default — means a member may not onboard a host directory at all
+	// (repos and operator-owned workspaces are unaffected), which is the
+	// fail-closed posture the section-(c) threat model requires. It bounds ONLY
+	// mounts on a member-OWNED workspace; an operator's mounts are never
+	// narrowed by it. See internal/runner/member_mount.go.
+	MemberMounts runner.MemberMountPolicy
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
 	// builds (the request degrades to the convention image).

@@ -167,12 +167,19 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/policies"},
 	{http.MethodPut, "/api/v1/policies/p1"},
 	{http.MethodDelete, "/api/v1/policies/p1"},
-	// 3. workspaces
-	{http.MethodPost, "/api/v1/workspaces"},
-	{http.MethodPut, "/api/v1/workspaces/w1"},
-	{http.MethodDelete, "/api/v1/workspaces/w1"},
-	{http.MethodPost, "/api/v1/workspaces/w1/scan"},
-	{http.MethodPost, "/api/v1/workspaces/w1/build"},
+	// 3. workspaces — the routes that WIDEN AN EGRESS CEILING, BIND CREDENTIAL
+	// MATERIAL, or WRITE THE HOST. These stay flatly admin-gated.
+	//
+	// NOT here as of migration 0048 (docs/design/member-role-desktop.md §b):
+	// create / update / delete / scan / build. Those moved to the
+	// OWNER-OR-ADMIN tier — a member owns the workspaces they create and may
+	// act on their own — so the gate now lives inside the handler
+	// (getWorkspaceAuthorized) and "a member always gets 403 here" is no longer
+	// the property to assert. What replaced it: TestAuthzMatrix's classOwner
+	// probe (owner reaches / foreign 404s / admin bypasses) and
+	// TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly, which pins that a
+	// member mutating an OPERATOR-owned workspace still gets this exact 403
+	// with this exact "requires admin role" body.
 	{http.MethodPut, "/api/v1/workspaces/w1/requirements"},
 	{http.MethodPut, "/api/v1/workspaces/w1/approved-egress"},
 	{http.MethodPut, "/api/v1/workspaces/w1/llm-cred"},
