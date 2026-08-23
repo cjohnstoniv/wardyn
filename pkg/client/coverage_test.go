@@ -60,6 +60,7 @@ func routeFamilies() map[string][]string {
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
+		"sessions":    {"RevokeSessions"},
 	}
 }
 

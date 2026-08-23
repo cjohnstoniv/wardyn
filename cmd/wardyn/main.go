@@ -174,6 +174,7 @@ func rootCmd() *cobra.Command {
 		subscriptionCmd(client),
 		setupCmd(client),
 		siteConfigCmd(client),
+		sessionsCmd(client),
 	)
 	return root
 }

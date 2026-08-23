@@ -123,6 +123,7 @@ internal action can rename across releases without notice.
 | `harness.credential.captured` | A harness login flow (Claude Code subscription, etc.) captures a credential | `captured`, `provider`, `source` | `internal/api/harnesscred.go:620`, `internal/api/ssotoken.go:113` | internal |
 | `harness.credential.disconnected` | A harness credential is disconnected | `captured`, `provider` | `internal/api/harnesscred.go:644` | internal |
 | `harness.login.started` | A harness SSO login flow starts | `egress`, `provider`, `sso_start_url` | `internal/api/harnesscred.go:465` | internal |
+| `session.revoke` | An admin revokes active OIDC console sessions — `target` is the revoked `sub`, or `*` for a revoke-all (`POST /api/v1/sessions/revoke`, D16) | `scope` (`sub` or `all`), `sub` (sub-scoped only) | `internal/api/sessions.go:47,54` | internal |
 
 ## Policy, capability & authorization
 

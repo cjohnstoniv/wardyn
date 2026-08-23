@@ -251,3 +251,13 @@ func (c *Client) Healthz(ctx context.Context) (json.RawMessage, error) {
 	err := c.do(ctx, http.MethodGet, "/healthz", nil, &out)
 	return out, err
 }
+
+// RevokeSessions is D16's "revoke a human now" admin action:
+// POST /api/v1/sessions/revoke, admin-only. Pass exactly one of sub (revoke
+// that one principal's sessions) or all=true (revoke every principal's
+// sessions) — the server 400s on both or neither. 404s when the deployment
+// has no OIDC session store wired (nothing to revoke).
+func (c *Client) RevokeSessions(ctx context.Context, sub string, all bool) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/sessions/revoke",
+		map[string]any{"sub": sub, "all": all}, nil)
+}
