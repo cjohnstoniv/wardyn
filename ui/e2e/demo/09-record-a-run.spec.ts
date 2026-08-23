@@ -1101,11 +1101,13 @@ test("B6 — the unseen host, and the one we skipped", async () => {
       "Same cause as B3's empty capture: shoot in containerized mode.",
   ).toBe("review");
 
-  // The allowed count is a floor, not an equality: the control plane's own host
-  // is legitimately reachable from a confined replay and is counted here (it is
-  // only excluded from what an operator can APPROVE), so pinning it to 2 would
-  // fail on a truthful frame.
-  await expect(review).toContainText(/[2-9]\d* hosts reached, all allowed/);
+  // The allowed count is a floor of ONE, not two: replay #1's only approved
+  // task host is pypi.org — under subscription proxy-inject the model
+  // provider's traffic never lands in the observed egress domains, so a
+  // truthful frame reads "1 host reached, all allowed" (the live rehearsal
+  // proved exactly that). The caught-list asserts below carry the discovery
+  // story; this line only pins that the ALLOWED lane stayed clean.
+  await expect(review).toContainText(/[1-9]\d* hosts? reached, all allowed/);
 
   // TWO CATCHES, ONE LIST. B2 collapsed the old blocked/pending pair of
   // sections into a single CaughtHosts list with a per-row label, so both
