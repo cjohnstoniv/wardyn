@@ -238,7 +238,7 @@ oversight — do not wire them into `.github/workflows/ci.yml`:
   must NOT appear), the header strips both ways, and the pooled-exec baseline.
   It brings up its own uniquely-named compose stack on its own ports and tears
   it down on every exit path, and it builds `wardyn/agent-vscode:local`
-  (`make agent-image-vscode`, ~+300 MB) if that image is not already local —
+  (`make agent-image-vscode`, +~228 MiB) if that image is not already local —
   which is why it is a by-hand lane and not a CI job. Needs Docker;
   self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **`scripts/run-e2e-ssh-k8s.sh`** (`make test-e2e-ssh-k8s`) — the SSH

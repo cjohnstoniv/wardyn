@@ -120,7 +120,7 @@ compose down --volumes >/dev/null 2>&1 || true
 compose build wardynd >/dev/null || die "build ${WARDYND_IMAGE} failed"
 compose --profile build-only build proxy-image >/dev/null || die "build ${PROXY_IMAGE} failed"
 if ! docker image inspect wardyn/agent-vscode:local >/dev/null 2>&1; then
-  log "wardyn/agent-vscode:local absent; building it (make agent-image-vscode, +~300MB)"
+  log "wardyn/agent-vscode:local absent; building it (make agent-image-vscode, +~228 MiB)"
   make agent-image-vscode || die "make agent-image-vscode failed"
 fi
 # Re-tag EVERY run, not just when the tag is missing: the tag is a pointer, and

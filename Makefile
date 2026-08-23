@@ -91,7 +91,7 @@ agent-image-full: agent-images-core ## Build the fat toolchain agent image (Go/P
 
 # The claude-code agent image plus a pinned code-server, for the UI-sandbox
 # relay's "vscode" app (Workstream D, deploy/images/vscode/Dockerfile). Not in
-# agent-images-core/agent-images: it is +~300MB and only a run whose policy
+# agent-images-core/agent-images: it is +~228 MiB and only a run whose policy
 # declares a ui_apps entry needs it. Register it under an agent name with:
 #   WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 agent-image-vscode: agent-images-core ## Build the code-server UI-sandbox agent image
