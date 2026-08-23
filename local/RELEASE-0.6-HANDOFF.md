@@ -1,3 +1,12 @@
+> **⚠️ SUPERSEDED 2026-08-23.** The 0.6 release was reopened before the cut: the owner chose to pull
+> 0.7/0.8 enterprise work forward (desktop deployment + member-role desktop + a TIER-C pull-forward
+> menu) to make 0.6 a real enterprise POC. The `release: 0.6.0` commit (`0eb1ce0e`) has been **reverted**
+> (`54e2db0a`) — version strings are back at 0.5.0 and 0.6 entries are back under `## [Unreleased]` —
+> and the secrets-reveal fix was merged in (`c73d448b`). The commands below (merge/cut/tag/push) do
+> **not** apply until the expansion campaign finishes and the release is re-cut. A fresh handoff is
+> regenerated at that re-cut. Plan: `~/.claude/plans/fluffy-orbiting-tiger.md`. This file is kept for
+> the RELEASING 1/1b template and the still-valid deferred-proofs / demo-retake / residuals lists.
+
 # Wardyn 0.6.0 — owner handoff
 
 Everything the owner needs to cut 0.6.0. Written at `prep/v0.6` @ `0eb1ce0e`, 2026-08-23.
