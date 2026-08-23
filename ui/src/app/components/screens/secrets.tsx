@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch } from "lucide-react";
+import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch, Eye, EyeOff } from "lucide-react";
 import { secrets as secretsApi } from "../../lib/api/secrets";
 import { getErrorMessage } from "../../lib/format";
 import { LANE_META, laneOfName, type Lane } from "../../lib/scm-provider";
@@ -314,6 +314,13 @@ export function AddSecretDialog({
   const operator = useOperator();
   const [name, setName] = React.useState(initialName);
   const [value, setValue] = React.useState("");
+  // Masked at entry, revealed only on request: a write-only store should not
+  // put the plaintext on screen while it is typed (shoulder-surf + screen
+  // shares; caught on camera by the demo series). -webkit-text-security is
+  // the only way to mask a MULTILINE value (PEM keys need the textarea);
+  // Firefox ignores it and degrades to plaintext — cosmetic masking, not a
+  // security boundary either way.
+  const [reveal, setReveal] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   // MEDIUM fix: require an explicit confirm-overwrite click when the typed name
@@ -434,17 +441,29 @@ export function AddSecretDialog({
             // above — repeating "never displayed again" here would say it twice.
             hint={lockName ? undefined : "This field is cleared on save and the value is never displayed again."}
           >
-            <Textarea
-              id="secret-value"
-              placeholder="sk-…"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              rows={3}
-              spellCheck={false}
-              autoComplete="off"
-              className="font-mono text-xs"
-              required
-            />
+            <div className="relative">
+              <Textarea
+                id="secret-value"
+                placeholder="sk-…"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                rows={3}
+                spellCheck={false}
+                autoComplete="off"
+                className="font-mono text-xs pr-9"
+                style={reveal ? undefined : ({ WebkitTextSecurity: "disc" } as React.CSSProperties)}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setReveal((r) => !r)}
+                aria-label={reveal ? "Hide value" : "Show value"}
+                aria-pressed={reveal}
+                className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+              >
+                {reveal ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
+              </button>
+            </div>
           </Field>
           {/* MEDIUM fix: warn when the name already exists so the operator
               doesn't silently overwrite a secret currently referenced by runs. */}
