@@ -83,6 +83,47 @@ export function firstUseLabel(v: unknown, allowAll = false): string {
   }
 }
 
+// Outbound content inspection on the brokered LLM routes (mirrors
+// types.LLMInspectionSpec). A guardrail + visibility layer, NOT exfiltration
+// prevention. Omitting the whole block — or mode "off" — is off.
+export interface LLMInspectionSpec {
+  // "off" (default) | "alert" (scan + audit, forward unchanged) | "block" (a
+  // qualifying finding refuses the request). Left as `string` because Go's is:
+  // validatePolicySpec is what rejects a garbage value, at write time.
+  mode: string;
+  // Operator-declared secret NAMES — the authoring field. Resolved to values
+  // only at dispatch, in memory, on the copy handed to the proxy sidecar.
+  workspace_secret_names?: string[];
+  // NOT an authoring field: validatePolicySpec REFUSES a non-empty value on
+  // every policy write. Mirrored only because the wire shape carries it.
+  workspace_secret_values?: string[];
+  detect_secrets?: boolean;
+  detect_secret_patterns?: boolean;
+  detect_entropy?: boolean;
+  detect_pii?: boolean;
+  detector_sidecar_url?: string;
+  classified_markers?: string[];
+  scan_attachments?: boolean;
+  inspect_forward_egress?: boolean;
+  max_scan_bytes?: number;
+  // "pass" (default, fail-open) | "block" (fail-closed in block mode).
+  on_scanner_error?: string;
+  require_inspectable_llm?: boolean;
+  intercept_tls?: boolean;
+  // "low" (default) | "medium" | "high" | "critical".
+  block_min_severity?: string;
+}
+
+// Sandbox resource caps (mirrors types.ResourceLimits). A zero or omitted field
+// means "platform default" — dispatch fills conservative defaults so every run
+// is capped even under a policy that sets nothing.
+export interface ResourceLimits {
+  cpu_millis?: number;
+  memory_mib?: number;
+  pids_limit?: number;
+  disk_mib?: number;
+}
+
 export interface RunPolicySpec {
   allowed_domains: string[];
   denied_domains?: string[];
@@ -101,6 +142,10 @@ export interface RunPolicySpec {
   // wins, allowed_domains may be empty. The SSRF/private-IP guard and the
   // exact-host allowlist required for credential injection are UNCHANGED.
   allow_all_egress?: boolean;
+  // Outbound LLM content inspection. Omitted => OFF (the safe default).
+  llm_inspection?: LLMInspectionSpec;
+  // Sandbox CPU/memory/PID/disk caps. Omitted => platform defaults.
+  resources?: ResourceLimits;
 }
 
 export interface RunPolicy {
