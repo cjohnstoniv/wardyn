@@ -104,7 +104,11 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 		return types.Workspace{}, nil, errImportStepBusy
 	}
 	return claimed, func(e error) error {
-		s.failAndRevoke(ctx, runID, types.RunPending)
+		hint := "the workspace import step could not start"
+		if e != nil {
+			hint += ": " + e.Error()
+		}
+		s.failAndRevoke(ctx, runID, types.RunPending, hint)
 		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
 		return e
 	}, nil

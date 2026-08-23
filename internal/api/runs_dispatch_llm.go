@@ -268,7 +268,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun, sandboxEnv map[string]string) (certPEM, keyPEM string, ok bool) {
 	pemCert, pemKey, caErr := generateRunCA(time.Now())
 	if caErr != nil {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not provision the per-run TLS-interception CA: "+caErr.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
 		return "", "", false
@@ -340,7 +340,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the "+injectSource+" credential injection: "+gerr.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
 		return injections, false
@@ -383,7 +383,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the Bedrock bearer credential injection: "+gerr.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
 		return injections, nil, false
@@ -419,7 +419,8 @@ func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, 
 		return true
 	}
 	if (llm.subscription && !li.InterceptTLS && !llm.injectSub) || (llm.bedrockReady && !llm.bedrock.bearer) {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting,
+			"require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
 		return false

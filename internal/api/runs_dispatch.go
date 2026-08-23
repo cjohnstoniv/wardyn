@@ -388,7 +388,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
 		// terminal state (mirrors the STARTING->RUNNING guard below).
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the sandbox could not be created: "+err.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
@@ -523,7 +523,8 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			}
 			if !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
 				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-				s.failAndRevoke(ctx, run.ID, types.RunRunning)
+				s.failAndRevoke(ctx, run.ID, types.RunRunning,
+					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")
 				return
 			}
 		}
@@ -535,7 +536,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
-			s.failAndRevoke(ctx, run.ID, types.RunRunning)
+			s.failAndRevoke(ctx, run.ID, types.RunRunning, "the agent process could not be started in the sandbox: "+xerr.Error())
 			return
 		}
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
@@ -699,7 +700,8 @@ func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, re
 				"would consume the sandbox's only process, guaranteeing the task exec that follows it fails",
 		})))
 	s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-	s.failAndRevoke(ctx, run.ID, types.RunRunning)
+	s.failAndRevoke(ctx, run.ID, types.RunRunning,
+		"BYOI images are not supported on this exec-less (krun) runtime")
 	return true
 }
 
