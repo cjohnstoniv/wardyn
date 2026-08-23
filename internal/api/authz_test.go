@@ -98,7 +98,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /auth/logout":   {class: classAnonymous},
 
 	// ── admin ──
-	"GET /metrics":                                              {class: classAdmin},
+	"GET /metrics": {class: classAdmin},
+	// The admin twins of /me/tokens: the deployment-wide inventory names other
+	// humans, and revoke-any is the remediation path for a token whose owner was
+	// demoted or has left (migration 0045's stamp ceiling).
+	"GET /api/v1/tokens":                                        {class: classAdmin},
+	"DELETE /api/v1/tokens/{id}":                                {class: classAdmin},
 	"POST /api/v1/setup/harness-login":                          {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":           {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}":        {class: classAdmin},
@@ -149,6 +154,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/tokens is the same self-service shape as /me/ssh-keys above:
+	// classMember, principal-scoped AT THE STORE, so DELETE /me/tokens/{id}
+	// answers a foreign id with store.ErrNotFound (404) without needing an
+	// owner/foreign pair here. The token a member mints carries their own
+	// stamped role, so minting one crosses no tier — see apiTokenAuth.
+	"GET /api/v1/me/tokens":         {class: classMember},
+	"POST /api/v1/me/tokens":        {class: classMember},
+	"DELETE /api/v1/me/tokens/{id}": {class: classMember},
 	// /me/capabilities is the member-safe twin of GET /permissions above: it
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
@@ -839,6 +852,29 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+
+// ─── per-user api tokens (migration 0045) ─────────────────────────────────
+//
+// Honest empty state, same rationale as the SSH stubs above: this matrix pins
+// the coarse admit/refuse boundary of the five token routes, not the feature.
+// GetAPITokenByRaw returning ErrNotFound is what makes every bearer in this file
+// take the pre-existing admin path — the matrix presents session cookies and the
+// admin token, never a `wdn_` bearer, so the token auth branch must be inert
+// here. apitokens_test.go is that branch's own pin.
+func (s *authzStore) CreateAPIToken(_ context.Context, t types.APIToken, _ string) (types.APIToken, error) {
+	return t, nil
+}
+func (s *authzStore) GetAPITokenByRaw(context.Context, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (s *authzStore) TouchAPIToken(context.Context, uuid.UUID, time.Time) error { return nil }
+func (s *authzStore) ListAPITokensByPrincipal(context.Context, string) ([]types.APIToken, error) {
+	return nil, nil
+}
+func (s *authzStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Time) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
 
 // ─── capability grants (migration 0042) ───────────────────────────────────
 //

@@ -125,6 +125,26 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
+// withHumanIdentity publishes the four keys that TOGETHER describe an
+// authenticated human: who they are (sub), the email an admin may have written
+// a grant against, the role isOperator gates on, and the group snapshot the
+// capability resolver matches. It exists so the SSO-session branch and the
+// api-token branch of humanOrAdminAuth cannot DRIFT: a fifth identity key added
+// to one path and forgotten on the other is exactly how a token would silently
+// resolve to a different permission set than the session that minted it — and
+// for a DENY grant, silently resolving to "no match" is a breach, not a
+// degradation. Both branches call this and nothing else.
+//
+// Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
+// an identity: an api token has no session to expire, so the key stays zero for
+// one and is set by the SSO branch alone (see oidcExpiryCtxKey).
+func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string) context.Context {
+	ctx = withOIDCHuman(ctx, sub)
+	ctx = withOIDCEmail(ctx, email)
+	ctx = withOIDCRole(ctx, role)
+	return withOIDCGroups(ctx, groups)
+}
+
 // errorBody is the uniform JSON error envelope.
 type errorBody struct {
 	Error string `json:"error"`
@@ -295,7 +315,13 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(withLocalPrincipal(r.Context(), op)))
 		})
 	}
-	admin := s.adminAuth(next)
+	// The THIRD auth branch sits in front of the admin bearer path, on both
+	// halves of the split below: a `wdn_`-prefixed bearer is a per-user API
+	// token, anything else is still compared against the single deployment-wide
+	// admin token. Both halves get it because a token is a token — an operator
+	// who has not configured SSO can still hold one (they simply cannot MINT
+	// one; see handleCreateAPIToken, which requires a verified human).
+	admin := s.apiTokenAuth(next, s.adminAuth(next))
 	if s.cfg.OIDC == nil {
 		return admin
 	}
@@ -311,13 +337,14 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// The session email rides along for /me and audit attribution; the
 			// session role rides along for isOperator (B1's derived admin/member
 			// role is now the sole source of the admin tier — see isOperator).
-			ctx := withOIDCHuman(r.Context(), sub)
-			ctx = withOIDCEmail(ctx, oidc.EmailFromContext(r.Context()))
-			ctx = withOIDCRole(ctx, oidc.RoleFromContext(r.Context()))
-			// The group snapshot rides along for the capability resolver. Copied
+			//
+			// The group snapshot rides along for the capability resolver, copied
 			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
 			// empty set (see oidcGroupsCtxKey).
-			ctx = withOIDCGroups(ctx, oidc.GroupsFromContext(r.Context()))
+			ctx := withHumanIdentity(r.Context(), sub,
+				oidc.EmailFromContext(r.Context()),
+				oidc.RoleFromContext(r.Context()),
+				oidc.GroupsFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
 			// W31-S1-7: there is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.

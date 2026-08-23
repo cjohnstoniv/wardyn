@@ -154,6 +154,30 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 
+	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
+	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
+	// reason the capability methods below are: GetAPITokenByRaw runs on the
+	// REQUEST PATH of every route in the authenticated group (it is the third
+	// auth branch — see patAuth in internal/api/http.go), so a store that
+	// cannot answer it must be a COMPILE error, never a degrade-to-allow
+	// type-assert hiding in a test double.
+	//
+	// CreateAPIToken and GetAPITokenByRaw take the PLAINTEXT token and hash it
+	// internally — the raw value never reaches SQL. GetAPITokenByRaw is the
+	// auth-time lookup (unscoped: the caller has not authenticated yet, that IS
+	// what this call resolves) and returns ErrNotFound for unknown, mismatched
+	// AND revoked tokens alike, so the boundary is not an existence oracle.
+	// RevokeAPIToken is principal-scoped when principal is non-empty (the
+	// self-service path; someone else's id is ErrNotFound, not a
+	// distinguishable 403) and revokes ANY token when it is empty (the admin
+	// path). TouchAPIToken is best effort — its error must never fail a request.
+	CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error)
+	GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error)
+	TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) error
+	ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error)
+	ListAPITokens(ctx context.Context) ([]types.APIToken, error)
+	RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error)
+
 	// Capability grants and the per-kind enforcement switch (migration 0042,
 	// store_capabilities.go). These ARE part of Store — unlike RunLayoutStore /
 	// Pager, which stayed out of it precisely so an embedded-nil test double
