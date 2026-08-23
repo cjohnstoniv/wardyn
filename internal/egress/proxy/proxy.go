@@ -540,12 +540,14 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalDenied, host)
 		http.Error(w, "egress denied by policy", http.StatusForbidden)
 		return
 	case egress.Pending:
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
 		return
 	}
@@ -628,12 +630,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalDenied, host)
 		http.Error(w, "egress denied by policy", http.StatusForbidden)
 		return
 	case egress.Pending:
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
 		return
 	}
