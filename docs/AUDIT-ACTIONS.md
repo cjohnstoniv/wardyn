@@ -100,7 +100,7 @@ internal action can rename across releases without notice.
 | `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:346` | **stable** (documented) |
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:347` | **stable** (documented) |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:144` | internal |
-| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:168` | internal |
+| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:177` | internal |
 | `ui.auth` | A UI-sandbox relay session is authorized or denied (see the D14/D27 residuals on this channel) | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:288` | internal |
 | `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:652` | internal |
 | `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:657` | internal |
