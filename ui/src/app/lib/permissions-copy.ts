@@ -163,7 +163,6 @@ export const PERM = {
   ADD_CTA: "Add grant",
   FIELD_WHO: "Who",
   FIELD_CAPABILITY: "Capability",
-  FIELD_VALUE: "Value",
   FIELD_EFFECT: "Effect",
   HINT_USER: "An email address or the sign-in subject id. Either one matches the same person.",
   HINT_GROUP: "A group or app-role name exactly as your identity provider sends it in the token.",
@@ -174,10 +173,6 @@ export const PERM = {
   SNAPSHOT_TITLE: "Groups are read at sign-in",
   SNAPSHOT_BODY:
     "Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request.",
-  SNAPSHOT_STALE:
-    "This member signed in before Wardyn recorded groups, so group grants can't reach them. Grant their user directly, or ask them to sign in again.",
-  SNAPSHOT_TRUNCATED:
-    "This member is in more groups than fit in their session. Grants on the groups shown work; prefer granting an app role or their user directly.",
 
   // A grant is a widened blast radius, not an achievement — this is the
   // one-liner the amber styling exists to carry.
@@ -201,9 +196,6 @@ export const DENIED = {
   // is not capability — so the ungranted rows say why they'll refuse.
   WORKSPACE_CHIP: "Not granted",
   WORKSPACE_BODY: "A run against this workspace is refused at launch. Ask an admin to grant it to you.",
-
-  // New Run: base image.
-  IMAGE_BODY: "You can't name your own base image. Ask an admin to grant the exact image ref.",
 
   // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
   // are count-shaped copy for a preflight/Review surface, and 0.6 ships none:
