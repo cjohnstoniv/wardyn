@@ -139,6 +139,17 @@ type RunPolicySpec struct {
 	// connection until decided). Accepts the legacy boolean on the wire. Inert
 	// under allow-all.
 	FirstUseApproval FirstUseMode `json:"first_use_approval"`
+	// FirstUseHoldSeconds bounds how long a wait_for_review connection is HELD
+	// open awaiting a decision before the proxy refuses it. 0/absent keeps the
+	// built-in 30s default (back-compat); a positive value overrides it. Only
+	// wait_for_review holds; the other first-use modes never hold. See
+	// internal/egress/proxy configureHold.
+	FirstUseHoldSeconds int `json:"first_use_hold_seconds,omitempty"`
+	// MaxHolds caps concurrent wait_for_review holds (one held goroutine per
+	// held connection). 0/absent keeps the built-in 16 default; a positive value
+	// overrides it. The (N+1)th concurrent held connection fails fast rather than
+	// consuming an unbounded goroutine.
+	MaxHolds int `json:"max_holds,omitempty"`
 	// AllowedMethods optionally restricts HTTP methods (empty = all).
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
 	// MinConfinementClass refuses to launch below this class.

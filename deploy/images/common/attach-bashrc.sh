@@ -35,6 +35,11 @@ if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}" ] || [ -f "$HOME/.wardyn/workdir
   unset _wd
 fi
 
+# Egress-refusal hint: a blocked request returns 403 with an X-Wardyn-Egress
+# response header — "approval-pending" means retry once a human approves,
+# "denied" means permanently blocked. `curl -sD- URL` shows it.
+printf '\033[90mℹ egress 403? check the X-Wardyn-Egress header (approval-pending = retry after approval; denied = blocked).\033[0m\n'
+
 # WARDYN_INTERACTIVE_START=agent (CreateRunRequest.interactive_start): the
 # operator asked to land IN the agent CLI rather than at a bare prompt. Placed
 # after the cd above so the agent starts in the prepared workspace, not $HOME.
