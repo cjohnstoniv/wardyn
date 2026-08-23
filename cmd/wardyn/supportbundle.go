@@ -157,14 +157,18 @@ func gatherComposeConfig(path string) ([]byte, string) {
 }
 
 // secretLineRe matches a YAML/env-style "KEY: value" or "KEY=value" line
-// (optionally list-prefixed with "- ") whose key name contains a
-// password/secret/token/dsn/key/credential marker — the same shape both a
-// raw compose file's `environment:` block and `docker compose config`'s
-// resolved output use. Intentionally broad: WARDYN_GROUNDTRUTH_TOKEN_FILE (a
-// file PATH, not a secret) also matches and gets redacted — a false-positive
-// path redaction is a cost worth paying to "refuse to include secret VALUES
-// anywhere".
-var secretLineRe = regexp.MustCompile(`(?i)^(\s*-?\s*)([A-Za-z_][A-Za-z0-9_.]*(?:PASSWORD|SECRET|TOKEN|_DSN|_KEY|CREDENTIAL)[A-Za-z0-9_.]*)(\s*[:=]\s*)(.*)$`)
+// (optionally list-prefixed with "- ", and optionally commented out with
+// "#"/"##") whose key name contains a password/secret/token/dsn/key/
+// credential marker — the same shape both a raw compose file's
+// `environment:` block and `docker compose config`'s resolved output use.
+// The comment prefix matters on the raw-file fallback path (gatherComposeConfig):
+// `docker compose config` itself strips comments, but a support bundle
+// gathered from the file on disk still carries them, and "comment out the
+// old token" is a routine ops pattern — the value must not survive that.
+// Intentionally broad: WARDYN_GROUNDTRUTH_TOKEN_FILE (a file PATH, not a
+// secret) also matches and gets redacted — a false-positive path redaction
+// is a cost worth paying to "refuse to include secret VALUES anywhere".
+var secretLineRe = regexp.MustCompile(`(?i)^(\s*(?:#+\s*)?-?\s*)([A-Za-z_][A-Za-z0-9_.]*(?:PASSWORD|SECRET|TOKEN|_DSN|_KEY|CREDENTIAL)[A-Za-z0-9_.]*)(\s*[:=]\s*)(.*)$`)
 
 // dsnCredsRe is defense-in-depth for a credential embedded in a DSN-shaped
 // value on a line secretLineRe's key check didn't catch (e.g. a comment, or

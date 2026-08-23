@@ -70,6 +70,16 @@ func TestRedactSecrets(t *testing.T) {
 			in:         `      note: see postgres://alice:hunter2@db:5432/x for details`,
 			wantAbsent: []string{"hunter2", "alice:hunter2"},
 		},
+		{
+			name:       "commented-out admin token (raw-file fallback path)",
+			in:         `      # WARDYN_ADMIN_TOKEN: "real-secret-value"`,
+			wantAbsent: []string{"real-secret-value"},
+		},
+		{
+			name:       "double-hash-commented postgres password",
+			in:         `## POSTGRES_PASSWORD=hunter2`,
+			wantAbsent: []string{"hunter2"},
+		},
 	}
 
 	for _, tc := range cases {
