@@ -7,7 +7,7 @@ session — the same one the browser terminal (run detail's "Live terminal" /
 `wardyn attach`) shows. It authenticates registered **public keys only** (no
 passwords) and is **owner-or-admin**: a human may SSH into a run they
 created, or — if their key was registered while they held the admin role —
-into anyone's. That admin half is a registration-time stamp, not a live role
+into anyone's. That admin half is a bounded-stale stamp, not a live role
 check; see [Bounds](#bounds) for the ceiling that comes with it.
 
 The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is
