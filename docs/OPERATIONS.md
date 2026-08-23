@@ -1276,7 +1276,7 @@ Three properties are worth knowing before you run it:
   lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
   cannot see a serving daemon — no wardynd holds a process-lifetime lock — so
   stopping it is **your** step, not one the tool enforces.
-- **All-or-nothing.** Every row is taken `FOR UPDATE` in a single transaction. A
+- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A
   row the current key cannot decrypt aborts the whole thing with an error naming
   that secret and how far it got (`rekey ABORTED after 3 of 9 rows …`), and
   nothing is committed — every secret is still readable with the old key. There

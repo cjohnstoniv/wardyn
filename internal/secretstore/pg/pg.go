@@ -149,12 +149,20 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 // column-encrypting backend has (an OpenBao/KMS store rotates in its own
 // system, not here).
 //
-// ALL-OR-NOTHING. One transaction, and every row is taken FOR UPDATE, so a
-// concurrent Put cannot slip a row in under the old key mid-rotation. Any row
-// that fails to decrypt aborts the whole transaction — the returned error names
-// how many of how many rows had been re-encrypted when it gave up, and nothing
-// is committed, so every secret is still readable with the OLD key. There is no
-// partial-rekey state to reason about, by construction.
+// ALL-OR-NOTHING. One transaction: any row that fails to decrypt aborts the
+// whole thing — the returned error names how many of how many rows had been
+// re-encrypted when it gave up, and nothing is committed, so every secret is
+// still readable with the OLD key. There is no partial-rekey state to reason
+// about, by construction.
+//
+// The FOR UPDATE on the select buys lost-update prevention, NOT exclusivity: it
+// holds the rows it read, so a concurrent Put of one of those names waits and
+// lands AFTER the commit instead of being clobbered by this transaction's
+// re-encryption of the value it replaced. It does NOT keep rows out from under
+// the retired key — under READ COMMITTED a Put of a NEW name inserts straight
+// past these locks, and a queued Put of an existing name still writes its
+// old-key ciphertext once released. That every committed row is readable with
+// newID is carried by the offline requirement below, not by the lock.
 //
 // The caller supplies BOTH identities: the daemon must be offline (its in-memory
 // Store still holds the old one), and the caller is responsible for persisting
