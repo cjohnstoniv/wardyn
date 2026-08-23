@@ -74,7 +74,11 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     id: "model-provider",
     label: "Model provider only",
     hint: "One host, one proxy-injected API key. Nothing else is reachable.",
-    // examples/policies/ci-claude-llm.json, minus its auto_stop_after_sec.
+    // examples/policies/ci-claude-llm.json, auto_stop included: this is the one
+    // template carrying a minted credential, so the source's idle cap matters
+    // MOST here — without it a non-interactive run holds the key forever and
+    // preflight grades it RiskHigh. Idle-stop only fires after a genuinely
+    // silent hour (lifecycle TouchDebounce keeps active sessions alive).
     spec: {
       allowed_domains: ["api.anthropic.com"],
       denied_domains: [],
@@ -82,6 +86,7 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
       first_use_approval: "always_deny",
       allowed_methods: [],
       min_confinement_class: "CC1",
+      auto_stop_after_sec: 3600,
       eligible_grants: [
         {
           kind: "api_key",

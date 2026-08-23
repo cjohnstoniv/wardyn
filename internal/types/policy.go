@@ -145,10 +145,10 @@ type RunPolicySpec struct {
 	MinConfinementClass ConfinementClass `json:"min_confinement_class"`
 	// EligibleGrants is the ceiling of credential scopes a run may request.
 	EligibleGrants []GrantSpec `json:"eligible_grants,omitempty"`
-	// AutoStopAfter stops idle sandboxes (seconds, 0 = platform default). A
-	// NEGATIVE value disables idle reaping ("never reap") — this is what an
-	// interactive run (which comes up idle, awaiting a human attach) should use,
-	// or the reaper will stop it as soon as it looks idle.
+	// AutoStopAfter stops idle sandboxes after this many seconds. 0 — which is
+	// also what an ABSENT field coalesces to — means never reaped, identical to
+	// an explicit negative (see internal/lifecycle: the reaper skips <= 0). A
+	// negative value exists only to state never-reap intent explicitly.
 	AutoStopAfterSec int `json:"auto_stop_after_sec,omitempty"`
 	// WorkspaceMounts are OPERATOR/ADMIN-controlled host bind mounts injected
 	// into the sandbox (e.g. a host repo at ~/work that edits persist to). They

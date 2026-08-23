@@ -46,10 +46,12 @@ describe("PolicyPanel — templates", () => {
     }
   });
 
-  it("only the CI baseline carries auto_stop_after_sec (3600); every other template omits it", () => {
+  it("templates carry auto_stop_after_sec only where the source example has a real value", () => {
     for (const t of POLICY_TEMPLATES) {
       const parsed = JSON.parse(templateText(t)) as RunPolicySpec;
-      if (t.id === "ci") {
+      if (t.id === "ci" || t.id === "model-provider") {
+        // ci.json and ci-claude-llm.json both set a real idle cap — and
+        // model-provider is the one template holding a minted credential.
         expect(parsed.auto_stop_after_sec).toBe(3600);
       } else {
         // OMITTED, not 0 and not -1 — absent already means "never reaped".

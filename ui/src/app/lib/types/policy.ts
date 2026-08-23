@@ -37,6 +37,8 @@ export interface WorkspaceMount {
 export interface WorkspaceRepo {
   repo: string;
   target?: string;
+  // Branch/tag/SHA to check out; omitted => the repo's default branch.
+  ref?: string;
 }
 
 // SUBSCRIPTION_OAUTH_SECRET is the sentinel secret name (mirrors

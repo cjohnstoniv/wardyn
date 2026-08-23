@@ -48,6 +48,72 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
   });
 }
 
+type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
+  interactive?: boolean;
+  inline_policy?: RunPolicySpec;
+  // Per-run half of the requirements contract: which optional requirements
+  // this run enables, plus any read-only narrowing, per attached workspace.
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+  // Primary-workspace id for a selection that resolves to no mount/repo (a
+  // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
+  // the server's seedRequestWorkspace, which the mount-less spec can't.
+  workspace_id?: string;
+  // Explicit model-access override — tier 1 of the server's resolution chain.
+  integration_id?: string;
+};
+
+// The ONE projection from wizard input to the POST /runs wire body. createRun
+// and preflightRun both send exactly this — a field added here reaches both, a
+// field missed here reaches neither, and the two verdicts can never drift.
+// (They used to be two hand-built whitelists; preflight's lagged by five fields.)
+function runWireBody(input: RunWireInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    agent: input.agent,
+    repo: input.repo,
+    task: input.task,
+  };
+  if (input.policy_id) body.policy_id = input.policy_id;
+  // A run may request an equal-or-STRONGER tier than its policy floor, never a
+  // weaker one (the server 422s "confinement_class X is weaker than the policy
+  // minimum Y"). Defensively raise a requested class UP to the inline policy's
+  // floor so a stale/edited selection can never produce that rejection — clamping
+  // up only ever strengthens confinement, so it is always safe.
+  let cc = input.confinement_class;
+  const floor = input.inline_policy?.min_confinement_class;
+  if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
+  if (cc) body.confinement_class = cc;
+  if (input.interactive) body.interactive = true;
+  if (input.inline_policy) body.inline_policy = input.inline_policy;
+  // BYOI + governed-command pass-through — previously dropped on the floor here.
+  if (input.image) body.image = input.image;
+  if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+  // The run's name/note and the interactive start choice — same lesson as the
+  // two above: this whitelist is hand-built, so an unlisted field is discarded
+  // between the form and the wire with no error anywhere. The title the
+  // operator typed would simply never exist.
+  if ("title" in input && input.title) body.title = input.title;
+  if ("description" in input && input.description) body.description = input.description;
+  if ("interactive_start" in input && input.interactive_start) {
+    body.interactive_start = input.interactive_start;
+  }
+  // The boot-seed opt-in and the autonomous tool-approval posture — same
+  // hand-built-whitelist trap as everything else on this list: an unlisted
+  // field is silently discarded between the form and the wire.
+  if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
+  if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
+  // Composition-model pass-through. This whitelist has dropped a wizard field
+  // on the floor once before (image/task_mode, above) — a selection the
+  // operator made, silently discarded between the form and the wire. These
+  // two carry the per-run half of the requirements contract (which optional
+  // requirements this run enables, and any read-only narrowing) and the
+  // explicit model-access override, so dropping them would launch a run the
+  // Review screen did not describe.
+  if (input.workspaces?.length) body.workspaces = input.workspaces;
+  if (input.workspace_id) body.workspace_id = input.workspace_id;
+  if (input.integration_id) body.integration_id = input.integration_id;
+  return body;
+}
+
 export const runs = {
   // GET /api/v1/runs
   async listRuns(): Promise<AgentRun[]> {
@@ -86,66 +152,8 @@ export const runs = {
   // active run) — the run still launched; callers surface warnings without
   // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
   // callbacks keep working.
-  async createRun(
-    input: (Partial<AgentRun> | CreateRunInput) & {
-      interactive?: boolean;
-      inline_policy?: RunPolicySpec;
-      // Per-run half of the requirements contract: which optional requirements
-      // this run enables, plus any read-only narrowing, per attached workspace.
-      workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
-      // Primary-workspace id for a selection that resolves to no mount/repo (a
-      // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
-      // the server's seedRequestWorkspace, which the mount-less spec can't.
-      workspace_id?: string;
-      // Explicit model-access override — tier 1 of the server's resolution chain.
-      integration_id?: string;
-    },
-  ): Promise<CreateRunResult> {
-    const body: Record<string, unknown> = {
-      agent: input.agent,
-      repo: input.repo,
-      task: input.task,
-    };
-    if (input.policy_id) body.policy_id = input.policy_id;
-    // A run may request an equal-or-STRONGER tier than its policy floor, never a
-    // weaker one (the server 422s "confinement_class X is weaker than the policy
-    // minimum Y"). Defensively raise a requested class UP to the inline policy's
-    // floor so a stale/edited selection can never produce that rejection — clamping
-    // up only ever strengthens confinement, so it is always safe.
-    let cc = input.confinement_class;
-    const floor = input.inline_policy?.min_confinement_class;
-    if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
-    if (cc) body.confinement_class = cc;
-    if (input.interactive) body.interactive = true;
-    if (input.inline_policy) body.inline_policy = input.inline_policy;
-    // BYOI + governed-command pass-through — previously dropped on the floor here.
-    if (input.image) body.image = input.image;
-    if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
-    // The run's name/note and the interactive start choice — same lesson as the
-    // two above: this whitelist is hand-built, so an unlisted field is discarded
-    // between the form and the wire with no error anywhere. The title the
-    // operator typed would simply never exist.
-    if ("title" in input && input.title) body.title = input.title;
-    if ("description" in input && input.description) body.description = input.description;
-    if ("interactive_start" in input && input.interactive_start) {
-      body.interactive_start = input.interactive_start;
-    }
-    // The boot-seed opt-in and the autonomous tool-approval posture — same
-    // hand-built-whitelist trap as everything else on this list: an unlisted
-    // field is silently discarded between the form and the wire.
-    if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
-    if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
-    // Composition-model pass-through. This whitelist has dropped a wizard field
-    // on the floor once before (image/task_mode, above) — a selection the
-    // operator made, silently discarded between the form and the wire. These
-    // two carry the per-run half of the requirements contract (which optional
-    // requirements this run enables, and any read-only narrowing) and the
-    // explicit model-access override, so dropping them would launch a run the
-    // Review screen did not describe.
-    if (input.workspaces?.length) body.workspaces = input.workspaces;
-    if (input.workspace_id) body.workspace_id = input.workspace_id;
-    if (input.integration_id) body.integration_id = input.integration_id;
-    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
+  async createRun(input: RunWireInput): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
     return asJson<CreateRunResult>(res);
   },
 
@@ -156,35 +164,11 @@ export const runs = {
   // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
   // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
   // error as a quiet "preflight unavailable" and never block Review.
-  async preflightRun(
-    input: (Partial<AgentRun> | CreateRunInput) & {
-      interactive?: boolean;
-      inline_policy?: RunPolicySpec;
-      workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
-      workspace_id?: string;
-      integration_id?: string;
-    },
-  ): Promise<PreflightResult> {
-    const body: Record<string, unknown> = {
-      agent: input.agent,
-      repo: input.repo,
-      task: input.task,
-    };
-    if (input.policy_id) body.policy_id = input.policy_id;
-    let cc = input.confinement_class;
-    const floor = input.inline_policy?.min_confinement_class;
-    if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
-    if (cc) body.confinement_class = cc;
-    if (input.interactive) body.interactive = true;
-    if (input.inline_policy) body.inline_policy = input.inline_policy;
-    // Mirror createRun's body exactly, so preflight's verdict matches the real launch.
-    if (input.image) body.image = input.image;
-    if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
-    // Same rationale as createRun's identical whitelist above — see its comment.
-    if (input.workspaces?.length) body.workspaces = input.workspaces;
-    if (input.workspace_id) body.workspace_id = input.workspace_id;
-    if (input.integration_id) body.integration_id = input.integration_id;
-    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });
+  async preflightRun(input: RunWireInput): Promise<PreflightResult> {
+    const res = await wfetch("/runs/preflight", {
+      method: "POST",
+      body: JSON.stringify(runWireBody(input)),
+    });
     return asJson<PreflightResult>(res);
   },
 
