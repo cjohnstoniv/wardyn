@@ -133,6 +133,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":                           {class: classAdmin},
 	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
 	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
+	// The audit hash-chain sweep, unlike the two /audit READS below: its
+	// verdict counts every row in the deployment, which is whole-fleet audit
+	// volume — the disclosure that keeps /metrics admin-gated too.
+	"GET /api/v1/audit/chain/verify": {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
