@@ -24,7 +24,10 @@
 #     CONNECT tunnel with resident creds).
 
 # ── Stage 1: Go builder ───────────────────────────────────────────────────────
-FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
+# --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
+# $TARGETARCH below. Every binary here is pure Go (CGO_ENABLED=0), so this stage
+# never needs QEMU. Stage 2 does (apt + npm run as the target arch).
+FROM --platform=$BUILDPLATFORM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 
 WORKDIR /build
 
@@ -49,10 +52,13 @@ RUN go mod download
 # Full source tree needed to build the two binaries.
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan ./cmd/wardyn-scan \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
+# TARGETARCH is BuildKit's automatic per-target ARG; empty under the legacy
+# builder, and `GOARCH=` empty is how Go spells "use the default".
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./cmd/wardyn-rec \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
@@ -129,12 +135,21 @@ ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 # with scripts/stage-agent-binary.sh), else downloaded checksum-verified from the
 # official downloads.claude.ai surface (the ONLY host that path needs reachable
 # through the corp proxy). See docs/adoption/corp-image-authoring.md "Native-binary agent installs".
+#
+# CLAUDE_CODE_VERSION is a PINNED exact version, not a channel — a released
+# agent image must be reproducible, and a floating `stable`/`latest` means two
+# builds of the same git tag ship different agents (D3, supply chain). The SAME
+# value drives BOTH install paths: npm takes it as the version specifier, and
+# the native path passes a bare semver straight through as a release id (its
+# `stable|latest` arm below resolves a channel and is what a deliberate opt-out
+# would name). Bump it deliberately, exactly like AWS_CLI_VERSION in the
+# sibling aws-sso image.
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CLAUDE_INSTALL=npm
-ARG CLAUDE_CODE_VERSION=stable
+ARG CLAUDE_CODE_VERSION=2.1.231
 ARG TARGETARCH
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).
@@ -166,7 +181,8 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g @anthropic-ai/claude-code; \
+        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
+        echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
     fi
 
 # The node:22-bookworm-slim base image ships a `node` user at uid=1000.
