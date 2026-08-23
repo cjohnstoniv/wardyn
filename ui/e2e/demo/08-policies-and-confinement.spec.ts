@@ -22,13 +22,12 @@
  *   confinement_substrates: {CC1: oci/runc, CC2: oci/runsc, CC3: oci/kata}
  * so all three columns read "Ready" and the top-bar chip is VAULT (not Fence)
  * — no tier is un-buildable here, so B4 can no longer just let the New Run
- * wizard's resolveDefaultCc float this run up to the host's strongest class
- * and call that "the floor holding". Instead B4 DRIVES it: picks Fence
- * explicitly (below the policy's own Wall floor) with the policy attached,
- * films what the app does with that contradiction, then re-attaches through
- * the Saved-policy combobox — which cannot raise the request past the floor
- * (new-run-screen.tsx:674-690) — so the run that actually launches is pinned
- * at Wall, not wherever this host's default happens to sit.
+ * screen's resolveDefaultCc float this run up to the host's strongest class
+ * and call that "the floor holding". Instead B4 DRIVES it: rings Fence, which
+ * the Barrier Seg has DISABLED beneath the attached policy's Wall floor (and
+ * says so in its own reason line), then clicks Wall — the weakest tier the
+ * floor still allows — so the run that actually launches is pinned at Wall,
+ * not wherever this host's default happens to sit.
  *
  * So nothing below names a tier or a status the host might contradict, with
  * one deliberate exception (next paragraph):
@@ -47,8 +46,23 @@
  *     loud (see below).
  * The two labels this file DOES hardcode are "Fence" and "Wall": the floor of
  * the policy IT AUTHORS (min_confinement_class: CC2), and the weaker tier B4
- * deliberately clicks against it. Both are our own spec and our own choice of
- * click — never a claim about what the host can build.
+ * deliberately rings against it. Both are our own spec and our own choice of
+ * click — never a claim about what the host can build. (beforeAll does assert
+ * this host can BUILD CC2, because B4 clicks Wall for real; without it a
+ * CC2-less host would park act() on a disabled button for 45s.)
+ *
+ * ── WHAT THE POLICY SURFACE CHANGED HERE ───────────────────────────────────
+ * This episode's premise — "two surfaces authoring one object" — is now the
+ * product's own answer: /policies' editor body and /runs/new's Policy card are
+ * the SAME component (wardyn/policy-panel.tsx). So B2 films what that bought:
+ * the template chips the editor now opens with, and the helper rail that
+ * documents every key. B3/B4's saved-policy path is unchanged in intent, and
+ * changed in exactly two mechanics: "Saved policy" is a mode-row OptionCard
+ * (an aria-pressed <button>, not a radio), and the barrier FLOOR is now
+ * enforced by DISABLING every tier below it on the Seg — a standing refusal
+ * with its own reason line, where the old screen detached the policy the
+ * moment you touched the tier. That is B4's floor beat, and it is stronger
+ * footage than either branch the old file had to hedge between.
  *
  * KEYLESS, and by choice rather than by the plan (whose STAGING line says
  * "model pre-connected (no rail warning)"). B3 picks "Shell command", so this
@@ -64,28 +78,33 @@
  * button is ENABLED before clicking it, so a take accidentally shot against an
  * SSO stack fails loudly here instead of clicking a dead control for 45s.
  *
- * FRICTION NOTES, RE-VERIFIED AGAINST SOURCE (2026-08-18). Three of the plan's
- * four Track-A findings for this video are FIXED on this branch:
- *   (1) FIXED — new-run-screen.tsx:355-366: the launch payload is gated on the
- *       confinement RADIO (`confinement === "saved" && state.selectedPolicyId`),
- *       not a stale selectedPolicyId alone; patch() also detaches the id on any
- *       envelope edit (:243-258).
- *   (2) FIXED — the rail HAS a Policy section now (:809-822): it names the
- *       stored policy, its barrier floor and its host count, and hides the
- *       wizard's own Network section beneath it ("The network edits on this
- *       page do not apply to it."). The plan's B3 camera direction — "camera
- *       stays on the select, rail does NOT reflect saved policies today" — is
+ * FRICTION NOTES, RE-VERIFIED AGAINST SOURCE (2026-08-23, after the shared
+ * policy panel landed). Three of the plan's four Track-A findings for this
+ * video are FIXED on this branch:
+ *   (1) FIXED — the launch payload is gated on the MODE ROW
+ *       (`useSaved && state.selectedPolicyId`, new-run-screen.tsx's
+ *       buildRunInput), not a stale selectedPolicyId alone. What detaches has
+ *       narrowed to exactly one trigger — EDITING THE SPEC TEXT — because the
+ *       tier that used to detach the policy is now simply disabled instead
+ *       (see B4).
+ *   (2) FIXED — the rail HAS a Policy section: it names the stored policy, its
+ *       barrier floor and its host count, and says the page's own edits are
+ *       not merged into it ("It launches by reference, so nothing on this page
+ *       is merged into it."). The plan's B3 camera direction — "camera stays
+ *       on the select, rail does NOT reflect saved policies today" — is
  *       therefore OBSOLETE, and B3 below spotlights the rail instead.
- *   (3) STILL LIVE — policies.tsx:70-75's STARTER_SPEC floors at CC2. B2 never
- *       edits it: it PASTES a prepared CC1 spec over the whole textarea with
- *       .fill(), which replaces the value in one call exactly like a real
- *       clipboard paste. B2 then asserts the SAVED row's barrier chip reads
- *       Fence — if the paste ever silently failed, the starter's Wall would be
- *       on the row and the take dies there rather than three beats later.
- *   (4) FIXED — new-run-screen.tsx:281 re-resolves the persisted default
- *       against the host's REAL class list, so Settings' "saved as your default
- *       barrier" promise now holds here too. It is also why this run lands at
- *       the strongest tier rather than CC1 (see the block above).
+ *   (3) STILL LIVE — the editor's STARTER_SPEC floors at CC2 (it IS the
+ *       panel's Minimal template now, policies.tsx's one-const re-export). B2
+ *       never edits it in place: it clicks a TEMPLATE CHIP and then PASTES the
+ *       prepared spec over the whole textarea with .fill(), which replaces the
+ *       value in one call exactly like a real clipboard paste. The chip is
+ *       deliberately NOT Minimal — that is what the dialog already prefills,
+ *       so clicking it would be a dead click on camera.
+ *   (4) FIXED — the screen re-resolves the persisted default against the
+ *       host's REAL class list, so Settings' "saved as your default barrier"
+ *       promise holds here too. Picking a policy only ever UP-clamps that
+ *       default, never lowers it, which is why B4 clicks Wall for real
+ *       instead of expecting the pick to have settled the run there.
  *
  * PACING. One stretch of this video is nothing but waiting on a container: B4's
  * launch (POST /runs dispatches SYNCHRONOUSLY, so the navigate does not happen
@@ -137,7 +156,7 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { act, beat, caption, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
@@ -159,13 +178,18 @@ test.describe.configure({ mode: "serial" });
 const POLICY_NAME = "nightly-triage";
 
 /**
- * The prepared spec B2 PASTES. Four fields, matching the SAY line "The spec is
- * four fields." exactly — and min_confinement_class is CC2 ON PURPOSE: B4
- * explicitly picks the weaker Fence (CC1) with this policy attached so the
- * app's own refusal of that contradiction is what gets filmed, then re-attaches
- * to launch clean (file header). It also now equals policies.tsx's CC2-floored
- * STARTER_SPEC (friction 3) — B2's paste-proof below leans on the egress-domain
- * count to catch a failed paste, since the floor alone no longer can.
+ * The prepared spec B2 PASTES. Four fields — and min_confinement_class is CC2
+ * ON PURPOSE: it is the floor B4 films the Barrier Seg refusing to go below.
+ * (An older comment here claimed a SAY line "The spec is four fields."; no
+ * such line exists in the owner's script — episodes-03-12-scripts-current.md's
+ * Episode 08 §B2 — so nothing spoken depends on the field count. The count
+ * still matters to the VERIFIER, which asserts these exact four values:
+ * scripts/verify-demo-take.sh's V08_POL_* checks.)
+ *
+ * The paste-proof leans on the egress-domain count: B2 clicks the "Package
+ * registries" template chip first (eleven hosts), so a paste that silently
+ * failed leaves eleven on the row instead of two. The floor chip alone cannot
+ * tell the two specs apart — that template floors at CC2 as well.
  */
 const POLICY_SPEC = {
   allowed_domains: ["github.com", "npmjs.org"],
@@ -336,6 +360,15 @@ test.beforeAll(async () => {
   for (const cc of hostClasses) {
     expect(hostNames[cc], `/healthz names no display label for ${cc}`).toBeTruthy();
   }
+  // B4 CLICKS the policy's own floor tier for real (the Seg disables
+  // everything below it, so Wall is the weakest tier still on offer). A host
+  // that cannot build CC2 would leave that button disabled for a
+  // host-capability reason instead, and act() would park on it for the full
+  // 45s action timeout — fail here, by name, instead.
+  expect(
+    hostClasses,
+    `this host cannot build CC2 (${POLICY_FLOOR_LABEL}) — the policy this video authors floors there, and B4 clicks it`,
+  ).toContain("CC2");
 
   const res = await page.request.get("/api/v1/policies", { headers });
   expect(res.ok(), `GET /api/v1/policies failed (${res.status()})`).toBe(true);
@@ -499,23 +532,66 @@ test("B2 — create a policy", async () => {
   await nameBox.fill(POLICY_NAME);
   await spotlight(page, null);
 
-  // PASTE, never edit the CC2-floored STARTER_SPEC in place — friction (3) in
-  // the file header. fill() replaces the textarea's whole value in one call,
-  // functionally identical to a clipboard paste; it never keystrokes over the
-  // prefilled starter, so no intermediate half-edited spec is ever on screen.
+  // ── THE TEMPLATE GALLERY ──────────────────────────────────────────────
+  // New with the shared panel, and the reason this episode's premise is now
+  // the product's own fix: the editor opens on a real starting spec, and a
+  // row of chips swaps in the other worked ones (policy-panel.tsx's
+  // POLICY_TEMPLATES, seeded from examples/policies/*.json). "Package
+  // registries" is the pick because it VISIBLY rewrites the document — the
+  // dialog already prefills with Minimal, so a Minimal click would be a dead
+  // one — and because its own floor is CC2, the floor this policy keeps.
+  const templateRow = dlg.getByText("Start from a template");
+  await spotlight(page, templateRow);
+  // DIALOG-NEW-BEAT: the chips have no line in the owner's script — they did
+  // not exist when it was written. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "Start from a template.");
+  await beat(page, BEAT_SHORT);
+  await act(page, dlg.getByRole("button", { name: "Package registries" }));
+
+  // PASTE, never keystroke over the template — friction (3) in the file
+  // header. fill() replaces the textarea's whole value in one call,
+  // functionally identical to a clipboard paste, so no intermediate
+  // half-edited spec is ever on screen.
   const specBox = dlg.getByLabel("Spec (JSON)");
   await spotlight(page, specBox);
   await specBox.fill(JSON.stringify(POLICY_SPEC, null, 2));
+
+  // The panel's LIVE derivations, re-read on every keystroke — so the paste
+  // is proven here, on camera, instead of three beats later on the saved
+  // row: the template put eleven hosts in this chip a moment ago.
+  const egressChip = dlg.getByText(POLICY_EGRESS_SUMMARY, { exact: true });
+  await expect(
+    egressChip,
+    "the panel does not read '2 domains allowed' — the paste never replaced the template",
+  ).toBeVisible();
+  await spotlight(page, egressChip);
   await caption(page, "We'll give this one two allowed hosts.");
   await beat(page, PACE.read);
+  await spotlight(page, specBox);
   await caption(page, "Everything else should require a decision.");
   await beat(page, PACE.read);
 
-  // SCREEN: Policy JSON — camera stays on the spec box for the field walk.
+  // SCREEN: Policy JSON — the field walk, which now has somewhere to point.
+  // The panel's helper rail documents every key of RunPolicySpec with its
+  // legal values (policy-panel.tsx's FIELD_HELP), so the owner's two "this
+  // setting / this one" lines land on the two fields they are about. Each row
+  // is located by its own "Insert <key>" button (a unique aria-label) rather
+  // than the key text, which also appears inside the textarea above.
+  const railEntry = (key: string) =>
+    dlg.getByRole("button", { name: `Insert ${key}` }).locator("xpath=ancestor::li[1]");
+  const firstUse = railEntry("first_use_approval");
+  await centerInFrame(firstUse); // S2: the dialog scrolls; keep it off the caption bar
+  await spotlight(page, firstUse);
   await caption(page, "This setting controls that behavior.");
   await beat(page, PACE.read);
+  const floorField = railEntry("min_confinement_class");
+  await centerInFrame(floorField);
+  await spotlight(page, floorField);
   await caption(page, "And this one sets the minimum confinement level.");
   await beat(page, PACE.read);
+  // The floor BADGE — the panel's own derived chip, not the raw JSON.
+  await spotlight(page, dlg.getByText(POLICY_FLOOR_LABEL, { exact: true }).first());
   await caption(page, "Think of it as the floor.");
   await beat(page, BEAT_SHORT);
   await caption(page, "The policy can require a stronger barrier than the machine's default.");
@@ -594,35 +670,40 @@ test("B3 — use it", async () => {
   await cmdBox.fill(DEMO_COMMAND);
   await spotlight(page, null);
 
-  await act(page, page.getByRole("radio", { name: /^Saved policy/ }), "Select saved policy.");
+  // "Saved policy" is the Policy panel's MODE ROW now, not a radio: an
+  // OptionCard, which is an aria-pressed <button> whose accessible name is
+  // its title plus its hint line — so prefix-match the title (same shape, and
+  // the same trap, as the Add-workspace dialog's cards). The picker itself
+  // only renders once this half of the row is lit.
+  await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Select saved policy.");
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
 
   // FRICTION (2), NOW FIXED — and this is the beat the plan could not have: the
-  // rail no longer describes wizard state a saved-policy launch would drop. It
+  // rail no longer describes screen state a saved-policy launch would drop. It
   // names the STORED policy, its own floor and its own host count, and says
-  // outright that this page's network edits do not apply. Scoped to the rail
+  // outright that nothing on this page is merged into it. Scoped to the rail
   // (the sidebar is an <aside> too; only this one carries its heading), because
   // the policy's name is also showing in the Select trigger to the left.
   const rail = page.locator("aside").filter({ hasText: "What this run can do" });
   await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
   const railPolicy = rail.getByText(/^The stored spec governs this run/);
   await expect(railPolicy).toBeVisible();
-  // The stored spec's OWN facts, echoed by the rail — not the wizard's. Not
+  // The stored spec's OWN facts, echoed by the rail — not the screen's. Not
   // narrated directly (the owner's B3 line stays at the higher-level
   // distinction below), but still proven: a claim silently dropped from the
   // rail would otherwise ship undetected.
   await expect(railPolicy).toContainText(`barrier floor ${POLICY_FLOOR_LABEL}`);
   await expect(railPolicy).toContainText("2 hosts allowed");
-  await expect(railPolicy).toContainText("The network edits on this page do not apply to it.");
+  await expect(railPolicy).toContainText("It launches by reference, so nothing on this page is merged into it.");
 
   await spotlight(page, rail);
   await caption(page, "And here's the important distinction.");
   await beat(page, PACE.read);
-  // INERT-BUT-LIT (Sam/Priya/Dana, product finding (d) for the ledger): the
-  // LEFT form still shows Network radios and Barrier chips selected/enabled
-  // here too. Barrier still sets this run's requested class, which B4 proves
-  // by deliberately picking a weaker one.
+  // The left column now shows the PICKER in place of the spec textarea — the
+  // panel hides the document it isn't going to send — while the Barrier Seg
+  // stays live below it, because the run's requested class is a separate wire
+  // field from the policy's floor. B4 films exactly where those two meet.
   const barrierRail = rail.getByText("Barrier", { exact: true }).locator("xpath=..");
   await spotlight(page, barrierRail);
   await caption(page, "The sandbox is the wall around the workload.");
@@ -644,86 +725,80 @@ test("B4 — launch, effective policy", async () => {
   const page = stage();
 
   const rail = page.locator("aside").filter({ hasText: "What this run can do" });
-  // The rail's launch-error line — the only danger-toned paragraph on this
-  // screen (new-run-screen.tsx:933-938), and it renders the control plane's own
-  // message verbatim. Raced against the navigate below so a refused launch
-  // fails in a second with a cause, instead of a 3-minute URL timeout at the
-  // end of an otherwise-finished take.
-  const launchError = rail.locator("p.text-danger");
+  // The rail's launch-error line (new-run-screen.tsx's `error &&` paragraph),
+  // which renders the control plane's own message verbatim. Raced against the
+  // navigate below so a refused launch fails in a second with a cause, instead
+  // of a 3-minute URL timeout at the end of an otherwise-finished take.
+  // `.first()`: the rail grew a SECOND danger-toned paragraph for preflight
+  // errors, and this video never clicks Preflight — DOM order keeps the launch
+  // one, and a strict-mode violation can no longer happen if it ever does.
+  const launchError = rail.locator("p.text-danger").first();
 
   // ── THE FLOOR, FILMED ─────────────────────────────────────────────────
   // The one claim in eight videos delivered without footage, per all four
-  // personas. B3 left the policy attached at whatever barrier this host
-  // defaults to (Vault, today — file header). Pick the weaker Fence
-  // explicitly, with the policy still attached, and see what the app does
-  // with the contradiction.
+  // personas — and it is now a STANDING refusal instead of a race. The
+  // Barrier Seg disables every tier below the attached policy's floor and
+  // prints its own reason line for each one (new-run-screen.tsx's floor
+  // block), so Fence is greyed the moment B3 picked nightly-triage. The old
+  // detach-on-edit that used to make this a two-branch gamble is GONE: the
+  // spec text is the only thing that detaches a policy now.
   //
-  // REHEARSAL-VERIFY (read against new-run-screen.tsx as of 2026-08-20, not
-  // yet confirmed live): patch() (:234-254) detaches selectedPolicyId on ANY
-  // edit to confinementClass while a policy is attached, including this
-  // click — so the Fence radio's own `disabled` prop (host-capability only,
-  // :714) is NOT the signal that matters here; it reads enabled on this host
-  // (all three tiers build) and clicking it anyway drops the policy rather
-  // than reaching Launch with the contradiction intact. That IS the floor
-  // being enforced — just client-side instead of over the wire — and is
-  // filmed as the clamp. Branch on what actually happened (whether the
-  // rail's Policy section survived) rather than on the radio's disabled
-  // state: if it's gone, film the clamp; if a future change to patch()
-  // leaves it attached, Launch is attempted for real and raced against
-  // launchError for the 422/400 body — the original plan. Either branch
-  // re-attaches before the real Launch below, because B4's own assertions
-  // need this beat's exploration to end with the run still governed by
-  // createdPolicyId, not an inline stand-in.
-  const fenceRadio = page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: "Fence" });
-  await act(page, fenceRadio, "Select Fence.");
+  // So this beat RINGS Fence rather than clicking it. Clicking a disabled
+  // button would park act() on it for the full 45s action timeout, and there
+  // would be nothing to see at the end of the wait.
+  const barrier = page.getByRole("radiogroup", { name: "Barrier" });
+  const fenceRadio = barrier.getByRole("radio", { name: "Fence" });
+  await centerInFrame(fenceRadio);
+  await spotlight(page, fenceRadio);
+  // DIALOG-STALE(no click left to make): the owner's SAY-ON-CLICK "Select
+  // Fence." and this line both narrated PICKING the weaker tier. The form no
+  // longer offers it while a CC2-floored policy is attached — the refusal is
+  // now visible before the click instead of after it. The "Select Fence."
+  // click line is dropped (no control to click); this line rides the ring on
+  // the disabled tier. See local/heavy-episodes-dialog-proposals.md.
   await caption(page, "Now we'll deliberately choose a barrier below the policy's minimum.");
   await beat(page, PACE.read);
+  await expect(
+    fenceRadio,
+    "Fence is selectable beneath the policy's CC2 floor — the floor is not being enforced on the form",
+  ).toBeDisabled();
 
-  const stillAttached = await rail
-    .getByText(POLICY_NAME, { exact: true })
-    .isVisible()
-    .catch(() => false);
-
-  if (stillAttached) {
-    await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
-    await spotlight(page, launchError);
-    await expect(
-      launchError,
-      "the contradiction reached Launch but the control plane let it through",
-    ).toBeVisible({ timeout: 30_000 });
-    await caption(page, "And Wardyn refuses to start it.");
-    await beat(page, PACE.read);
-    await caption(page, "The policy requires a stronger floor.");
-    await beat(page, PACE.read);
-    await caption(page, "So the control plane says no.");
-    await beat(page, PACE.read + 400);
-    await spotlight(page, null);
-  } else {
-    await spotlight(page, fenceRadio);
-    // ADAPTED (clamp branch): owner line was "And Wardyn refuses to start it."
-    // On this host the Fence click detaches the policy client-side (patch()
-    // drops selectedPolicyId on any confinementClass edit, new-run-screen.tsx)
-    // instead of reaching Launch with the contradiction intact, so there is no
-    // refused Launch to film — the clamp itself IS the refusal.
-    await caption(page, "And Wardyn won't hold that combination — the policy just let go of the run.");
-    await beat(page, PACE.read);
-    await caption(page, "The policy requires a stronger floor.");
-    await beat(page, PACE.read);
-    // ADAPTED (clamp branch): owner line was "So the control plane says no."
-    await caption(page, "Below that floor, this form won't even launch it governed.");
-    await beat(page, PACE.read + 400);
-    await spotlight(page, null);
-  }
-
-  // Re-attach (or confirm) the policy so the launch below is the governed run
-  // B2/B3 built, not an inline stand-in. The picker cannot land the request
-  // above the policy's own floor (:674-690), so this also settles the run at
-  // Wall — "leave the clamp" rather than chase Vault back.
-  await act(page, page.getByRole("combobox", { name: "Saved policy" }));
-  await act(page, page.getByRole("option", { name: POLICY_NAME }));
-  await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
-  await caption(page, "Now choose a barrier that meets the floor.");
+  // The Seg's OWN reason line for a floor-disabled tier — distinct from the
+  // "isn't installed on this host" line, which would be a lie about a tier
+  // this host builds fine. Hardcoded labels, same rule as the file header:
+  // both are OUR policy's floor and OUR choice of tier, never a claim about
+  // the host.
+  const floorReason = page.getByText(`Fence is below the policy's floor (${POLICY_FLOOR_LABEL}).`);
+  await expect(
+    floorReason,
+    "the Seg disables Fence without saying why — the floor is enforced but not explained",
+  ).toBeVisible();
+  await spotlight(page, floorReason);
+  // DIALOG-STALE(nothing is started, and nothing is refused at launch): the
+  // refusal happens on the form now, before any request exists.
+  await caption(page, "And Wardyn refuses to start it.");
   await beat(page, PACE.read);
+  await caption(page, "The policy requires a stronger floor.");
+  await beat(page, PACE.read);
+  // DIALOG-STALE(the control plane is never asked): the run below the floor
+  // cannot be composed, so no 422 is ever raised. The server check still
+  // exists (runs_create.go) — it is simply no longer what the viewer sees.
+  await caption(page, "So the control plane says no.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  // The owner's next line, and now a REAL click: Wall is the policy's own
+  // floor and the weakest tier the Seg still offers. It is also what pins
+  // this run — picking a policy only ever UP-clamps the requested class, so
+  // without this click the run would launch at whatever this host defaults
+  // to (Vault today) and the floor would never have bitten on camera.
+  await act(page, barrier.getByRole("radio", { name: POLICY_FLOOR_LABEL }), "Now choose a barrier that meets the floor.");
+  // The barrier is a separate wire field from the policy's floor, so changing
+  // it must NOT detach the policy — the whole reason the old detach died.
+  await expect(
+    rail.getByText(POLICY_NAME, { exact: true }),
+    "the policy detached when the barrier changed — this run would launch inline, not by reference",
+  ).toBeVisible();
 
   // SPRINT: nothing spoken between here and the wait, because everything from
   // here IS the wait.
@@ -785,11 +860,10 @@ test("B4 — launch, effective policy", async () => {
 
   // The barrier the control plane ENFORCED, named by the server's own map —
   // read off the wire rather than hardcoded. Expect "Wall": the floor beat
-  // above re-attaches the policy through the Saved-policy combobox, which
-  // raises confinementClass no higher than the policy's own floor
-  // (new-run-screen.tsx:674-690), so this run's requested class is pinned to
-  // CC2 by construction now, not by whatever this host's default happens to
-  // be (file header).
+  // above clicked Wall explicitly, and the Seg cannot go below the attached
+  // policy's floor, so this run's requested class is pinned to CC2 by
+  // construction now, not by whatever this host's default happens to be
+  // (file header). The assertion still reads whatever the server says.
   const enforcedLabel = hostNames[run.confinement_class] ?? String(run.confinement_class);
   // #main-content excludes the app-shell's OWN top-bar barrier chip, which shows
   // the host's strongest tier on every route — without this scope the run

@@ -25,9 +25,9 @@
  *
  * WHY A SHELL COMMAND WITH NO NETWORK. Three reasons, each load-bearing:
  * keyless (no model quota spent on the form-teaching video); the tightest
- * possible envelope makes the rail's promise legible ("this run can touch the
- * workspace, and nothing else" is provable at a glance when the allowlist is
- * empty); and the command still produces a REAL artifact — it writes an
+ * possible envelope makes the policy's promise legible ("this run can touch
+ * the workspace, and nothing else" is provable at a glance when the allowlist
+ * is empty); and the command still produces a REAL artifact — it writes an
  * inventory file into the writable workspace, so "Files changed" has an honest
  * row and the take can assert the byte actually landed on the host.
  *
@@ -257,13 +257,54 @@ test("V05 beat 2 — the envelope", async () => {
   await beat(page, BEAT_SHORT);
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(), "Choose the workspace.");
 
-  // Confined has no click line of its own in the script — it rides the
-  // network-starts-closed stanza that follows it. The form seeds "Just the
-  // model provider" by default (initialWizardState allows api.anthropic.com,
-  // because most runs are agent runs), so "the network starts closed" is only
-  // true after the None click below.
-  await act(page, page.getByRole("radio", { name: /^Confined/ }), "And because this is a confined run, the network starts closed.");
-  await act(page, page.getByRole("radio", { name: /^None/ }), "Network: none.");
+  // ── THE POLICY, AS A DOCUMENT ─────────────────────────────────────────
+  //
+  // The Confinement + Network cards are GONE: policy-panel.tsx replaced both
+  // with ONE spec-JSON Policy card, so the envelope beat now films the
+  // document itself. Neither owner claim below went false with them — the
+  // run is still confined (default-deny is what "confined" WAS), and the
+  // template chip below still authors an empty allowlist — only the controls
+  // they used to point at did, exactly like 06/07's "Confined." line.
+  //
+  // The panel opens on the Minimal template with its floor rewritten to the
+  // operator's own default barrier (new-run-screen.tsx), which is a whole
+  // policy in eight lines — the thing this beat now exists to show.
+  const specBox = page.getByLabel("Spec (JSON)");
+  await centerInFrame(specBox);
+  await spotlight(page, specBox);
+  // DIALOG-NEW-BEAT: the re-choreography's whole reason for existing — the
+  // policy is one small readable document, and this is the first episode
+  // that puts it on screen. Drafted for the owner's pen; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "The rules for this run are one small document.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "You can read the whole thing at a glance.");
+  await beat(page, PACE.read);
+  await caption(page, "And because this is a confined run, the network starts closed.");
+  await beat(page, PACE.read);
+
+  // "Network: none." — the deleted Network preset's line, now the template
+  // chip that authors the same envelope: allowed_domains [], denied_domains
+  // [], first_use_approval always_deny.
+  //
+  // DELIBERATELY NOT "Minimal" (the chip 06/07 pick): Minimal allows
+  // api.anthropic.com and answers an unlisted host with deny_with_review,
+  // which would both contradict "No internet." and park a PENDING approval
+  // row on every later episode's sidebar — the exact chrome this file's own
+  // preflight() clears off camera. And Minimal floors at CC2, which would
+  // grey out Fence on the Barrier Seg and make "Same choices." false three
+  // lines later; CI baseline floors at CC1, so every tier this host can
+  // build stays live.
+  await act(page, page.getByRole("button", { name: "CI baseline" }), "Network: none.");
+  // The panel's own live egress chip, where the rail's "0 hosts allowed"
+  // used to be — the rail stopped counting hosts for a self-authored policy
+  // when the Network card died. Asserted so the narration can't outrun the
+  // form, same as before.
+  await expect(
+    page.getByText("No egress", { exact: true }),
+    "the policy on screen still grants egress — the CI baseline chip never landed",
+  ).toBeVisible();
+  await spotlight(page, null);
   await caption(page, "This command doesn't need the internet, so we're not giving it one.");
   await beat(page, PACE.read);
 
@@ -281,12 +322,22 @@ test("V05 beat 2 — the envelope", async () => {
 
   // The unlisted-hosts rule — the OTHER half of the envelope (owner note:
   // whether requests are even expected must be controllable, with always-deny
-  // as the fallback). The three modes are the card's own Seg now, and this
-  // run picks the strictest one on camera because it is the honest choice: a
-  // command that expects zero requests should not park approvals on a human.
-  const rules = page.getByRole("radiogroup", { name: "Unlisted hosts" });
-  await centerInFrame(rules); // S2: scrollIntoViewIfNeeded leaves it under the caption bar
-  await spotlight(page, rules);
+  // as the fallback). Its on-card Seg died with the Network card; the same
+  // three modes ARE the spec's first_use_approval, and the panel's helper
+  // rail documents all three legal values on one row (policy-panel.tsx's
+  // FIELD_HELP) — which is what the owner's three staccato lines now point
+  // at. The run still lands on the strictest mode, for the same reason as
+  // before: a command that expects zero requests should not park approvals on
+  // a human. The CI baseline chip above already authored it.
+  //
+  // Located by the row's own "Insert <key>" button (an aria-label, unique per
+  // field) rather than the key text: the same key names also live inside the
+  // textarea's value a few hundred pixels up.
+  const railEntry = (key: string) =>
+    page.getByRole("button", { name: `Insert ${key}` }).locator("xpath=ancestor::li[1]");
+  const unlisted = railEntry("first_use_approval");
+  await centerInFrame(unlisted); // S2: scrollIntoViewIfNeeded leaves it under the caption bar
+  await spotlight(page, unlisted);
   await caption(page, "And if the command tries to reach somewhere it shouldn't, we decide what happens.");
   await beat(page, PACE.read);
   await caption(page, "We can hold it for approval.");
@@ -295,41 +346,65 @@ test("V05 beat 2 — the envelope", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Or we can deny it silently.");
   await beat(page, BEAT_SHORT);
-  // Owner's "Launch the command that deliberately reaches an unlisted host"
-  // has no launch click of its own here (Launch itself is beat 3) — the
-  // COMMAND already carries the off-list curl, so it rides this pick.
-  await act(
-    page,
-    rules.getByRole("radio", { name: "Deny silently" }),
-    "Launch the command that deliberately reaches an unlisted host.",
-  );
+
+  // Owner's "Launch the command…" line never had a launch click (Launch
+  // itself is beat 3) — it rode the "Deny silently" pick, and that radio is
+  // gone. It rides the document that now says the same thing instead; the
+  // COMMAND still carries the off-list curl. Asserted, not assumed: a
+  // changed template default would make the deny below never happen while
+  // the take went green (10's own rule for this exact field).
+  await centerInFrame(specBox);
+  await expect(
+    specBox,
+    "the spec's unlisted-host rule is not always_deny — this run would raise an approval instead of a silent deny",
+  ).toHaveValue(/"first_use_approval": "always_deny"/);
+  await spotlight(page, specBox);
+  await caption(page, "Launch the command that deliberately reaches an unlisted host.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
   await caption(page, "This one is designed to fail.");
   await beat(page, PACE.read);
   await caption(page, "The request is outside the contract, so it gets denied.");
   await beat(page, PACE.read);
 
-  // The rail is the contract, and with zero hosts it is one sentence long.
-  // "0 hosts allowed" is the rail's own line (new-run-screen.tsx's
-  // hostCount === 0 branch) — assert it so the narration can't outrun the form.
-  const rail = page.getByText("What this run can do");
-  await rail.scrollIntoViewIfNeeded().catch(() => {});
-  await spotlight(page, rail);
-  await expect(page.getByText("0 hosts allowed")).toBeVisible();
+  // PREFLIGHT — the server's own answer to the owner's next line, and the
+  // one control on this screen that can give it. Clicked SILENTLY: the two
+  // owner lines below are what narrate the result, which renders in the rail
+  // beside Launch (new-run-screen.tsx). A dry run of the exact body Launch
+  // will send, so what it shows is what will run.
+  await act(page, page.getByRole("button", { name: "Preflight" }));
+  const preflight = page.getByTestId("preflight-result");
+  await expect(
+    preflight,
+    "preflight returned nothing — the control plane refused the dry run, so the policy on screen is not launchable",
+  ).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, preflight);
   await caption(page, "That's the important part of this screen.");
   await beat(page, PACE.read);
   await caption(page, "Before launch, we can see what this run is allowed to do.");
   await beat(page, PACE.read);
+  // The clamp lane's own words: an operator's spec is not clamped, so this
+  // reads "No adjustments." Asserted BEFORE it is spoken — a stack that did
+  // clamp something must not be narrated as if it hadn't.
+  await expect(
+    preflight.getByText("No adjustments."),
+    "preflight came back with adjustments — the policy that runs is not the policy on screen",
+  ).toBeVisible();
+  // DIALOG-NEW-BEAT: names what the result box says. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "Nothing gets adjusted — what we wrote is what runs.");
+  await beat(page, PACE.read);
+
   // NOT wsPicker: its hasText filter matched the pre-selection placeholder,
   // and once slugify is chosen no combobox carries that text — ring the
   // Workspace card itself, which is the better frame for the line anyway.
   await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 3 }).locator("xpath=ancestor::section[1]"));
   await caption(page, "The workspace defines what it can touch.");
   await beat(page, PACE.read);
-  await spotlight(page, rail);
+  await spotlight(page, page.getByText("No egress", { exact: true }));
   await caption(page, "The network defines where it can go.");
   await beat(page, PACE.read);
-  await spotlight(page, rules);
+  await spotlight(page, unlisted);
   await caption(page, "And the policy defines what happens when it tries something else.");
   await beat(page, PACE.read);
   await spotlight(page, null);
