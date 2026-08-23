@@ -113,6 +113,18 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}
+
+	// D28: re-apply decided `always`-scoped egress decisions onto their
+	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
+	// dropped on a PG blip. In a goroutine — it reads all decided egress
+	// approvals, which need not gate serving.
+	go goSafe("egress.reconcile", func() {
+		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(rootCtx); rerr != nil {
+			slog.WarnContext(rootCtx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
+		} else if n > 0 {
+			slog.InfoContext(rootCtx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
+		}
+	})
 }
 
 // startSSHGateway launches the SSH gateway's accept loop in its own goroutine
