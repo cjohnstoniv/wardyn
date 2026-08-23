@@ -281,6 +281,32 @@ self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
 bound, both under the same authority the operator ceiling is meant to
 constrain.
 
+**A `credential` decision carries one scope: `run` — the per-run credential
+lease.** Every other scope on a `credential` approval is a `400`, and so is any
+scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
+credential helper git invokes on every operation, so single-use forced the
+operator to choose between a click per git op and standing auto-issue of a real
+personal credential (`docs/adoption/corp-network-onboarding-findings.md` B2).
+Approving with `decision_scope=run` (`wardyn approve <id> --scope run`) makes
+that one decision re-mintable for the rest of the run.
+
+Three things bound it. It applies to **`git_pat` only** — `github_token` is
+brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never
+leaves the broker, so none of them has the standing-consumer problem, and
+`broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped
+decision. It is **per scope**: if the grant's scope no longer matches what the
+human approved, the lease does not carry over. And it is **killed by
+revocation** — a leased re-mint still runs the whole mint transaction, so the
+kill-switch cascade ends it the moment the revocation commits.
+
+The audit says which mints were the human's and which were the lease's:
+`credential.mint` carries `lease: true` plus the raw `decision_scope`. The
+comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d — an
+empty `decision_scope` normalizes to `run`, and every credential approval
+decided before this feature carries an empty one, so a normalized comparison
+would have turned every legacy approval in the deployment into a standing lease
+on upgrade. Nothing you approved before v0.6 leases anything.
+
 **An `egress_domain` decision's *scope* adds a second, narrower gate on top
 of the kind check above — and one of the four scopes is gated on ROLE, not
 ownership.** A member who owns the run may still choose `once`, `run`, or

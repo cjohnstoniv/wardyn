@@ -147,6 +147,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		apState   *string
 		reqScope  []byte
 		mintedJTI *string
+		decScope  *string
 	)
 	// FOR UPDATE OF g locks the grant row, serializing concurrent mints for the
 	// same grant. It CANNOT also lock `a`: Postgres forbids FOR UPDATE on the
@@ -161,7 +162,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 	// UPDATE (broker.mint) — that check is the load-bearing single-use guarantee.
 	const q = `
 		SELECT g.id, g.run_id, g.spec,
-		       a.id, a.run_id, a.state, a.requested_scope, a.minted_jti
+		       a.id, a.run_id, a.state, a.requested_scope, a.minted_jti, a.decision_scope
 		  FROM credential_grants g
 		  LEFT JOIN approvals a
 		         ON a.grant_id = g.id
@@ -178,7 +179,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		hint = approvalHint
 	}
 	err := tx.QueryRow(ctx, q, grantID, hint).
-		Scan(&r.grantID, &r.grantRunID, &specRaw, &apID, &apRunID, &apState, &reqScope, &mintedJTI)
+		Scan(&r.grantID, &r.grantRunID, &specRaw, &apID, &apRunID, &apState, &reqScope, &mintedJTI, &decScope)
 	if err != nil {
 		if errors.Is(err, errNoRow) {
 			return grantApprovalRow{}, ErrGrantNotFound
@@ -200,6 +201,11 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		r.requestedScope = json.RawMessage(reqScope)
 		if mintedJTI != nil {
 			r.mintedJTI = *mintedJTI
+		}
+		// RAW, never Normalize()d — the per-run lease turns on this exact value
+		// and "" must stay "" all the way to leaseCoversRemint.
+		if decScope != nil {
+			r.decisionScope = types.ApprovalScope(*decScope)
 		}
 	}
 	return r, nil

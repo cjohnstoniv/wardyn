@@ -133,8 +133,10 @@ type (
 	// ApprovalScope is how far an Approve/Deny decision reaches: once, run
 	// (the default), until, or always. Set via DecisionOpts on Approve/Deny;
 	// read back on ApprovalRequest.DecisionScope. Meaningful only for an
-	// egress_domain approval — a credential mints once by construction and a
-	// tool_call is bounded by the clamp.
+	// egress_domain approval, EXCEPT "run" on a credential approval — that one
+	// is the per-run credential lease (a git_pat approved once is re-mintable
+	// for the rest of the run). A tool_call is bounded by the clamp and carries
+	// no scope.
 	ApprovalScope = types.ApprovalScope
 
 	// ConfinementClass declares how strongly a sandbox confines an agent

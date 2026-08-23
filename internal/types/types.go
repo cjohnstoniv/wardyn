@@ -498,8 +498,11 @@ var (
 // ApprovalScope is how far a human's approve/deny decision reaches. It is
 // ORTHOGONAL to FirstUseMode: that policy setting decides whether an unknown
 // host is escalated to a human at all; this decides the blast radius of the
-// answer. Only egress_domain approvals carry a non-default scope — a credential
-// mints exactly once by construction and a tool_call is bounded by the clamp.
+// answer. egress_domain approvals carry any of the four; a tool_call carries
+// none (the clamp bounds it); a CREDENTIAL approval carries ScopeRun and
+// nothing else — that one value is the per-run credential lease (B2), read RAW
+// by broker.leaseCoversRemint so a git_pat approved once is re-mintable for the
+// rest of the run instead of raising a fresh approval per git operation.
 type ApprovalScope string
 
 const (

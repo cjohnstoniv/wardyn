@@ -232,12 +232,31 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		}
 		haveAP = true
 	}
-	// Rule 4 — only egress_domain decisions carry a scope. A credential mints
-	// exactly once by construction (minted_jti) and a tool_call is bounded by
-	// the clamp, so a scope on either is a stored field that grants nothing.
+	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
+	// two kinds differ in what "something" is.
+	//
+	// tool_call is bounded by the clamp, so no scope changes anything: refused.
+	//
+	// credential USED to be in the same bucket ("a credential mints exactly once
+	// by construction"), and for once/until/always it still is. `run` is the one
+	// exception, and it is the whole of B2's per-run credential lease
+	// (docs/adoption/corp-network-onboarding-findings.md): a git_pat installs a
+	// STANDING credential helper git invokes on every operation, so single-use
+	// forced the operator to choose between a click per git op and standing
+	// auto-issue of a real personal credential. A run-scoped decision is the
+	// middle ground — one approval, re-mintable for this run's lifetime — and the
+	// broker reads it RAW (leaseCoversRemint) so no legacy decision becomes one.
+	//
+	// Deliberately NOT narrowed to git_pat here: decide holds no grant, so
+	// checking the kind would cost a load on the approval's grant_id for a rule
+	// the broker already enforces at the only place a lease can be spent. A `run`
+	// scope on another credential kind is recorded and simply leases nothing.
 	if needAP && ap.Kind != types.ApprovalEgressDomain {
-		writeError(w, http.StatusBadRequest, "decision_scope is only valid on an egress_domain approval")
-		return
+		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
+			writeError(w, http.StatusBadRequest,
+				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
+			return
+		}
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by
