@@ -332,20 +332,23 @@ shipped behavior; none is scheduled.
   CUSTOM roles beyond admin/member. The admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,
   no separation of duty from a real admin user (v1.0's row, above).
-- **The SSH gateway's admin override is a registration-time stamp, weaker
-  than the web terminal's live check.** `sshAuth` now grants an admin's own
-  registered key an override — `run.created_by == principal` OR
-  `key.role == admin` (migration `0043_ssh_key_role.sql`) — closing the gap
-  this bullet used to name. What's left: `role` is stamped once, at
-  `POST /me/ssh-keys` time, from the session's role THEN; it is never
-  re-checked against the human's role NOW, unlike the web terminal's
-  `requireOperator` gate, which reads the session live on every attach. A
-  demoted admin's already-registered key keeps the override until that key
-  is deleted and re-registered (or revoked) — there's no live lookup or
-  expiry to catch a stale stamp automatically. Overrides are audited
-  distinctly (`ssh.auth` carries `override:true`), and the ceiling is
-  documented, not silently assumed away, in `docs/SSH.md`'s Bounds section
-  and `threatmodel/THREAT-MODEL.md` residual #15.
+- **The SSH gateway's admin override is a bounded-stale stamp, weaker than
+  the web terminal's live check.** `sshAuth` grants an admin's own registered
+  key an override — `run.created_by == principal` OR (`key.role == admin` AND
+  `key.role_checked_at` no older than `WARDYN_SSH_ROLE_TTL`, migrations
+  `0043_ssh_key_role.sql` and `0046_ssh_key_role_checked_at.sql`). The stamp
+  is no longer registration-time-only: every OIDC login re-stamps `role` and
+  `role_checked_at` for all of that principal's keys (`oidc.Config.OnLogin`),
+  and the TTL (default `24h`) expires a stamp on its own even if the human
+  never logs in again — closing the "keeps the override forever until
+  re-registered" gap this bullet used to name. What's left: the gateway still
+  never reads the human's role LIVE at connect time, unlike the web
+  terminal's `requireOperator` gate — SSH carries no session for that gate to
+  read — so a demotion can still ride an unexpired stamp for up to one TTL
+  window. Overrides are audited distinctly (`ssh.auth` carries
+  `override:true`), and the ceiling is documented, not silently assumed away,
+  in `docs/SSH.md`'s Bounds section and `threatmodel/THREAT-MODEL.md`
+  residual #15.
 - **The legacy `sources`/`base_image` workspace columns have no drop date, and
   the migration number reserved for it is gone.** 0.4.5's source-library split
   (migration `0031_source_library.sql`) kept the old embedded columns live for

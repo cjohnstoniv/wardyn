@@ -96,12 +96,12 @@ internal action can rename across releases without notice.
 | `session.takeover` | A second viewer takes over a held session (the write-lane single-holder rule) | `held_since`, `previous_holder`, `previous_source`, `taken_over` | `internal/api/attach.go` | internal |
 | `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:603` | internal |
 | `recording.upload` | A sandbox uploads an asciinema-cast chunk for a run's recording session — audited on both outcomes, like every sibling recording lane, since a full store or an over-cap upload is exactly how a long session's provenance gets lost | `error` (failure only) | `internal/api/recording.go:120` | internal |
-| `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:251,293,328` | **stable** (documented) |
-| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:632`; documented `docs/SSH.md:330` | **stable** (documented) |
-| `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:330` | **stable** (documented) |
-| `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:331` | **stable** (documented) |
-| `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:135` | internal |
-| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:168` | internal |
+| `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway.go:309` (failure), `internal/api/sshgateway.go:345` (success); documented `docs/SSH.md:251,303,308` | **stable** (documented) |
+| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:611`; documented `docs/SSH.md:346` | **stable** (documented) |
+| `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:346` | **stable** (documented) |
+| `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:347` | **stable** (documented) |
+| `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:144` | internal |
+| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:177` | internal |
 | `ui.auth` | A UI-sandbox relay session is authorized or denied (see the D14/D27 residuals on this channel) | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:288` | internal |
 | `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:652` | internal |
 | `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:657` | internal |

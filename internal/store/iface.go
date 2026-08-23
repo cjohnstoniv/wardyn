@@ -148,11 +148,15 @@ type Store interface {
 	// principal (an attempted delete of someone else's key is ErrNotFound, not
 	// a distinguishable 403 — no existence leak). GetSSHKeyByFingerprint is the
 	// gateway's auth-time lookup (unscoped: the caller has not authenticated
-	// yet, that IS what this call resolves).
+	// yet, that IS what this call resolves). RefreshSSHKeyRoles re-stamps
+	// role+role_checked_at (migration 0046) on every key owned by principal —
+	// the OIDC callback's OnLogin hook, bounding the admin-override stamp's
+	// staleness instead of leaving it fixed at registration time forever.
 	AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error)
 	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
+	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same

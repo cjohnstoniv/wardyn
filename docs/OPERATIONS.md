@@ -628,19 +628,30 @@ concept), no tenant/org columns, no
 separation of duty among admins — every admin (and the admin token, always)
 can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
 residual #14, still open). The SSH gateway's admin override is a
-**registration-time stamp**, not a live role check: since migration `0043` a
+**bounded-stale stamp**, not a live role check: since migration `0043` a
 key authorizes when `run.created_by == the key's principal` OR the key's
-`role` column reads `admin`, and that column is written once, at
-`POST /me/ssh-keys` time, from the role the registering session held then.
-The gateway never re-reads the human's role now, so a demoted admin's
-already-registered key keeps the override until that key is deleted
-(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registered —
-strictly weaker than the web terminal's live `requireOperator` gate. The same
-stamp is why **an admin upgrading from 0.5 does not get the override on the key
-they already have**: `0043` backfills every pre-existing row as `member` (the
-fail-closed value — nothing in the schema knows what role its registrant held),
-and nothing re-stamps it later, so an admin who wants the override must delete
-that key and register it again. A member's key never satisfies the override
+`role` column reads `admin` AND its `role_checked_at` (migration `0046`) is
+no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). That stamp is written at
+`POST /me/ssh-keys` time, from the role the registering session held then,
+but it is also RE-stamped — both `role` and `role_checked_at` — on every OIDC
+login for that principal, across every key they hold, no re-registration
+required. The gateway still never reads the human's role live at connect time
+— SSH carries no session for `requireOperator` to read — so this stays
+bounded-stale rather than live, but a demoted admin's already-registered key
+now loses the override on its own: at their next login (which re-stamps
+`role=member`), or once `role_checked_at` ages past `WARDYN_SSH_ROLE_TTL`
+even if they never log in again — whichever comes first. Deleting the key
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registering it is
+still the immediate lever, just no longer the only one — strictly weaker than
+the web terminal's live `requireOperator` gate, but no longer unboundedly so.
+The same TTL is why **an admin upgrading from 0.5 (or from pre-`0046`) does not
+get the override on the key they already have until it is refreshed**: `0043`
+backfills every pre-existing row as `member` (the fail-closed value — nothing
+in the schema knows what role its registrant held), and `0046` backfills
+`role_checked_at` as `NULL` for every pre-existing row, which `sshAuth` treats
+as infinitely stale — so that key has no override until its owner logs in
+again (the ordinary path, no re-registration needed) or deletes and
+re-registers it. A member's key never satisfies the override
 (`docs/SSH.md`'s Bounds section;
 `threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.

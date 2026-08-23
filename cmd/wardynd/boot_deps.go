@@ -289,6 +289,19 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// jti-level identity_revocations store which is a separate
 			// concern — see pgSessionRevocations' doc comment.
 			Revocations: &pgSessionRevocations{pool: pool},
+			// OnLogin (migration 0046): every successful login re-stamps
+			// role+role_checked_at on every ssh_public_keys row this principal
+			// owns — the bounded-stale re-check sshAuth's admin-override path
+			// reads (WARDYN_SSH_ROLE_TTL). store.NewPG(pool) is a cheap value
+			// wrapper (constructed the same way elsewhere in this file), not a
+			// connection of its own. Best-effort: a store hiccup here logs and
+			// the login still succeeds — see oidc.Config.OnLogin's own doc for
+			// why that contract lives on the callback side, not here.
+			OnLogin: func(ctx context.Context, sub, role string) {
+				if err := store.NewPG(pool).RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
+					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+				}
+			},
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)

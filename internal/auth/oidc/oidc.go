@@ -133,6 +133,19 @@ type Config struct {
 	// revocation is never checked — unset changes nothing, same as every
 	// other optional Config field.
 	Revocations SessionRevocations
+
+	// OnLogin, when set, is called synchronously from CallbackHandler after a
+	// login is APPROVED (role derived, session about to be issued) with the
+	// ID token's sub and the freshly-derived role. It exists for exactly one
+	// caller today — internal/api wires it to refresh ssh_public_keys.role /
+	// role_checked_at (migration 0046) for every key this principal owns, the
+	// bounded-stale re-check the SSH gateway's admin override reads — but this
+	// package stays store-agnostic: it knows nothing about SSH keys, only that
+	// a login happened. A failure inside OnLogin must never fail the login
+	// itself (the integrator is expected to log-and-continue, not panic);
+	// CallbackHandler does not inspect its return because it has none. nil
+	// (the default) is a plain no-op, so every existing caller is unaffected.
+	OnLogin func(ctx context.Context, sub, role string)
 }
 
 // SessionRevocations is the store D16's revoke-a-human-now admin action
@@ -464,6 +477,15 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		clearCookie(w, sessionCookieName)
 		redirectAuthError(w, r, authErrorNoRole)
 		return
+	}
+
+	// OnLogin fires once the login is APPROVED (past every denial branch
+	// above) but before the session cookie is written — a real login, not a
+	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
+	// responsible for not letting a backend hiccup fail the login (see the
+	// Config.OnLogin doc).
+	if a.cfg.OnLogin != nil {
+		a.cfg.OnLogin(r.Context(), idToken.Subject, role)
 	}
 
 	// (6) Create a Wardyn session. Groups is stamped from the SAME two

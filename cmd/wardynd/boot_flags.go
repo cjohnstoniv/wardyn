@@ -115,8 +115,11 @@ type bootFlags struct {
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
 	// run-detail pane's `ssh` command — never read by the gateway itself.
+	// sshRoleTTL (migration 0046) bounds how stale a key's admin-override
+	// stamp may be — see api.Config.SSHRoleTTL.
 	sshListen    *string
 	sshAdvertise *string
+	sshRoleTTL   *time.Duration
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -255,6 +258,7 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional PER-RUN origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS + a wildcard certificate). Set, every run gets its own browser origin and an enter on any other host is refused; empty, all runs share one origin separated only by a path-scoped cookie`),
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty publishes NO address at all: /healthz reports an empty advertise_addr, the console pane has no host to show and "wardyn ssh" refuses with that message — so set this whenever the gateway is enabled`),
+		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, `how stale a registered SSH key's admin-override stamp (role_checked_at, migration 0046) may be before the gateway refuses the override; refreshed on every OIDC login for that key's owning principal (bounded-stale, never live — see docs/SSH.md Bounds)`),
 	}
 	flag.Parse()
 

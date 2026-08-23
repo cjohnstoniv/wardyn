@@ -138,7 +138,7 @@ invitation, not an embarrassment.
 | **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5+ — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only the network named by `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the run sandboxes' own bridge, never `host`) plus the layer-cache registry. See residual #13. |
-| **B9 — SSH gateway pre-auth listener vs. everything else** | **[v0.5+]** A NEW anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key even generated). Registered-public-key-only auth (no passwords); the trust root is the `ssh_public_keys` registry a human writes to via self-service `/api/v1/me/ssh-keys`, so the boundary this adds is exactly as strong as that registration step and the DoS bounds around the pre-auth handshake (per-connection deadline, `MaxAuthTries`, a concurrent-connection cap — `ssh.NewServerConn` blocks with no default timeout otherwise). Once authenticated, a session is bounded by owner-or-admin authorization (below — the admin half is a registration-time `role` stamp, never re-checked live; residual #15) and runs entirely inside B1: the shell/exec/sftp/`-L` primitives are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal and internal tooling already use — this boundary adds a new front door, not a new back door; nothing on the other side of B1 changes. |
+| **B9 — SSH gateway pre-auth listener vs. everything else** | **[v0.5+]** A NEW anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key even generated). Registered-public-key-only auth (no passwords); the trust root is the `ssh_public_keys` registry a human writes to via self-service `/api/v1/me/ssh-keys`, so the boundary this adds is exactly as strong as that registration step and the DoS bounds around the pre-auth handshake (per-connection deadline, `MaxAuthTries`, a concurrent-connection cap — `ssh.NewServerConn` blocks with no default timeout otherwise). Once authenticated, a session is bounded by owner-or-admin authorization (below — the admin half is a bounded-stale `role` stamp, refreshed at every OIDC login and re-checked against `WARDYN_SSH_ROLE_TTL`, but never read live; residual #15) and runs entirely inside B1: the shell/exec/sftp/`-L` primitives are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal and internal tooling already use — this boundary adds a new front door, not a new back door; nothing on the other side of B1 changes. |
 | **B10 — UI-sandbox gateway origin vs. the console origin** | **[v0.6]** A SECOND HTTP listener (`WARDYN_UI_SANDBOX_LISTEN`, off by default — no var set, no listener, not even a relay cookie key generated) that relays one policy-declared sandbox loopback port to a browser (`docs/UI-SANDBOXES.md`). What crosses it is **content authored inside B1**: the relayed app's own HTML and JavaScript, executing in the operator's browser. So the boundary is a BROWSER-ORIGIN one, and the separate origin is the enforcement — boot refuses a listen address equal to `-listen`, because on the console's origin that same sandbox-authored code could read the console's token storage (see "Console auth token storage" below) and drive every admin action the operator can. Like B9 this is a new front door, not a new back door: the bytes ride the SAME `Runner.ExecStream` + `socat` lane the SSH `-L` forward already uses, inside the existing sandbox netns — no pod/container-IP dial, no NetworkPolicy delta, nothing on the far side of B1 changes. |
 
 On a single-operator machine the trust boundaries compose into a strict
@@ -215,7 +215,7 @@ the canary, never merely claimed because a policy object was applied.
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
 | Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, stamped at registration and never re-checked live, residual #15 — reads `admin`); a member's key never satisfies the override, so a member still has no path to another human's run over either transport. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, stamped at registration and re-stamped bounded-stale on every OIDC login (migration `0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15 — reads `admin`); a member's key never satisfies the override, so a member still has no path to another human's run over either transport. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B9 |
 | Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B9 |
 | SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B9 |
@@ -479,33 +479,47 @@ hiding them would repeat the failure mode we are designed to avoid.
     `capability.grant.*` and `capability.enforcement.write`) rather than
     prevention.
 
-15. **SSH gateway's admin override is a registration-time stamp, not a live
+15. **SSH gateway's admin override is a bounded-stale stamp, not a live
     role check.** Since `0043_ssh_key_role.sql` (v0.6), SSH gateway
     (`docs/SSH.md`) authorization is `run.created_by == the connecting key's
     registered principal` OR the key's `role` column reads `admin`
     (`internal/api/sshgateway.go`'s `sshAuth`). That closes the gap this
     residual used to describe — an admin reaching another human's run no
     longer needs the browser terminal — but opens a narrower one in its
-    place: `role` is stamped ONCE, at `POST /me/ssh-keys` time, from the
+    place: `role` is stamped at `POST /me/ssh-keys` time, from the
     registering session's role at that moment, and `sshAuth` never
-    re-consults the human's CURRENT role — there is no live lookup, no
-    revocation sweep, no expiry. Unlike the browser terminal's
-    `requireOperator` gate (`GET /runs/{id}/attach`'s admin-only,
-    ticket-less session-cookie fall-through), which reads the session's role
-    fresh on every attach, a demoted admin's already-registered SSH key goes
-    on granting the override indefinitely — until that key is deleted
-    (self-service `DELETE /me/ssh-keys/{fingerprint}`, or an operator with
-    direct store access) and, if the human re-registers, re-stamped with
-    whatever role they hold at that later moment. A member's key never
-    satisfies the override regardless of stamp drift — only `role==admin`
-    does, and a member can't reach `role==admin` by any path but actually
-    holding the admin role at registration time. The override is audited
+    re-consults the human's CURRENT role live — there is no per-connection
+    lookup. `0046_ssh_key_role_checked_at.sql` (v0.6) narrows the staleness
+    from unbounded to bounded: every successful OIDC login re-stamps BOTH
+    `role` and `role_checked_at` for every key that principal owns
+    (`oidc.Config.OnLogin`, wired in `cmd/wardynd/boot_deps.go` to
+    `store.RefreshSSHKeyRoles`), and `sshAuth` additionally refuses the
+    override once `role_checked_at` is older than `WARDYN_SSH_ROLE_TTL`
+    (default `24h`) — including when it was never stamped at all (`NULL`,
+    infinitely stale, the fail-closed reading for every pre-`0046` row).
+    Unlike the browser terminal's `requireOperator` gate (`GET
+    /runs/{id}/attach`'s admin-only, ticket-less session-cookie
+    fall-through), which reads the session's role fresh on every attach,
+    this is still bounded-stale, never live: a demoted admin's
+    already-registered SSH key keeps granting the override until whichever
+    comes first — their own next login (which re-stamps `role=member`),
+    `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL` on its own (no login
+    required), or the key being deleted (self-service `DELETE
+    /me/ssh-keys/{fingerprint}`, or an operator with direct store access)
+    and, if re-registered, re-stamped with whatever role the human holds at
+    that later moment. A member's key never satisfies the override
+    regardless of stamp drift — only `role==admin` does, and a member can't
+    reach `role==admin` by any path but actually holding the admin role at a
+    stamping moment (registration or a later login). The override is audited
     distinctly (`ssh.auth` success carries `override:true` whenever the
-    owner check failed and the role check is what passed the connection),
+    owner check failed and the role check is what passed the connection; a
+    TTL-refused attempt is a `ssh.auth` failure with its own reason string),
     so the staleness ceiling is attributable after the fact even though it
-    isn't prevented up front. Documented, not silently assumed away, in
-    `docs/SSH.md`'s Bounds section; the re-register path (delete, then
-    re-add) is the only supported way to force a re-stamp — there is no
+    isn't prevented up front on every single connection. Documented, not
+    silently assumed away, in `docs/SSH.md`'s Bounds section; the re-register
+    path (delete, then re-add) is still supported and still immediate — it is
+    no longer the ONLY way to force a re-stamp, an ordinary login does it too
+    — and there is no
     in-place role-update endpoint.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
