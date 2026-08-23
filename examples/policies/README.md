@@ -11,6 +11,20 @@ inline comments the JSON files can't have (see `sandbox.yaml` below).
 `wardyn policy render -f <file>` converts either to canonical JSON and fails on a
 misspelled field, so you can sanity-check a policy before you launch.
 
+## Console template chips
+
+The policy panel's template chips (`/runs/new` and `/policies`) are seeded
+from three of these files as compiled-in consts in
+`ui/src/app/components/wardyn/policy-panel.tsx` — **not** read from disk at
+runtime: `default.json` → **Package registries**, `ci.json` → **CI baseline**,
+`ci-claude-llm.json` → **Model provider only**. Editing one of these files does
+not change what the console offers; the chip's JSON has to be updated in the
+panel component too. `claude-subscription.template.json` is deliberately
+excluded — its `__comment` key and machine-specific `__WARDYN_CRED_DIR__`
+mounts don't validate as shipped. The **Minimal** and **Allow-all — observe
+first** chips are authored directly in the panel and have no example-file
+source.
+
 ## sandbox.yaml / sandbox-claude.yaml / sandbox-workspace.yaml
 
 The keyless quick-start trio: sealed floor -> real Claude -> real code.

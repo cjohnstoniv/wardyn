@@ -16,6 +16,30 @@ Source of truth: `types.RunPolicySpec` (`internal/types/types.go`); the legal
 values below are what `validatePolicySpec` (`internal/api/policy.go`) enforces at
 write time. A guard test fails if a field here drifts from the struct.
 
+## Authoring surfaces
+
+The console has three places a policy gets written, and all three resolve to
+this same JSON through this same validator — there is no separate UI schema.
+
+- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+  reusable policy (`POST`/`PUT /policies`).
+- **The run screen's Custom policy.** An `inline_policy` on the create-run
+  request, member-authored — this editor carries no operator gate.
+  `composer.Clamp` is the enforcement net, and a member's clamp warnings are
+  visible before launch via the **Preflight** button (`POST /runs/preflight`).
+- **"Make a policy from this run"**, on a run's detail page. Synthesizes a
+  policy from that run's observed behavior via `ProfileReview` (`POST
+  /runs/{id}/profile`) — the honest home for "write the policy from what
+  happened," rather than a promise the run screen can't keep.
+
+All three share one component, `policy-panel.tsx` — a mono JSON textarea plus
+template chips (Minimal, Model provider only, Package registries, CI baseline,
+Allow-all — observe first) seeded from
+[`examples/policies/`](../examples/policies/) — and one write path: `POST
+/runs`, `POST /runs/preflight`, and `POST`/`PUT /policies` all decode with
+`DisallowUnknownFields` (an unrecognised field is a `400` everywhere, not just
+on `/policies`) and validate through the same `validatePolicySpec`.
+
 ## Top level
 
 | Field | Type | Default | What it does |
