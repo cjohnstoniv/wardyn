@@ -520,7 +520,7 @@ export function AddSecretDialog({
 }
 
 // A row of common secret-name suggestions (toggle-button styling matches the
-// egress preset chips, step-egress.tsx's PRESET_DOMAINS). Clicking one sets the
+// Policy panel's template chips). Clicking one sets the
 // Name field verbatim; "Custom…" clears it back to blank for a hand-typed name.
 // Never touches the Value field.
 function ProviderNameChips({ onPick }: { onPick: (name: string) => void }) {

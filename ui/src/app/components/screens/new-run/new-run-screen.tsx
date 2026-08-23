@@ -16,6 +16,15 @@
 // so the launch payload and the policy it produces are exactly what the wizard
 // produced. That is deliberate: the governance contract is the tested part, and
 // this change is about when the operator SEES it, not what it is.
+//
+// The Confinement and Network cards are GONE. `inline_policy` on POST /runs is
+// the identical Go struct a saved policy stores, validated by the same
+// validator — so this screen and /policies now author it through ONE component
+// (wardyn/policy-panel.tsx) instead of a bespoke form that could only ever
+// assemble a subset of what the server already accepts. What the JSON cannot
+// know — the Workspace card's mounts/repos, the grant lanes' grants and the
+// egress hosts those grants require — is unioned back in by mergeRunSelections
+// and NAMED on screen, never merged behind the operator's back.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
@@ -41,23 +50,21 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
+import { PolicyPanel, POLICY_TEMPLATES, parseSpec, templateText } from "../../wardyn/policy-panel";
 import { cn } from "../../ui/utils";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
-import { NetworkDialog, UNLISTED_RULES, type NetworkSelection } from "./network-dialog";
-import { buildSpec, impliedEgressHosts } from "./wizard-spec";
-import { agentLabel, initialWizardState, PRESET_DOMAINS, primaryWorkspaceId, type WizardState } from "./wizard-types";
+import { buildSpec, mergeRunSelections } from "./wizard-spec";
+import { agentLabel, initialWizardState, primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { surfaceRunWarnings } from "./run-warnings";
-
-// The three Network presets. "Registries" is the whole PRESET_DOMAINS list —
-// the same set the dialog groups — so the card and the dialog can never
-// disagree about what "common package registries" means.
-type NetworkPreset = "none" | "model" | "registries" | "everything" | "custom";
 
 const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
-// A run is EITHER recorded (allow everything, log everything, synthesise the
-// policy afterwards) or confined. Record is Wardyn's moat, so it leads.
-type ConfinementChoice = "record" | "confined" | "saved";
+// The body a fresh Custom policy opens with: a valid, editable floor rather
+// than a blank document nobody can start from.
+const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
+
+// A tier is pickable only if the host can BUILD it and the policy allows it.
+const rank = (c: ConfinementClass) => ORDERED_CLASSES.indexOf(c);
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -106,47 +113,6 @@ function Seg({
   );
 }
 
-function RadioCard({
-  on,
-  onSelect,
-  title,
-  body,
-  children,
-}: {
-  on: boolean;
-  onSelect: () => void;
-  title: string;
-  body: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className={cn("rounded-lg border transition-colors", on ? "border-primary bg-primary/5" : "border-border")}>
-      <button
-        type="button"
-        role="radio"
-        aria-checked={on}
-        onClick={onSelect}
-        className="flex w-full items-start gap-2.5 p-3 text-left"
-      >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
-            on ? "border-primary" : "border-border-strong",
-          )}
-        >
-          {on && <span className="size-2 rounded-full bg-primary" />}
-        </span>
-        <span>
-          <span className="block text-sm font-medium text-foreground">{title}</span>
-          <span className="mt-0.5 block text-[0.6875rem] leading-snug text-muted-foreground">{body}</span>
-        </span>
-      </button>
-      {on && children && <div className="border-t border-border px-3 py-3">{children}</div>}
-    </div>
-  );
-}
-
 function RailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="border-b border-border pb-3 last:border-0">
@@ -166,8 +132,16 @@ export function NewRunScreen() {
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState(getDefaultCc() ?? "CC1"),
   );
-  const [confinement, setConfinement] = React.useState<ConfinementChoice>("confined");
-  const [netOpen, setNetOpen] = React.useState(false);
+  // The policy this run ships, as the operator wrote it. `useSaved` is the mode
+  // row: reuse a stored policy by REFERENCE (policy_id) or author one here.
+  const [useSaved, setUseSaved] = React.useState(false);
+  const [specText, setSpecText] = React.useState(() => templateText(MINIMAL));
+  // The floor the LAST SUCCESSFUL parse authored — deliberately sticky across a
+  // broken edit: a half-typed document must not momentarily drop the floor and
+  // re-open a barrier tier the operator's own policy forbids.
+  const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>(
+    () => MINIMAL.spec.min_confinement_class as ConfinementClass,
+  );
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
@@ -237,27 +211,14 @@ export function NewRunScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const patch = React.useCallback(
-    (p: Partial<WizardState>) =>
-      setState((s) => {
-        // D11/claim6 funnel, restored from the retired wizard: ANY edit to the
-        // inline envelope detaches a picked saved policy. Without this the
-        // stale id survives every visible signal of detachment, and launch
-        // ships the STORED spec — its workspace mounts included — instead of
-        // the inline one on screen.
-        const envelope: (keyof WizardState)[] = [
-          "allowAllEgress",
-          "allowedDomains",
-          "deniedDomains",
-          "firstUseApproval",
-          "confinementClass",
-        ];
-        const detach =
-          s.selectedPolicyId && !("selectedPolicyId" in p) && envelope.some((k) => k in p);
-        return { ...s, ...p, ...(detach ? { selectedPolicyId: undefined } : {}) };
-      }),
-    [],
-  );
+  // The envelope-field detach funnel (D11/claim6) retired with the controls it
+  // guarded: four of its five fields were the Network card's, and the fifth —
+  // confinementClass — is now guarded by the floor-DISABLE below instead, which
+  // is strictly stronger. A one-time up-clamp alone would re-open the
+  // below-floor 422 (runs_create.go's floor check, on both the policy_id and
+  // inline paths) the moment the operator lowered the Seg afterwards. Detach
+  // now has exactly one trigger: editing the spec text (see onSpecChange).
+  const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
 
   // Which barriers this host can actually build. Empty means UNKNOWN, not
   // confirmed-absent (healthApi.health swallows a failure into {}), so an empty
@@ -295,7 +256,8 @@ export function NewRunScreen() {
   }, []);
 
   const isAgent = state.runType === "agent";
-  const isRecord = confinement === "record";
+  const cc = state.confinementClass;
+  const parsed = parseSpec(specText);
   // A shell command is unattended by definition — buildSpec forces batch for
   // one, so the Run mode segment is hidden rather than offering a combination
   // that would silently drop the command.
@@ -304,7 +266,7 @@ export function NewRunScreen() {
   // is exactly the drift that helper's doc says it exists to prevent.
   const agentName = agentLabel(state.agent);
   const selectedPolicy =
-    confinement === "saved" && state.selectedPolicyId
+    useSaved && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
       : undefined;
 
@@ -319,62 +281,87 @@ export function NewRunScreen() {
       ? isAgent
         ? "An autonomous run needs a task to perform."
         : "Enter a command to run."
-      : null;
+      : // A Custom policy that doesn't parse has nothing to send. The saved
+        // lane launches by reference, so its body is never on the wire.
+        !useSaved && !parsed.ok
+        ? "The policy spec isn't valid JSON."
+        : useSaved && !state.selectedPolicyId
+          ? "Pick a saved policy, or write a custom one."
+          : null;
 
-  // Which preset the current host list corresponds to — derived, never stored,
-  // so an edit in the dialog is reflected here instead of silently disagreeing.
-  const preset: NetworkPreset = state.allowAllEgress
-    ? "everything"
-    : state.allowedDomains.length === 0
-      ? "none"
-      : state.allowedDomains.length === 1 && state.allowedDomains[0] === "api.anthropic.com"
-        ? "model"
-        : state.allowedDomains.length === PRESET_DOMAINS.length &&
-          PRESET_DOMAINS.every((d) => state.allowedDomains.includes(d))
-        ? "registries"
-        : "custom";
+  // Every successful parse re-reads the floor the document authors; a FAILED
+  // parse changes nothing (parsedFloor stays whatever last parsed).
+  React.useEffect(() => {
+    const p = parseSpec(specText);
+    if (!p.ok) return;
+    const f = p.spec.min_confinement_class as ConfinementClass;
+    setParsedFloor(ORDERED_CLASSES.includes(f) ? f : undefined);
+  }, [specText]);
 
-  const setPreset = (p: NetworkPreset) => {
-    if (p === "none") patch({ allowAllEgress: false, allowedDomains: [] });
-    else if (p === "model") patch({ allowAllEgress: false, allowedDomains: ["api.anthropic.com"] });
-    else if (p === "registries") patch({ allowAllEgress: false, allowedDomains: [...PRESET_DOMAINS] });
-    else if (p === "everything") patch({ allowAllEgress: true });
+  // The ACTIVE floor: a picked saved policy's stored floor, else the last
+  // successful parse's. Both paths refuse to launch below it server-side.
+  const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
+
+  // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
+  // purpose: the health probe resolves ASYNCHRONOUSLY and re-seeds
+  // confinementClass from the persisted default, which can land BELOW a floor
+  // this already clamped to. Watching the value, not just the floor, makes
+  // "never below the floor" an invariant instead of a one-shot.
+  React.useEffect(() => {
+    if (!floor || !ORDERED_CLASSES.includes(floor)) return;
+    if (rank(floor) > rank(cc)) patch({ confinementClass: floor });
+  }, [floor, cc, patch]);
+
+  // The post-parse union, computed ONCE: the same value renders the "Added for
+  // this run's selections" line and goes on the wire, so the screen cannot show
+  // one policy and launch another.
+  const merged = React.useMemo(
+    () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces) : null),
+    // parsed is rebuilt every render; specText is what actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [specText, state, workspaces],
+  );
+  const added = merged?.added;
+  const hasAdditions =
+    !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
+
+  // Editing the spec text DETACHES a picked saved policy: the body on screen is
+  // no longer the stored one, and launching by reference would ship a policy
+  // nobody is looking at.
+  const onSpecChange = (next: string) => {
+    setSpecText(next);
+    if (state.selectedPolicyId) patch({ selectedPolicyId: undefined });
   };
 
-  const implied = React.useMemo(
-    () =>
-      impliedEgressHosts(state, workspaces).filter((h) => !state.allowedDomains.includes(h.host)),
-    [state, workspaces],
-  );
-  const ruleTitle = UNLISTED_RULES.find((r) => r.id === state.firstUseApproval)?.title ?? "";
-  const cc = state.confinementClass;
-  const hostCount = state.allowedDomains.length + implied.length;
-
-  const netValue: NetworkSelection = {
-    allowAllEgress: state.allowAllEgress,
-    allowedDomains: state.allowedDomains,
-    deniedDomains: state.deniedDomains,
-    firstUseApproval: state.firstUseApproval,
+  // Picking a policy REPLACES the body, so the textarea always shows what will
+  // actually govern the run even while the reference path is what ships.
+  const onPickPolicy = (id: string) => {
+    const p = savedPolicies.find((x) => x.id === id);
+    if (p) setSpecText(JSON.stringify(p.spec, null, 2));
+    patch({ selectedPolicyId: id });
   };
 
   // The ONE request-payload builder — Launch and Preflight must send EXACTLY
   // the same body, since preflight's verdict is only true if it is a dry-run
   // of what Launch actually does. A second builder here is how the two drift.
   const buildRunInput = () => {
-    const { run, inline_policy } = buildSpec(state, workspaces);
-    // The RADIO is the discriminator, belt to the patch-funnel's braces: a
-    // policy id that somehow survives a switch back to Confined still must
-    // not launch by reference. And the workspace_id override must never
-    // OVERWRITE buildSpec's deliberate ephemeral-workspace fallback with
-    // undefined — that silently launched a workspace-less run.
-    const usePolicy = confinement === "saved" && state.selectedPolicyId;
-    return usePolicy
-      ? {
-          ...run,
-          policy_id: state.selectedPolicyId,
-          workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
-        }
-      : { ...run, inline_policy };
+    const { run } = buildSpec(state, workspaces);
+    // The MODE ROW is the discriminator: a policy id that somehow survives a
+    // switch back to Custom still must not launch by reference. And the
+    // workspace_id override must never OVERWRITE buildSpec's deliberate
+    // ephemeral-workspace fallback with undefined — that silently launched a
+    // workspace-less run.
+    if (useSaved && state.selectedPolicyId) {
+      return {
+        ...run,
+        policy_id: state.selectedPolicyId,
+        workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
+      };
+    }
+    // Unreachable: `problem` disables both actions while the document is
+    // broken. Throwing beats substituting a composed fallback nobody wrote.
+    if (!merged) throw new Error("The policy spec isn't valid JSON.");
+    return { ...run, inline_policy: merged.spec };
   };
 
   const launch = async () => {
@@ -670,65 +657,82 @@ export function NewRunScreen() {
             </Button>
           </SectionCard>
 
-          <SectionCard title="Confinement">
-            <div className="space-y-2">
-              <RadioCard
-                on={confinement === "record"}
-                onSelect={() => {
-                  setConfinement("record");
-                  // Recording means allow-everything by definition; anything else
-                  // would record a policy narrower than what the run really did.
-                  patch({ allowAllEgress: true });
+          <SectionCard title="Policy">
+            <div className="space-y-4">
+              <PolicyPanel
+                instance="run"
+                value={specText}
+                onChange={onSpecChange}
+                onPreflight={preflight}
+                preflightBusy={preflighting}
+                savedPolicy={{
+                  active: useSaved,
+                  onActiveChange: setUseSaved,
+                  picker: (
+                    <Select value={state.selectedPolicyId ?? ""} onValueChange={onPickPolicy}>
+                      <SelectTrigger aria-label="Saved policy">
+                        <SelectValue placeholder="Pick a policy" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {savedPolicies.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ),
                 }}
-                title="Record"
-                body="Allow everything. Log everything. Write the policy from what actually happened."
               />
-              <RadioCard
-                on={confinement === "confined"}
-                onSelect={() => {
-                  setConfinement("confined");
-                  patch({ allowAllEgress: false });
-                }}
-                title="Confined"
-                body="Default-deny. New hosts are held at the door for your approval."
-              />
-              <RadioCard
-                on={confinement === "saved"}
-                onSelect={() => setConfinement("saved")}
-                title="Saved policy"
-                body="Reuse a policy you already have."
-              >
-                <Select
-                  value={state.selectedPolicyId ?? ""}
-                  onValueChange={(v) => {
-                    // Raise the barrier to the policy's floor at PICK time —
-                    // the stored spec refuses to launch below it, and the old
-                    // flow only learned that from a 422 after clicking Launch.
-                    const floor = savedPolicies.find((p) => p.id === v)?.spec
-                      ?.min_confinement_class;
-                    patch({
-                      selectedPolicyId: v,
-                      ...(floor &&
-                      ORDERED_CLASSES.indexOf(floor) >
-                        ORDERED_CLASSES.indexOf(state.confinementClass)
-                        ? { confinementClass: floor }
-                        : {}),
-                    });
-                  }}
-                >
-                  <SelectTrigger aria-label="Saved policy">
-                    <SelectValue placeholder="Pick a policy" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {savedPolicies.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </RadioCard>
 
+              {/* What buildSpec unions in AFTER the parse, named out loud. A
+                  policy the operator did not write is one they cannot be held
+                  to — and these are exactly the entries the document itself
+                  cannot know: the Workspace card's attachments, the grant
+                  lanes' grants, and the hosts those grants must reach (an
+                  api_key grant whose host is not on the allowlist authenticates
+                  nothing, allow_all_egress included). Saved-policy runs launch
+                  by REFERENCE, so nothing is merged into a stored spec. */}
+              {!useSaved && hasAdditions && added && (
+                <div
+                  className="rounded-lg border border-border bg-surface-2 p-3"
+                  data-testid="run-spec-additions"
+                >
+                  <p className="text-[0.75rem] text-muted-foreground">
+                    Added for this run&apos;s selections:
+                  </p>
+                  <div className="mt-1.5 space-y-1">
+                    {added.hosts.map((h) => (
+                      <div key={h} className="flex flex-wrap items-center gap-1.5">
+                        <Mono className="text-[0.75rem] text-foreground">{h}</Mono>
+                        <Chip tone="neutral">allowed_domains</Chip>
+                      </div>
+                    ))}
+                    {added.grants.map((g, i) => (
+                      <div key={`${g.kind}-${i}`} className="flex flex-wrap items-center gap-1.5">
+                        <Mono className="text-[0.75rem] text-foreground">{String(g.kind)}</Mono>
+                        <Chip tone="neutral">eligible_grants</Chip>
+                      </div>
+                    ))}
+                    {added.mounts.map((m) => (
+                      <div key={m.target} className="flex flex-wrap items-center gap-1.5">
+                        <Mono className="text-[0.75rem] text-foreground">{m.target}</Mono>
+                        <Chip tone="neutral">workspace_mounts</Chip>
+                      </div>
+                    ))}
+                    {added.repos.map((r) => (
+                      <div key={r.repo} className="flex flex-wrap items-center gap-1.5">
+                        <Mono className="text-[0.75rem] text-foreground">{r.repo}</Mono>
+                        <Chip tone="neutral">workspace_repos</Chip>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* The run's REQUESTED barrier — a separate wire field from the
+                  spec's min_confinement_class floor, which is why it keeps its
+                  own control here rather than living in the JSON. */}
               <div className="border-t border-border pt-3">
                 <p className="mb-2 text-[0.8125rem] font-medium text-foreground">Barrier</p>
                 <Seg
@@ -738,13 +742,32 @@ export function NewRunScreen() {
                   options={ORDERED_CLASSES.map((c) => ({
                     id: c,
                     label: CC_META[c].label,
-                    disabled: !!availableClasses && !availableClasses.includes(c),
+                    // Two independent reasons, each with its own line below:
+                    // the host can't build this tier, or the policy forbids it.
+                    disabled:
+                      (!!availableClasses && !availableClasses.includes(c)) ||
+                      (!!floor && rank(c) < rank(floor)),
                   }))}
                 />
                 {availableClasses &&
                   ORDERED_CLASSES.filter((c) => !availableClasses.includes(c)).map((c) => (
                     <p key={c} className="mt-1.5 text-[0.6875rem] text-muted-foreground">
                       {CC_META[c].label} isn&apos;t installed on this host.
+                    </p>
+                  ))}
+                {/* Floor-disabled tiers get their OWN reason — the line above
+                    keys off availability alone, and "isn't installed" would be
+                    a lie about a tier this host builds fine. Skipped for a tier
+                    already named as uninstalled: one reason per tier, not two.
+                    A floor above every buildable tier leaves the Seg entirely
+                    disabled — fail-closed on purpose, with preflight and launch
+                    naming the cause. */}
+                {floor &&
+                  ORDERED_CLASSES.filter(
+                    (c) => rank(c) < rank(floor) && (!availableClasses || availableClasses.includes(c)),
+                  ).map((c) => (
+                    <p key={c} className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                      {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
                     </p>
                   ))}
                 {probeSettled && !availableClasses && (
@@ -754,77 +777,6 @@ export function NewRunScreen() {
                 )}
               </div>
             </div>
-          </SectionCard>
-
-          <SectionCard title="Network">
-            {isRecord ? (
-              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground italic">
-                Everything is allowed. That is what recording means.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                <RadioCard
-                  on={preset === "none"}
-                  onSelect={() => setPreset("none")}
-                  title="None"
-                  body="No hosts. Everything becomes an approval request."
-                />
-                <RadioCard
-                  on={preset === "model"}
-                  onSelect={() => setPreset("model")}
-                  title="Just the model provider"
-                  body="api.anthropic.com only — the agent reaches its model and nothing else."
-                />
-                <RadioCard
-                  on={preset === "registries"}
-                  onSelect={() => setPreset("registries")}
-                  title="Common package registries"
-                  body={`${PRESET_DOMAINS.length} hosts — npm, PyPI, crates.io, Go proxy, Maven Central and the rest.`}
-                />
-                <RadioCard
-                  on={preset === "everything"}
-                  onSelect={() => setPreset("everything")}
-                  title="Everything"
-                  body="Open egress. Nothing is blocked."
-                />
-
-                {/* Host detail lives in ONE surface, not a stack of disclosures. */}
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                  <p className="text-[0.75rem] text-muted-foreground">
-                    {preset === "custom"
-                      ? "Edited — this run uses your host list."
-                      : "Pick individual hosts, set what happens for anything unlisted, and block hosts outright."}
-                  </p>
-                  <Button variant="secondary" size="sm" onClick={() => setNetOpen(true)}>
-                    Edit hosts…
-                  </Button>
-                </div>
-
-                {/* The unlisted-hosts rule, ON the card face — not only inside
-                    the dialog. What happens to everything you did NOT list is
-                    as much a part of the envelope as the list itself, and
-                    burying the choice behind "Edit hosts…" made it read as
-                    fixed: an operator who wants approvals never raised at all
-                    ("Deny silently" — always_deny as the fallback) had no way
-                    to see the choice existed without opening a dialog about a
-                    different question. Same state the dialog edits, so the two
-                    surfaces cannot disagree. */}
-                {!state.allowAllEgress && (
-                  <div className="space-y-1.5 border-t border-border pt-3">
-                    <p className="text-[0.75rem] text-muted-foreground">Unlisted hosts:</p>
-                    <Seg
-                      label="Unlisted hosts"
-                      value={state.firstUseApproval}
-                      onChange={(id) => patch({ firstUseApproval: id as (typeof UNLISTED_RULES)[number]["id"] })}
-                      options={UNLISTED_RULES.map((r) => ({ id: r.id, label: r.title }))}
-                    />
-                    <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-                      {UNLISTED_RULES.find((r) => r.id === state.firstUseApproval)?.body}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
           </SectionCard>
         </div>
 
@@ -842,7 +794,7 @@ export function NewRunScreen() {
                   {selectedPolicy.spec.allow_all_egress
                     ? "open egress"
                     : `${(selectedPolicy.spec.allowed_domains ?? []).length} host${(selectedPolicy.spec.allowed_domains ?? []).length === 1 ? "" : "s"} allowed`}
-                  . The network edits on this page do not apply to it.
+                  . It launches by reference, so nothing on this page is merged into it.
                 </p>
               </RailSection>
             )}
@@ -853,66 +805,6 @@ export function NewRunScreen() {
               </div>
               <p className="text-[0.75rem] text-muted-foreground">{CC_META[cc].doesntProtect}</p>
             </RailSection>
-
-            {!selectedPolicy && (
-            <RailSection title="Network">
-              {isRecord ? (
-                <div className="space-y-2">
-                  <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
-                    Unrestricted — every host this run reaches is logged and becomes the policy.{" "}
-                    {state.deniedDomains.length > 0
-                      ? `${state.deniedDomains.length} denied host${state.deniedDomains.length === 1 ? "" : "s"} stay blocked — denies always win, recording included.`
-                      : "Nothing is blocked."}
-                  </p>
-                  {cc === "CC1" && (
-                    <p className="rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
-                      On {CC_META.CC1.label}, an unrestricted run can move your data out. Use{" "}
-                      {CC_META.CC2.label} or {CC_META.CC3.label} to record.
-                    </p>
-                  )}
-                </div>
-              ) : state.allowAllEgress ? (
-                <p className="text-[0.75rem] text-muted-foreground">Open egress. Nothing is blocked.</p>
-              ) : hostCount === 0 ? (
-                <>
-                  <p className="text-[0.8125rem] font-medium text-foreground">0 hosts allowed</p>
-                  <p className="mt-0.5 text-[0.75rem] text-muted-foreground">{ruleTitle} for anything else.</p>
-                </>
-              ) : (
-                <>
-                  <p className="mb-1.5 text-[0.8125rem] font-medium text-foreground">
-                    {hostCount} host{hostCount === 1 ? "" : "s"} allowed
-                  </p>
-                  <div className="space-y-1">
-                    {state.allowedDomains.slice(0, 3).map((h) => (
-                      <Mono key={h} className="block text-[0.75rem] text-foreground">
-                        {h}
-                      </Mono>
-                    ))}
-                    {state.allowedDomains.length > 3 && (
-                      <p className="font-mono text-[0.75rem] text-muted-foreground">
-                        …{state.allowedDomains.length - 3} more
-                      </p>
-                    )}
-                    {/* Hosts the RUN implies but nobody typed — named with why,
-                        so an unexplained host never appears in the allowlist. */}
-                    {implied.map((h) => (
-                      <div key={h.host} className="flex flex-wrap items-center gap-1.5">
-                        <Mono className="text-[0.75rem] text-foreground">{h.host}</Mono>
-                        <Chip tone="neutral">added by your {h.why}</Chip>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-1.5 text-[0.75rem] text-muted-foreground">{ruleTitle} for anything else.</p>
-                </>
-              )}
-              {state.deniedDomains.length > 0 && (
-                <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
-                  {state.deniedDomains.length} blocked outright.
-                </p>
-              )}
-            </RailSection>
-            )}
 
             <RailSection title="Credentials">
               {isAgent && llmReady === false && (
@@ -963,16 +855,11 @@ export function NewRunScreen() {
             </p>
           )}
 
+          {/* Preflight moved ONTO the Policy panel, next to the document it
+              checks — one button, not two competing ones. Its result stays
+              here, beside Launch, because "what would be clamped" is the last
+              thing read before committing. */}
           <div className="mt-4 flex gap-2">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              disabled={preflighting || !!problem}
-              onClick={preflight}
-            >
-              {preflighting && <Loader2 className="size-4 animate-spin" />}
-              Preflight
-            </Button>
             <Button className="flex-1" disabled={launching || !!problem} onClick={launch}>
               {launching && <Loader2 className="size-4 animate-spin" />}
               Launch run
@@ -1015,19 +902,6 @@ export function NewRunScreen() {
           )}
         </aside>
       </div>
-
-      <NetworkDialog
-        open={netOpen}
-        onOpenChange={setNetOpen}
-        value={netValue}
-        onSave={(next) => {
-          patch(next);
-          setNetOpen(false);
-          // An explicit host edit means this is no longer a recording run —
-          // recording is allow-everything by definition.
-          if (confinement === "record" && !next.allowAllEgress) setConfinement("confined");
-        }}
-      />
 
       {addWsOpen && (
         <AddWorkspaceDialog

@@ -9,9 +9,16 @@
 // WizardState + the wizard's own per-step validation): this module holds
 // buildSpec, the CANONICAL state -> wire-contract composer described in
 // wizard-types.ts's own header, plus impliedEgressHosts, the grant-implied
-// egress-host list buildSpec and step-egress.tsx both read (D6/claim3) so the
-// two can never drift. Pure extraction — re-exported from wizard-types.ts so
-// every existing importer keeps working unchanged.
+// egress-host list buildSpec and mergeRunSelections both read (D6/claim3) so
+// the two can never drift. Re-exported from wizard-types.ts so every existing
+// importer keeps working unchanged.
+//
+// Since the Policy panel took over /runs/new, buildSpec's own envelope
+// (allowed/denied domains, first_use_approval, the barrier floor, the
+// lifecycle) is no longer what the run screen ships — the operator's spec JSON
+// is. buildSpec still composes the `run` scalars, the Workspace card's
+// mounts/repos and the grant lanes, and mergeRunSelections unions exactly those
+// back into the authored document.
 import type {
   Agent,
   GrantSpec,
@@ -46,12 +53,11 @@ export interface ImpliedEgressHost {
   why: ImpliedEgressWhy;
 }
 
-// The ONE list of grant-implied egress hosts — buildSpec unions these into
-// allowed_domains (below) so a granted capability is never silently gated
-// behind first-use approval; step-egress.tsx renders the SAME list as
-// non-removable "Added by grants:" chips so the one screen that owns egress
-// can't disagree with what actually ships. Extracted here so the two call
-// sites share one predicate/host-list and can never drift (D6/claim3).
+// The ONE list of grant-implied egress hosts — unioned into allowed_domains so
+// a granted capability is never silently gated behind first-use approval. Both
+// consumers read THIS list: buildSpec (below) and mergeRunSelections, whose
+// "Added for this run's selections" line names each host on screen, so what the
+// operator is shown and what actually ships cannot drift (D6/claim3).
 export function impliedEgressHosts(
   state: WizardState,
   workspaces: Workspace[] = [],
@@ -150,10 +156,6 @@ export function buildSpec(
   // BYOI: a user-supplied base image the backend wraps with the runner tools.
   if (state.image.trim()) {
     run.image = state.image.trim();
-  } else if (state.devcontainerRepo.trim()) {
-    // W15-W15e-wizard-roundtrip-6: a composed devcontainer build — mutually
-    // exclusive with `image` (the `else` above), same as the server enforces.
-    run.devcontainer_repo = state.devcontainerRepo.trim();
   }
   // Governed command: task_mode=exec runs `task` as a plain shell command, no
   // agent/model involved. Omitted for "agent" so the wire default ("harness")
@@ -263,11 +265,6 @@ export function buildSpec(
     });
   }
 
-  // W15-W15e-wizard-roundtrip-3: re-emit any grant kind this wizard has no
-  // editable UI for (ssh_key, cloud_sts) verbatim, unchanged, rather than
-  // silently dropping it — see WizardState.opaqueGrants.
-  grants.push(...state.opaqueGrants);
-
   // --- lifecycle: an interactive run comes up idle, so never-reap (-1) unless
   // the operator explicitly chose an auto-stop window. ---
   let autoStopAfterSec: number | undefined;
@@ -320,6 +317,109 @@ export function buildSpec(
   if (autoStopAfterSec !== undefined) inline_policy.auto_stop_after_sec = autoStopAfterSec;
 
   return { run, inline_policy };
+}
+
+/* ---------- the post-parse merge (new-run's Policy panel) ---------- */
+
+// What the run's own SELECTIONS added on top of the spec the operator wrote.
+// Rendered verbatim next to the panel ("Added for this run's selections: …"):
+// a union the operator cannot see is a policy they did not author.
+export interface SpecAdditions {
+  /** allowed_domains entries the JSON did not already carry. */
+  hosts: string[];
+  /** eligible_grants the JSON did not already carry. */
+  grants: GrantSpec[];
+  mounts: WorkspaceMount[];
+  repos: WorkspaceRepo[];
+}
+
+// Deep equality over the FULL canonicalized GrantSpec — kind + scope +
+// ttl_seconds + requires_approval (types.go's GrantSpec). Exact duplicates
+// ONLY: any PARTIAL key silently drops a real grant (github_token has no
+// secret name at all; one secret_name can serve two hosts; two grants equal on
+// scope can still differ on requires_approval/TTL). Key-sorted so JSON authored
+// by hand matches a composed grant that spells the same scope in another order;
+// array order INSIDE a scope is left as-is — a kept near-duplicate is harmless,
+// a dropped grant is not. Absent ttl/scope/requires_approval normalize to the
+// values the Go decoder would default them to, so "omitted" and "written out"
+// are one grant, not two.
+function grantKey(g: GrantSpec): string {
+  const sortKeys = (v: unknown): unknown =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.keys(v as object)
+            .sort()
+            .map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]),
+        )
+      : v;
+  return JSON.stringify({
+    kind: g.kind,
+    scope: sortKeys(g.scope ?? {}),
+    ttl_seconds: g.ttl_seconds ?? 0,
+    requires_approval: g.requires_approval === true,
+  });
+}
+
+// mergeRunSelections is the run screen's post-parse union, and the ONE place it
+// happens: the panel's JSON is the authored policy, and this adds back only
+// what the JSON cannot know — the Workspace card's mounts/repos, the grant
+// lanes' own grants, and the egress hosts those grants require.
+//
+// The JSON OWNS everything else (the egress keys, first_use_approval,
+// min_confinement_class, auto_stop_after_sec, llm_inspection, resources): a
+// merge that overwrote them would silently un-author the document on screen.
+export function mergeRunSelections(
+  authored: RunPolicySpec,
+  state: WizardState,
+  workspaces: Workspace[] = [],
+): { spec: RunPolicySpec; added: SpecAdditions } {
+  const { inline_policy: composed } = buildSpec(state, workspaces);
+
+  // --- eligible_grants: authored ∪ composed, deep-equal dedupe ---
+  const grants = [...(authored.eligible_grants ?? [])];
+  const seen = new Set(grants.map(grantKey));
+  const addedGrants: GrantSpec[] = [];
+  for (const g of composed.eligible_grants ?? []) {
+    const k = grantKey(g);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    grants.push(g);
+    addedGrants.push(g);
+  }
+
+  // --- allowed_domains: grant-implied hosts + the credential-injection pin ---
+  // The pin is derived from the UNION's api_key grants, NOT from wizard state:
+  // proxy credential injection only rewrites requests whose host is already on
+  // allowed_domains, and that holds under allow_all_egress too
+  // (types/policy.go's allow_all_egress note). A hand-written api_key grant
+  // whose host nobody pinned authenticates nothing.
+  const pins = grants
+    .filter((g) => g.kind === "api_key")
+    .map((g) => (typeof g.scope?.host === "string" ? g.scope.host.trim() : ""))
+    .filter(Boolean);
+  const have = new Set(authored.allowed_domains ?? []);
+  const hosts = dedupe([
+    ...impliedEgressHosts(state, workspaces).map((h) => h.host),
+    ...pins,
+  ]).filter((h) => !have.has(h));
+
+  const added: SpecAdditions = {
+    hosts,
+    grants: addedGrants,
+    mounts: composed.workspace_mounts ?? [],
+    repos: composed.workspace_repos ?? [],
+  };
+
+  const spec: RunPolicySpec = { ...authored };
+  if (hosts.length) spec.allowed_domains = [...(authored.allowed_domains ?? []), ...hosts];
+  if (addedGrants.length) spec.eligible_grants = grants;
+  if (added.mounts.length) {
+    spec.workspace_mounts = [...(authored.workspace_mounts ?? []), ...added.mounts];
+  }
+  if (added.repos.length) {
+    spec.workspace_repos = [...(authored.workspace_repos ?? []), ...added.repos];
+  }
+  return { spec, added };
 }
 
 // Compose the github_token grant scope. read => contents:read; read+write =>

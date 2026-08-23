@@ -7,14 +7,17 @@
 // PermissionWizard dialog (Basics → Access → Egress → Confinement → Review).
 //
 // What is worth proving against a live backend, rather than in jsdom: that the
-// live rail actually tracks the form, and that the network dialog's selections
-// reach the card and the rail. Those are the claims the redesign exists to make
-// — the wizard put every consequence on a Review screen you reached last.
+// form's fields follow the run mode, and that the shared Policy panel — the
+// same component /policies authors through — really governs what this run
+// ships. The Confinement + Network cards it replaced put the envelope behind a
+// preset stack and a dialog; the spec JSON is the envelope now.
 //
-// Notes on the seeded backend (scripts/e2e-backend.sh): /healthz reports no
-// confinement_classes, so the barrier floors to Fence (CC1) and Wall/Vault
-// render disabled. There is no ai_provider integration at all, so an agent run
-// honestly reports that no model provider is connected.
+// Notes on the seeded backend (scripts/e2e-backend.sh): wardynd runs with
+// -runner none, so /healthz advertises NO confinement_classes — unknown, not
+// confirmed-absent, so all three barrier tiers stay selectable and the runner
+// capability gate (runs_create.go) is skipped entirely. There is no ai_provider
+// integration at all, so an agent run honestly reports that no model provider
+// is connected.
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page } from "@playwright/test";
 
@@ -58,65 +61,76 @@ test.describe("New run — one page", () => {
     await expect(page.getByRole("radiogroup", { name: "Run mode" })).toHaveCount(0);
   });
 
-  // The rail is the whole point: it answers "what can this run do" while you
-  // build it, not on a screen you reach at the end.
-  test("the rail tracks the network choice as it changes", async ({ page }) => {
+  // The Policy panel replaced the Confinement + Network cards: the run's policy
+  // IS the spec JSON, authored through the same component /policies uses. Its
+  // live derivations are what the rail's Network section used to be — the
+  // consequences of the envelope, while you build it rather than after.
+  test("the panel's derivations track the spec as it changes", async ({ page }) => {
     await openNewRun(page);
-    const rail = page.getByText("What this run can do").locator("..");
+    const spec = page.getByLabel("Spec (JSON)");
 
-    await page.getByRole("radio", { name: /^None/ }).click();
-    await expect(rail.getByText("0 hosts allowed")).toBeVisible();
+    // Opens on the Minimal template: one host, a review rule, a CC2 floor.
+    await expect(spec).toHaveValue(/"api\.anthropic\.com"/);
+    await expect(page.getByText("Valid JSON")).toBeVisible();
+    await expect(page.getByText("1 domain allowed")).toBeVisible();
 
-    await page.getByRole("radio", { name: /Common package registries/ }).click();
-    await expect(rail.getByText(/1[0-9] hosts allowed/)).toBeVisible();
-    await expect(rail.getByText("github.com")).toBeVisible();
+    await page.getByRole("button", { name: "Package registries" }).click();
+    await expect(spec).toHaveValue(/"pypi\.org"/);
+    await expect(page.getByText(/1[0-9] domains allowed/)).toBeVisible();
 
-    await page.getByRole("radio", { name: /^Everything/ }).click();
-    await expect(rail.getByText(/Open egress\. Nothing is blocked\./)).toBeVisible();
+    // A broken document says so instead of deriving from nothing, and Launch
+    // stops rather than posting a body nobody can read. The title is filled
+    // first so the disable is the SPEC's doing, not the title rule's.
+    await page.getByLabel("Title").fill("e2e smoke");
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
+    await spec.fill("{ not json");
+    await expect(page.getByText(/Invalid JSON/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
+    await expect(page.getByText("The policy spec isn't valid JSON.")).toBeVisible();
   });
 
-  // Recording is allow-everything by definition, and on the weakest barrier
-  // that is worth saying out loud rather than leaving the operator to infer.
-  test("Record states its own blast radius, and warns on Fence", async ({ page }) => {
+  // The Record radio only ever set allow_all_egress — a promise this screen
+  // could not keep, since real Record Mode is workspace-level. It is a template
+  // now, named for what it actually does.
+  test("the allow-all template says block-list only, never 'unrestricted'", async ({ page }) => {
     await openNewRun(page);
-    await page.getByRole("radio", { name: /^Record/ }).click();
-    await expect(page.getByText(/That is what recording means/)).toBeVisible();
-    await expect(page.getByText(/every host this run reaches is logged and becomes the policy/i)).toBeVisible();
-    // The seeded backend floors to Fence, so the CC1 caveat must be showing.
-    await expect(page.getByText(/an unrestricted run can move your data out/i)).toBeVisible();
+    await page.getByRole("button", { name: "Allow-all — observe first" }).click();
+
+    await expect(page.getByLabel("Spec (JSON)")).toHaveValue(/"allow_all_egress": true/);
+    await expect(page.getByText("Allow-all egress (block-list only)")).toBeVisible();
   });
 
-  test("Edit hosts… opens the dialog and its choice reaches the card and rail", async ({ page }) => {
+  // The Edit-hosts dialog's job — pick hosts, set the unlisted rule, block hosts
+  // outright — is the JSON itself now, with the Fields rail documenting each key
+  // and writing a starting value for it.
+  test("the Fields rail inserts a key into the spec, and the derivations follow", async ({ page }) => {
     await openNewRun(page);
-    await page.getByRole("radio", { name: /Common package registries/ }).click();
-    await page.getByRole("button", { name: "Edit hosts…" }).click();
+    const spec = page.getByLabel("Spec (JSON)");
 
-    const dlg = page.getByRole("dialog");
-    await expect(dlg.getByText("Network for this run")).toBeVisible();
+    await page.getByRole("button", { name: "Insert denied_domains" }).click();
+    await expect(spec).toHaveValue(/"denied_domains"/);
+    // A deny beats an allow in both egress modes, so it is counted separately.
+    await expect(page.getByText("1 domain allowed, 1 denied")).toBeVisible();
 
-    // The run's most consequential choice, as three cards instead of a Select.
-    await dlg.getByRole("radio", { name: /Deny silently/ }).click();
-    await dlg.getByRole("button", { name: /crates\.io/ }).click(); // drop one host
-    await dlg.getByRole("button", { name: "Save hosts" }).click();
-
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    // The card stops asserting a preset the run no longer uses.
-    await expect(page.getByText(/Edited — this run uses your host list/)).toBeVisible();
-    await expect(
-      page.getByRole("radiogroup", { name: "Unlisted hosts" }).getByRole("radio", { name: "Deny silently" }),
-    ).toBeChecked();
+    // The unlisted-host rule is a documented key, not a buried dropdown.
+    await expect(page.getByTitle("docs/POLICIES.md#first_use_approval-modes")).toBeVisible();
   });
 
-  test("Cancel in the dialog changes nothing", async ({ page }) => {
+  // Two lanes, one panel: reuse a stored policy by reference, or author one for
+  // this run. Switching lanes swaps the editor for the picker, and nothing on
+  // the page is merged into a stored spec.
+  test("the mode row swaps the editor for the saved-policy picker", async ({ page }) => {
     await openNewRun(page);
-    await page.getByRole("radio", { name: /Common package registries/ }).click();
-    await page.getByRole("button", { name: "Edit hosts…" }).click();
-    const dlg = page.getByRole("dialog");
-    await dlg.getByRole("radio", { name: /Deny silently/ }).click();
-    await dlg.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByLabel("Spec (JSON)")).toBeVisible();
 
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(page.getByText(/Edited — this run uses your host list/)).toHaveCount(0);
+    await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
+    await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
+    // Nothing is picked yet, so Launch says what it is waiting for.
+    await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
+
+    await page.getByRole("button", { name: /Custom policy/ }).click();
+    await expect(page.getByLabel("Spec (JSON)")).toBeVisible();
   });
 
   // The "no model provider is connected" rail warning is NOT asserted here on

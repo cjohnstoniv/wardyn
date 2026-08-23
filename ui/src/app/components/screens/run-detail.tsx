@@ -16,6 +16,7 @@ import {
   Loader2,
   ScrollText,
   ShieldCheck,
+  Sparkles,
   SquareTerminal,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -70,6 +71,7 @@ import {
   VIEWER_APPROVAL_BLOCKS_NOTE,
   approvalScopeBadge,
 } from "../wardyn/copy";
+import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
@@ -98,6 +100,13 @@ export function RunDetailScreen() {
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [tab, setTab] = React.useState<Tab>("overview");
+  // "Make a policy from this run" — the honest home of "write the policy from
+  // what actually happened", now that /runs/new's Record radio (which only ever
+  // set allow_all_egress) is gone. Same runId-driven ProfileReview sheet
+  // workspace-detail.tsx and demo-screen.tsx already mount: it POSTs
+  // /runs/{id}/profile, renders the proposal's inline_policy verbatim, and its
+  // own "Save as policy" persists it via POST /policies. Local open-state only.
+  const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   // Recording is fetched lazily the first time the Recording tab opens.
   const [recording, setRecording] = React.useState<Recording | null>(null);
@@ -345,7 +354,7 @@ export function RunDetailScreen() {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} />
+            <AuditTab events={audit} onMakePolicy={() => setProfileRunId(id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -365,6 +374,8 @@ export function RunDetailScreen() {
           </TabsContent>
         </Tabs>
       )}
+
+      <ProfileReview runId={profileRunId} onClose={() => setProfileRunId(null)} />
 
       <ReasonDialog
         prompt={decide}
@@ -717,15 +728,20 @@ function ApprovalsTab({
 // ---------------------------------------------------------------------------
 // Audit tab (this run's events)
 // ---------------------------------------------------------------------------
-function AuditTab({ events }: { events: AuditEvent[] }) {
+function AuditTab({ events, onMakePolicy }: { events: AuditEvent[]; onMakePolicy: () => void }) {
   return (
     <div className="max-w-4xl">
-      <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
         <Link to="/audit" className="ml-1 inline-flex items-center gap-1 text-primary hover:underline">
           open full Audit <ArrowRight className="size-3" />
         </Link>
+        {/* Beside the record it is synthesized FROM, not on the command bar:
+            what this run actually did is the whole basis of the proposal. */}
+        <Button variant="outline" size="sm" className="ml-auto h-7" onClick={onMakePolicy}>
+          <Sparkles className="size-3.5" /> Make a policy from this run
+        </Button>
       </div>
       {events.length === 0 ? (
         <div className="rounded-xl border border-border bg-card">

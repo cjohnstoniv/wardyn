@@ -4,7 +4,6 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { UNLISTED_RULES } from "../new-run/network-dialog";
 import { DEMOS } from "./demo-catalog";
 
 // Keyless, workspace-free, LLM-free sandboxes an operator drives by hand.
@@ -102,43 +101,49 @@ describe("demo catalog", () => {
     }
   });
 
-  // Regression: setupUi quoted "Deny with review", but the real dropdown
-  // option text (step-egress.tsx) is "Deny + review".
-  // setupUi tells an operator which control to click, so it must quote the
-  // words the UI actually shows. This used to hardcode the wizard's Select
-  // label ("Deny + review"); the New run page names each rule by its
-  // CONSEQUENCE instead, so the assertion now reads UNLISTED_RULES — the one
-  // place those titles live — and a future rewording updates both at once.
-  it("setupUi quotes the real unlisted-host rule titles verbatim", () => {
-    for (const mode of ["deny_with_review", "wait_for_review"] as const) {
-      const demo = DEMOS.find((d) => d.policy.first_use_approval === mode);
-      if (!demo) continue;
-      const title = UNLISTED_RULES.find((r) => r.id === mode)!.title;
+  // setupUi tells an operator which control to click, so it must name what the
+  // UI actually shows. It has quoted three different vocabularies now: the
+  // retired wizard's Select label ("Deny + review"), then the New run page's
+  // consequence titles ("Deny, but ask" — UNLISTED_RULES, which died with the
+  // Edit-hosts dialog). /runs/new authors the spec JSON through the shared
+  // Policy panel today, so there is no prose title left to quote: the WIRE KEY
+  // is the vocabulary, and the panel's Fields rail is where it's documented.
+  //
+  // Pinning each demo's OWN first_use_approval is also a stronger check than
+  // the two it replaces — it covers every confined demo rather than the first
+  // match per mode, and it ties the instructions to the policy the demo really
+  // launches with instead of to a string table.
+  it("every confined demo's setupUi names its own first_use_approval value", () => {
+    for (const d of KEYLESS.filter((x) => !x.policy.allow_all_egress)) {
       expect(
-        demo.setupUi.some((line) => line.includes(`'${title}'`)),
-        `${demo.id} should quote "${title}"`,
+        d.setupUi.some((line) => line.includes(`"${d.policy.first_use_approval}"`)),
+        `${d.id} should name ${d.policy.first_use_approval}`,
       ).toBe(true);
     }
   });
 
-  // once-or-for-good is a SECOND deny_with_review demo (fail-then-approve is
-  // the first), so the DEMOS.find(...) above — first match wins — never
-  // reaches its setupUi. Address this one by id rather than assuming the
-  // generic check above covers it.
-  it("once-or-for-good's setupUi also quotes the deny_with_review rule title verbatim", () => {
-    const demo = DEMOS.find((d) => d.id === "once-or-for-good")!;
-    const title = UNLISTED_RULES.find((r) => r.id === "deny_with_review")!.title;
-    expect(
-      demo.setupUi.some((line) => line.includes(`'${title}'`)),
-      `${demo.id} should quote "${title}"`,
-    ).toBe(true);
+  // Under allow-all, first_use_approval is inert (the proxy never raises an
+  // approval for a host it already allows), so quoting it there would teach a
+  // setting that does nothing. Those demos name the key that IS doing the work.
+  it("every allow-all demo's setupUi names allow_all_egress instead", () => {
+    const openEgress = KEYLESS.filter((d) => d.policy.allow_all_egress);
+    expect(openEgress.length).toBeGreaterThan(0);
+    for (const d of openEgress) {
+      expect(
+        d.setupUi.some((line) => line.includes("allow_all_egress")),
+        `${d.id} should name allow_all_egress`,
+      ).toBe(true);
+    }
   });
 
-  // The steps must not send anyone to a screen that no longer exists.
-  it("no setupUi line names the retired wizard's steps", () => {
+  // The steps must not send anyone to a control that no longer exists — the
+  // five-step wizard's, nor the Network card / Edit-hosts dialog / Record radio
+  // the shared Policy panel replaced on /runs/new.
+  it("no setupUi line names a retired control", () => {
     for (const d of DEMOS) {
       for (const line of d.setupUi) {
         expect(line).not.toMatch(/Egress step|Basics step|Confinement step|Review step|wizard/i);
+        expect(line).not.toMatch(/Edit hosts|In Network|Pick Record\b/i);
       }
     }
   });

@@ -8,7 +8,7 @@
 // the machine running the suite has a logged-in Claude CLI, which setupProviders
 // detects — so the same assertion passes on a laptop and fails on CI.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -108,19 +108,78 @@ describe("NewRunScreen — the rail tells the truth about model access", () => {
   });
 });
 
-describe("NewRunScreen — the rail counts hosts the way the policy does", () => {
-  // impliedEgressHosts can name a host already in allowedDomains
-  // (api.anthropic.com is in the default state) and buildSpec dedupes on the
-  // wire — a rail saying 2 where the policy carries 1 would be a rail that lies.
-  it("counts the union, not the sum", async () => {
+// The Policy panel authors the spec; the run's own SELECTIONS are unioned in
+// after the parse and named on screen. The governance claim the retired
+// host-count tests made — count the UNION, not the sum — now lives here: what
+// the JSON already carries must never be re-announced as something this screen
+// added, and what only the selections know must never be silently merged.
+describe("NewRunScreen — the additions line counts the union, not the sum", () => {
+  // A grant whose injection host is already on the allowlist adds NOTHING. The
+  // Minimal template is exactly that shape (api.anthropic.com, allowed), so a
+  // fresh screen has nothing to announce.
+  it("says nothing when the JSON already carries every implied host", async () => {
     renderScreen();
-    expect(await screen.findByText("1 host allowed")).toBeInTheDocument();
+    await screen.findByLabelText(/Spec \(JSON\)/);
+    expect(screen.queryByTestId("run-spec-additions")).not.toBeInTheDocument();
   });
 
-  it("pluralises", async () => {
+  // The trap the merge rules exist for: proxy credential injection only rewrites
+  // requests whose host is ALREADY on allowed_domains, and that holds under
+  // allow_all_egress too. A hand-written api_key grant therefore needs its exact
+  // host pinned — derived from the merged grant UNION, not from wizard state,
+  // which knows nothing about a grant the operator typed.
+  it("pins a hand-written api_key grant's host, allow-all included", async () => {
     renderScreen();
-    await user.click(await screen.findByRole("radio", { name: /Common package registries/ }));
-    expect(screen.getByText(/^1[0-9] hosts allowed$/)).toBeInTheDocument();
+    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    await user.clear(box);
+    fireEvent.change(box, {
+      target: {
+        value: JSON.stringify({
+          allowed_domains: [],
+          allow_all_egress: true,
+          first_use_approval: "always_deny",
+          min_confinement_class: "CC1",
+          eligible_grants: [
+            {
+              kind: "api_key",
+              scope: { host: "llm.acme.internal", header: "x-api-key", secret_name: "acme-key" },
+              requires_approval: false,
+            },
+          ],
+        }),
+      },
+    });
+
+    const added = await screen.findByTestId("run-spec-additions");
+    expect(within(added).getByText("llm.acme.internal")).toBeInTheDocument();
+  });
+});
+
+// Every successful parse re-reads the floor the document authors, and the Seg
+// DISABLES every tier below it. A one-time up-clamp alone would re-open the
+// below-floor 422 the moment the operator lowered the Seg afterwards.
+describe("NewRunScreen — the barrier floor disables what it forbids", () => {
+  it("names the floor as its own reason, separate from what the host can build", async () => {
+    renderScreen();
+    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    fireEvent.change(box, {
+      target: {
+        value: JSON.stringify({
+          allowed_domains: [],
+          first_use_approval: "always_deny",
+          min_confinement_class: "CC3",
+        }),
+      },
+    });
+
+    // The health mock reports CC1 only, so Wall/Vault are unavailable AND
+    // below-floor — one reason each, never two — while Fence, which this host
+    // builds fine, is disabled for the floor alone. Every tier disabled is
+    // fail-closed on purpose; preflight and launch name the cause.
+    expect(await screen.findByText(/Fence is below the policy's floor \(Vault\)/)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Fence" })).toBeDisabled();
+    expect(screen.getByText(/Wall isn't installed on this host/)).toBeInTheDocument();
+    expect(screen.queryByText(/Wall is below the policy's floor/)).not.toBeInTheDocument();
   });
 });
 

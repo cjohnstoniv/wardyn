@@ -14,6 +14,7 @@ import {
   impliedEgressHosts,
   initialWizardState,
 } from "./wizard-types";
+import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
 import type { Workspace } from "../../../lib/types";
 
@@ -689,5 +690,104 @@ describe("buildSpec — the boot-seed opt-in and tool-approval posture", () => {
       toolApprovals: "hold",
     });
     expect(run.tool_approvals).toBeUndefined();
+  });
+});
+
+// mergeRunSelections — /runs/new's post-parse union. The panel's JSON is the
+// authored policy; only what it CANNOT know is added back, and only once.
+describe("mergeRunSelections — the authored spec wins, the selections are added", () => {
+  const base = () => ({
+    allowed_domains: ["api.anthropic.com"],
+    first_use_approval: "deny_with_review" as const,
+    min_confinement_class: "CC2" as const,
+  });
+
+  it("never overwrites a key the JSON owns", () => {
+    const authored = { ...base(), auto_stop_after_sec: 900, allow_all_egress: true };
+    const { spec } = mergeRunSelections(authored, initialWizardState());
+    expect(spec.auto_stop_after_sec).toBe(900);
+    expect(spec.allow_all_egress).toBe(true);
+    expect(spec.first_use_approval).toBe("deny_with_review");
+    expect(spec.min_confinement_class).toBe("CC2");
+  });
+
+  // Dedupe is deep equality over the FULL canonicalized GrantSpec, so key ORDER
+  // and an omitted-vs-written default must not turn one grant into two...
+  it("treats a re-spelled identical grant as the same grant", () => {
+    const state: WizardState = { ...initialWizardState(), llmSecretName: "anthropic-api-key" };
+    expect(buildSpec(state).inline_policy.eligible_grants).toHaveLength(1);
+    // Same grant: keys in another order, requires_approval left out (Go
+    // defaults it false, which is exactly what the composed one says).
+    const authored = {
+      ...base(),
+      eligible_grants: [
+        {
+          scope: {
+            secret_name: "anthropic-api-key",
+            format: "%s",
+            host: "api.anthropic.com",
+            header: "x-api-key",
+          },
+          kind: "api_key",
+        },
+      ],
+    } as unknown as Parameters<typeof mergeRunSelections>[0];
+    const { spec, added } = mergeRunSelections(authored, state);
+    expect(added.grants).toEqual([]);
+    expect(spec.eligible_grants).toHaveLength(1);
+  });
+
+  // ...but any PARTIAL key would silently DROP a real grant: two grants can
+  // agree on kind AND scope and still differ on TTL or requires_approval.
+  it("keeps a grant that differs only on ttl_seconds or requires_approval", () => {
+    const state: WizardState = { ...initialWizardState(), llmSecretName: "anthropic-api-key" };
+    const composed = buildSpec(state).inline_policy.eligible_grants![0];
+    const authored = {
+      ...base(),
+      eligible_grants: [{ ...composed, ttl_seconds: 60 }, { ...composed, requires_approval: true }],
+    };
+    const { spec, added } = mergeRunSelections(authored, state);
+    expect(added.grants).toHaveLength(1);
+    expect(spec.eligible_grants).toHaveLength(3);
+  });
+
+  // Credential injection only rewrites requests whose host is on the allowlist —
+  // under allow_all_egress too. A hand-written api_key grant nobody pinned
+  // authenticates nothing, and wizard state cannot know it exists.
+  it("pins a JSON-authored api_key host the wizard never saw", () => {
+    const authored = {
+      ...base(),
+      allowed_domains: [],
+      allow_all_egress: true,
+      eligible_grants: [
+        { kind: "api_key", scope: { host: "llm.acme.internal" }, requires_approval: false },
+      ],
+    };
+    const { spec, added } = mergeRunSelections(authored, initialWizardState());
+    expect(added.hosts).toEqual(["llm.acme.internal"]);
+    expect(spec.allowed_domains).toEqual(["llm.acme.internal"]);
+  });
+
+  it("does not re-announce a host the JSON already allows", () => {
+    const authored = {
+      ...base(),
+      eligible_grants: [
+        { kind: "api_key", scope: { host: "api.anthropic.com" }, requires_approval: false },
+      ],
+    };
+    const { spec, added } = mergeRunSelections(authored, initialWizardState());
+    expect(added.hosts).toEqual([]);
+    expect(spec.allowed_domains).toEqual(["api.anthropic.com"]);
+  });
+
+  it("adds the Workspace card's mounts, which the JSON cannot know", () => {
+    const ws = localDirWorkspace("ws-1");
+    const state: WizardState = {
+      ...initialWizardState(),
+      workspaces: [{ workspaceId: "ws-1", enabledOptional: [] }],
+    };
+    const { spec, added } = mergeRunSelections(base(), state, [ws]);
+    expect(added.mounts).toHaveLength(1);
+    expect(spec.workspace_mounts).toEqual(added.mounts);
   });
 });

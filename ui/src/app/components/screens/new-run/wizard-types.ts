@@ -26,7 +26,6 @@ import type {
   ConfinementClass,
   CreateRunInput,
   FirstUseMode,
-  GrantSpec,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
@@ -117,27 +116,12 @@ export type RunType = "agent" | "command";
 // server default -> honest none; see step-access.tsx). A subscription is now an
 // ai_provider integration configured once (Integrations), not typed in per run.
 
-// The curated preset egress domains the chips toggle. Custom domains are added
-// separately (see isValidDomain below for what the client does and doesn't check).
-// Kept aligned with the scanner's marker-table registries
-// (internal/workspacescan/markers.go) and the risk baseline
-// (internal/composer/risk.go safeBaselineDomains) so the three lists agree.
-export const PRESET_DOMAINS: string[] = [
-  "github.com",
-  "*.githubusercontent.com",
-  "registry.npmjs.org",
-  "registry.yarnpkg.com",
-  "pypi.org",
-  "files.pythonhosted.org",
-  "proxy.golang.org",
-  "repo.maven.apache.org",
-  "services.gradle.org",
-  "plugins.gradle.org",
-  "crates.io",
-  "rubygems.org",
-  "api.anthropic.com",
-  "api.openai.com",
-];
+// RETIRED: PRESET_DOMAINS, the curated egress list the Network card's
+// "Registries" preset and the Edit-hosts dialog's chip groups both spelled.
+// Both surfaces are gone — /runs/new authors egress as spec JSON through the
+// shared Policy panel, whose "Package registries" template carries the same set
+// (examples/policies/default.json, the source the risk baseline
+// internal/composer/risk.go safeBaselineDomains is itself aligned with).
 
 export interface WizardState {
   // --- Step 1: basics ---
@@ -182,15 +166,11 @@ export interface WizardState {
   // (codex-cli has no external tool-approval contract) — buildSpec never emits
   // it otherwise.
   toolApprovals: "auto" | "hold";
-  // The Basics "start from" picker's current value — either a recorded profile's
-  // key or a saved policy's id. When set, that source has populated steps 2-4 and
-  // the wizard offers "Review Now" to fast-track straight to Review. Cleared when
-  // the workspace selection changes.
-  selectedProfile?: string;
-  // Set ONLY when the picked source was a SAVED POLICY: the run then launches by
-  // REFERENCE (policy_id) instead of an inline_policy, so the server enforces the
-  // stored spec verbatim. Any hand edit detaches it (see the wizard's patch
-  // funnel) — buildSpec's composed spec is not a round-trip of a stored one.
+  // Set ONLY when the operator picked a SAVED POLICY: the run then launches by
+  // REFERENCE (policy_id) instead of an inline_policy, so the server enforces
+  // the stored spec verbatim. Editing the panel's spec text detaches it (see
+  // new-run-screen.tsx) — the authored document is not a round-trip of a stored
+  // one.
   selectedPolicyId?: string;
 
   // --- Step 2: access ---
@@ -237,20 +217,15 @@ export interface WizardState {
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
   image: string;
-  // A composed proposal's devcontainer build (composer.RunInput.
-  // DevcontainerRepo — mutually exclusive with `image`, operator-only, same as
-  // it). Wizard-editable, never — it is CARRIED from "Edit in wizard" so the
-  // wizard's own Launch builds the SAME sandbox "Approve & launch" would have
-  // (see buildSpec); "" = no devcontainer build.
-  devcontainerRepo: string;
-
-  // W15-W15e-wizard-roundtrip-3: grant kinds this wizard has no editable UI
-  // for at all — ssh_key (a resident private key for git's SSH transport) and
-  // cloud_sts — carried verbatim from a hydrated spec's eligible_grants so
-  // buildSpec can re-emit them unchanged instead of silently dropping them
-  // (the git_pat kind above got its own editable Access fields for the same
-  // reason). Never wizard-editable; the wizard just passes these through.
-  opaqueGrants: GrantSpec[];
+  // RETIRED with the wizard's hydrator (W15-W15e-wizard-roundtrip): both
+  // `devcontainerRepo` and `opaqueGrants` existed ONLY to carry a hydrated
+  // proposal/policy through a round trip, and the hydrator that wrote them
+  // (wizardStateFromProposal / applyProfileSpecToState) has no callers left.
+  // Their buildSpec branches could never fire, so the "carried verbatim,
+  // never silently dropped" promise was unreachable code claiming a guarantee.
+  // Hand-authored grant kinds this screen has no control for now ride the
+  // Policy panel's spec JSON, where mergeRunSelections preserves them by
+  // construction — the JSON IS the document.
 }
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
@@ -311,8 +286,6 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     profileName: "",
 
     image: "",
-    devcontainerRepo: "",
-    opaqueGrants: [],
   };
 }
 
@@ -539,11 +512,6 @@ export function toRunWorkspacesWire(selections: RunWorkspaceSelection[]): RunWor
 export type CreateRunInputWithComposition = CreateRunInput & {
   workspaces?: RunWorkspaceSelectionWire[];
   integration_id?: string;
-  // A composed proposal's devcontainer build (pkg/client.CreateRunRequest.
-  // DevcontainerRepo — mutually exclusive with `image`). Carried from
-  // WizardState.devcontainerRepo so "Launch" from the wizard builds the same
-  // sandbox "Approve & launch" would have for the same proposal.
-  devcontainer_repo?: string;
   // The PRIMARY workspace's id, sent ONLY when the selection resolves to no
   // mount/repo (a pure-ephemeral / migrated-0029 container workspace). Such a
   // workspace has no source the server's referencedWorkspaces can match, so its

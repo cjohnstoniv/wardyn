@@ -100,8 +100,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick the Fence (CC1) barrier.",
-      "In Network, pick None — no hosts at all.",
-      "Edit hosts… → 'Deny silently' for anything unlisted.",
+      "In Policy, start from the Minimal template and empty allowed_domains — no hosts at all.",
+      "Set \"first_use_approval\": \"always_deny\" — no prompt, no wait.",
       "Launch interactive and attach the terminal.",
     ],
   },
@@ -128,8 +128,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier (Fence is fine for a demo).",
-      "In Network, pick None — no hosts at all.",
-      "Edit hosts… → 'Deny, but ask' for anything unlisted.",
+      "In Policy, start from the Minimal template and empty allowed_domains — no hosts at all.",
+      "Set \"first_use_approval\": \"deny_with_review\" — refused now, raised for review.",
       "Launch interactive; denied requests surface in the Approvals panel below the terminal.",
     ],
   },
@@ -159,8 +159,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier.",
-      "In Network, pick None — no hosts at all.",
-      "Edit hosts… → 'Hold it for approval' for anything unlisted.",
+      "In Policy, start from the Minimal template and empty allowed_domains — no hosts at all.",
+      "Set \"first_use_approval\": \"wait_for_review\" — the connection is HELD while you decide.",
       "Launch interactive and keep the Approvals panel visible — you have ~30s to decide each held request.",
     ],
   },
@@ -194,7 +194,7 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick a barrier (Fence here; nothing is mounted, so the blast radius is a bare sandbox).",
-      "In Network, pick Everything — open egress.",
+      "In Policy, pick the 'Allow-all — observe first' template — \"allow_all_egress\": true.",
       "The cloud-metadata + private-range limits aren't settings — there is no route there to allow.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
     ],
@@ -225,7 +225,7 @@ export const DEMOS: Demo[] = [
     setupUi: [
       "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",
       "New Run → pick the Fence (CC1) barrier.",
-      "Edit hosts… → clear the presets and allow only api.anthropic.com and *.anthropic.com.",
+      "In Policy, pick the 'Model provider only' template and trim allowed_domains to api.anthropic.com and *.anthropic.com.",
       "Launch interactive, attach the terminal, and run `claude` yourself.",
     ],
   },
@@ -263,9 +263,9 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick the Fence (CC1) barrier.",
-      "Pick Record — allow everything, which is what makes the recording honest.",
+      "In Policy, pick the 'Allow-all — observe first' template — \"allow_all_egress\": true is what makes the recording honest.",
       "Launch interactive, attach the terminal, and run whatever the task actually needs.",
-      "From the run's own page, synthesize a policy from what it did — same action this demo's “Turn this into a policy” takes.",
+      "On the run's own page, Audit → 'Make a policy from this run' synthesizes one from what it did — same action this demo's “Turn this into a policy” takes.",
     ],
   },
   {
@@ -294,8 +294,8 @@ export const DEMOS: Demo[] = [
     ],
     setupUi: [
       "New Run → pick any barrier (Fence is fine for a demo).",
-      "In Network, pick None — no hosts at all.",
-      "Edit hosts… → 'Deny, but ask' for anything unlisted.",
+      "In Policy, start from the Minimal template and empty allowed_domains — no hosts at all.",
+      "Set \"first_use_approval\": \"deny_with_review\" — refused now, raised for review.",
       "Launch interactive; when a request appears, use the split button's caret to grant Once instead of a plain Approve.",
     ],
   },
