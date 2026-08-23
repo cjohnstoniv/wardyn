@@ -284,6 +284,49 @@ func TestDecideScope_NonEgressKindRejectsScope(t *testing.T) {
 	}
 }
 
+// TestDecideScope_RunOnCredentialIsTheLease covers rule 4's one exception, and
+// it is the ONLY test that touches the lease's human-reachable door. The broker
+// suite seeds decision_scope straight into its fake rows, so every lease test
+// there stays green with this API path 400ing; the sibling above pins only the
+// refusal direction (once -> 400). Delete the exception from rule 4 and both
+// suites remain green while every `wardyn approve <id> --scope run` on a
+// credential approval 400s and B2's per-run lease is unreachable end to end.
+//
+// Asserted through the STORE because the broker reads decision_scope RAW
+// (leaseCoversRemint compares it against types.ScopeRun and never
+// Normalize()s): a handler that answered the same 200 but persisted "" would
+// mint once and then hand the agent ErrAlreadyMinted for the rest of the run.
+func TestDecideScope_RunOnCredentialIsTheLease(t *testing.T) {
+	f := newScopeFixture(t)
+	admin := ssoSession(t, "sub-admin-lease", "admin@corp.example", oidc.RoleAdmin)
+
+	id := uuid.New()
+	f.approval.mu.Lock()
+	f.approval.byID[id] = types.ApprovalRequest{
+		ID: id, RunID: f.runID, Kind: types.ApprovalCredential,
+		State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	}
+	f.approval.mu.Unlock()
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
+		admin, decideBody(t, types.ScopeRun, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("run scope on a credential approval: status = %d, want 200 "+
+			"(this is the per-run lease's only door); body=%s", w.Code, w.Body.String())
+	}
+
+	f.approval.mu.Lock()
+	got := f.approval.byID[id]
+	f.approval.mu.Unlock()
+	if got.State != types.ApprovalApproved {
+		t.Fatalf("state = %q, want APPROVED", got.State)
+	}
+	if got.DecisionScope != types.ScopeRun {
+		t.Fatalf("persisted decision_scope = %q, want %q — the broker reads it raw, "+
+			"so anything else leases nothing", got.DecisionScope, types.ScopeRun)
+	}
+}
+
 // TestDecideScope_DefaultsToRun pins the compatibility promise: a caller that
 // sends no scope at all gets today's behavior. Every pre-existing client — the
 // SDK, the console, and the three shell suites — is in this case.
