@@ -95,10 +95,10 @@ internal action can rename across releases without notice.
 | `session.takeover` | A second viewer takes over a held session (the write-lane single-holder rule) | `held_since`, `previous_holder`, `previous_source`, `taken_over` | `internal/api/attach.go` | internal |
 | `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:603` | internal |
 | `recording.upload` | A sandbox uploads an asciinema-cast chunk for a run's recording session — audited on both outcomes, like every sibling recording lane, since a full store or an over-cap upload is exactly how a long session's provenance gets lost | `error` (failure only) | `internal/api/recording.go:120` | internal |
-| `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:239,281,316` | **stable** (documented) |
-| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:611`; documented `docs/SSH.md:319` | **stable** (documented) |
-| `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:319` | **stable** (documented) |
-| `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:320` | **stable** (documented) |
+| `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:251,293,328` | **stable** (documented) |
+| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:632`; documented `docs/SSH.md:330` | **stable** (documented) |
+| `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:330` | **stable** (documented) |
+| `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:331` | **stable** (documented) |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:135` | internal |
 | `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:168` | internal |
 | `ui.auth` | A UI-sandbox relay session is authorized or denied (see the D14/D27 residuals on this channel) | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:288` | internal |
@@ -135,8 +135,8 @@ internal action can rename across releases without notice.
 | `capability.grant.created` | `POST /permissions/grants` (new) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:167` | internal |
 | `capability.grant.updated` | `POST /permissions/grants` (upsert on existing key) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:169` | internal |
 | `capability.grant.deleted` | `DELETE /permissions/grants/{id}` | — | `internal/api/permissions.go:199` | internal |
-| `capability.enforcement.write` | `PUT /permissions/enforcement` (whole-map replace) | (saved enforcement map) | `internal/api/permissions.go:229`; documented `docs/OPERATIONS.md`'s capability-grants section | internal |
-| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:444-460` | **stable** (documented, closed `reason` enum) |
+| `capability.enforcement.write` | `PUT /permissions/enforcement` (whole-map replace) | (saved enforcement map) | `internal/api/permissions.go:252`; documented `docs/OPERATIONS.md`'s capability-grants section | internal |
+| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:483-495` | **stable** (documented, closed `reason` enum) |
 | `egress.*` | The proxy reports an egress decision for a run — the literal suffix is the decision itself: `egress.allow`, `egress.deny`, or `egress.pending` (`egress.Decision`, `internal/egress/egress.go:27-31`). A synthetic `blind` scan decision emits only `llm.scan.blind`, never a duplicate `egress.allow` for the tunnel | `approval_id`, `host`, `method`, `path`, `port`, `rule_source` | `internal/api/internal.go:80` | internal |
 
 ## Kernel ground-truth (eBPF/Tetragon stream)
@@ -164,7 +164,7 @@ it never blocks, and it is blind inside CC3/Kata microVM guests.
 | `base_image.delete` | An admin deletes a base image | `detached_from`, `forced` | `internal/api/base_images.go:164` | internal |
 | `integration.write` | An admin creates/updates an integration (secrets/egress/config/delivery) | `default_for`, `egress`, `header`, `kind` | `internal/api/setup_integrations.go:251` | internal |
 | `integration.delete` | An admin deletes an integration | `credentials`, `egress`, `kind` | `internal/api/setup_integrations.go:292` | internal |
-| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:336` | internal |
+| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:355` | internal |
 | `site_config.test_proxy` | The site-config "test upstream proxy" probe runs | `custom_target`, `elapsed_ms`, `intercepted`, `state`, `target_host` | `internal/api/site_config_probe.go:710` | internal |
 | `site_config.test_redirect` | The site-config "test egress redirect" probe runs | `elapsed_ms`, `from_host`, `state`, `to_host` | `internal/api/site_config_probe.go:780` | internal |
 | `site_config.test_probe` | An egress-redirect probe run's finalize step (via `finalizeRunTail`; `reclaimProbeRun`'s doc comment explains why the audited name must be this endpoint's own, never `run.compose`) | — | `internal/api/site_config_probe.go:423` | internal |
@@ -178,7 +178,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:554` | internal |
+| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:554` | internal |
 
 ## Notes on completeness
 
