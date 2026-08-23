@@ -4,7 +4,7 @@
 
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
 #
-# Same shape as run-ui-e2e.sh; dedicated :8098/wardyn_shots so it can't collide.
+# Same shape as run-ui-e2e.sh; dedicated :8098/:8099/wardyn_shots so it can't collide.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +16,10 @@ cd "${REPO_ROOT}"
 wardyn_pick_docker_host
 
 export WARDYN_E2E_ADDR=":8098"
+# Its own UI-sandbox listener too: e2e-backend.sh defaults that to :8089 and
+# `down` fuser -k's it, so sharing it with a concurrent e2e backend means one
+# instance's teardown kills the other's wardynd.
+export WARDYN_E2E_UI_ADDR=":8099"
 export WARDYN_E2E_PG_DBNAME="wardyn_shots"
 # Overridable PG host:port (same convention as run-ui-e2e.sh); the DB name
 # stays pinned to wardyn_shots — the spec self-gates on it.
