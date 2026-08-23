@@ -360,11 +360,15 @@ shipped behavior; none is scheduled.
   this sentence. Nothing depends on it happening by any particular release; it's
   listed here so the stale "is 0032" comment in `0031_source_library.sql`
   isn't mistaken for a live plan.
-- **Age-key rotation for the secret store.** One age identity binds both
-  encryption and decryption (`internal/secretstore/pg`); nothing re-encrypts
-  stored secrets under a new key, and there is no `wardyn secret rotate`.
-  Changing `WARDYN_AGE_KEY` strands every existing ciphertext — see
-  [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "The age key has no rotation path".
+- **Age-key rotation is offline and operator-driven.** `wardynd -rotate-age-key`
+  now re-encrypts every stored secret to a fresh identity in one transaction
+  ([docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Rotating the age key"), so the old
+  "no rotation path at all" ceiling is gone. What remains: the daemon has to be
+  **stopped** for it, and nothing enforces that — no wardynd holds a
+  process-lifetime advisory lock, so the tool can refuse a second concurrent
+  rotation but cannot see a serving process. There is also no scheduled or
+  automatic rotation, and no `wardyn secret rotate`: the CLI deliberately never
+  touches the key.
 - **react-router 7 → 8 major bump.** No longer security-forced: GHSA-qwww-vcr4-c8h2
   patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the
   pnpm-audit suppression that once covered it is deleted — `make npm-audit` is
