@@ -390,7 +390,7 @@ wardynd never reads one back); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name).
 
-### Known gaps (v0.5)
+### Known gaps (v0.6)
 
 The k8s substrate is not yet at parity with the Docker Compose one. Fails
 closed with a clear error: **no BYOI/devcontainer image builds**, **no

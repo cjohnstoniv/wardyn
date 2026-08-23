@@ -209,6 +209,7 @@ the canary, never merely claimed because a policy object was applied.
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties: every named operator (and the admin token, always) can rewrite the policy that bounds them, and there is exactly one operator tier. See residual #14. | B5, ID |
+| Member escalating past a capability grant | **[v0.6 shipped]** A capability grant (`capability_grants`, migration `0042`) bounds what a MEMBER chose, on four closed kinds: `egress_host`, `secret` and `workspace` NARROW what a member could already do, and `image` WIDENS — without both its switch on and an exact-ref grant a member cannot name a custom image at all (`devcontainer_repo` is deliberately not a kind and stays unconditionally admin-only: it executes attacker-authored build configuration, which is not a power to hand out one row at a time). One resolver answers both directions (`capAllowed`/`capGranted`, `internal/api/capabilities.go`) on a fixed precedence: admins, the admin token and local mode are EXEMPT — a capability bounds the tier below the one writing the grants; then any matching **deny**; then any matching **allow**; then the per-kind enforcement switch; and a store error answers `500` rather than reading as permission. Deny sits ABOVE the switch on purpose, so one host can be blacklisted for one contractor without taking the whole deployment fail-closed, and there is no user-over-group precedence (a user allow overriding a group deny is a breach report, not a feature). `egress_host` values are matched by `entryCoversAny` — the SAME matcher the egress substitution drop already uses, never a second one that could disagree about a port suffix — and deny rows match on overlap in either direction, so a narrower request cannot slip under a broader deny nor a broader one over a narrower deny; every other kind is an exact compare, and grant values are shape-validated at the write boundary. The enforcement seams are `narrowMemberInlinePolicy` (a member's own `inline_policy` allowlist and secret refs), `denyMemberRequest` (`workspace_id`, `image`, `devcontainer_repo`), `authorizeMemberDecision` (which host a member may decide an `egress_domain` approval for) and `handleListSecrets` (which names `GET /secrets` lists back). **The doctrine is the security-relevant half: a capability never narrows what the ADMIN pre-authorized** — a stored policy, a workspace's own requirements, scan-seeded hosts and the model provider's own egress stay untouched no matter what the member holds, because narrowing them would brick workspace runs at scale and a member who cannot be trusted with a workspace should not be granted the workspace. Grant CRUD and the switch map are `operatorOnly` and audited (`capability.grant.created` / `.updated` / `.deleted`, `capability.enforcement.write`); every member refusal that is not a plain foreign-resource 404 audits as `authz.denied` with a `reason` drawn from a closed vocabulary (`capability_workspace`, `capability_egress_host`, `capability_secret`, `byoi_member`, `grant_pairing_not_eligible`). **EVERY switch ships OFF** — an absent `capability_enforcement` row is not enforced — so a 0.5 deployment upgraded with no rows written behaves byte-for-byte as it did before. That default is fail-open BY DESIGN, chosen for adoption over posture, and residual #20 states what it and three narrower gaps under it cost. | B5, ID, AU |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` -> `kernel.*` events via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the recording-upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast with a fabricated one before the run ends — but every upload, real or overwriting, emits its own `recording.upload` row in the append-only log above, so a second upload is visible there even though the PTY bytes it replaced are not recoverable. Detection-only (the `ld-linux`/`mmap` loader bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable` without a sensor); host eBPF is blind inside CC3/Kata guests (emits `kernel.sensor.blind`). | AU |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
@@ -221,7 +222,7 @@ the canary, never merely claimed because a policy object was applied.
 | Sandbox-authored page reading the console session (UI-sandbox relay) | **[v0.6 shipped]** The relayed app is code from inside B1 running in the operator's browser, so it is treated as hostile page content, not as a Wardyn surface. It is served on a SEPARATE ORIGIN (`WARDYN_UI_SANDBOX_LISTEN`) and boot REFUSES an address equal to `-listen` — not "address in use", a named refusal saying what the shared origin would break (`validateUISandboxConfig`, `cmd/wardynd`). Because cookies are not port-scoped, a shared *hostname* would still leak: every forwarded request has ALL `wardyn_*` cookies plus `Authorization`/`Proxy-Authorization` and any `?ticket` STRIPPED, and every response has `Set-Cookie: wardyn_*` DROPPED (cookie tossing — a sandbox-set `wardyn_ui_sess` or console session cookie would be an authentication attack, not a rendering quirk). Both directions are pinned by tests (`internal/api/uigateway_test.go`). `Referrer-Policy: no-referrer` on every gateway response keeps the enter URL's ticket out of the app's outbound links, and `X-Forwarded-*` is removed and deliberately not re-added (the sandbox does not learn the operator's IP). The console never embeds a relayed app in an iframe — that would put the content back on the console origin, defeating all of the above. | B10, B1 |
 | Unauthenticated / cross-run access to a relayed UI app | **[v0.6 shipped]** The UI listener has EXACTLY ONE authentication mechanism and never falls through to the console's session cookie or the admin bearer: a single-use, 30s, owner-or-admin attach ticket (the SAME `POST /runs/{id}/attach-ticket` the browser terminal mints — no second ticket type) is redeemed at `/__wardyn/enter`, which then RE-CHECKS against freshly-loaded state what the ticket cannot prove on its own (owner-or-admin for THIS run, run still `RUNNING` with a sandbox, app actually declared in the run's EFFECTIVE policy — resolved from the `run.policy.effective` envelope, never through `policy_id`, so an inline-policy run can never inherit the default policy's apps). Only then is an HMAC-signed session cookie issued, `HttpOnly`, `SameSite=Lax`, and `Path=/r/<run-id>/` — path-scoped so one run's page cannot make the browser attach another run's session. Every cookie failure (absent, malformed, forged, expired) answers one indistinguishable 403: no fallback to negotiate, no oracle to probe. Every enter, success or denial, is audited (`ui.auth`). | B10, AU |
 | Relay reaching a port the operator never declared | **[v0.6 shipped]** The relay serves only ports in the policy's `ui_apps` — operator-authored, at most 8, validated wherever a policy enters (stored, inline, `WARDYN_DEFAULT_POLICY`). The port is captured from the effective policy AT TICKET REDEMPTION into the signed cookie, so no later request can name a different one, and the dial target is re-verified against that session on every connection. Policy names an app, never a command string: what starts is the image's own `/usr/local/bin/wardyn-ui-<name>` launcher, so a policy write can never choose what executes inside the sandbox. `ssh -L` remains the undeclared-port escape hatch, bounded by its own owner-or-admin gate. | B1, B10 |
-| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec inside the sandbox, so the same bound the SSH gateway applies per run applies here: at most 8 concurrent relay connections per run (browsers open ~6 per origin, so this is that plus headroom), and a pooled idle connection is closed after 90s so a closed tab stops holding relay capacity. What that bounds is concurrent relay connections, NOT the execs behind them: neither substrate offers "kill this exec", so closing a connection only closes the exec's streams, and a `socat` whose app-side half the app still holds open lingers until the sandbox stops. That ceiling is published, not hidden — `docs/UI-SANDBOXES.md` "Resource bounds", the constant's own comment (`uiIdleConnTimeout`, `internal/api/uigateway.go`), and `scripts/run-e2e-ui-sandbox.sh`, which asserts the bound this actually promises (20 relayed requests must not become 20 execs) and prints what remains rather than claiming zero. A run reload on every new connection means a stopped or killed run stops serving (409) instead of opening more. | B10, B1 |
+| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec inside the sandbox, so it carries a per-run bound of its own, a sibling of the SSH gateway's per-run channel cap rather than the same number: at most 8 concurrent relay connections per run (`maxUIConnsPerRun`, against the gateway's `maxSSHSessionsPerRun = 4` — browsers open ~6 connections per origin, so 8 is that plus headroom, while an SSH client opens channels one shell at a time), and a pooled idle connection is closed after 90s so a closed tab stops holding relay capacity. What that bounds is concurrent relay connections, NOT the execs behind them: neither substrate offers "kill this exec", so closing a connection only closes the exec's streams, and a `socat` whose app-side half the app still holds open lingers until the sandbox stops. That ceiling is published, not hidden — `docs/UI-SANDBOXES.md` "Resource bounds", the constant's own comment (`uiIdleConnTimeout`, `internal/api/uigateway.go`), and `scripts/run-e2e-ui-sandbox.sh`, which asserts the bound this actually promises (20 relayed requests must not become 20 execs) and prints what remains rather than claiming zero. A run reload on every new connection means a stopped or killed run stops serving (409) instead of opening more. | B10, B1 |
 
 ---
 
@@ -463,6 +464,21 @@ hiding them would repeat the failure mode we are designed to avoid.
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
 
+    **What v0.6 changed, and what it did not.** Capability grants (§4, residual
+    #20) add a *fourth* dimension to this picture, not a third role: on four
+    closed kinds an admin can now narrow one member — or one IdP group, or every
+    signed-in human — below what the member tier otherwise allows, and in the
+    `image` case widen one above it. Nothing about that reaches the tier this
+    residual is actually about. Grants bound MEMBERS only: admins, the admin
+    token and local mode are exempt at the top of the resolver, grant CRUD and
+    the enforcement switches are themselves `operatorOnly`, and an admin
+    therefore still writes the rows that would have bounded them. So the
+    sentence that matters is unchanged — every named operator can still rewrite
+    the policy that bounds them, there is still no separation of duty among
+    admins, and the ceiling on this residual is still attribution (now including
+    `capability.grant.*` and `capability.enforcement.write`) rather than
+    prevention.
+
 15. **SSH gateway's admin override is a registration-time stamp, not a live
     role check.** Since `0043_ssh_key_role.sql` (v0.6), SSH gateway
     (`docs/SSH.md`) authorization is `run.created_by == the connecting key's
@@ -527,11 +543,21 @@ hiding them would repeat the failure mode we are designed to avoid.
     intentional residual: a member can self-approve a `wait_for_review`
     first-use host on their own run with no second human in the loop — the
     approval's `decided_by` gives ATTRIBUTION, not independent review, for a
-    member-owned run. An operator who needs genuine third-party sign-off on
-    first-use domains for member-launched runs must set the ceiling policy's
-    `first_use_approval` to `always_deny` (`composer.Clamp` takes the
-    stricter of ceiling vs. proposal) rather than `wait_for_review`, which a
-    member can always clear themselves.
+    member-owned run. **v0.6 narrows this, conditionally.** With the
+    `egress_host` capability kind ENFORCED (residual #20 — it ships off), a
+    member may decide an `egress_domain` approval only for a host they hold a
+    grant for: `authorizeMemberDecision` resolves the approval's requested host
+    through `capSeamAllowed` and answers `403` otherwise, audited as
+    `authz.denied` / `capability_egress_host`. A matching DENY bites even with
+    the switch off. So an operator now has two levers rather than one, and they
+    close different halves: enforce `egress_host` (or write the deny) to bound
+    WHICH hosts a member may clear on their own run, and set the ceiling
+    policy's `first_use_approval` to `always_deny` (`composer.Clamp` takes the
+    stricter of ceiling vs. proposal) where the requirement is genuine
+    third-party sign-off on ANY first-use domain — a grant makes the decision
+    permissible, never independent. On a deployment that has done neither —
+    which is every deployment upgraded from 0.5 with no rows written —
+    `wait_for_review` remains something the owning member clears themselves.
 
 18. **The UI-sandbox gateway shares ONE browser origin across runs unless the
     deployment has wildcard DNS.** In the default path mode
@@ -575,6 +601,61 @@ hiding them would repeat the failure mode we are designed to avoid.
     to reach, and states it in the product (the console lane's own
     no-recording line, `docs/design/ui-sandboxes-prompt.md`) rather than only
     here.
+
+20. **Capability enforcement is off until an admin turns it on, and three
+    narrower gaps sit underneath that default.** The v0.6 permissioning pillar
+    (§4, "Member escalating past a capability grant") is a real authorization
+    control, but it is published here because its shipped posture is
+    permissive, deliberately:
+
+    - **Every enforcement switch ships OFF.** An absent `capability_enforcement`
+      row means *not enforced*, so an upgraded 0.5 deployment behaves exactly as
+      it did — a member keeps every power the role split already gave them until
+      an admin flips a kind on, one kind at a time. That is fail-OPEN as a
+      default, traded for an upgrade that changes nothing, and it means "Wardyn
+      has per-capability permissioning" is never by itself a statement about a
+      given deployment's posture. `GET /permissions` (admin) and
+      `GET /me/capabilities` (member) both report which kinds are actually
+      enforced, so the real posture is queryable rather than assumed; deny rows
+      are the on-ramp that works with every switch still off.
+
+    - **A `group` DENY is not evaluated when the caller's group snapshot cannot
+      answer.** Group membership is a snapshot taken at LOGIN and carried in the
+      signed session cookie, capped at 2048 bytes of payload and dropped from the
+      sorted end (`maxSessionGroupsBytes`, `internal/auth/oidc/derive.go`), and a
+      pre-0.6 cookie carries no groups field at all. In both cases the group's
+      rows — including its denies — are simply not in the caller's subject set,
+      and with the kind unenforced that resolves as allow-by-default. So the
+      "blacklist one contractor without going fail-closed" property has two
+      unstated exceptions: a human in more groups than the cap holds, and a human
+      still riding a session minted before 0.6. Both clear on the next login, and
+      the condition is reported distinctly as `groups_snapshot_stale` on
+      `GET /me/capabilities` rather than as "holds no groups". Where a deny must
+      bite regardless, write it against the **user** (either the lowercased OIDC
+      `sub` or the email — a row on either hits) instead of the group.
+
+    - **`PUT /permissions/enforcement` is a full-map replace with no
+      optimistic-concurrency guard.** There is no ETag, `If-Match` or version:
+      an omitted kind means *off*, so a stale admin tab re-submitting an older
+      map, or two admins toggling concurrently, silently turns an enforced kind
+      back off — the fail-open direction — and answers `200`. What bounds it is
+      attribution, not prevention: every write emits
+      `capability.enforcement.write` into the append-only log. Re-fetch
+      `GET /permissions` immediately before writing. (The switches live in their
+      own table for exactly this class of reason — `PUT /site-config` is a full
+      replace too, and an authz control that any stale client could round-trip
+      away was not acceptable there either; this residual is the narrower form
+      that survives inside the dedicated route.)
+
+    - **Admin-authored values are never narrowed, by doctrine.** A capability
+      bounds what the MEMBER chose and nothing else, so a stored policy, a
+      workspace's own requirements, the hosts a workspace scan seeded and the
+      model provider's own egress reach a member's run untouched however few
+      grants that member holds — a member granted a workspace inherits
+      everything the admin already attached to it. That is the intended contract
+      (residual #14's "the control plane authenticates; it barely authorizes"
+      remains the frame), not a bypass, but an operator reasoning about blast
+      radius should read a capability as bounding *authorship*, not *reach*.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

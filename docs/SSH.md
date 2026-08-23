@@ -263,6 +263,17 @@ holds at that later moment, member or admin, honestly. There is no
 in-place "update this key's role" endpoint; delete-then-re-add is the
 supported re-stamp path, not a workaround.
 
+**Upgrading from 0.5: your existing key is a `member` key.** The stamp is
+written at registration, and migration `0043` backfills every row that
+predates it as `member` — the fail-closed value, because nothing in the
+schema knows what role a pre-0.6 registrant actually held, and guessing
+`admin` would hand every key already in the deployment a cross-user reach it
+was never granted. There is no boot backfill and no re-stamp sweep, so **an
+admin who registered their key under 0.5 does not have the override**: they
+must `DELETE /me/ssh-keys/{fingerprint}` and `POST` the same key again to be
+stamped with the role they hold now. The same delete-then-re-add, for the
+opposite reason.
+
 An override connection is audited distinctly: the `ssh.auth` success event
 carries `override:true` in its data whenever the owner check did NOT match
 and the admin-role check is what let the connection through — so "who used

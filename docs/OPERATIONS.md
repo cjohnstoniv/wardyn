@@ -7,7 +7,7 @@ that arrive after the stack is up.
 corporate-network sections below are written against
 [`deploy/compose/`](../deploy/compose/). The Helm chart (`deploy/helm/wardyn`,
 [`k8s.enabled`](../deploy/helm/wardyn/README.md)) now runs its own
-[Kubernetes runner substrate](#kubernetes-known-gaps-v05) with its own
+[Kubernetes runner substrate](#kubernetes-known-gaps-v06) with its own
 run/recording state to operate — see that section for what's different there,
 and [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup, restore,
 upgrade and key-persistence commands.
@@ -144,7 +144,13 @@ recovery (see [One replica, by construction](#one-replica-by-construction)).
 `GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`)
 serves Prometheus text exposition — stdlib-only, no client library. Counters:
 runs by terminal state, approval decisions by outcome, egress denies, credential
-mints; plus sandbox launch-latency sum/count. Scrape it with any Prometheus
+mints; plus sandbox launch-latency sum/count. Two gauges sit beside them, because
+every counter above only moves on success — a dead store and an idle cluster
+otherwise scrape identically: `wardyn_store_up` (1 when Postgres answers the same
+bounded ping `/readyz` makes, 0 when it does not) and `wardyn_audit_spool_lines`
+(audit events waiting in the local JSONL fallback spool — a value that never
+returns to 0 means the drain loop is not working, a condition that had no
+operator-visible signal before 0.6). Scrape it with any Prometheus
 `authorization` config carrying the admin token. `/healthz` stays the
 liveness/component surface (identity, runner classes, eBPF ground-truth state);
 `/metrics` is the trend surface. Audit sinks (`WARDYN_AUDIT_SINKS`,
@@ -378,6 +384,14 @@ that state is reported distinctly as `groups_snapshot_stale` on `GET
 /me/capabilities`, because "can't tell yet" and "holds no groups" must not
 read the same.
 
+**Both of those cut the DENY direction too, which is the half worth stating
+plainly.** A group's rows are matched against the caller's snapshot, so a group
+that fell off the 2048-byte cut — or a caller still holding a pre-0.6 cookie —
+has *none* of its rows evaluated, denies included, and with the kind unenforced
+that resolves as permitted. Signing in again fixes both. Where a deny has to
+bite regardless of session age or group count, write it against the **user**
+(either identity — the lowercased `sub` or the email) rather than the group.
+
 **What a capability deliberately does not reach.** `always`-scope decisions
 stay operator-only even for a member granted the host — a grant must never
 promote a member's decision into durable workspace config. `GET /workspaces`
@@ -397,6 +411,12 @@ there — that is the operator's own posture, not a switch that failed.
 | `DELETE /permissions/grants/{id}` | remove one grant |
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
+
+`PUT /permissions/enforcement` replaces the **whole** map and carries no
+`If-Match`/version guard, so an omitted kind is an enforced kind switched off:
+re-fetch `GET /permissions` immediately before writing, or a stale admin tab
+can silently disable a control that two admins both believe is on. The write is
+audited either way, which is attribution rather than prevention.
 
 Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
 `capability.enforcement.write`. Enforcement lives in its own table rather than
@@ -427,11 +447,13 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 The three drop rows are why `POST /runs` mostly *narrows* rather than refuses:
 a member whose whole allowlist is ungranted gets a run with no member-authored
 egress, not a `403`, because the run's admin-authored egress is still there and
-is usually what the task needed. Each drop surfaces as a warning in
-preflight/Review before launch **and** as an audit event at launch — one event
-per reason, with the affected values beside it, rather than one per dropped
-host, so a policy naming twenty ungranted hosts reads as the one authorization
-outcome it is. Preflight dry-runs are not audited: Review re-resolves on every
+is usually what the task needed. A drop is never silent: it comes back as a
+**warning on the launch response itself** — surfaced as a toast in the console
+and on `wardyn run`'s stderr — it appears the same way in a preflight/Review
+dry-run *before* launch, and it is recorded as an audit event at launch: one
+event per reason, with the affected values beside it, rather than one per
+dropped host, so a policy naming twenty ungranted hosts reads as the one
+authorization outcome it is. Preflight dry-runs are not audited: Review re-resolves on every
 edit, and a stream of denials for a policy nobody launched is
 indistinguishable from denials that actually bounded a run.
 
@@ -455,8 +477,13 @@ key authorizes when `run.created_by == the key's principal` OR the key's
 The gateway never re-reads the human's role now, so a demoted admin's
 already-registered key keeps the override until that key is deleted
 (`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registered —
-strictly weaker than the web terminal's live `requireOperator` gate. A
-member's key never satisfies the override (`docs/SSH.md`'s Bounds section;
+strictly weaker than the web terminal's live `requireOperator` gate. The same
+stamp is why **an admin upgrading from 0.5 does not get the override on the key
+they already have**: `0043` backfills every pre-existing row as `member` (the
+fail-closed value — nothing in the schema knows what role its registrant held),
+and nothing re-stamps it later, so an admin who wants the override must delete
+that key and register it again. A member's key never satisfies the override
+(`docs/SSH.md`'s Bounds section;
 `threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
@@ -1237,38 +1264,55 @@ kubectl -n wardyn exec deploy/postgres -- \
   pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 ```
 
-Then upgrade — and pass `--reuse-values` explicitly:
+Then upgrade — passing the install's values, from the file you keep them in:
 
 ```sh
 helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
-  --reuse-values --set image.tag=<new-tag> --wait --timeout 5m
+  -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
 ```
 
-It is not redundant, and the reason is a Helm sharp edge worth knowing before
-it bites: `helm upgrade` reuses the previous release's values *only while you
-pass no `--set`/`-f` at all*. Add a single `--set` and Helm resets everything
+Keeping the values in a file under version control is the recommendation for
+its own sake — nothing is being reused, and what is deployed is reviewable —
+but it also steps around two Helm sharp edges worth knowing before they bite.
+
+**The first: `helm upgrade` reuses the previous release's values *only while you
+pass no `--set`/`-f` at all*.** Add a single `--set` and Helm resets everything
 else to chart defaults — which drops exactly the values a Wardyn install cannot
 run without (`auth.adminToken.*`, `k8s.proxyImage`, `serviceAccount.automount`,
 `secrets.ageKeyFromSecret`). The chart is built to catch that rather than
-render a crippled install, so the same upgrade fails at render time with a
+render a crippled install, so such an upgrade fails at render time with a
 refusal naming the missing one:
 
 ```console
 $ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn --set image.tag=<new-tag> --dry-run
-Error: UPGRADE FAILED: execution error at (wardyn/templates/secret.yaml:31:4):
+Error: UPGRADE FAILED: execution error at (wardyn/templates/secret.yaml):
 wardyn: the public API would 401 every request. Set auth.adminToken.secretRef.name
 (external Secret), auth.adminToken.value (inline demo), env.WARDYN_ADMIN_TOKEN, or
 env.WARDYN_OIDC_ISSUER for SSO — [...]
 ```
 
-A refusal is the good case, and dropping `secrets.ageKeyFromSecret` earns one
-too: on an external-DSN install the chart refuses any render with no age
-identity wired, rather than letting the reset render cleanly and take the pod
-down at boot (see
+(Helm prints a `templates/secret.yaml:<line>:<col>` location alongside that
+message; the line moves whenever the template does, so the message is the part
+to match on.) A refusal is the good case, and dropping
+`secrets.ageKeyFromSecret` earns one too: on an external-DSN install the chart
+refuses any render with no age identity wired, rather than letting the reset
+render cleanly and take the pod down at boot (see
 [the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
-below). `--reuse-values` is what keeps both cases from arising. Better still,
-keep the install's values in a file under version control and pass `-f` every
-time; then nothing is being reused, and what is deployed is reviewable.
+below).
+
+**The second, and the reason `--reuse-values` is NOT the fix for the first:
+`--reuse-values` replaces the new chart's `values.yaml` with the previous
+release's, so every value the new version ADDED is simply absent.** That is
+fine while a chart only gains optional scalars and fatal the moment it gains a
+block the templates dereference — a `0.5` release upgraded to `0.6` with
+`--reuse-values` fails at render on the blocks `0.6` introduced (the UI-sandbox
+gateway and the readiness-probe path among them), because the old values map
+has no key there to read. Use `--reset-then-reuse-values` instead (Helm ≥ 3.14:
+it starts from the NEW chart's defaults and layers the previous release's
+overrides on top), or — better — pass `-f your-values.yaml` as above, which is
+the same idea with the overrides somewhere you can review them. Neither the
+break nor the fix is Wardyn-specific: any chart that adds a required-shaped
+block hits it, and `--reuse-values` is a trap in exactly that upgrade.
 
 The new pod applies nothing, because `schema_migrations` already records every
 file — the forward-only rule at work, visible as an empty count:
@@ -1367,7 +1411,7 @@ $ kubectl -n wardyn exec deploy/postgres -- psql -U wardyn -d wardyn_restorechec
 
  migrations
 ------------
-         42
+         43
 (1 row)
 
         name
@@ -1416,7 +1460,7 @@ cluster.
 ```console
 $ helm template wardyn ./deploy/helm/wardyn \
     --set postgres.dsn.secretRef.name=wardyn-db --set auth.adminToken.value=t
-Error: execution error at (wardyn/templates/secret.yaml:53:4): wardyn:
+Error: execution error at (wardyn/templates/secret.yaml): wardyn:
 postgres.dsn.secretRef.name="wardyn-db" is a PERSISTENT Postgres, but no age
 identity is wired, so wardynd generates an ephemeral one at every boot. [...]
 Throwaway install where losing every stored secret on restart is fine:
@@ -1560,13 +1604,13 @@ those lost work, this one persists secrets. Keep `replicas: 1`. Going beyond it
 has not been built, tested, or released, and the chart will not render it without
 `allowMultiReplica=true`.
 
-## Kubernetes: known gaps (v0.5)
+## Kubernetes: known gaps (v0.6)
 
 The `k8s` runner substrate (`deploy/helm/wardyn`, `k8s.enabled=true`,
 `internal/runner/k8s`) is a **separate, independent confinement substrate**
 from the Docker Compose path (L1/NetworkPolicy-backed vs. Compose's L0
 structural one) — most of this document applies to both, but the list below
-is what the k8s substrate does NOT do yet, honestly, as of v0.5. Each item is
+is what the k8s substrate does NOT do yet, honestly, as of v0.6. Each item is
 a real limitation checked against the driver, not a guess:
 
 - **No BYOI or devcontainer builds.** A `wardyn-byoi/`-prefixed image ref is
