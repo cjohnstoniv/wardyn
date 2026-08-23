@@ -548,6 +548,27 @@ func TestValidateUISandboxConfig(t *testing.T) {
 			wantErr: "same address as -listen",
 		},
 		{
+			// Two binds, one origin: both listeners come up (different address
+			// families), and http://localhost:8080 then serves the console or
+			// the sandbox depending on whether the resolver answers A or AAAA
+			// first — the same-origin collapse, arrived at sideways.
+			name:     "ipv6 loopback collides with the ipv4 loopback on one port",
+			uiListen: "[::1]:8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			name:     "the localhost name collides with the address it resolves to",
+			uiListen: "localhost:8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			// The carve-out: two SPECIFIC non-loopback hosts on one port really
+			// are two origins (two NICs, two names), so they still boot.
+			name:     "two specific non-loopback hosts on one port stay distinct",
+			uiListen: "192.168.1.5:8080", listen: "192.168.1.6:8080",
+			posture: tlsPosture{tlsEnabled: true, secureCookies: true},
+		},
+		{
 			name: "ssh gateway address collides", uiListen: ":2222", listen: ":8080", sshListen: ":2222",
 			wantErr: "same address as -ssh-listen",
 		},
