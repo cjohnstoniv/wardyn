@@ -115,6 +115,22 @@ Compose: the loopback mapping (`WARDYN_UI_SANDBOX_PORT`, default `8081`) is
 always published, and the gateway stays off until `WARDYN_UI_SANDBOX_LISTEN` is
 also set — a mapped port with no listener behind it is inert.
 
+**Getting `wardyn/agent-vscode` onto a cluster is yours to do.** No release or
+publish workflow pushes it — `make agent-image-vscode` builds it locally as
+`wardyn/agent-vscode:local`, it is deliberately not part of `agent-images`
+(~+228 MiB over the base), and nothing in `.github/workflows/` tags it to a
+registry. On compose the local tag is enough; a cluster's nodes cannot see your
+daemon, so either push it to a registry the nodes can pull from and name that
+ref, or `kind load docker-image wardyn/agent-vscode:local` on a `kind` cluster.
+Either way the ref reaches wardynd through `WARDYN_AGENT_IMAGES` — the
+agent-name → image-ref JSON map, e.g.
+`{"vscode":"registry.example.com/agent-vscode:0.6.0"}` — which the chart carries
+as an ordinary entry under `env` (`env.WARDYN_AGENT_IMAGES`; values render
+inline in the pod spec, which is fine for an image ref). There is no dedicated
+chart value for it, and none of this is `vscode`-specific: it is the same path
+any Bring-Your-Own-Image agent takes, which is why the launcher contract below
+is the whole story about serving an app.
+
 ## Image contract (BYOI)
 
 The gateway runs three things **inside the sandbox**, by convention, never by
