@@ -234,10 +234,23 @@ test("V03 act 2 — four ways the boundary holds", async () => {
     await policyBlock.scrollIntoViewIfNeeded().catch(() => {});
     await spotlight(page, demo.id === "fail-then-approve" ? policyBlock.getByText(/first_use_approval/) : policyBlock);
 
+    // P2 (dialog review, owner-ratified 2026-08-23): the cold open promises
+    // "Four small tests" and then never numbers them. Each test now says which
+    // one it is, in the conclusion's own four words. Anchored per-BRANCH, and
+    // the branch order here IS the running order: STOP_DEMOS is FUNNEL_DEMOS
+    // (task.ts) minus once-or-for-good, i.e. demo-catalog.ts's order —
+    // sealed-box, fail-then-approve, held-at-the-door, lines-that-cant-be-
+    // crossed. Test four's label is NOT in the fourth iteration: that test
+    // opens on the wikipedia deny at the TAIL of held-at-the-door (see the
+    // file header), so the label rides there.
     if (demo.id === "sealed-box") {
+      await caption(page, "Test one: denied.");
+      await beat(page, BEAT_SHORT);
       await caption(page, "First, something the policy simply doesn't allow.");
       await beat(page, PACE.read);
     } else if (demo.id === "fail-then-approve") {
+      await caption(page, "Test two: denied, but it can ask.");
+      await beat(page, BEAT_SHORT);
       await caption(page, "Now we'll give the policy a different instruction.");
       await beat(page, PACE.read);
       await caption(page, "Don't silently refuse.");
@@ -245,6 +258,8 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       await caption(page, "Ask me.");
       await beat(page, BEAT_SHORT);
     } else if (demo.id === "held-at-the-door") {
+      await caption(page, "Test three: held for a decision.");
+      await beat(page, BEAT_SHORT);
       await caption(page, "This time, the request is already in progress when the policy stops it.");
       await beat(page, PACE.read);
     }
@@ -367,6 +382,8 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       // test rides it rather than getting a sandbox of its own.
       await typeInTerminal(page, "curl -sSI --max-time 60 https://wikipedia.org");
       await beat(page, 1200);
+      await caption(page, "Test four: walled off.");
+      await beat(page, BEAT_SHORT);
       await caption(page, "Now another ordinary host.");
       await beat(page, BEAT_SHORT);
       await caption(page, "This one should be refused outright.");

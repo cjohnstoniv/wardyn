@@ -493,6 +493,12 @@ drive() {
     && die "the owner attached READ-ONLY — something already holds this terminal. Close the run's Overview tab in the console and re-shoot"
   pane_text "${P_OWNER}" | grep -q 'Permission denied' \
     && die "the owner's own key was refused — this run is not owned by ${PRINCIPAL}"
+  # DIALOG-NEW-BEAT (dialog review, P10c): the episode is titled "Audit &
+  # attach" and the browser half never says the word — the attach is HERE, and
+  # this is the frame where it lands (the owner's key accepted, the run's own
+  # shell on screen). One line names it. Drafted; see
+  # local/light-episodes-dialog-flags.md.
+  say "This is attach — stepping into the live session without loosening a single rule."
   # KEEP-VERIFY: both clauses below check against the SSH lane's actual
   # implementation (internal/api/sshgateway.go: "ssh <run-id>@<advertise-host>
   # lands in the same tmux session and masked live recorder the web terminal

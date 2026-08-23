@@ -242,7 +242,7 @@ test("V04 beat 2 — onboard the project", async () => {
   // carries the hint text too, so match on a prefix. The ring flies from
   // Repository to Local directory as it's clicked.
   await act(page, dlg.getByRole("button", { name: /Local directory/ }), "Or use an existing directory on the machine.");
-  await caption(page, "That's what we'll do today.");
+  await caption(page, "Today, though, we'll point at a project that's already on this machine.");
   await beat(page, BEAT_SHORT);
 
   const pathField = dlg.getByLabel("Path on this host");

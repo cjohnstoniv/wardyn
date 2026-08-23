@@ -468,7 +468,7 @@ test("V06 beat 5 — on the record", async () => {
   await beat(page, PACE.read);
   await caption(page, "The secret value itself isn't.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Let's find it.");
+  await caption(page, "Let's find that credential event.");
   await beat(page, BEAT_SHORT);
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await expect(search).toBeVisible({ timeout: 30_000 });

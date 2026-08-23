@@ -261,9 +261,14 @@ test("beat 6 — same trail, no human", async () => {
   await beat(page, PACE.read);
   await caption(page, "The policy makes the decision.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The run produces the verdict.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And the pipeline carries that verdict forward.");
+  // P9 (dialog review, owner-ratified 2026-08-23): "verdict" is now episode
+  // 09's word for a replay chip ("Replayed clean" / "Replayed — caught N").
+  // Two episodes apart, one word, two meanings — so it leaves BOTH lanes here
+  // (the terminal half's "That result becomes the build's verdict." went with
+  // it: scripts/demo-beats/11-ci-and-headless.sh).
+  await caption(page, "The run either fits inside the policy or it doesn't, and it says which.");
+  await beat(page, PACE.read);
+  await caption(page, "The pipeline carries that result forward.");
   await beat(page, BEAT_SHORT);
   // DIALOG-NEW-BEAT (dialog review, A17): the conclusion states what a
   // pipeline GETS but never what happens when it reaches off-list — the beat

@@ -399,7 +399,7 @@ test("V05 beat 2 — the envelope", async () => {
     "the spec's unlisted-host rule is not always_deny — this run would raise an approval instead of a silent deny",
   ).toHaveValue(/"first_use_approval": "always_deny"/);
   await spotlight(page, specBox);
-  await caption(page, "Launch the command that deliberately reaches an unlisted host.");
+  await caption(page, "So let's run it — and have it reach for a host that was never on the list.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await caption(page, "This one is designed to fail.");

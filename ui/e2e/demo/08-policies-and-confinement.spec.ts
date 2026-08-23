@@ -418,10 +418,15 @@ test("B1 — barrier honesty", async () => {
   const staleFailed = page.getByText("Run failed — review what happened").first();
   if (await staleFailed.isVisible().catch(() => false)) {
     await spotlight(page, staleFailed);
-    await caption(
-      page,
-      "That red card is an earlier take's failed run — this board resets once, in video one, not between videos.",
-    );
+    // P6 (dialog review, owner-ratified 2026-08-23): the old line said "take",
+    // "video one" and "between videos" — the series' only fourth-wall break.
+    // Same job, in-world: the card still has to be explained, but as evidence
+    // the board refuses to drop, not as a production note.
+    await caption(page, "That red card is a run that failed earlier in this series.");
+    await beat(page, BEAT_SHORT);
+    await caption(page, "The board keeps it.");
+    await beat(page, BEAT_SHORT);
+    await caption(page, "Nothing here quietly disappears because it was inconvenient.");
     await beat(page, PACE.read);
     await spotlight(page, null);
   }
@@ -449,15 +454,16 @@ test("B1 — barrier honesty", async () => {
     page,
     page.getByRole("heading", { name: "Host", level: 3, exact: true }).locator("xpath=ancestor::section[1]"),
   );
-  await caption(page, "First, Wardyn tells us what this machine can actually support.");
-  await beat(page, PACE.read);
-  await caption(page, "Fence.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Wall.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Vault.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And importantly, it tells us what each one does — and what it doesn't.");
+  // P7 (dialog review, owner-ratified 2026-08-23): episode 02 already walks
+  // Fence/Wall/Vault in fifteen lines, including this beat's own "Wardyn checks
+  // what this machine can actually support." Eight captions here restated it
+  // nearly word for word. Two lines now cover the same two on-screen moments —
+  // the Host card (this ring) and the per-tier verdict row (the ring below) —
+  // and the second one says the thing 02 could NOT: on this screen the pick is
+  // saved into the policy. Beats trimmed with it so the pair still covers the
+  // frame; beat() holds for the residual speech, so each long line pays for
+  // itself and no silent hole opens between the two rings.
+  await caption(page, "You've already met Fence, Wall, and Vault, and the same capability check applies here.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -482,11 +488,10 @@ test("B1 — barrier honesty", async () => {
   // The header row IS the three columns' state blocks (radio + status chip),
   // so one ring covers whatever verdict this host happens to give.
   await spotlight(page, matrix.getByRole("row").first());
-  await caption(page, "On this machine, all three are available.");
-  await beat(page, PACE.read);
-  await caption(page, "On another machine, one might not be.");
-  await beat(page, PACE.read);
-  await caption(page, "That's a capability check, not a configuration preference.");
+  await caption(
+    page,
+    "The difference is that this time the choice gets saved with the policy, instead of being made again every run.",
+  );
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
@@ -515,7 +520,7 @@ test("B2 — create a policy", async () => {
   const dlg = page.getByRole("dialog");
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
-  await caption(page, "A policy is an actual specification.");
+  await caption(page, "A policy is the same spec, saved with a name.");
   await beat(page, PACE.read);
   // Sam: "the modal's own body text is the most interesting thing on screen."
   // VERIFY the inline-floor clause against the server's confinement_floor
@@ -523,7 +528,10 @@ test("B2 — create a policy", async () => {
   // RequiredConfinementFloor both gate an inline spec exactly like a saved
   // one — runs_create.go:437-450 — but re-check before speaking it as fact).
   await spotlight(page, dlg.getByText(/admin-gated config/));
-  await caption(page, "It's validated on the server before it gets saved.");
+  await caption(
+    page,
+    "Wardyn checks it before it stores it — a policy that couldn't run doesn't get to sit there looking like it would.",
+  );
   await beat(page, PACE.read);
   await spotlight(page, null);
 

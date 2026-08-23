@@ -142,7 +142,9 @@ say "CI doesn't have that luxury."
 say "A pipeline has no hands."
 say "So the policy has to make the decision for it."
 say "And instead of a human clicking a button, the pipeline gets a result."
-say "That result becomes the build's verdict."
+# P9 (dialog review, owner-ratified 2026-08-23): "verdict" belongs to episode
+# 09's replay chips now — dropped from both lanes of this episode.
+say "That result becomes the build's pass or fail."
 
 # ── B1 · The policy ──────────────────────────────────────────────────────────
 # The dialog no longer counts the fields out loud (it lists the categories:

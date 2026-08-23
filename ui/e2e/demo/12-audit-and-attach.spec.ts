@@ -229,14 +229,19 @@ test("beat 4 — the trail", async () => {
   await caption(page, "Open the human event.");
   await spotlight(page, refused);
   await beat(page, BEAT_SHORT);
-  await caption(page, "And here is the refused key.");
-  await beat(page, BEAT_SHORT);
-  // FLAGGED (see report): "the identity it belongs to" — event.actor (the
-  // principal string) is read by the search box's filter predicate but is
-  // never rendered in the row; only the fingerprint (target) is genuinely on
-  // screen, so this line is true of the data but not independently provable
-  // from the picture the way the fingerprint half is.
-  await caption(page, "We can see the fingerprint and the identity it belongs to.");
+  // P10a (dialog review, owner-ratified 2026-08-23): "the refused key" arrived
+  // with no antecedent — nothing before it had told the viewer a key WAS
+  // refused. The ratified line carries the setup AND the fingerprint/identity
+  // content, so the owner line that used to follow it ("We can see the
+  // fingerprint and the identity it belongs to.") is folded in here rather
+  // than left to stutter two lines later.
+  //
+  // FLAGGED, and inherited from the folded line: "the identity it belonged to"
+  // — event.actor (the principal string) is read by the search box's filter
+  // predicate but is never rendered in the row; only the fingerprint (target)
+  // is genuinely on screen, so that half is true of the data but not
+  // independently provable from the picture the way the fingerprint half is.
+  await caption(page, "Here's a key Wardyn refused — the fingerprint, and the identity it belonged to.");
   await beat(page, PACE.read);
   await caption(page, "The credential itself isn't exposed.");
   await beat(page, BEAT_SHORT);
@@ -296,13 +301,19 @@ test("beat 5 — name the streams", async () => {
   await beat(page, PACE.read);
   await caption(page, "And Wardyn tells us that instead of pretending otherwise.");
   await beat(page, PACE.read);
-  // KEEP-VERIFY: "another source of evidence alongside the application-level
-  // record" — re-check against the sensor docs before the take. Support today:
+  // KEEP-VERIFY: "a second witness alongside Wardyn's own log" — re-check
+  // against the sensor docs before the take. Support today:
   // internal/groundtruth/groundtruth.go frames this stream as "the tamper-
   // proof 'ground-truth' counterpart to the agent's own self-report (the
   // Postgres event log) and the human-watchable PTY replay" — drop this line
   // if a sharper read of the docs contradicts it.
-  await caption(page, "Where the sensor is available, it gives us another source of evidence alongside the application-level record.");
+  //
+  // P10b (dialog review, owner-ratified 2026-08-23): "application-level
+  // record" was the only phrase of its kind in the series, and this same line
+  // had already called the kernel "an independent witness" — so it now says
+  // witness twice on purpose and names the other stream in the series' own
+  // words.
+  await caption(page, "Where the sensor is available, you get a second witness alongside Wardyn's own log.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });

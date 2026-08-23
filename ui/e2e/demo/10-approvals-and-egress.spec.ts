@@ -426,11 +426,11 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // branch, so a demo that dies here takes the header with it.
   //
   // STARTED, NOT AWAITED: the proxy holds this connection for only ~30s
-  // (defaultHoldTimeout, no production knob), and the owner's B1 stanza run
-  // is longer than the old two-line version — a serial header-wait here plus
-  // the narration blew the window once (08-21 rehearsal: the curl had 403'd
-  // before the Approve landed). Let the poll run UNDER the two captions and
-  // collect it after; the failure still surfaces at the await.
+  // (defaultHoldTimeout, no production knob), and a serial header-wait here
+  // plus the narration blew the window once (08-21 rehearsal: the curl had
+  // 403'd before the Approve landed). Let the poll run UNDER the callback
+  // caption and collect it after; the failure still surfaces at the await.
+  // P11b shortened this stanza, which only widens the margin.
   const headerUp = waitUnlessGone(
     expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
       timeout: APPROVAL_APPEARS,
@@ -443,10 +443,16 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // hanging — never the idle pane before it (S3: point at content, not
   // emptiness).
   await spotlight(page, card.locator(".xterm-screen").first());
-  await caption(page, "The command is waiting.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "It hasn't failed.");
-  await beat(page, BEAT_SHORT);
+  // P11b (dialog review, owner-ratified 2026-08-23): this is the THIRD full
+  // explanation of held-at-the-boundary (03 walks it, 07 repeats it), and it
+  // costs momentum in the longest episode. One callback replaces "The command
+  // is waiting." / "It hasn't failed." / (below) "It's sitting at the
+  // boundary, waiting for a decision." — the callback's own words are
+  // "waiting, not failing", so keeping the two it paraphrases would stutter.
+  // "Nothing has left the sandbox." stays: it is the only line here that says
+  // something the callback does not, and it rides the held row's own ring.
+  await caption(page, "Same as episode three — it's waiting, not failing.");
+  await beat(page, PACE.read);
   {
     const r = await headerUp;
     if (r instanceof Error) throw r;
@@ -461,10 +467,8 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // that hold for it. Without this the next caption starts ~2s in and the mux
   // plays both lines over each other. The floor is subsumed by the residual
   // speech, so the cost against the proxy's ~30s hold is ~3s, not 2.2+speech.
-  await caption(page, "Nothing has left the sandbox.");
-  await beat(page, PACE.read);
   await spotlight(page, heldRow);
-  await caption(page, "It's sitting at the boundary, waiting for a decision.");
+  await caption(page, "Nothing has left the sandbox.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -473,9 +477,10 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // decides a NAMED host, never .first(): approving something you did not mean
   // to approve is the worst possible frame in a governance video.
   await decide(card, "Approve", "Approve.", HELD_HOST);
-  await caption(page, "The simplest approval is:");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "this run.");
+  // P8 (dialog review, owner-ratified 2026-08-23): the ladder on screen starts
+  // at Once, so calling "this run" the SIMPLEST contradicted the picture. One
+  // caption, and it claims reach-for-it-most instead of simplest.
+  await caption(page, "The one you'll reach for most is: just this run.");
   await beat(page, BEAT_SHORT);
   await caption(page, "It works for this run, and then it disappears.");
   await beat(page, PACE.read);

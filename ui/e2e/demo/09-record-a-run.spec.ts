@@ -756,7 +756,7 @@ test("B4 — evidence becomes policy", async () => {
   const warningsBullet = sheet.getByText("Warnings", { exact: true }).locator("xpath=..").locator("li").first();
   await expect(warningsBullet).toBeVisible({ timeout: 30_000 });
   await spotlight(page, grants);
-  await caption(page, "The synthesizer also looks at credentials.");
+  await caption(page, "Wardyn also looks at credentials.");
   await beat(page, PACE.read);
   await spotlight(page, warningsBullet);
   await caption(page, "If a credential was used but isn't eligible for policy, it doesn't simply turn that observation into a new grant.");
@@ -823,7 +823,11 @@ test("B5 — approve one, not both", async () => {
   await expect(confirm).toContainText(RECORDED_HOSTS[1]);
   await caption(page, "Now we take those observed destinations and promote them into the workspace's standing policy.");
   await beat(page, PACE.read + 400);
-  await caption(page, "That's why we're asked to approve them.");
+  // P15 (dialog review, owner-ratified 2026-08-23): state the principle rather
+  // than explain the dialog. Two captions, the episode's one-thought idiom.
+  await caption(page, "Seeing a host isn't the same as allowing it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Nothing becomes policy until a person says so.");
   await beat(page, PACE.read);
 
   // THE SUBSET. Both boxes start checked (the dialog seeds its selection from

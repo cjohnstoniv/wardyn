@@ -109,7 +109,7 @@ test("V02 act 1 — the install, on camera", async () => {
   await silentChapter(page, "Set up the host", "Episode two — from a bare machine to a governed one");
   await caption(page, "In episode one, we asked why agents need to be governed.");
   await beat(page, PACE.read);
-  await caption(page, "Now let's actually set one up.");
+  await caption(page, "Now let's build the machine that governs them.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Starting with a machine that doesn't have Wardyn on it.");
   await beat(page, PACE.read);
@@ -221,6 +221,11 @@ test("V02 act 2 — first light through secrets", async () => {
   await spotlight(page, tiers);
   await caption(page, "Here, Wardyn gives us three versions of that room.");
   await beat(page, PACE.read);
+  // P11a (dialog review, owner-ratified 2026-08-23): "barrier" is spoken six
+  // times across later episodes and was never defined anywhere. This is the
+  // one screen that can define it — the radiogroup on camera IS the choice.
+  await caption(page, "That choice is what we'll call the barrier.");
+  await beat(page, BEAT_SHORT);
 
   await spotlight(page, tiers.getByRole("radio", { name: /Fence/ }));
   await caption(page, "Fence is the simplest.");

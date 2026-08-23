@@ -574,7 +574,11 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   await beat(page, BEAT_SHORT);
   await caption(page, "The agent reached a destination that wasn't allowed.");
   await beat(page, PACE.read);
-  await caption(page, "So the request is waiting at the boundary.");
+  // P11b (dialog review, owner-ratified 2026-08-23): episode 03 already walks
+  // held-at-the-boundary in full. This is the second telling, so it is a
+  // callback, not a re-explanation. The lines around it carry unique content
+  // (WHY it stopped, and that nothing left) and stay.
+  await caption(page, "Same as episode three — it's waiting, not failing.");
   await beat(page, PACE.read);
   await caption(page, "Nothing has gone out.");
   await beat(page, BEAT_SHORT + 400);
