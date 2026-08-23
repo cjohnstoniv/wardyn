@@ -289,9 +289,9 @@ test("V05 beat 2 — the envelope", async () => {
   await spotlight(page, rules);
   await caption(page, "And if the command tries to reach somewhere it shouldn't, we decide what happens.");
   await beat(page, PACE.read);
-  await caption(page, "We can stop it.");
+  await caption(page, "We can hold it for approval.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "We can ask for a decision.");
+  await caption(page, "We can deny it, but let it ask.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Or we can deny it silently.");
   await beat(page, BEAT_SHORT);
@@ -449,6 +449,8 @@ test("V05 beat 4 — the receipts", async () => {
   await caption(page, "There's also one network entry here.");
   await beat(page, PACE.read);
   await caption(page, "That's Wardyn's own control channel.");
+  await beat(page, PACE.read);
+  await caption(page, "Internal control traffic — not internet access.");
   await beat(page, PACE.read);
   await caption(page, "It's not the open internet.");
   await beat(page, PACE.read);

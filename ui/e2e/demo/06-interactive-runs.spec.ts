@@ -196,7 +196,7 @@ test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, PACE.read);
   await caption(page, "Now let's put ourselves inside the loop.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Same run.");
+  await caption(page, "Same kind of run.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Same boundaries.");
   await beat(page, BEAT_SHORT);
@@ -449,8 +449,10 @@ test("V06 beat 5 — on the record", async () => {
   // raw action strings, while /audit renders the event through its
   // ACTION_VERB map — and the verb row is the frame this beat is about.
   await page.goto("/audit");
-  await caption(page, "And the credential injection itself is recorded.");
+  await caption(page, "And the credential use is recorded.");
   await beat(page, PACE.read);
+  await caption(page, "The secret value itself isn't.");
+  await beat(page, BEAT_SHORT);
   await caption(page, "Let's find it.");
   await beat(page, BEAT_SHORT);
   const search = page.getByPlaceholder("Search events, domains, run IDs…");

@@ -396,7 +396,7 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       // test rides it rather than getting a sandbox of its own.
       await typeInTerminal(page, "curl -sSI --max-time 60 https://wikipedia.org");
       await beat(page, 1200);
-      await caption(page, "Now a second host.");
+      await caption(page, "Now another ordinary host.");
       await beat(page, BEAT_SHORT);
       await caption(page, "This one should be refused outright.");
       await beat(page, PACE.read);
@@ -469,7 +469,7 @@ test("V03 act 3 — conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
-  await chapter(page, "What you just saw", "Four refusals, proved on camera");
+  await chapter(page, "What you just saw", "Four boundary behaviors, proved on camera");
   await caption(page, "We saw four different kinds of boundary behavior.");
   await beat(page, PACE.read);
   await caption(page, "Denied.");

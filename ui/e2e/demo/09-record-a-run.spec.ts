@@ -324,7 +324,7 @@ test("cold open + B1 — the card that learns", async () => {
   await beat(page, PACE.read);
   await caption(page, "So don't guess.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Watch it once.");
+  await caption(page, "Watch it first.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And turn what you observe into policy.");
   await beat(page, PACE.read);
@@ -439,7 +439,7 @@ test("B2 — start a recorded session", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  await caption(page, "While we're recording, nothing gets blocked.");
+  await caption(page, "While we're recording, ordinary policy stops blocking — only the hard walls stay.");
   await beat(page, PACE.read);
   await caption(page, "Every host the job reaches is captured at the proxy.");
   await beat(page, PACE.read + 600);
@@ -947,7 +947,7 @@ test("B6 — the unseen host", async () => {
   await caption(page, "You have to observe the work and make the boundary explicit.");
   await beat(page, PACE.read + 600);
 
-  await caption(page, "Watch it once.");
+  await caption(page, "Watch it first.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Enforce it from then on.");
   await beat(page, PACE.read);

@@ -130,7 +130,7 @@ test("V02 act 1 — the install, on camera", async () => {
   await caption(page, "This is the real setup, on this machine.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#cmd"));
-  await caption(page, "One command.");
+  await caption(page, "Once the prerequisites are in place, it's one command.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's it.");
   await beat(page, BEAT_SHORT);
@@ -284,7 +284,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await expect(fence).toHaveAttribute("aria-checked", "true");
   await caption(page, "And that's deliberate.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Everything you're about to see works on the weakest of the three.");
+  await caption(page, "The governance you're about to see works on the weakest of the three.");
   await beat(page, PACE.read);
   await caption(page, "We're not going to hide behind the strongest isolation option.");
   await beat(page, PACE.read);
@@ -308,6 +308,8 @@ test("V02 act 2 — first light through secrets", async () => {
   await expect(reached).toBeVisible({ timeout: SANDBOX_UP });
   await spotlight(page, reached);
   await caption(page, "Here, it reached the internet directly.");
+  await beat(page, PACE.read);
+  await caption(page, "That's the host's own path being tested — a confined run still doesn't get open internet.");
   await beat(page, PACE.read);
   await caption(page, "So we know what a run will actually have available.");
   await beat(page, PACE.read);
@@ -333,7 +335,7 @@ test("V02 act 2 — first light through secrets", async () => {
   // token line is the field's own hint ("Injected proxy-side at fetch time —
   // the sandbox never holds it."). Visiting the tab also feeds the step's
   // gate proof (corpNetworkGate's egressVisited), never blocks it.
-  await caption(page, "And both of those cases live right here.");
+  await caption(page, "Those cases are handled right here.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.getByRole("tab", { name: "Host proxy" }));
   await caption(page, "A corporate proxy goes in the Host proxy tab.");
@@ -383,7 +385,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, PACE.read);
   await caption(page, "And the workload itself doesn't get handed the key.");
   await beat(page, PACE.read);
-  await caption(page, "The host keeps it.");
+  await caption(page, "Wardyn keeps it — outside the workload.");
   await beat(page, BEAT_SHORT);
   await caption(page, "A run gets access when it needs it, rather than getting a copy to keep.");
   await beat(page, PACE.read);

@@ -1009,7 +1009,7 @@ test("V07 beat 10 — borrowed, never held", async () => {
   await beat(page, PACE.read);
   await caption(page, "Real changes on disk.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "And a complete record of the run.");
+  await caption(page, "And a record of everything Wardyn observed.");
   await beat(page, PACE.read);
   await caption(page, "The next question is obvious:");
   await beat(page, BEAT_SHORT);
