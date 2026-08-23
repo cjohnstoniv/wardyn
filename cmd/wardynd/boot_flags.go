@@ -102,6 +102,13 @@ type bootFlags struct {
 
 	printGroundtruthToken *bool
 	genAgeKey             *bool
+	// rotateAgeKey is the one knob in this struct with NO WARDYN_* env pair, on
+	// purpose: it is a destructive maintenance mode that re-encrypts every
+	// stored secret, so it must be an explicit act on a command line. Its
+	// early-exit siblings above are print-and-quit and harmless if an env var
+	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
+	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
+	rotateAgeKey *string
 
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
@@ -222,6 +229,11 @@ func parseBootFlags() *bootFlags {
 		// `docker run --rm wardyn/wardynd:local -gen-age-key` can mint a durable
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
+
+		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
+		// The backquoted word is deliberate: flag.PrintDefaults renders the first
+		// one in a usage string as the argument placeholder ("-rotate-age-key path").
+		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, re-encrypt every stored secret from WARDYN_AGE_KEY to it in ONE transaction, replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),

@@ -106,8 +106,8 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    then prove the age key actually decrypts what came back, which a row
 #    count alone can't: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts instead of
-#    failing closed with a decrypt error (see "The age key has no rotation
-#    path" — the wrong key fails exactly here, not at boot):
+#    failing closed with a decrypt error (see "Rotating the age key" — the
+#    wrong key fails exactly here, not at boot):
 wardyn run --agent claude-code --workspace <workspace-id>
 ```
 
@@ -1293,20 +1293,88 @@ verbatim, never injected into. An agent CLI is present in that image only if
 the repo's own devcontainer installs it; an agent run on an image without
 one fails at the CLI, visibly, rather than being silently patched.
 
-## The age key has no rotation path
+## Rotating the age key
 
 The secret store binds **one** age identity for both encryption and decryption
-(`internal/secretstore/pg`), and nothing re-encrypts stored secrets under a new
-key — there is no `wardyn secret rotate`. Changing `WARDYN_AGE_KEY` does not
-migrate anything; it strands every existing ciphertext. To move keys today you
-must re-enter every secret (`wardyn secret set …`, `wardyn subscription connect`)
-against the new identity.
+(`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates
+nothing — it strands every existing ciphertext, and wardynd then fails closed on
+the first decrypt rather than starting.
 
-The "set a persistent key or lose your secrets on restart" warning is already in
-[`deploy/compose/README.md`](../deploy/compose/README.md),
-[TRY-IT.md](TRY-IT.md), and both installer scripts. What those do not say, and
-this does: **back the key up off-host, because you cannot rotate out of a
-compromise without re-entering every secret.**
+`wardynd -rotate-age-key <key-file>` is the supported rotation. It is a
+**maintenance mode, not a server start**: it mints a new identity, re-encrypts
+every row of the `secrets` table from the current key to the new one in ONE
+transaction, replaces the key file, writes a `secret.rekey` audit event, and
+exits. It never opens a listener and never dispatches a run.
+
+Three properties are worth knowing before you run it:
+
+- **The daemon must be stopped.** A serving wardynd holds the OLD identity in
+  memory for the life of the process; after a rotation it decrypts nothing and
+  would write any newly-stored secret under the retired key. A Postgres advisory
+  lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
+  cannot see a serving daemon — no wardynd holds a process-lifetime lock — so
+  stopping it is **your** step, not one the tool enforces.
+- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A
+  row the current key cannot decrypt aborts the whole thing with an error naming
+  that secret and how far it got (`rekey ABORTED after 3 of 9 rows …`), and
+  nothing is committed — every secret is still readable with the old key. There
+  is no half-rotated state to diagnose.
+- **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
+  is a `wardynd` flag, run by whoever has shell access to the key file.
+
+The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines are
+allowed, so `age-keygen` output works as-is) — *not* an env file. It must
+already hold the identity `WARDYN_AGE_KEY` names, or the rotation is refused:
+the whole point is that this file is replaced, and pointing the flag at
+`deploy/compose/.env` would otherwise overwrite it.
+
+```sh
+# 0. Take the Postgres dump above FIRST. It is the only rollback for the data
+#    half; the .bak below is only the rollback for the key half.
+
+# 1. Stop the daemon. Nothing may be writing secrets during the rotation.
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+
+# 2. Put the CURRENT key in a key file, if it is not already in one.
+#    (Compose keeps it as a WARDYN_AGE_KEY= line in deploy/compose/.env.)
+umask 077
+grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | cut -d= -f2- > ~/.wardyn/age.key
+
+# 3. Rotate. The old key still comes in via WARDYN_AGE_KEY; the new one is
+#    generated here and lands in the key file.
+WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+# INFO wardynd: age key rotated; … secrets=7 key_file=/home/you/.wardyn/age.key
+#      public_recipient=age1… rollback_copy=/home/you/.wardyn/age.key.bak
+
+# 4. Put the NEW key back where the deployment reads it from, then restart.
+#    Compose: rewrite the .env line. Helm: update the Secret's age-key entry.
+docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
+```
+
+Verify the same way the restore runbook does — a row count proves nothing about
+decryptability. Launch a run against a workspace that depends on a stored secret
+and confirm it starts. The audit trail records the rotation itself:
+
+```sh
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
+  -c "SELECT time, data FROM audit_events WHERE action='secret.rekey' ORDER BY time DESC LIMIT 1;"
+```
+
+**Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until
+*you* delete it — nothing cleans it up. Restoring it is only half an undo: the
+database is already re-encrypted, so `.bak` is usable **only** together with the
+Postgres dump from step 0. Once you have confirmed the rotated deployment works,
+delete `.bak` — leaving it is leaving a second copy of a retired master key on
+disk.
+
+If a step after the commit fails (the key file could not be replaced), the error
+says so explicitly and names `<key-file>.new`, which holds the new identity and
+at that point is the **only** key that reads the store. Save it before doing
+anything else.
+
+Whatever you do, **back the key up off-host.** Rotation re-encrypts what is
+there; it cannot recover a key you have already lost.
 
 ## Upgrades
 
@@ -1588,11 +1656,44 @@ ERROR wardynd: fatal err="load secret \"wardyn-signing-key\": pg secretstore: de
 That is the correct behaviour — `loadOrCreateSecret` fails closed on a decrypt
 error rather than minting a fresh key over the existing one, which would strand
 the old ciphertext permanently instead of loudly. But it is also unrecoverable
-from inside the cluster: there is no rotation path (see
-[The age key has no rotation path](#the-age-key-has-no-rotation-path)), so the
-fix is always "put the original Secret back", never "generate a new one". Back
-the Secret up off-cluster, wherever the DSN Secret is backed up, and treat
-deleting it as equivalent to deleting the database.
+from inside the cluster. [Rotating the age key](#rotating-the-age-key)
+re-encrypts a store you can still *read*; it cannot help here, because the key
+that reads this one is exactly what is missing. So the fix is always "put the
+original Secret back", never "generate a new one". Back the Secret up
+off-cluster, wherever the DSN Secret is backed up, and treat deleting it as
+equivalent to deleting the database.
+
+**Rotating it on k8s** uses the same runbook
+([Rotating the age key](#rotating-the-age-key)), with two differences.
+
+First, "stop the daemon" is a scale-to-zero — the Deployment *is* the daemon:
+
+```sh
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+kubectl -n wardyn wait --for=delete pod -l app.kubernetes.io/name=wardyn --timeout=2m
+```
+
+Second, **run the rotation from outside the cluster, not in a Pod.**
+`-rotate-age-key` needs only `WARDYN_PG_DSN`, `WARDYN_AGE_KEY` and a writable
+path for the key file — so port-forward Postgres and run the same `wardynd`
+binary on your workstation, exactly as the compose runbook does. Doing it in a
+one-shot Pod is the awkward path, not the clever one: the wardynd image is
+distroless with no shell (`deploy/compose/Dockerfile.wardynd`), so there is
+nothing in it to seed the key file with or to copy the result back out
+afterwards, and the `.bak` would die with the Pod anyway.
+
+```sh
+kubectl -n wardyn port-forward svc/<your-postgres> 15432:5432 &
+WARDYN_PG_DSN='postgres://…@127.0.0.1:15432/wardyn?sslmode=disable' \
+  WARDYN_AGE_KEY="$(kubectl -n wardyn get secret <name> -o jsonpath='{.data.age-key}' | base64 -d)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+```
+
+Then write the new value into the Secret the Deployment reads
+(`secrets.ageKey`, or the `age-key` entry of the external-DSN Secret — see the
+table above) and scale back up. Keep the old Secret value **and** the Postgres
+backup until the rotated deployment is confirmed working; on k8s those are the
+rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
 
 ### The SSH host key survives restarts — because the age key does
 

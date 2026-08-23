@@ -97,6 +97,15 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
+	// secret store and returns, never serving. Ahead of validateConfig on
+	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
+	// govern SERVING, and a rotation run under the deployment's own environment
+	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
+	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
+		return rotateAgeKeyMode(f, p)
+	}
+
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
 	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
 	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
