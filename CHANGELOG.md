@@ -40,7 +40,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   origin in a new tab (`window.open(…, "noopener")`, never an iframe — an
   iframe is precisely the same-origin risk the second listener exists to
   avoid). The policy detail sheet shows `ui_apps` read-only; there is no
-  in-console editor in 0.6.
+  in-console editor in 0.6. Boot also refuses the second listener on a routable
+  address with no TLS posture — `-ui-sandbox-listen 192.168.1.5:8081` behind a
+  loopback `-listen` previously served the 8h `wardyn_ui_sess` relay cookie in
+  cleartext on a LAN interface, exactly the class the console's own guard
+  already refused. The rule now lives beside the posture both listeners share
+  (`refusePlaintextListen`), so the loopback/unspecified carve-outs and the
+  `WARDYN_ALLOW_PLAINTEXT_LISTEN` escape hatch cannot drift apart
+  ([docs/ENV.md](docs/ENV.md)).
 - **`wardyn/agent-vscode` image variant** (`make agent-image-vscode`,
   `deploy/images/vscode/`): the claude-code image plus a pinned,
   sha256-verified `code-server` bound to `127.0.0.1:8080` and a
@@ -97,8 +104,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   re-registered (or revoked) — there is no expiry or background sweep. Every
   override connection is audited distinctly (`ssh.auth` success carries
   `override:true` whenever the owner check did not match), and a member's
-  key never satisfies the check regardless of registration age. See
-  [docs/SSH.md](docs/SSH.md) → "Bounds" and `threatmodel/THREAT-MODEL.md`
+  key never satisfies the check regardless of registration age. **Upgrading:
+  a key registered before 0.6 is backfilled as `member` and never gains the
+  override** — the stamp is written only at registration and nothing
+  re-stamps it, so an admin who registered a key under 0.5 must
+  `DELETE /me/ssh-keys/{fingerprint}` and register it again to receive one.
+  See [docs/SSH.md](docs/SSH.md) → "Bounds" and `threatmodel/THREAT-MODEL.md`
   residual #15.
 
 - **One command from a bare host to a real Kubernetes cluster.** `make
@@ -150,8 +161,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`wardyn logs <run-id> [-f]`** tails a run's audited event trail (dispatch,
   egress, credential mints, completion) by reusing the existing audit-events
   pipeline. There is no raw agent stdout/stderr capture for exec-mode runs, so
-  the command is honestly scoped to what actually gets audited, and it reports
-  an unknown or unauthorized run id immediately instead of polling forever.
+  the command is honestly scoped to what actually gets audited. It reports an
+  unknown or unauthorized run id immediately — with or without `--follow` —
+  rather than exiting 0 on nothing or polling forever, and a followed run's
+  tail runs until the run's terminal audit rows are drained, not merely until
+  the run's state flips.
 - **`approvals list`/`get` gain run and host visibility.** `approvals list
   --run <id>` filters by run — the SDK's `ListApprovals` now actually sends
   `?run_id=`, dead since decision scopes shipped it server-side — a `HOST`
@@ -189,9 +203,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rejected, so the run still launches on its admin-authored egress — and `GET
   /secrets` lists a member only the names their own grants cover once `secret`
   is enforced.
+- **BREAKING — `pkg/client.ListApprovals` gains a `runID uuid.UUID`
+  parameter**, positionally between `state` and the variadic `ListOpts`:
+  `ListApprovals(ctx, state, opts...)` becomes
+  `ListApprovals(ctx, state, runID, opts...)`. Pass `uuid.Nil` for "every
+  run" — the previous behaviour. The method never sent the `?run_id=` filter
+  the server has supported since decision scopes shipped; adding it as an
+  option would have left the filter as easy to forget as it already was.
+  Every SDK caller must update to compile.
+- **Upgrading a Kubernetes install: `helm upgrade --reuse-values` is not the
+  path across 0.5 → 0.6.** `--reuse-values` replaces the new chart's
+  `values.yaml` with the previous release's, so the value blocks 0.6 added
+  (the UI-sandbox gateway, the readiness-probe path) are absent and the
+  templates fail at render on a nil map rather than installing something
+  crippled. Use `-f your-values.yaml`, or `--reset-then-reuse-values` (Helm
+  ≥ 3.14), which starts from the new chart's defaults and layers the previous
+  release's overrides on top. [docs/OPERATIONS.md](docs/OPERATIONS.md) →
+  "`helm upgrade`, and why `--wait` is not optional" carries the recipe and
+  the two Helm sharp edges it steps around.
 
 ### Fixed
 
+- **An exec-mode run's page stops calling it an agent.** A run launched with
+  no agent and no model was chipped "autonomous — the agent drives", badged
+  "agent exit 0", and watched "anything the agent tries". `task_mode` is
+  request-scoped and lives only in the `run.create` audit event, so the run
+  page derives it from the trail it already holds: an exec run now chips
+  "exec — shell command, no agent harness", the exit chip drops the word (it
+  is true in every mode), and the idle hint says "anything this run tries".
+- **The recording banner derives its tier from the runner, not from a
+  New-Run preference.** The Recorded-sessions warning card guessed the
+  confinement tier from the operator's persisted New-Run default in
+  `localStorage` — an unrelated setting — falling back to a hardcoded CC1, so
+  a capture that actually ran under Vault was captioned "Fence — the weakest
+  barrier". The backend launches every recording under the runner's
+  *strongest* class, and the card now reads that: the open-recording-allows-
+  all-egress line is stated on every tier, and the weakest-barrier line is
+  added only when the session genuinely runs under CC1.
 - **Ground-truth's control-plane counter could freeze on a live sensor.** The
   ingest sidecar built its container→run index from a `docker ps` snapshot
   (running containers only) and replaced it wholesale on every refresh, while
@@ -320,6 +368,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   failed poll stops rendering as "all clear".
 
 ### Security
+
+- **`wardyn-ssh-host-key` was listable and overwritable through the generic
+  secrets API.** The SSH gateway's ed25519 host key sat in the broker's
+  reserved set but not in `internal/api`'s, so the half of the guard facing
+  the operator never applied: `GET /secrets` listed it, `PUT`/`DELETE`
+  overwrote or removed it — a junk value regenerates the host key at the next
+  boot and breaks every pinned fingerprint, which is the warning `ssh(1)`
+  prints for a man-in-the-middle — and an `api_key` grant could name it. It
+  is now reserved on both sides, the same omission `wardyn-ui-session-key`
+  had. The two hand-written maps live in packages that cannot see
+  `cmd/wardynd`'s platform-key constants, so the test that would have caught
+  this lives in `cmd/wardynd`, where all three are visible, and fails if any
+  daemon-GENERATED key is missing from either set. The operator-PROVIDED
+  GitHub App pair stays deliberately out of it: those must remain `Put`-able.
 
 - **A member's dropped secret pairing is now audited, not just warned about.**
   `filterMemberGrants` drops an `inline_policy` grant that pairs a stored secret
