@@ -118,7 +118,7 @@ wardyn run --agent claude-code --workspace <workspace-id>
 
 ### The audit log can't quietly rot
 
-[Watch — Audit & attach (2:00–2:30)](README.md#v10--audit--attach)
+[Watch — Audit & attach (2:00–2:30)](README.md)
 
 "Append-only" here is enforced by the database, not by convention. A row-level
 Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a

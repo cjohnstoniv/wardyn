@@ -1,6 +1,6 @@
 # SSH gateway
 
-[Watch — Audit & attach (2:00–2:30)](README.md#v10--audit--attach)
+[Watch — Audit & attach (2:00–2:30)](README.md)
 
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
