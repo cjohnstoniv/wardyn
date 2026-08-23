@@ -490,6 +490,16 @@ type Server struct {
 	// promote to a PG advisory lock (gt_rotator.go's pattern) if
 	// allowMultiReplica ever becomes real.
 	siteConfigMu sync.Mutex
+	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
+	// replace this package added If-Match/ETag optimistic concurrency to
+	// (etag.go): PUT /permissions/enforcement reads the current enforcement
+	// map to check If-Match against, then writes the new one, and this mutex
+	// is what keeps that check-then-write atomic against a second overlapping
+	// PUT on the same process — same reasoning as siteConfigMu above (single
+	// replica by construction), just a second lock because the two documents
+	// live in different tables and a writer on one must never block a writer
+	// on the other. Zero value is ready to use.
+	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
