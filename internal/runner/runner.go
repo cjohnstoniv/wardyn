@@ -66,6 +66,17 @@ type SandboxSpec struct {
 	// deny-list defense-in-depth (see runner/docker/driver.go) even though the
 	// values came from policy. Default ReadOnly.
 	Mounts []Mount
+	// MemberMountRoots, when non-nil, marks this run as one whose mounts were
+	// authored by a MEMBER (a member-owned workspace's local_dir) and carries
+	// the operator/MDM-set roots those mounts must resolve inside. Resolved at
+	// create-run from the owning member's principal (MemberMountPolicy.RootsFor)
+	// and re-checked by the driver at BIND time — the last moment this process
+	// can resolve the real path — via ValidateMemberMountSource.
+	//
+	// NIL for every operator/non-member run, and nil means the driver does
+	// EXACTLY what it does today: the member gate is purely additive and can
+	// never narrow an operator mount. See member_mount.go for the threat model.
+	MemberMountRoots []string
 	// Interactive marks a run that comes up idle for `wardyn attach` (no task is
 	// exec'd). Drivers use it to prepare the workspace on the idle main process —
 	// e.g. clone the repo into ~/work — so the attach shell isn't empty. A non-

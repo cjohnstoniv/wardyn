@@ -422,7 +422,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(spec.Mounts)
+	agentMounts, err := d.agentMounts(spec.Mounts, spec.MemberMountRoots)
 	if err != nil {
 		return fail(err)
 	}
@@ -542,7 +542,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 //     in-container prefixes errors the whole CreateSandbox (rollback runs).
 //   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
 //     ReadOnly=false, so a workspace bind cannot grant host write by default.
-func (d *Driver) agentMounts(specMounts []runner.Mount) ([]mount.Mount, error) {
+//   - MEMBER MOUNTS (memberRoots non-nil): a run whose mounts a MEMBER authored
+//     (a member-owned workspace's local_dir) additionally runs
+//     runner.ValidateMemberMountSource against the operator/MDM-set roots
+//     resolved for that member. It runs HERE, immediately after ValidateMount
+//     and immediately before the bind is appended, for the same reason
+//     ValidateMount is re-run here at all: a symlink that was benign at
+//     onboarding can be repointed before the run, so the resolved-real-path
+//     within-root assertion has to be the LAST thing before ContainerCreate.
+//     nil memberRoots (every operator run) skips it entirely — the gate is
+//     additive and never narrows an operator mount.
+func (d *Driver) agentMounts(specMounts []runner.Mount, memberRoots []string) ([]mount.Mount, error) {
 	var mounts []mount.Mount
 	if d.cfg.RecordingMount != "" {
 		// Cast delivery: wardyn-rec writes the finished recording to this
@@ -572,6 +582,11 @@ func (d *Driver) agentMounts(specMounts []runner.Mount) ([]mount.Mount, error) {
 	for _, m := range specMounts {
 		if err := runner.ValidateMount(m); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
+		if memberRoots != nil {
+			if err := runner.ValidateMemberMountSource(m.Source, memberRoots); err != nil {
+				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
+			}
 		}
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
