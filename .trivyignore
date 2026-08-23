@@ -1,0 +1,15 @@
+# trivy allowlist — CVEs accepted for the images CI scans.
+#
+# Consumed by ci.yml's `trivy` job (severity CRITICAL, --ignore-unfixed), which
+# scans deploy/images/claude-code/Dockerfile's built image. One CVE id per line;
+# `#` starts a comment. Trivy applies this file verbatim — an id here is
+# silenced everywhere, so keep the scope note in the comment.
+#
+# RULES for adding an entry (this file is a security exception log, not a mute
+# button): every id needs a comment naming (1) the package, (2) WHY it does not
+# reach us in this image, and (3) the date + who accepted it. An entry with no
+# reason is a finding someone hid. Delete an entry the moment the base image
+# ships a fix — --ignore-unfixed already suppresses the no-fix-available case,
+# so anything listed here is a CVE we could have patched and chose not to.
+#
+# Empty on purpose: the current agent image has no accepted CRITICALs.
