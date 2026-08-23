@@ -441,6 +441,11 @@ bug rather than a slow page.
 
 ### Every denial that isn't a 404
 
+(This section is the source of record for `authz.denied`'s `reason` values;
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
+every *other* audit `action` and points back here for this one rather than
+restating it.)
+
 Every member denial that isn't a plain foreign-resource 404 is audited under
 `authz.denied`, whose `reason` field is the whole vocabulary:
 

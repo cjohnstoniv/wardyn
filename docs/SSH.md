@@ -317,7 +317,9 @@ else the client's shell happens to export reaches the sandbox.
 `session.attach` with `transport:ssh` in its data (the shell path — same
 action name the browser terminal uses, so both show up together in a run's
 timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp` (`bytes` transferred),
-`ssh.forward` (`port`, `bytes`).
+`ssh.forward` (`port`, `bytes`). This is the source of record for these four;
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
+every other audit action in the system and points back here for these.
 
 ## Migration & internals
 
