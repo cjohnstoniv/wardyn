@@ -521,11 +521,16 @@ there — that is the operator's own posture, not a switch that failed.
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
 
-`PUT /permissions/enforcement` replaces the **whole** map and carries no
-`If-Match`/version guard, so an omitted kind is an enforced kind switched off:
-re-fetch `GET /permissions` immediately before writing, or a stale admin tab
-can silently disable a control that two admins both believe is on. The write is
-audited either way, which is attribution rather than prevention.
+`PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind
+is an enforced kind switched off: re-fetch `GET /permissions` immediately
+before writing, or a stale admin tab can silently disable a control that two
+admins both believe is on. `GET /permissions`'s `ETag` header (a content hash
+of the enforcement map alone, not the grant table) can be sent back as this
+`PUT`'s `If-Match` for that: a document that changed underneath a stale tab is
+refused `412` instead of accepted and silently narrowed. `If-Match` is
+optional — omitting it keeps working exactly as before, so this is additive,
+not a new requirement, and the write is audited either way regardless of
+whether `If-Match` was used, which is attribution rather than prevention.
 
 Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
 `capability.enforcement.write`. Enforcement lives in its own table rather than
@@ -1166,6 +1171,17 @@ validator the server runs): because this is a whole-document replace, a typo'd
 key is not an ignored line — it would leave the real setting out of the body and
 delete it. A misspelled field fails on the host, before anything is sent.
 
+**Optional `If-Match`.** `GET /site-config` returns an `ETag` (a content hash
+of the document); a `PUT` carrying that value back as `If-Match` is refused
+`412` if the document changed underneath it — two admins editing the same
+config, or a stale `corp-baseline.json` applied after someone else's `PUT`
+already landed — instead of one silently overwriting the other. Omitting
+`If-Match` keeps working exactly as before: this is additive, not a new
+requirement, and `wardyn site-config apply` today sends none. A `PUT` that
+does send it and gets `412` should re-`GET`, re-apply its intended change on
+top of the current document, and retry — the same shape as any optimistic
+concurrency failure.
+
 ### Testing it: two probes, not a courtesy button
 
 Wardyn otherwise has no test-connection buttons anywhere: it cannot dial a
@@ -1782,6 +1798,22 @@ error before the gateway ever listens, so what clients get is a connection
 refused, never a silently different host key — a strictly better failure than
 the man-in-the-middle warning a re-minted key would produce, and the reason
 `loadOrCreateSecret`'s fail-closed branch matters here specifically.
+
+### The UI-sandbox gateway: a per-run origin is the production default
+
+If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
+set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — this
+is the documented enterprise default, not an optional extra. Leaving it unset
+puts every run's relayed app on the SAME browser origin, separated only by a
+path-scoped cookie; that shared-origin mode is a published residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18), tolerable for a
+single-tenant demo cluster but not the shape a multi-tenant or production
+install should run in. Setting the template needs wildcard DNS and a wildcard
+certificate for the gateway's hostname (e.g. `*.ui.example.com`) — the one-time
+cost that buys every run its own origin, with an enter on any other host
+refused outright. Full recipe, including the wildcard Ingress, in
+[docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the Helm chart
+section linked above.
 
 ## One replica, by construction
 

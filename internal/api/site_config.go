@@ -270,12 +270,16 @@ func danglingSiteConfigSecretRefs(sc types.SiteConfig, present map[string]bool) 
 // NEVER included — only the refs (names) the broker/proxy resolve at dispatch/
 // injection time. A never-configured operator gets the zero value (empty refs/
 // overrides/hosts) with 200, not a 404: "unconfigured" is a valid, common state.
+//
+// The response carries an ETag (etag.go) so a caller that means to base a
+// later PUT on exactly this read can send it back as If-Match.
 func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
 		return
 	}
+	w.Header().Set("ETag", computeETag(cfg))
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -298,6 +302,13 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // (foldLegacyArtifactOverrides) before validation, so a document saved before
 // EgressRedirects existed keeps applying rather than 400ing or silently
 // dropping every redirect.
+//
+// If-Match (etag.go) is optional optimistic concurrency on top of this
+// whole-document replace: an absent header behaves exactly as before (this is
+// additive), a present one that no longer matches the document's CURRENT
+// ETag is refused with 412 before the write reaches the store — the same
+// "read, then write only if nothing else changed it first" guarantee
+// PUT /permissions/enforcement gets in permissions.go.
 func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg types.SiteConfig
 	if !decodeStrict(w, r, &cfg) {
@@ -326,6 +337,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get existing site config: "+err.Error())
 		return
 	}
+	// Checked under siteConfigMu, against the SAME read this handler's own
+	// integrations-carry-forward uses below — no other writer can land between
+	// this check and the Put that follows it.
+	if !ifMatchSatisfied(r, computeETag(existing)) {
+		writeError(w, http.StatusPreconditionFailed,
+			"If-Match does not match the current site config — GET /site-config again and retry")
+		return
+	}
 	cfg.Integrations = existing.Integrations
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
@@ -338,6 +357,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			"egress_redirects_count":    len(saved.EgressRedirects),
 			"scm_hosts_count":           len(saved.ScmHosts),
 		})))
+	w.Header().Set("ETag", computeETag(saved))
 	// dangling_secret_refs surfaces the "reset+apply came back green but every
 	// credentialed path is dead" gap: this document round-trips secret NAMES
 	// only, so an apply after a secret-store wipe (or a hand-edited file) can

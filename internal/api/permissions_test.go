@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -300,6 +301,72 @@ func TestPutCapabilityEnforcementReplaces(t *testing.T) {
 	}
 	if !st.enf[capEgressHost] || len(st.enf) != 1 {
 		t.Fatalf("enforcement = %v after the rejected write, want the previous state untouched", st.enf)
+	}
+}
+
+// doSSOIfMatch is doSSO (rbac_test.go) plus an If-Match header.
+func doSSOIfMatch(t *testing.T, srv *Server, method, path string, cookie *http.Cookie, ifMatch, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(method, path, nil)
+	} else {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	if cookie != nil {
+		r.AddCookie(cookie)
+	}
+	if ifMatch != "" {
+		r.Header.Set("If-Match", ifMatch)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// TestPutCapabilityEnforcementIfMatch is the #7 optimistic-concurrency
+// contract on this endpoint's own document (the enforcement map, distinct
+// from the grant table GET /permissions also returns): no If-Match keeps
+// working, a stale one 412s before the store is touched, and a fresh one
+// (re-read via GET /permissions) succeeds.
+func TestPutCapabilityEnforcementIfMatch(t *testing.T) {
+	srv, st := permServer(t)
+	admin := permAdmin(t)
+	st.enf = map[string]bool{capEgressHost: true}
+
+	get := doSSO(t, srv, http.MethodGet, "/api/v1/permissions", admin, "")
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET /permissions = %d: %s", get.Code, get.Body.String())
+	}
+	etag := get.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("GET /permissions did not set an ETag")
+	}
+
+	stale := `"0000000000000000000000000000000000000000000000000000000000000000"`
+	w := doSSOIfMatch(t, srv, http.MethodPut, "/api/v1/permissions/enforcement", admin, stale, `{"secret":true}`)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale If-Match: code = %d, want 412: %s", w.Code, w.Body.String())
+	}
+	if st.enf[capSecret] {
+		t.Fatal("a refused If-Match must never reach the store")
+	}
+
+	w = doSSOIfMatch(t, srv, http.MethodPut, "/api/v1/permissions/enforcement", admin, etag, `{"secret":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fresh If-Match: code = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if !st.enf[capSecret] {
+		t.Fatal("fresh If-Match write did not reach the store")
+	}
+	if got := w.Header().Get("ETag"); got == "" || got == etag {
+		t.Fatalf("PUT ETag = %q, want a NEW value distinct from the pre-write one %q", got, etag)
+	}
+
+	// No If-Match at all: unconditional, exactly as before this feature.
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/permissions/enforcement", admin, `{"secret":true,"egress_host":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("no If-Match: code = %d, want 200: %s", w.Code, w.Body.String())
 	}
 }
 

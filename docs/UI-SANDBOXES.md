@@ -95,7 +95,7 @@ precisely what the second listener exists to prevent.
 |---|---|
 | `WARDYN_UI_SANDBOX_LISTEN` | the gateway's own address, e.g. `:8081` — never `WARDYN_LISTEN`'s |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | the externally-reachable base URL, e.g. `https://wardyn-ui.example.com` (advisory copy; unset falls back to the raw bind address and warns) |
-| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | optional per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate |
+| `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below |
 
 **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
 `-tls-key` as the console, so a distinct hostname needs a certificate that

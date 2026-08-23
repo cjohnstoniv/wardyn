@@ -75,6 +75,7 @@ That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
 | Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | shipped | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | shipped | [CI.md](docs/CI.md) |
 | Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | shipped | [SSH.md](docs/SSH.md) |
+| UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | shipped | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
 
 Everything else — env and policy reference, deployment, sample workspaces — is
 indexed in [docs/](docs/README.md).
@@ -120,6 +121,10 @@ What Wardyn does **not** defend against is published in full
   opaque.
 - **CC1/Fence shares the host kernel**, and the 1-hour minted-token window
   before revocation is minimized by TTL, never eliminated.
+- **The UI sandbox gateway defaults to a shared browser origin** across runs,
+  separated only by a path-scoped cookie, unless the operator sets a per-run
+  origin template — the documented production default
+  ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
 
 ## Status
 
