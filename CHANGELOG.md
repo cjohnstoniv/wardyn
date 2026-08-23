@@ -8,7 +8,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-<!-- 0.6 work populates these sections as it lands. -->
+## [0.6.0] — 2026-08-23
 
 ### Added
 
@@ -111,7 +111,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `DELETE /me/ssh-keys/{fingerprint}` and register it again to receive one.
   See [docs/SSH.md](docs/SSH.md) → "Bounds" and `threatmodel/THREAT-MODEL.md`
   residual #15.
-
 - **One command from a bare host to a real Kubernetes cluster.** `make
   kind-quickstart` ([`deploy/kind/quickstart.sh`](deploy/kind/quickstart.sh))
   builds `wardynd` locally, stands up a `kind` cluster with a version-pinned
@@ -205,9 +204,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   still launches on its admin-authored egress. The warning appears twice: on
   the preflight/Review dry-run *before* launch, and again on the `201` of the
   launch itself, where the console raises it as a toast and `wardyn run`
-  prints it to stderr — and `GET
-  /secrets` lists a member only the names their own grants cover once `secret`
-  is enforced.
+  prints it to stderr. `GET /secrets` likewise lists a member only the names
+  their own grants cover, once `secret` is enforced.
 - **BREAKING — `pkg/client.ListApprovals` gains a `runID uuid.UUID`
   parameter**, positionally between `state` and the variadic `ListOpts`:
   `ListApprovals(ctx, state, opts...)` becomes
@@ -255,7 +253,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The index is now fed by `docker events` (a container is known at CREATE,
   before its first exec) and merged rather than replaced, with entries
   outliving their container by 15 minutes so a lagging tail still correlates.
-
 - **A persistent-Postgres install with the default ephemeral age key now
   refuses to render, instead of crash-looping on its second restart.**
   External-DSN installs pair with the default ephemeral age identity —
@@ -389,7 +386,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this lives in `cmd/wardynd`, where all three are visible, and fails if any
   daemon-GENERATED key is missing from either set. The operator-PROVIDED
   GitHub App pair stays deliberately out of it: those must remain `Put`-able.
-
 - **A member's dropped secret pairing is now audited, not just warned about.**
   `filterMemberGrants` drops an `inline_policy` grant that pairs a stored secret
   with a host the operator never eligible-listed; that drop previously produced
@@ -402,7 +398,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   audit the same way (`capability_egress_host`, `capability_secret`), and a
   capability refusal at launch or at an approval decision audits as
   `capability_workspace`, `capability_egress_host`, or `byoi_member`.
-
 - **`k8s.enabled` refuses `serviceAccount.create=false` with no explicit
   name.** That combination let the k8s-runner RBAC role — `pods/exec`,
   `secrets` create/delete, `networkpolicies` create/delete — silently bind to

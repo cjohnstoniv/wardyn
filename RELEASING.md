@@ -75,15 +75,6 @@ before step 3.
    Prerequisites run above only sees the previous release's already-consistent
    versions and passes either way. **Re-run `make release-check` after this
    commit** before tagging.
-
-   > **TODO at the 0.6.0 cut:** bumping `appVersion` to `0.6.0` makes the
-   > "`/readyz` is 0.6-and-later, and the chart's default image is not yet"
-   > paragraphs **historical** — the default image will serve `/readyz`. Rewrite
-   > them as an upgrade note for operators still pinning a `<=0.5.0` image rather
-   > than deleting them: [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)
-   > (the "`/readyz` is a 0.6-and-later endpoint" block and the
-   > `readinessProbe.path` value note) and
-   > [docs/OPERATIONS.md](docs/OPERATIONS.md)'s matching readiness paragraph.
 2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
    `git commit -s -m "release: X.Y.Z"`.
 3. **Cut (or reuse) the release branch.** Starting with 0.5, every minor
