@@ -25,7 +25,6 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
 import {
   Table,
   TableBody,
@@ -57,6 +56,7 @@ import {
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
+import { PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -65,10 +65,10 @@ import { OPERATOR_ONLY_REASON, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 
-type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
-
 // A starter spec used to prefill the "create" editor. Mirrors the shipped
 // default policy shape so an operator sees a valid, editable starting point.
+// (Equivalent to the panel's "Minimal" template — kept as its own const since
+// the create flow prefills it directly, independent of the template gallery.)
 const STARTER_SPEC: RunPolicySpec = {
   allowed_domains: ["api.anthropic.com"],
   first_use_approval: "deny_with_review",
@@ -76,31 +76,8 @@ const STARTER_SPEC: RunPolicySpec = {
   eligible_grants: [],
 };
 
-// Compact, honest egress summary for the table row. allow_all_egress is ALWAYS
-// the block-list phrasing (never "unrestricted") — see wardyn/copy.ts.
-function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipTone } {
-  if (spec.allow_all_egress) {
-    return { label: "Allow-all egress (block-list only)", tone: "info" };
-  }
-  const n = spec.allowed_domains?.length ?? 0;
-  const denied = spec.denied_domains?.length ?? 0;
-  if (n === 0) {
-    return { label: denied > 0 ? `No egress, ${denied} denied` : "No egress", tone: "neutral" };
-  }
-  return {
-    label: `${n} domain${n === 1 ? "" : "s"} allowed${denied > 0 ? `, ${denied} denied` : ""}`,
-    tone: "info",
-  };
-}
-
-// Honest lifecycle summary — mirrors the reaper's ACTUAL semantics
-// (internal/lifecycle/lifecycle.go): auto_stop_after_sec <= 0 or unset means the
-// run is exempt from idle auto-stop, not "30 minutes by default".
-function lifecycleSummary(spec: RunPolicySpec): string {
-  const s = spec.auto_stop_after_sec;
-  if (typeof s === "number" && s > 0) return `Auto-stop: ${Math.max(1, Math.round(s / 60))} min idle`;
-  return "Runs until stopped";
-}
+// egressSummary/lifecycleSummary (used by the table rows below) now live in
+// policy-panel.tsx — one copy, shared with the panel's own derivations.
 
 export function PoliciesScreen() {
   const operator = useOperator();
@@ -520,23 +497,7 @@ function PolicyEditor({
               required
             />
           </Field>
-          <Field label="Spec (JSON)" htmlFor="policy-spec" required>
-            <Textarea
-              id="policy-spec"
-              value={specText}
-              onChange={(e) => setSpecText(e.target.value)}
-              rows={16}
-              spellCheck={false}
-              className="font-mono text-xs"
-              required
-            />
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-              Requires <span className="font-mono">min_confinement_class</span> (CC1|CC2|CC3 = the
-              Fence/Wall/Vault barrier). Optional:
-              <span className="font-mono"> allowed_domains</span>, <span className="font-mono">denied_domains</span>,
-              <span className="font-mono"> first_use_approval</span>, <span className="font-mono">eligible_grants</span>.
-            </p>
-          </Field>
+          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} />
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below — a
               rejected save previously only ever showed visually. */}

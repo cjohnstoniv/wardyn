@@ -345,3 +345,60 @@ test("search filters the table and renders the 'no matching' empty state", async
 
   await deletePolicyViaUi(page, name);
 });
+
+// Phase 4b: PolicyEditor's body is now the shared PolicyPanel
+// (wardyn/policy-panel.tsx) — template chips + a live-derived textarea instead
+// of a bare Field. These two specs cover what's new: picking a template then
+// editing it, and the strict-decode error path the panel's textarea now feeds.
+
+test("picking a template chip fills the spec, and an edit to it is reflected on save", async ({ page }) => {
+  const name = uniqueName("template");
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  await dialog.getByLabel("Name").fill(name);
+
+  // "CI baseline" replaces the textarea body wholesale with its template spec.
+  await dialog.getByRole("button", { name: "CI baseline" }).click();
+  const specBox = dialog.getByLabel("Spec (JSON)");
+  await expect(specBox).toHaveValue(/"min_confinement_class": "CC1"/);
+
+  // Edit a field in the filled-in spec: bump the floor from CC1 to CC2.
+  const filled = await specBox.inputValue();
+  await specBox.fill(filled.replace('"CC1"', '"CC2"'));
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+  await expect(dialog).toBeHidden();
+
+  // The row reflects the EDITED value (CC2 -> "Wall"), not the template's CC1.
+  await expect(policyRow(page, name)).toContainText("Wall");
+
+  await deletePolicyViaUi(page, name);
+});
+
+test("create form surfaces the server-side error for an unknown spec key (strict decode)", async ({ page }) => {
+  const name = uniqueName("unknownkey");
+  // Syntactically valid JSON, structurally valid otherwise, but a key the
+  // server's strict decoder (decodeStrictMsg, DisallowUnknownFields) has never
+  // heard of -> rejected before validatePolicySpec even runs. A different code
+  // path than the CC9 enum-rejection spec above.
+  const badSpec = JSON.stringify(
+    {
+      allowed_domains: [],
+      first_use_approval: true,
+      min_confinement_class: "CC2",
+      not_a_real_field: true,
+    },
+    null,
+    2,
+  );
+  await openCreate(page);
+  await fillEditor(page, name, badSpec);
+  const dialog = editorDialog(page);
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+  // The server's "invalid JSON body: json: unknown field ..." message is
+  // surfaced verbatim; the dialog stays open and nothing persists.
+  await expect(dialog.getByText(/unknown field/i)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(editorDialog(page)).toBeHidden();
+  await expect(policyRow(page, name)).toHaveCount(0);
+});

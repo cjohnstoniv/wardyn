@@ -21,7 +21,8 @@
 // preflight call (runs.preflightRun) and its result rendering, the Workspace
 // card's mounts/repos, and any post-parse union it does before submit.
 //
-// Phase 4a ships this UNCONSUMED — no screen imports it yet.
+// instance="policies" is consumed by policies.tsx's PolicyEditor; the run
+// instance is still unconsumed pending the /runs/new swap (plan phase 5).
 import * as React from "react";
 import { CircleCheck, CircleX, Globe, Plus, ShieldCheck, Timer } from "lucide-react";
 import type { RunPolicySpec } from "../../lib/types";
@@ -298,16 +299,14 @@ const HIDDEN_ON_RUN: readonly (keyof RunPolicySpec)[] = ["workspace_mounts"];
 
 /* ---------- live derivations ---------- */
 
-type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
+export type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
 
-// ponytail: egressSummary/lifecycleSummary are COPIES of policies.tsx:81-103
-// (they are not exported there, and 4a must not touch that screen). Phase 4b
-// swaps PolicyEditor's body onto this panel and deletes the originals — until
-// then two identical copies exist, deliberately.
+// 4b dedup: policies.tsx's table rows import these two straight from here
+// instead of keeping their own copies.
 
 // Compact, honest egress summary. allow_all_egress is ALWAYS the block-list
 // phrasing (never "unrestricted") — see wardyn/copy.ts.
-function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipTone } {
+export function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipTone } {
   if (spec.allow_all_egress) {
     return { label: "Allow-all egress (block-list only)", tone: "info" };
   }
@@ -325,7 +324,7 @@ function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipTone } {
 // Honest lifecycle summary — mirrors the reaper's ACTUAL semantics
 // (internal/lifecycle/lifecycle.go): auto_stop_after_sec <= 0 or unset means the
 // run is exempt from idle auto-stop, not "30 minutes by default".
-function lifecycleSummary(spec: RunPolicySpec): string {
+export function lifecycleSummary(spec: RunPolicySpec): string {
   const s = spec.auto_stop_after_sec;
   if (typeof s === "number" && s > 0) return `Auto-stop: ${Math.max(1, Math.round(s / 60))} min idle`;
   return "Runs until stopped";
