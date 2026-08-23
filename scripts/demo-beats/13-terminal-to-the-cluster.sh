@@ -2,11 +2,11 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# V11 — Your terminal, our cluster. A TERMINAL-ONLY video: there is no
-# ui/e2e/demo/11-*.spec.ts and there is not meant to be one.
+# V13 — Your terminal, our cluster. A TERMINAL-ONLY video: there is no
+# ui/e2e/demo/13-*.spec.ts and there is not meant to be one.
 #
-#   scripts/record-demo.sh --video 11 \
-#     --terminal-script scripts/demo-beats/11-terminal-to-the-cluster.sh
+#   scripts/record-demo.sh --video 13 \
+#     --terminal-script scripts/demo-beats/13-terminal-to-the-cluster.sh
 #
 # WHAT THIS FILMS. One shell, five beats, against a REAL Kubernetes cluster —
 # the one `make kind-quickstart` leaves behind (deploy/kind/quickstart.sh):
@@ -25,9 +25,9 @@
 #   5. `wardyn audit <run-id>`          every connection and every exec, on the
 #                                       trail, with the exit code it really had
 #
-# WHY IT IS A SINGLE PANE. V10 needs three terminals because its subject is
+# WHY IT IS A SINGLE PANE. V12 needs three terminals because its subject is
 # three identities; this one's subject is one operator and one cluster, so it
-# is V09's shape — the driver types into the terminal record-demo.sh is already
+# is V11's shape — the driver types into the terminal record-demo.sh is already
 # filming, and nothing here needs tmux.
 #
 # NO NEW CLAIM IS MADE ABOUT SSH ITSELF. What is new is the substrate: the same
@@ -60,7 +60,7 @@
 #     one curl that creates a suitable one and stops.
 #  6. THE OPERATOR'S OWN PUBLIC KEY IS REGISTERED. Registration is a silent
 #     POST /api/v1/me/ssh-keys here (201, or 409 on a retake — both fine);
-#     nothing about key management is filmed, that is V10's subject.
+#     nothing about key management is filmed, that is V12's subject.
 #  7. NON-INTERACTIVE AUTH REALLY WORKS. Preflight opens a real connection with
 #     `ssh -N` and no exec, so it proves the key, the agent, known_hosts and
 #     the gateway in one go and leaves an ssh.auth row but NO ssh.exec row —
@@ -71,7 +71,7 @@
 #     Secret. Nothing in the beats prints it, and nothing here runs a command
 #     whose --help would (cobra renders a flag default, and that default is the
 #     token).
-#  9. THE OPERATOR HAS TO BE IN THE ROOM (V09/V10's lesson, same lane). This is
+#  9. THE OPERATOR HAS TO BE IN THE ROOM (V11/V12's lesson, same lane). This is
 #     a gdigrab of a fixed desktop rectangle (WARDYN_DEMO_CAPTURE, default
 #     1920x1080+0+0). Nothing here can see inside it, so nothing here can fail
 #     a take that filmed a notification or a stray window. Clear the top-left
@@ -79,7 +79,7 @@
 #     there is no fast-forward on this lane (record-demo.sh skips ffwd whenever
 #     a terminal segment exists), so it ships in real time.
 #
-#     scripts/demo-beats/11-terminal-to-the-cluster.sh --preflight
+#     scripts/demo-beats/13-terminal-to-the-cluster.sh --preflight
 #
 # stages and checks all of the above and films nothing. Run it the morning of
 # the shoot; every failure it can print is one that would otherwise happen with
@@ -92,7 +92,7 @@ REPO_ROOT="$(cd "${_HERE}/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 
 # Captions, typing, chapter cards and the narration timeline — the terminal
-# lane's answer to ui/e2e/demo/overlay.ts. Sourced at top level like V09/V10;
+# lane's answer to ui/e2e/demo/overlay.ts. Sourced at top level like V11/V12;
 # nothing runs until a verb is called. Its timeline lands in
 # ${WARDYN_DEMO_WORK_DIR}/narration-terminal.json, which is the per-video
 # directory record-demo.sh exports and merges back from.
@@ -102,16 +102,16 @@ cd "${REPO_ROOT}" || exit 1
 # The cluster deploy/kind/quickstart.sh installs, and the port it publishes.
 # Constants rather than knobs for run-e2e-ssh-k8s.sh's reason: a second install
 # would need its own token and port discovery, which is a different script.
-CONTEXT="${WARDYN_V11_CONTEXT:-kind-wardyn-quickstart}"
-NAMESPACE="${WARDYN_V11_NAMESPACE:-wardyn}"
+CONTEXT="${WARDYN_V13_CONTEXT:-kind-wardyn-quickstart}"
+NAMESPACE="${WARDYN_V13_NAMESPACE:-wardyn}"
 WARDYN_URL="${WARDYN_URL:-http://127.0.0.1:8080}"
-TAKE_DIR="${WARDYN_V11_DIR:-/tmp/wardyn-v11}"
+TAKE_DIR="${WARDYN_V13_DIR:-/tmp/wardyn-v13}"
 LOG="${TAKE_DIR}/preflight.log"
-# Where the verifier reads this take's run id back from (check_video_11).
-HANDOFF="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-11}/v11-run-id.txt"
+# Where the verifier reads this take's run id back from (check_video_13).
+HANDOFF="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-13}/v13-run-id.txt"
 
-die()  { printf '\n\033[1;31mv11: %s\033[0m\n' "$*" >&2; exit 1; }
-note() { printf '[v11] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
+die()  { printf '\n\033[1;31mv13: %s\033[0m\n' "$*" >&2; exit 1; }
+note() { printf '[v13] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 
 kc()  { kubectl --context "${CONTEXT}" -n "${NAMESPACE}" "$@"; }
 api() { curl -fsS -H "Authorization: Bearer ${WARDYN_ADMIN_TOKEN}" "$@"; }
@@ -180,17 +180,17 @@ preflight() {
   # The operator's own key, registered the ordinary way (the same POST the
   # console's SSH keys page makes — it binds the CALLER's principal).
   local pub code
-  pub="${WARDYN_V11_PUBKEY:-${HOME}/.ssh/id_ed25519.pub}"
-  [[ -s "${pub}" ]] || die "no public key at ${pub} — beat 3 authenticates with the operator's own key (ssh-keygen -t ed25519), or point WARDYN_V11_PUBKEY at one"
+  pub="${WARDYN_V13_PUBKEY:-${HOME}/.ssh/id_ed25519.pub}"
+  [[ -s "${pub}" ]] || die "no public key at ${pub} — beat 3 authenticates with the operator's own key (ssh-keygen -t ed25519), or point WARDYN_V13_PUBKEY at one"
   code="$(api_code -X POST "${WARDYN_URL}/api/v1/me/ssh-keys" -H 'Content-Type: application/json' \
-    --data "$(jq -nc --arg n 'wardyn v11' --arg k "$(<"${pub}")" '{name:$n, public_key:$k}')" 2>>"${LOG}")" || code=000
+    --data "$(jq -nc --arg n 'wardyn v13' --arg k "$(<"${pub}")" '{name:$n, public_key:$k}')" 2>>"${LOG}")" || code=000
   case "${code}" in
     201|409) note "key ${pub}: ${code}" ;;
     *) die "registering ${pub} returned ${code} — see ${LOG}" ;;
   esac
 
   # WHICH run: named outright, or the newest RUNNING one. Never created here —
-  # this script only ever attaches to what an operator staged (V10's rule).
+  # this script only ever attaches to what an operator staged (V12's rule).
   RUN_ID="${WARDYN_DEMO_RUN_ID:-}"
   if [[ -z "${RUN_ID}" ]]; then
     RUN_ID="$(api "${WARDYN_URL}/api/v1/runs" 2>>"${LOG}" \
@@ -310,7 +310,7 @@ gate() {
 # ---------------------------------------------------------------------------
 if [[ "${1:-}" == "--preflight" ]]; then
   preflight
-  printf 'v11 preflight OK\n  cluster    %s/%s\n  run        %s\n  sandbox    %s\n  gateway    %s:%s %s\n  connect    %s\n  handoff    %s\n' \
+  printf 'v13 preflight OK\n  cluster    %s/%s\n  run        %s\n  sandbox    %s\n  gateway    %s:%s %s\n  connect    %s\n  handoff    %s\n' \
     "${CONTEXT}" "${NAMESPACE}" "${RUN_ID}" "${SANDBOX_REF}" \
     "${SSH_HOST}" "${SSH_PORT}" "${FP_CARD}" "${SSH_CMD}" "${HANDOFF}"
   exit 0

@@ -188,7 +188,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   v0.5 gateway with no attach flag to trip on, and `wardyn ssh --print` emits
   the raw command for a script or a demo. The lane is proven on the other
   substrate too — `make test-e2e-ssh-k8s` drives it against kind, not only
-  Compose — and demo **V11 ("your terminal, our cluster")** films it end to end
+  Compose — and demo **V13 ("your terminal, our cluster")** films it end to end
   against the `kind-quickstart` cluster, graded against that install's own audit
   trail rather than an exit code. That beat and its grader are wired and were
   exercised on a live cluster once; the take itself is a release-cut act and is
