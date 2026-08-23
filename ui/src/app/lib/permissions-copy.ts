@@ -199,12 +199,13 @@ export const DENIED = {
   // New Run: base image.
   IMAGE_BODY: "You can't name your own base image. Ask an admin to grant the exact image ref.",
 
-  // Preflight / Review warnings — the run still launches; the dropped rows are
-  // named so the later failure isn't a mystery.
-  SECRET_DROPPED: (n: number) =>
-    `${n} secret${n === 1 ? " isn't" : "s aren't"} granted to you and won't be attached. Whatever needs ${n === 1 ? "it" : "them"} will fail at that point.`,
-  EGRESS_DROPPED: (n: number) =>
-    `${n} host${n === 1 ? "" : "s"} you added ${n === 1 ? "isn't" : "aren't"} granted to you and ${n === 1 ? "was" : "were"} removed from this run. Hosts this workspace already carries are unaffected.`,
+  // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
+  // are count-shaped copy for a preflight/Review surface, and 0.6 ships none:
+  // the drop is surfaced at launch instead, as one toast per dropped value
+  // carrying the SERVER's text, which names the kind and the exact value
+  // (internal/api/runs.go -> new-run/run-warnings.ts). A string defined here
+  // and rendered nowhere is not canon, it is a claim — so it waits for the
+  // surface that draws it.)
 
   // Secrets page, member view, `secret` enforced.
   SECRETS_NARROWED: "Only secrets granted to you are listed.",
