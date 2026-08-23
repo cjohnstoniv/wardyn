@@ -824,13 +824,27 @@ only at the end.`,
 				return err
 			}
 			c := client()
+			// GetRun FIRST, in BOTH modes: an unknown/typo'd id 404s here and an
+			// unauthorized caller 401/403s, while the audit endpoint happily
+			// answers 200 [] for either — so --follow=false used to print
+			// nothing and exit 0 for a run that does not exist.
+			if _, err := c.GetRun(cmd.Context(), id); err != nil {
+				return err
+			}
 			var tail logTail
+			// Polls taken AFTER the run was first seen terminal. The completion
+			// watcher flips the state BEFORE finalizeRunTail writes run.complete,
+			// and the revoke/teardown audits land after that again — so stopping
+			// on the first terminal read drops the completion line this command
+			// promises. Bounded: two extra polls, and it stops as soon as one
+			// comes back with nothing new.
+			drains := 0
 			for {
 				var f sdk.AuditFilter
 				if !tail.since.IsZero() {
 					f.Since = tail.since.UTC().Format(time.RFC3339)
 				}
-				page, _, err := c.AuditEventsPage(cmd.Context(), id, f)
+				page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f)
 				if err != nil {
 					return err
 				}
@@ -840,19 +854,25 @@ only at the end.`,
 					fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
 				}
 				if !follow {
+					// A truncated page is the server's per-run cap (1000
+					// events), not the end of the trail. --follow recovers from
+					// it for free on its next poll, since `since` has advanced;
+					// one-shot mode has to take that next page itself or it
+					// silently prints a cut-off log.
+					if truncated && len(newEvents) > 0 {
+						continue
+					}
 					return nil
 				}
-				// A failed GetRun is fatal, not a reason to keep polling: an
-				// unknown/typo'd id 404s (the audit endpoint happily answers
-				// 200 [] for it) and an unauthorized caller 401/403s, so
-				// swallowing the error left `wardyn logs` looping silently
-				// forever instead of reporting it.
 				run, err := c.GetRun(cmd.Context(), id)
 				if err != nil {
 					return err
 				}
 				if run.State.IsTerminal() {
-					return nil
+					if drains >= 2 || (drains > 0 && len(newEvents) == 0) {
+						return nil
+					}
+					drains++
 				}
 				select {
 				case <-cmd.Context().Done():
