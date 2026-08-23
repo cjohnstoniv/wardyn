@@ -105,6 +105,8 @@ ds-bundle/
 /docs/design/*
 !/docs/design/ui-sandboxes-prompt.md
 !/docs/design/ui-sandboxes-mock/
+!/docs/design/permissioning-prompt.md
+!/docs/design/permissioning-mock/
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
