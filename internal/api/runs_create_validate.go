@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -60,8 +59,7 @@ const (
 // silently launching a run that just sits there unexplained.
 func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, string, bool) {
 	var req createRunRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeStrict(w, r, &req) {
 		return req, "", "", false
 	}
 	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that

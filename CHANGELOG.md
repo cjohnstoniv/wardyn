@@ -14,6 +14,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`POST /runs` and `POST /runs/preflight` now decode their request bodies
+  strictly**, matching `POST /policies`: an unknown field (including a typo'd
+  one nested inside `inline_policy`) is now a 400 naming the field, where it
+  was previously ignored silently. Compat note: this can break an external
+  SDK/CLI client sending a field newer than an older server understands —
+  previously tolerated version-skew now hard-fails instead of degrading.
+
 ### Fixed
 
 ### Security

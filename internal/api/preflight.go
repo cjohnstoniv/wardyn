@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -66,8 +65,7 @@ type preflightResponse struct {
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeStrict(w, r, &req) {
 		return
 	}
 	// Same member custom-image denial launch runs (runs_create.go's
