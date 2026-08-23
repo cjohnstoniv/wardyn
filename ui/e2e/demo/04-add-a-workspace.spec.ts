@@ -45,9 +45,11 @@
  * uses.
  *
  * THE SENTINEL. Beat 4 pastes WARDYN-V02-CANARY-9K2QN into the Add-secret
- * dialog's Value field — the one moment its literal characters are legitimately
- * on screen. From then on this file asserts, at every beat that could leak it,
- * that the sentinel appears NOWHERE in the page.
+ * dialog's Value field, which MASKS at entry (secrets.tsx) — its glyphs are
+ * never on screen. At the paste the DOM value necessarily holds the
+ * plaintext (asserted MASKED, not absent); from the save onward this file
+ * asserts at every beat that could leak it that the sentinel appears
+ * NOWHERE in the page.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
@@ -113,8 +115,14 @@ async function resetFixtures(page: Page): Promise<void> {
   const wsItems: { id?: string; name?: string }[] = Array.isArray(wsBody)
     ? wsBody
     : (wsBody?.items ?? wsBody?.workspaces ?? []);
+  // ALL rows, not just slugify: Beat 1's entire premise is the EMPTY list
+  // ("Right now, that list is empty."), and later episodes' workspaces
+  // (record-demo, egress-lab) survive their own takes — a take of THIS
+  // episode after theirs found two leftover rows and no empty-state card
+  // (2026-08-23). Deleting them here is safe: those episodes recreate their
+  // own nouns in their own beforeAll every take.
   for (const w of wsItems) {
-    if (w?.id && w.name === WORKSPACE_NAME) {
+    if (w?.id) {
       await page.request.delete(`/api/v1/workspaces/${w.id}`, { headers });
     }
   }
@@ -421,14 +429,29 @@ test("V04 beat 4 — write-only secrets", async () => {
   await caption(page, "Runs ask for a secret by name, never by its value.");
   await beat(page, PACE.read);
 
-  // The one moment the sentinel's literal characters are legitimately on
-  // screen: an operator pasting a credential into a write-only field. The
-  // owner's "only moment that value was ever displayed" line lands on this.
-  const valueBox = dlg.getByLabel("Value");
+  // The Value field masks at entry (secrets.tsx's -webkit-text-security +
+  // reveal toggle, added 2026-08-23 after this take showed the plaintext) —
+  // so the sentinel's literal characters are NEVER legitimately on screen,
+  // and the whole-page grep below can run from the paste itself.
+  const valueBox = dlg.getByLabel("Value", { exact: true });
   await spotlight(page, valueBox);
   await valueBox.fill(SENTINEL);
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
+  // NOT assertSentinelAbsent here: the DOM value necessarily holds the
+  // plaintext until save (the field must submit it), and Playwright's page
+  // text includes control values — the take that tried it failed on its own
+  // paste. The visible claim at this moment is the MASK; assert exactly that.
+  // The whole-page greps resume right after save, when the field clears.
+  await expect
+    .poll(
+      () =>
+        valueBox.evaluate(
+          (el) => (getComputedStyle(el) as unknown as Record<string, string>).webkitTextSecurity ?? "",
+        ),
+      { timeout: 10_000 },
+    )
+    .toBe("disc");
 
   await act(page, dlg.getByRole("button", { name: "Save secret" }), "Save secret.");
   await expect(dlg).toBeHidden({ timeout: 30_000 });
@@ -453,7 +476,7 @@ test("V04 beat 4 — write-only secrets", async () => {
   await expect(menu.getByRole("menuitem", { name: /reveal|show|copy|view/i })).toHaveCount(0);
   await caption(page, "But we can't reveal it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "You just watched the only moment that value was ever displayed.");
+  await caption(page, "The value was never even displayed — masked from the moment we typed it.");
   await beat(page, PACE.read);
   await caption(page, "From here on, even the person who created it can't ask Wardyn to show it again.");
   await beat(page, PACE.read + 400);

@@ -805,8 +805,10 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
     APPROVAL_APPEARS,
     `${HELD_HOST} never raised an approval on the real-workspace run`,
   );
-  await caption(page, "Now we'll make the decision permanent for this workspace.");
+  await caption(page, "Now we'll save the decision to this workspace.");
   await beat(page, PACE.read + 400);
+  await caption(page, "It holds until you remove it.");
+  await beat(page, BEAT_SHORT);
 
   // `always` is the whole point of the video. It is only clickable because THIS
   // run resolves to a workspace (run-detail passes hasWorkspace=runHasWorkspace

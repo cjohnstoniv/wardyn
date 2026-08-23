@@ -93,7 +93,7 @@ describe("AddSecretDialog — overwrite warning", () => {
     );
 
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "anthropic-api-key" } });
-    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new" } });
 
     // The overwrite warning must be visible.
     expect(screen.getByText(/already exists/i)).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("AddSecretDialog — overwrite warning", () => {
     );
 
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
-    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-other" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-other" } });
     expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
@@ -157,7 +157,7 @@ describe("AddSecretDialog — provider chips (F5)", () => {
     expect(nameInput.value).toBe("npm-token");
 
     // Never touches the Value field — chips prefill the name only.
-    expect((screen.getByLabelText(/value/i) as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText(/^value$/i) as HTMLTextAreaElement).value).toBe("");
   });
 
   it("clears the Name field back to blank via the Custom… chip", async () => {
@@ -287,7 +287,7 @@ describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
         existingNames={["git-pat-ghes-corp-internal"]}
       />,
     );
-    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new" } });
 
     // Both visible at once: the operator must see WHICH host before confirming.
     expect(screen.getByText("ghes.corp.internal")).toBeInTheDocument();
@@ -377,7 +377,7 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
       </OperatorProvider>,
     );
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
-    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new" } });
     expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save secret/i })).toBeDisabled();
   });
@@ -385,7 +385,7 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
   it("operator: AddSecretDialog saves normally (unchanged from today)", async () => {
     render(<AddSecretDialog open onOpenChange={() => {}} />);
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
-    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new" } });
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
     await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-new"));
   });

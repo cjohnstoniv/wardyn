@@ -373,7 +373,7 @@ test("B1 — barrier honesty", async () => {
     })
     .toBe("object");
 
-  await chapter(page, "Policies & confinement", "Governance you configure once, and every later run inherits");
+  await chapter(page, "Policies & confinement", "Governance you configure once — and any run can reuse");
 
   // S6: sweepStaleState() (beforeAll) clears pending approvals and running
   // holdouts, but a red "Run failed" card has no delete API (sweep.ts) — the
@@ -827,7 +827,7 @@ test("B4 — launch, effective policy", async () => {
 
   await caption(page, "One policy.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Every run that uses it gets the same governance.");
+  await caption(page, "Every run that uses it gets those same rules.");
   await beat(page, PACE.read + 600);
 
   // ---- Conclusion ------------------------------------------------------------

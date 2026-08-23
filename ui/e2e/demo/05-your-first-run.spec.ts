@@ -289,9 +289,9 @@ test("V05 beat 2 — the envelope", async () => {
   await spotlight(page, rules);
   await caption(page, "And if the command tries to reach somewhere it shouldn't, we decide what happens.");
   await beat(page, PACE.read);
-  await caption(page, "We can stop it.");
+  await caption(page, "We can hold it for approval.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "We can ask for a decision.");
+  await caption(page, "We can deny it, but let it ask.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Or we can deny it silently.");
   await beat(page, BEAT_SHORT);
@@ -351,7 +351,7 @@ test("V05 beat 3 — launch, walk away", async () => {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   await caption(page, "Once it's launched, the envelope is set.");
   await beat(page, PACE.read);
-  await caption(page, "Only a decision at the boundary can change it.");
+  await caption(page, "Only a decision at the boundary can change what this run is allowed to do.");
   await beat(page, PACE.read);
 
   // SCREEN: Run terminal/replay.
@@ -386,14 +386,20 @@ test("V05 beat 3 — launch, walk away", async () => {
   // the REPLAY'S CONTENT too early, not the click that opens it).
   const player = page.locator(".ap-player, .ap-wrapper, .ap-terminal").first();
   await expect(player).toBeVisible({ timeout: 60_000 });
+  // 2x speed FIRST, silently: speed is a creation-time option in
+  // terminal-player.tsx, so changing it REBUILDS the player unstarted.
+  // Clicking it after playback began wiped a playing terminal back to the
+  // black poster mid-beat (owner report, 2026-08-23: "plays instantly and
+  // then goes away") — the order is the fix. The rebuilt player then plays
+  // to the end and HOLDS its final frame through the closing captions,
+  // which is the beat's whole point.
+  await page.getByRole("radio", { name: "2x speed" }).click().catch(() => {});
+  await beat(page, 600);
   await caption(page, "Open the terminal record.");
   await spotlight(page, player);
   await player.click().catch(() => {});
   await spotlight(page, null);
   await beat(page, PACE.afterClick);
-  // 2x speed is a production/pacing mechanic only — the owner's script never
-  // narrates it, so it rides silently between captions.
-  await page.getByRole("radio", { name: "2x speed" }).click().catch(() => {});
   await caption(page, "Wardyn keeps the terminal output as part of the run.");
   // Hold for the cast itself (~7s at 1×, ~4s at 2×) plus a breath — the
   // whole point of the beat is that the WORK is on screen.
@@ -449,6 +455,8 @@ test("V05 beat 4 — the receipts", async () => {
   await caption(page, "There's also one network entry here.");
   await beat(page, PACE.read);
   await caption(page, "That's Wardyn's own control channel.");
+  await beat(page, PACE.read);
+  await caption(page, "Internal control traffic — not internet access.");
   await beat(page, PACE.read);
   await caption(page, "It's not the open internet.");
   await beat(page, PACE.read);

@@ -87,7 +87,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight, typeInTerm
 // importing it is what registers this file's beforeAll/afterAll, and each act
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { advance, decide } from "./funnel";
+import { decide } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -178,10 +178,15 @@ async function silentCard(page: Page, text: string): Promise<void> {
 // Act 1 — back into the funnel
 // ---------------------------------------------------------------------------
 
-test("V03 act 1 — back to the funnel", async () => {
-  test.setTimeout(240_000);
+test("V03 act 1 — open on the demos", async () => {
+  test.setTimeout(120_000);
   const page = stage();
-  await page.goto("/setup");
+  // Owner call (2026-08-23, superseding the same-day ffwd version): the film
+  // OPENS on the demos — no funnel re-entry, no fast-forward blur. /demos is
+  // the catalog page that hosts the same four cards as the funnel's embedded
+  // steps (same DemoRunControls, same testids/headings — episode 10 films
+  // here for exactly this reason: it needs no wizard state to reach).
+  await page.goto("/demos");
   await page.bringToFront();
 
   // Fail here rather than minutes into a silent, caption-less take — the same
@@ -191,40 +196,6 @@ test("V03 act 1 — back to the funnel", async () => {
   await expect
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
-
-  // A fresh browser session lands on the first-light hero, not inside the
-  // funnel — the steps only mount behind "Get started" (episode 02 clicked it
-  // on camera; here it is silent, no owner line covers it). Past that, the
-  // barrier pick and Secrets carry over from this host's own state (video two
-  // proved them); Network does not — steps.ts's CorpNetworkState is
-  // deliberately SESSION-only ("never a stale 'reached' surviving a reload").
-  await act(page, page.getByRole("button", { name: /Get started/ }));
-  await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(
-    page,
-    "Before we test the boundary, let's quickly bring back the three things we established in episode two.",
-  );
-  await beat(page, PACE.read);
-  await caption(page, "The sandbox.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "The network.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And the secrets.");
-  await beat(page, BEAT_SHORT);
-  const tiers = page.getByRole("radiogroup", { name: "Barrier tier" });
-  const fence = tiers.getByRole("radio", { name: /Fence/ });
-  await expect(fence).toBeEnabled();
-  await act(page, fence);
-  await expect(fence).toHaveAttribute("aria-checked", "true");
-  await advance();
-
-  await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await act(page, page.getByRole("button", { name: "Test connectivity" }), "Test connectivity.");
-  await expect(page.getByText(/^Reached · direct/).first()).toBeVisible({ timeout: SANDBOX_UP });
-  await advance();
-
-  await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await advance();
 
   await expect(page.getByRole("heading", { name: "The sealed box", level: 2 })).toBeVisible({ timeout: 30_000 });
 });
@@ -241,7 +212,7 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   test.setTimeout(1_200_000);
   const page = stage();
 
-  await chapter(page, "What it stops", "Four sandboxes, refusals proved on camera");
+  await chapter(page, "What it stops", "Four boundary behaviors, proved on camera");
   await caption(page, "Setup is one thing.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Now let's see the boundary actually work.");
@@ -396,7 +367,7 @@ test("V03 act 2 — four ways the boundary holds", async () => {
       // test rides it rather than getting a sandbox of its own.
       await typeInTerminal(page, "curl -sSI --max-time 60 https://wikipedia.org");
       await beat(page, 1200);
-      await caption(page, "Now a second host.");
+      await caption(page, "Now another ordinary host.");
       await beat(page, BEAT_SHORT);
       await caption(page, "This one should be refused outright.");
       await beat(page, PACE.read);
@@ -455,7 +426,9 @@ test("V03 act 2 — four ways the boundary holds", async () => {
 
     const endDemo = page.getByRole("button", { name: "End demo" });
     if (await endDemo.isVisible().catch(() => false)) await act(page, endDemo);
-    await advance();
+    // No advance(): on /demos all four cards share the page — the next
+    // iteration's own heading assert + policy spotlight scrolls the camera
+    // to the next card.
   }
 });
 
@@ -469,7 +442,7 @@ test("V03 act 3 — conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
-  await chapter(page, "What you just saw", "Four refusals, proved on camera");
+  await chapter(page, "What you just saw", "Four boundary behaviors, proved on camera");
   await caption(page, "We saw four different kinds of boundary behavior.");
   await beat(page, PACE.read);
   await caption(page, "Denied.");
