@@ -227,6 +227,7 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `ENFORCE_ON_TITLE(kind)` | Enforce {kind}? |
 | `ENFORCE_ON_BODY(n)` | {n} members are bounded by the grants below from their next request. Anything not granted starts being refused. *(singular: "1 member is bounded…")* |
 | `ENFORCE_ON_ZERO` | There are no allow grants for this capability. Enforcing it now refuses every member request until you add one. |
+| `ENFORCE_OFF_TITLE(kind)` | Stop enforcing {kind}? *(0.6 ADDITION, not from this round: the table froze only one title, so the off-dialog asked "Enforce {kind}?" above a body about going back and a "Stop enforcing" button.)* |
 | `ENFORCE_OFF_BODY` | Members go back to the powers they had before this capability was enforced. Denies still apply. |
 | `ENFORCE_CONFIRM` | Enforce |
 | `ENFORCE_STOP` | Stop enforcing |

@@ -129,6 +129,12 @@ export const PERM = {
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",
+  // ADDITION to §7.2 (0.6 implementation): the canon table froze one title and
+  // an off-BODY, so the off-dialog asked "Enforce Egress hosts?" over a body
+  // saying members go back and a button saying Stop enforcing. Same shape as
+  // ENFORCE_ON_TITLE, same verb as ENFORCE_STOP — noted as an addition in
+  // docs/design/permissioning-prompt.md §7.2.
+  ENFORCE_OFF_TITLE: (kind: string) => `Stop enforcing ${kind}?`,
   ENFORCE_OFF_BODY: "Members go back to the powers they had before this capability was enforced. Denies still apply.",
   ENFORCE_CONFIRM: "Enforce",
   ENFORCE_STOP: "Stop enforcing",

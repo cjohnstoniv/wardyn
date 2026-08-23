@@ -468,7 +468,9 @@ function ConfirmEnforcement({
     <AlertDialog open={!!state} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{PERM.ENFORCE_ON_TITLE(state ? KIND[state.kind].label : "")}</AlertDialogTitle>
+          <AlertDialogTitle>
+            {(turningOn ? PERM.ENFORCE_ON_TITLE : PERM.ENFORCE_OFF_TITLE)(state ? KIND[state.kind].label : "")}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             {turningOn ? PERM.ENFORCE_ON_BODY(memberCount) : PERM.ENFORCE_OFF_BODY}
           </AlertDialogDescription>
