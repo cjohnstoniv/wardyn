@@ -19,6 +19,15 @@ re-open only what wardynd needs:
     checks, and recording uploads — never SSH, which is an operator/human
     surface, not something a run's sidecar has any business reaching
 */}}
+{{- /*
+`default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
+this chart's defaults with the PREVIOUS release's values map, so upgrading a
+0.5 release hands these templates a map with no uiSandbox/readinessProbe at
+all. Unguarded, that upgrade dies at render on a nil pointer instead of rolling
+out; guarded, the 0.5 defaults simply carry forward.
+*/ -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -46,11 +55,11 @@ spec:
       ports:
         - protocol: TCP
           port: http
-        {{- if .Values.ssh.enabled }}
+        {{- if $ssh.enabled }}
         - protocol: TCP
           port: ssh
         {{- end }}
-        {{- if .Values.uiSandbox.enabled }}
+        {{- if $ui.enabled }}
         - protocol: TCP
           port: ui
         {{- end }}
