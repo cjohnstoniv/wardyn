@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -390,6 +390,19 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
 
+# The shell half of the test suite: each of these pins a fixed regression in
+# scripts/ that no Go test can see (up.sh's reset warnings, the compose
+# namespace/port derivation, up-policy's parsing). Daemon-free by selection —
+# scripts/test-reset-all-sandbox-reap.sh and test-podman.sh are deliberately
+# NOT here, they need a live daemon / a podman host.
+test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
+	@echo "Running daemon-free shell regression tests..."
+	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-repo-scan-ok.sh
+	./scripts/test-reset-capture-hint.sh
+	./scripts/test-reset-host-gate.sh
+	./scripts/test-up-policy.sh
+
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`
 # so the tool + version + flags live in exactly one place.
@@ -656,7 +669,7 @@ npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dep
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker build-k8s tidy-check lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+ci: build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
