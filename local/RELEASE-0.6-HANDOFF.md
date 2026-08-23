@@ -37,7 +37,7 @@ precisely so the two sides stop colliding.
 |---|---|---|
 | `make ci` (daemon-free merge gate) | **EXIT=0** at final tip | `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/c3ceae31-29f9-4044-a0ef-7a79234f50c2/scratchpad/ci-final.log` |
 | `make release-check` **after** the release commit | **EXIT=0** (`release-check PASSED`); `cmd/wardyn` ran fresh (2.462s, not cached) so `TestVersionMatchesChangelog` / `TestShippedVersionStringsAgree` are covered | `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf3-gates/release-check.log` |
-| PG suite (`store`/`db`/`secretstore`/`broker`/`api`/`apie2e`/`recording`/`wardynd`) | **EXIT=0**, 1970 pass / 0 fail / 1 skip, coverage 76.2% — run at `45cb3367`, not re-run at the release tip | `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf1-gates/test-report-pg.log` |
+| PG suite (`store`/`db`/`secretstore`/`broker`/`api`/`apie2e`/`recording`/`wardynd`) | **EXIT=0 — covered at the release tip.** `make release-check` at `0eb1ce0e` runs this suite itself, as its `==> Postgres-gated suite` stage: same eight package globs, coverage **76.6%**, in-log `EXIT=0`. The standalone run at `45cb3367` is only where the per-test counts come from (1970 pass / 0 fail / 1 skip, coverage 76.2%). | release tip: `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf3-gates/release-check.log`; standalone: `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf1-gates/test-report-pg.log` |
 | Playwright ui-e2e (all specs) | **EXIT=0**, **14/14** spec files, 0 failed — at final tip, after the `secrets.spec.ts` strict-mode repair | `…/c3ceae31-…/scratchpad/ui-e2e-full2.log` |
 | `make test-conformance-docker` | **EXIT=0**, **32 pass / 0 fail / 7 skip** incl. `ExecStreamLoopbackRelay` — run at `45cb3367` | `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf1-gates/conformance-docker.log` |
 | `make test-e2e-ssh` | **EXIT=0**, **15/15**, hermetic (project `wardynv05e2e`, own image tags) incl. member-key denial (`rc=255`, `ssh.auth` failure `reason="not the run owner"`) **and** admin override (`ssh.auth` success, `data.override=true`) | `/tmp/claude-1000/-home-cjohn-containerized-agent-envs/wf2b-gates/gate3-e2e-ssh.log` |
@@ -56,6 +56,19 @@ Logs live under `/tmp` and do not survive a reboot — copy anything you want to
 
 Ask it to stop committing to `main` for the duration. Every re-sync below is invalidated the moment
 `main` moves.
+
+### (a-bis) Decide on `fix/v0.6-secrets-reveal` — before the cut
+
+The G3/P4 finding in §5 is fixed on branch **`fix/v0.6-secrets-reveal`** — one commit: the
+`secrets.tsx` reveal reset, a vitest that proves it, and a CHANGELOG `[0.6.0]` → `### Fixed` line for
+`main`'s `11ac05ae` masked Value field. It is **not** on `prep/v0.6`. Fold it in:
+
+```sh
+git -C /home/cjohn/wt-v06-prep merge --no-ff fix/v0.6-secrets-reveal
+```
+
+… and then tag the resulting tip instead of `0eb1ce0e` (§d) — or apply it on `main` after the cut, or
+hold it for 0.6.1. Its CHANGELOG line sits under `[0.6.0]`; **move it to `[Unreleased]` if you defer.**
 
 ### (b) Final re-sync in `/home/cjohn/wt-v06-prep`
 
@@ -107,14 +120,25 @@ git checkout -b release/0.6 0eb1ce0e                   # the release commit, now
 git tag v0.6.0
 ```
 
-### (e) Push
+### (e) Push — `main` FIRST, then the branch and tag
+
+Split the push. `ci.yml` runs on `push` to `main`, and `conformance-k8s` (`ci.yml:312`) carries no
+`if:` guard — pushing `main` is what finally proves the one gate this box cannot run (§1). Let that
+run go green before the tag exists; a tag pushed ahead of a red `conformance-k8s` is a published tag
+you have to retract.
 
 ```sh
-git push origin main release/0.6 v0.6.0
+git push origin main                                   # CI proves conformance-k8s here
+#   … watch it green first (§g) …
+git push origin release/0.6 v0.6.0
 ```
 
 `enforce_admins` is off on `main`'s branch protection, so this direct push is the sanctioned path
 (RELEASING.md §Repo settings).
+
+**`screenshots-fresh` cannot fire on this path.** `ci.yml:116` gates it on
+`github.event_name == 'pull_request'`, so a direct push to `main` never runs it — screenshot
+freshness stays unproven at the cut regardless of how green the run looks.
 
 ### (f) GitHub prerelease
 
@@ -137,7 +161,7 @@ Nothing below runs in the local merge gate; the push is their first and only pro
 - `envbuild-integration`
 - `helm-install-test`
 - `ui-e2e`
-- `screenshots-fresh`
+- ~~`screenshots-fresh`~~ — **will not run**: PR-only (`ci.yml:116`), see §e
 - `sbom-stub`, `publish-image`, `release`
 
 ```sh
@@ -224,8 +248,12 @@ guaranteed merge conflicts with the recording session.
 - **`scripts/cast-convert.py`** — the module docstring's account of the `script(1)` header/byte
   accounting contradicts what the code actually does with the first line.
 - **`main`'s `11ac05ae`** (`secrets.tsx` masked Value field + reveal toggle) was flagged
-  `fail-open-state-drift` by the background security hook. **P4 verdict: _(pending — fill in from
-  WF-3's G3 gate before the cut)_.** Note prep already carries the test-side fallout of this commit:
+  `fail-open-state-drift` by the background security hook. **P4 (G3) verdict: REAL, minor** —
+  `AddSecretDialog` stays mounted; `reveal` state is not reset in the `if (open)` effect
+  (`secrets.tsx:333,340-347`), so after one reveal + Cancel/Save the next Add/Rotate opens with the
+  Value field in plaintext. No value leaks to another principal. One-line fix — `setReveal(false)` in
+  the open-effect — plus a CHANGELOG line; staged on branch `fix/v0.6-secrets-reveal` (see §2a-bis).
+  Note prep already carries the test-side fallout of this commit:
   `cf6a4c3f` resolved the vitest selector collision and `0cc907bc` fixed five Playwright strict-mode
   violations in `ui/e2e/secrets.spec.ts` (`getByLabel("Value", { exact: true })`).
 
@@ -253,6 +281,12 @@ Documented, deliberate, and shipping as-is.
 - **Host residue from earlier campaigns** — destructive to remove, left for the owner:
   `wardyn-dex` container, `wardyntest_*` volumes, stale `wardyn-v05-*` kind containers, `kubectl`
   `current-context` left unset by the kind lane, CI-tagged images `wardyn/*:kind-test`.
+- **G1 hygiene — three files are tracked under `/local/`.** `.gitignore:64` is `/local/`, yet
+  `local/gt-diagnosis.md`, `local/ponytail-audit-0.6.md` and `local/RELEASE-0.6-HANDOFF.md` (this
+  file) are tracked on `prep/v0.6`; an ignore rule does not untrack what is already indexed. `main`
+  tracks nothing under `local/`, so the fast-forward carries all three onto `main` and into the
+  release tag. Keep them as release provenance, or drop them before the merge — owner's discretion:
+  `git rm --cached local/gt-diagnosis.md local/ponytail-audit-0.6.md local/RELEASE-0.6-HANDOFF.md`.
 - **gitleaks**: `.gitleaksignore:64` carries the sentinel fingerprint
   `81c0984168857a706ed2884b7f8cf22bd80df4fd:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556`.
   The value spells `wardyn-inert-sentinel` and is not a credential, but `gitleaks git` scans **every
