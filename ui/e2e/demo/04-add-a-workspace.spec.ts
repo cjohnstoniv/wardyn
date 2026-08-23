@@ -45,10 +45,11 @@
  * uses.
  *
  * THE SENTINEL. Beat 4 pastes WARDYN-V02-CANARY-9K2QN into the Add-secret
- * dialog's Value field, which MASKS at entry (secrets.tsx) — its literal
- * characters are never legitimately on screen, and this file asserts, from
- * the paste onward at every beat that could leak it, that the sentinel
- * appears NOWHERE in the page.
+ * dialog's Value field, which MASKS at entry (secrets.tsx) — its glyphs are
+ * never on screen. At the paste the DOM value necessarily holds the
+ * plaintext (asserted MASKED, not absent); from the save onward this file
+ * asserts at every beat that could leak it that the sentinel appears
+ * NOWHERE in the page.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
@@ -437,7 +438,20 @@ test("V04 beat 4 — write-only secrets", async () => {
   await valueBox.fill(SENTINEL);
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
-  await assertSentinelAbsent(page, "Add-secret dialog, right after the masked paste");
+  // NOT assertSentinelAbsent here: the DOM value necessarily holds the
+  // plaintext until save (the field must submit it), and Playwright's page
+  // text includes control values — the take that tried it failed on its own
+  // paste. The visible claim at this moment is the MASK; assert exactly that.
+  // The whole-page greps resume right after save, when the field clears.
+  await expect
+    .poll(
+      () =>
+        valueBox.evaluate(
+          (el) => (getComputedStyle(el) as unknown as Record<string, string>).webkitTextSecurity ?? "",
+        ),
+      { timeout: 10_000 },
+    )
+    .toBe("disc");
 
   await act(page, dlg.getByRole("button", { name: "Save secret" }), "Save secret.");
   await expect(dlg).toBeHidden({ timeout: 30_000 });
