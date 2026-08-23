@@ -1089,6 +1089,74 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	return nil
 }
 
+// containerListerAPI is the narrow docker-client slice SweepOrphanedSandboxes
+// needs beyond dockerAPI's own methods — kept separate (envbuild/reaper.go's
+// pattern) so the main seam does not grow ContainerList, and every dockerAPI
+// fake with it, until something else needs to list. A client that doesn't
+// implement it (a narrower test fake) is simply not swept.
+type containerListerAPI interface {
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+}
+
+// the real client must implement it.
+var _ containerListerAPI = (*client.Client)(nil)
+
+// SweepOrphanedSandboxes tears down the sandbox objects (agent container +
+// sibling proxy + per-run internal network) of every run whose row no longer
+// owns them — the residue of a crash BETWEEN CreateSandbox and SetSandboxRef,
+// which leaves those containers running under a run row that carries no
+// sandbox_ref, so no ref-keyed teardown (reconcile.go, SweepTerminalSandboxes)
+// ever revisits them (D13). isOrphan — supplied by the control plane, the only
+// layer that can read run rows — answers "does this run id still legitimately
+// own live sandbox containers?"; minAge is the reaper AGE GATE
+// (undispatchedGrace) below which a container is assumed to belong to a dispatch
+// still in flight and is left alone. That age gate is the SAME deliberately-blunt
+// multi-process safety net as envbuild's SweepOrphanedBuilds: a younger container
+// may be another replica's live dispatch that has not yet written its ref, so
+// only one older than any dispatch could still be provisioning is assumed
+// abandoned. Reuses the existing deterministic-name teardown, so a partially-created
+// sandbox (proxy up, agent still coming) is torn down whole from the run id alone.
+//
+// ponytail: keyed on the AGENT container (component=agent), whose deterministic
+// name reconstructs the proxy + network — a crash in the ~ms between
+// network-create and agent-create can leave a network with no container to key
+// on; that vanishingly rare edge is left to `docker network prune`, not a
+// second labeled-object listing.
+func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	lister, ok := d.cli.(containerListerAPI)
+	if !ok {
+		return 0, nil
+	}
+	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
+		All:     true, // a crashed sandbox's agent may be exited, not running
+		Filters: client.Filters{}.Add("label", labelComponent+"="+componentAgent),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
+	}
+	cutoff := time.Now().Add(-minAge)
+	var swept int
+	var errs []error
+	for _, c := range res.Items {
+		runID, perr := parseRunID(c.Labels[labelRun])
+		if perr != nil {
+			continue // not a wardyn agent container whose run id we can key teardown on
+		}
+		if time.Unix(c.Created, 0).After(cutoff) {
+			continue // too young: a dispatch may still be about to SetSandboxRef
+		}
+		if !isOrphan(runID) {
+			continue // a live run legitimately owns it
+		}
+		if terr := d.teardown(ctx, agentContainerName(runID)); terr != nil {
+			errs = append(errs, fmt.Errorf("docker: teardown orphaned run %s: %w", runID, terr))
+			continue
+		}
+		swept++
+	}
+	return swept, errors.Join(errs...)
+}
+
 // ensureImage pulls ref if it is not already present locally. Pull output is
 // drained and discarded; failures to pull surface as errors (fail closed —
 // never run a sandbox we could not provision).
