@@ -126,6 +126,9 @@ test.describe("New run — one page", () => {
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
     await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
+    // The launch gate surfaces ONE problem at a time, earliest first — give
+    // the run a title so the policy problem is the displayed message.
+    await page.getByLabel("Title").fill("mode row e2e");
     // Nothing is picked yet, so Launch says what it is waiting for.
     await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
 

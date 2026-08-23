@@ -115,7 +115,7 @@ test.describe("Secrets screen", () => {
 
     // The Add dialog's value field starts empty and shows no prior value.
     const dlg = await openAddDialog(page);
-    const value = dlg.getByLabel("Value");
+    const value = dlg.getByLabel("Value", { exact: true });
     await expect(value).toHaveValue("");
     // Name field also starts empty even though a secret exists.
     await expect(dlg.getByLabel("Name")).toHaveValue("");
@@ -146,7 +146,7 @@ test.describe("Secrets screen", () => {
     // Uppercase / invalid characters are rejected client-side with an inline
     // error and no round-trip. Fill value too so the Save button is enabled.
     await dlg.getByLabel("Name").fill("Invalid Name");
-    await dlg.getByLabel("Value").fill("some-value");
+    await dlg.getByLabel("Value", { exact: true }).fill("some-value");
     await dlg.getByRole("button", { name: "Save secret" }).click();
     await expect(dlg.getByText(/Invalid name:/i)).toBeVisible();
 
@@ -162,7 +162,7 @@ test.describe("Secrets screen", () => {
 
     const dlg = await openAddDialog(page);
     await dlg.getByLabel("Name").fill(newName);
-    await dlg.getByLabel("Value").fill("sk-super-secret-value");
+    await dlg.getByLabel("Value", { exact: true }).fill("sk-super-secret-value");
 
     // A brand-new name is not an overwrite: button reads "Save secret".
     const saveBtn = dlg.getByRole("button", { name: "Save secret" });
@@ -195,7 +195,7 @@ test.describe("Secrets screen", () => {
     ).toBeVisible();
 
     // Before any save the button advertises the overwrite via "Save (overwrites)".
-    await dlg.getByLabel("Value").fill("new-rotated-value");
+    await dlg.getByLabel("Value", { exact: true }).fill("new-rotated-value");
     const overwriteSave = dlg.getByRole("button", { name: "Save (overwrites)" });
     await expect(overwriteSave).toBeVisible();
 
@@ -221,7 +221,7 @@ test.describe("Secrets screen", () => {
     const dlg = await openAddDialog(page);
 
     await dlg.getByLabel("Name").fill(SEED_SECRET);
-    await dlg.getByLabel("Value").fill("v1");
+    await dlg.getByLabel("Value", { exact: true }).fill("v1");
     // Advance to the confirm step.
     await dlg.getByRole("button", { name: "Save (overwrites)" }).click();
     await expect(dlg.getByRole("button", { name: "Overwrite secret", exact: true })).toBeVisible();

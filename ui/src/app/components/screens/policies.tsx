@@ -475,7 +475,7 @@ function PolicyEditor({
 
   return (
     <Dialog open={!!editor} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="scroll-thin max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
           <DialogDescription>
