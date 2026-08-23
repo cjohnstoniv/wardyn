@@ -23,19 +23,15 @@
 //     injectionRuleFromScope, which defaults Format to "Bearer %s").
 // ============================================================
 import type {
-  Agent,
-  ComposeRunProposal,
   ConfinementClass,
   CreateRunInput,
   FirstUseMode,
   GrantSpec,
-  RunPolicySpec,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
   WorkspaceSelection,
 } from "../../../lib/types";
-import { asFirstUseMode, SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
 import type {
   WorkspaceRequirementsMap,
   WorkspaceSourceInput,
@@ -245,7 +241,7 @@ export interface WizardState {
   // DevcontainerRepo — mutually exclusive with `image`, operator-only, same as
   // it). Wizard-editable, never — it is CARRIED from "Edit in wizard" so the
   // wizard's own Launch builds the SAME sandbox "Approve & launch" would have
-  // (see wizardStateFromProposal / buildSpec); "" = no devcontainer build.
+  // (see buildSpec); "" = no devcontainer build.
   devcontainerRepo: string;
 
   // W15-W15e-wizard-roundtrip-3: grant kinds this wizard has no editable UI
@@ -573,252 +569,13 @@ export function agentLabel(agent: WizardAgent): string {
   return agent === "codex-cli" ? "Codex CLI" : "Claude Code";
 }
 
-// EXPORTED: wizard-spec.ts's buildSpec and wizardStateFromProposal share this
-// ONE dedupe.
+// EXPORTED: wizard-spec.ts's buildSpec shares this ONE dedupe.
 export function dedupe(xs: string[]): string[] {
   return Array.from(new Set(xs.map((x) => x.trim()).filter(Boolean)));
 }
 
-// Map a composer PROPOSAL (run scalars + clamped inline_policy) back into wizard
-// state so "Edit in wizard" lands the operator in the existing 5-step flow with
-// the proposal prefilled. This is a best-effort INVERSE of buildSpec — it can't
-// always perfectly round-trip (e.g. it can't recover which preset domains were
-// toggled vs typed), but it reproduces a launch-equivalent state.
-//
-// `workspaces` is the onboarded-workspace list (the caller fetches it via
-// listWorkspaces()) used to re-resolve the proposal's raw mount source / repo
-// string back into a WorkspaceSelection. The composer's workspace is still a
-// single operator-chosen source (not onboarding-aware) but, per the run-create
-// mount-restriction gate, it must already reference an onboarded source to have
-// been proposable at all — so matching by source is a reliable inverse.
-// an omitted/empty `workspaces` (a call site that hasn't loaded the
-// list yet) degrades to no workspace prefilled — a known, documented gap, not a
-// crash — the operator just re-picks it in the Basics step.
-//
-// `echoedSelections` is the compose proposal's OWN workspace_selections echo
-// (ComposeResponse.proposed.workspace_selections — the wire shape
-// RunWorkspaceSelectionWire) carrying whatever enabled_optional/read_only the
-// operator picked on the AI path's WorkspacePicker. Without it, "Edit in
-// wizard" silently dropped every Optional opt-in the operator just made — the
-// matched selection only ever carried the inferred workMount.read_only, never
-// enabledOptional at all. Absent/empty (an older server, or no match) degrades
-// to that same inferred-only behavior, never a crash.
-export function wizardStateFromProposal(
-  run: ComposeRunProposal,
-  spec: RunPolicySpec,
-  workspaces: Workspace[] = [],
-  echoedSelections: RunWorkspaceSelectionWire[] = [],
-): WizardState {
-  const cc = (run.confinement_class ?? spec.min_confinement_class ?? "CC1") as ConfinementClass;
-  const base = initialWizardState(cc);
-
-  // The agent is constrained to the two dotted wire ids; tolerate either form.
-  const agent: WizardAgent =
-    String(run.agent).replace(/_/g, "-").startsWith("codex") ? "codex-cli" : "claude-code";
-
-  // Workspace: a "local:<name>" repo label + a host mount at ~/work => a local
-  // folder; otherwise an org/repo github clone. Resolve it against the
-  // onboarded list by source so it becomes a real WorkspaceSelection.
-  const workMount = (spec.workspace_mounts ?? []).find(
-    (m) => m.target === "/home/agent/work",
-  );
-  const matched = workMount
-    ? workspaces.find((w) => w.kind === "local_dir" && w.source === workMount.source)
-    : workspaces.find((w) => w.kind === "repo" && w.source === run.repo);
-  // The echoed entry for the matched workspace, if the proposal named one —
-  // its enabled_optional/read_only win over the workMount-inferred read-only
-  // (the echo IS what produced that mount in the first place; workMount stays
-  // the fallback for an older server that predates the echo).
-  const echoed = matched ? echoedSelections.find((s) => s.workspace_id === matched.id) : undefined;
-  const workspaceSelections: RunWorkspaceSelection[] = matched
-    ? [
-        {
-          workspaceId: matched.id,
-          readOnly: echoed?.read_only ?? (workMount ? !!workMount.read_only : undefined),
-          enabledOptional: echoed?.enabled_optional,
-        },
-      ]
-    : [];
-
-  const githubGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "github_token");
-  const apiKeyGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "api_key");
-  const apiKeySecret = (apiKeyGrant?.scope?.secret_name as string) ?? "";
-  // W15-W15e-wizard-roundtrip-3: this used to hydrate ONLY github_token/
-  // api_key — a recorded/composed spec's git_pat grant silently vanished on
-  // "Edit in wizard" / fast-track while spec.allowed_domains (below) still
-  // carried its host into allowedDomains, so the destination stayed allowed
-  // with no credential left to authenticate to it. git_pat has a full,
-  // editable home in WizardState (Access's Git-PAT card), so hydrate it.
-  const gitPatGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "git_pat");
-  const gitPatScope = (gitPatGrant?.scope ?? {}) as { host?: string; secret_name?: string; username?: string };
-  // W15-W15e-wizard-roundtrip-3 (part 2, per the finding's own callout):
-  // ssh_key/cloud_sts grants have no editable home in this wizard at all (no
-  // fields anywhere represent them) — they used to silently drop here, same
-  // as any workspace_mounts entry this best-effort inverse doesn't recognize
-  // (see the recordedSubscription comment below), while spec.allowed_domains
-  // still carried their host, the identical shape of bug git_pat had. Keep
-  // every OTHER grant kind verbatim in a pass-through bucket buildSpec
-  // re-emits unchanged (WizardState.opaqueGrants) instead of refusing the
-  // fast-track — this wizard cannot EDIT these, but re-emitting the grant the
-  // recording/proposal already had is not an edit.
-  const KNOWN_GRANT_KINDS = new Set(["github_token", "api_key", "git_pat"]);
-  const opaqueGrants = (spec.eligible_grants ?? []).filter((g) => !KNOWN_GRANT_KINDS.has(g.kind));
-
-  // A recorded profile's api_key grant can name the subscription OAuth sentinel
-  // instead of a real stored secret (recordings never synthesize a resident
-  // mount for it) — recognizing it here is what stops it from being carried
-  // into llmSecretName and re-emitted as a broken x-api-key grant to a secret
-  // that doesn't exist (the "references unknown secret" launch failure). The
-  // resident ~/.claude PATH itself is no longer reconstructed (RETIRED —
-  // model access resolves from integrations, not a per-run subscription dir);
-  // a stored/recorded spec's OWN mount there is otherwise carried as an
-  // ordinary, unrecognized workspace_mounts entry — dropped on hydration, same
-  // as any other mount this best-effort inverse doesn't specifically recognize.
-  const recordedSubscription = apiKeySecret === SUBSCRIPTION_OAUTH_SECRET;
-  const ghScope = (githubGrant?.scope ?? {}) as {
-    repos?: unknown;
-    permissions?: Record<string, unknown>;
-  };
-  // W15-W15e-wizard-roundtrip-4: this wizard's github_token permission is a
-  // two-state read/read+write toggle (githubPermissionsMap re-emits
-  // "read+write" as BOTH contents:write AND pull_requests:write together).
-  // Collapsing to "read+write" off contents:write ALONE — the prior check —
-  // WIDENS an asymmetric source scope (contents:write with no
-  // pull_requests:write, e.g. a recording that never opened a PR) into one
-  // that re-emits pull_requests:write it never had, contradicting Record
-  // Mode's "reuse can only ever subset" claim. Require BOTH, matching
-  // exactly what "read+write" re-emits; an asymmetric scope this two-state
-  // toggle can't represent falls back to "read" (narrower, never wider).
-  const ghPerm: GitHubPermission =
-    ghScope.permissions?.contents === "write" && ghScope.permissions?.pull_requests === "write"
-      ? "read+write"
-      : "read";
-
-  return {
-    ...base,
-    agent,
-    workspaces: workspaceSelections,
-    mode: run.interactive ? "interactive" : "batch",
-    task: run.task ?? "",
-
-    githubEnabled: !!githubGrant,
-    githubRepos: Array.isArray(ghScope.repos) ? (ghScope.repos as string[]).join(", ") : "",
-    githubPermission: ghPerm,
-    githubRequiresApproval: githubGrant?.requires_approval ?? base.githubRequiresApproval,
-    githubTtlMinutes: githubGrant?.ttl_seconds
-      ? Math.max(1, Math.round(githubGrant.ttl_seconds / 60))
-      : base.githubTtlMinutes,
-
-    gitPatEnabled: !!gitPatGrant,
-    gitPatHost: gitPatScope.host ?? "",
-    gitPatSecretName: gitPatScope.secret_name ?? "",
-    gitPatUsername: gitPatScope.username ?? "",
-    gitPatRequiresApproval: gitPatGrant?.requires_approval ?? base.gitPatRequiresApproval,
-    // The api_key grant references a stored secret by name; carry it forward so
-    // the wizard re-emits the same grant — EXCEPT the subscription sentinel, which
-    // is not a real stored secret (it means "subscription auth", handled above).
-    llmSecretName: recordedSubscription ? "" : apiKeySecret,
-
-    // W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field
-    // (RunPolicySpec.allowed_domains string[]) — `[]` is always a real,
-    // meaningful value, not "unset". Record Mode's own synthesized profile
-    // (internal/recordmode/recordmode.go's Synthesize) writes exactly `[]`
-    // — or, for a genuinely deny-all outcome ("no allowed egress observed"),
-    // a NIL slice (`var allowed []string`, never appended to) — for that
-    // deny-all case. types.go's AllowedDomains has no `omitempty`, so a nil
-    // slice still serializes to wire `null`, not `[]` (Go's ordinary
-    // encoding/json behavior); TS's `string[]` type says "always an array"
-    // but does not guard the runtime JSON boundary. dedupe() itself would
-    // THROW (Array.prototype.map on null) on that null, crashing the
-    // recorded-profile fast-track (applyProfileSpecToState skips straight to
-    // Review, so the operator never sees a screen to work around it) for
-    // exactly the deny-all case this file most wants to get right.
-    // compose-quick-review.tsx:114's `p.allowed_domains ?? []` already
-    // guards the identical field for the same reason. `?? []` treats that
-    // wire null the same as an explicit empty array — both mean deny-all.
-    allowedDomains: dedupe(spec.allowed_domains ?? []),
-    deniedDomains: dedupe(spec.denied_domains ?? []),
-    firstUseApproval: asFirstUseMode(spec.first_use_approval),
-    allowAllEgress: spec.allow_all_egress === true,
-
-    confinementClass: cc,
-    // auto_stop_after_sec is `int json:"...,omitempty"` server-side (internal/
-    // types/types.go) — absent and an explicit 0 are indistinguishable on the
-    // wire, and 0 is never a meaningful idle-timeout choice (the UI's own
-    // min=1 already disallows it) — unlike allowed_domains above, there is no
-    // real "unset vs deliberately empty" distinction to lose here, so
-    // defaulting to this wizard's normal fresh-entry default (base, same as
-    // initialWizardState) when absent is not a misrepresentation.
-    lifecycle: spec.auto_stop_after_sec === -1 ? "never" : "auto",
-    autoStopMinutes:
-      spec.auto_stop_after_sec != null && spec.auto_stop_after_sec > 0
-        ? Math.max(1, Math.round(spec.auto_stop_after_sec / 60))
-        : base.autoStopMinutes,
-
-    // W15-W15e-wizard-roundtrip-6: without this, "Edit in wizard" silently
-    // dropped a composed devcontainer_repo — the wizard's own Launch then
-    // built the plain convention image, a DIFFERENT sandbox than "Approve &
-    // launch" (which sends result.proposed.run — devcontainer_repo intact —
-    // unchanged) would have built for the identical proposal.
-    devcontainerRepo: run.devcontainer_repo ?? "",
-    opaqueGrants,
-  };
-}
-
 // Per-step validation. Returns null when the step is valid, else an error string
 // the wizard renders inline and uses to gate Next/Launch.
-// A workspace's recorded PROFILES: its settled OPEN recordings. Each is tied to the
-// workspace by construction (it lives in the workspace's record_results) — no naming
-// heuristic or policy↔workspace FK needed — and synthesizes a full least-privilege
-// policy on demand (api.profileRun). Confined verify replays + failed captures are
-// excluded (they aren't the canonical learned profile).
-export type WorkspaceProfileOption = { key: string; label: string; runId: string };
-export function workspaceProfileOptions(ws: Workspace | undefined): WorkspaceProfileOption[] {
-  if (!ws) return [];
-  return Object.entries(ws.record_results ?? {})
-    .filter(([, v]) => v.status === "recorded" && !v.confined && !!v.run_id)
-    .map(([key, v]) => ({ key, label: v.label || key, runId: v.run_id }));
-}
-
-// applyProfileSpecToState loads a recorded profile's synthesized spec into the wizard's
-// steps 2-4 (access, egress, confinement) while KEEPING the operator's Basics choices
-// (runType, agent, mode, task, workspace, image). Sets selectedProfile so the footer
-// can fast-track.
-export function applyProfileSpecToState(
-  state: WizardState,
-  spec: RunPolicySpec,
-  workspaces: Workspace[],
-  profileKey: string,
-): WizardState {
-  const primary = state.workspaces[0]
-    ? workspaces.find((w) => w.id === state.workspaces[0].workspaceId)
-    : undefined;
-  const run: ComposeRunProposal = {
-    agent: state.agent as Agent,
-    repo: primary ? (primary.kind === "repo" ? primary.source : `local:${basename(primary.source)}`) : "",
-    task: state.task,
-    interactive: state.mode === "interactive",
-    confinement_class: spec.min_confinement_class,
-  };
-  const applied = wizardStateFromProposal(run, spec, workspaces);
-  return {
-    ...applied,
-    // UI-RUN-3: runType and image are Basics choices this function's own
-    // contract promises to keep — dropping them (they were missing here)
-    // silently converted a governed command into an agent run and discarded
-    // a BYOI image the instant a saved policy/recorded profile was picked.
-    runType: state.runType,
-    agent: state.agent,
-    mode: state.mode,
-    task: state.task,
-    workspaces: state.workspaces,
-    image: state.image,
-    selectedProfile: profileKey,
-    // Already based on a saved profile — don't also offer to re-save it as a policy.
-    saveAsProfile: false,
-  };
-}
-
 // RETIRED: validateStep(WizardStepId, WizardState) + WIZARD_STEPS/WizardStepId
 // were the five-step wizard's per-step gate. That wizard was replaced by the
 // single-page new-run-screen.tsx, which never called them — so they had no

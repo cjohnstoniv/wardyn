@@ -151,8 +151,7 @@ export function buildSpec(
   if (state.image.trim()) {
     run.image = state.image.trim();
   } else if (state.devcontainerRepo.trim()) {
-    // W15-W15e-wizard-roundtrip-6: re-emit a composed devcontainer build
-    // carried in from "Edit in wizard" (wizardStateFromProposal) — mutually
+    // W15-W15e-wizard-roundtrip-6: a composed devcontainer build — mutually
     // exclusive with `image` (the `else` above), same as the server enforces.
     run.devcontainer_repo = state.devcontainerRepo.trim();
   }
@@ -247,10 +246,8 @@ export function buildSpec(
     });
   }
 
-  // The LLM api_key grant — carried forward for a hydrated recording/policy
-  // that already names one (see wizardStateFromProposal); there is no longer a
-  // manual picker for it in step-access.tsx (model access resolves from
-  // integrations instead).
+  // The LLM api_key grant — no manual picker in step-access.tsx (model access
+  // resolves from integrations instead).
   if (state.llmSecretName) {
     const host = llmHostForSecret(state.agent, state.llmSecretName);
     const { header, format } = apiKeyInjectionFor(host);
@@ -268,8 +265,7 @@ export function buildSpec(
 
   // W15-W15e-wizard-roundtrip-3: re-emit any grant kind this wizard has no
   // editable UI for (ssh_key, cloud_sts) verbatim, unchanged, rather than
-  // silently dropping it — see WizardState.opaqueGrants and
-  // wizardStateFromProposal's collection of it below.
+  // silently dropping it — see WizardState.opaqueGrants.
   grants.push(...state.opaqueGrants);
 
   // --- lifecycle: an interactive run comes up idle, so never-reap (-1) unless

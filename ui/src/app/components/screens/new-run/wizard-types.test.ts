@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  applyProfileSpecToState,
   buildSpec,
   initialWizardState,
   isValidDomain,
@@ -14,11 +13,8 @@ import {
   gitPatConfigured,
   impliedEgressHosts,
   secretAutoGrants,
-  wizardStateFromProposal,
 } from "./wizard-types";
-import type { RunWorkspaceSelectionWire } from "./wizard-types";
-import type { ComposeRunProposal, RunPolicySpec, Workspace } from "../../../lib/types";
-import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
+import type { Workspace } from "../../../lib/types";
 
 // Workspace.requirements isn't on the shared Workspace TS type yet (see
 // wizard-types.ts's own import comment) — cast, matching how the module itself
@@ -74,196 +70,6 @@ describe("buildSpec is workspace-optional (ephemeral runs)", () => {
     expect(run.repo).toBe("");
     expect(inline_policy.workspace_mounts).toBeUndefined();
     expect(inline_policy.workspace_repos).toBeUndefined();
-  });
-});
-
-// Regression for the saved-workspace launch bug: a subscription-recorded profile
-// carries an api_key grant naming the subscription OAuth sentinel (recordings
-// never synthesize the ~/.claude mount — retired anyway, model access now
-// resolves from integrations, not a per-run subscription dir). Hydrating it
-// must NOT carry the sentinel into llmSecretName and re-emit it as an x-api-key
-// grant to a secret that doesn't exist (the "references unknown secret" launch
-// failure).
-describe("wizardStateFromProposal — subscription sentinel recognition", () => {
-  const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
-  const spec: RunPolicySpec = {
-    allowed_domains: ["api.anthropic.com", "github.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC2",
-    eligible_grants: [
-      {
-        kind: "api_key",
-        scope: { host: "api.anthropic.com", header: "x-api-key", secret_name: SUBSCRIPTION_OAUTH_SECRET, format: "%s" },
-        requires_approval: false,
-      },
-    ],
-  };
-
-  it("never carries the sentinel secret name into llmSecretName", () => {
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.llmSecretName).toBe("");
-  });
-
-  it("re-building never emits a dangling api_key grant to the sentinel", () => {
-    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
-    const apiKey = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "api_key");
-    expect(apiKey).toBeUndefined(); // no real secret name to re-emit a grant for
-  });
-});
-
-// W15-W15e-wizard-roundtrip-3: a recorded/composed spec's git_pat grant used
-// to vanish entirely on hydration (only github_token/api_key were read) while
-// spec.allowed_domains still carried its host — "Edit in wizard" (and the
-// recorded-profile fast-track, which delegates to this same function) would
-// re-launch a run that reaches the host with no credential to authenticate.
-describe("wizardStateFromProposal — hydrates the git_pat grant, not just github_token/api_key", () => {
-  const run = { agent: "claude-code", repo: "local:corp-app", interactive: true } as ComposeRunProposal;
-  const spec: RunPolicySpec = {
-    allowed_domains: ["dev.azure.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC2",
-    eligible_grants: [
-      {
-        kind: "git_pat",
-        scope: { host: "dev.azure.com", secret_name: "ado-pat", username: "myuser" },
-        requires_approval: false,
-      },
-    ],
-  };
-
-  it("carries host/secret/username/requires_approval into the wizard's own git_pat fields", () => {
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.gitPatEnabled).toBe(true);
-    expect(state.gitPatHost).toBe("dev.azure.com");
-    expect(state.gitPatSecretName).toBe("ado-pat");
-    expect(state.gitPatUsername).toBe("myuser");
-    expect(state.gitPatRequiresApproval).toBe(false);
-  });
-
-  it("re-building re-emits the SAME git_pat grant, not a dropped one", () => {
-    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
-    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "git_pat");
-    expect(grant?.scope).toEqual({ host: "dev.azure.com", secret_name: "ado-pat", username: "myuser" });
-    // The host stayed in allowed_domains BOTH before and after — the defect
-    // was the credential vanishing while the host stayed reachable.
-    expect(inline_policy.allowed_domains).toContain("dev.azure.com");
-  });
-
-  it("no git_pat grant present -> gitPatEnabled stays false (no false positive)", () => {
-    const noGrant: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
-    expect(wizardStateFromProposal(run, noGrant).gitPatEnabled).toBe(false);
-  });
-});
-
-// W15-W15e-wizard-roundtrip-7: allowed_domains is a REQUIRED field — `[]` is
-// always a real, deliberate value (Record Mode's own synthesized profile
-// writes exactly `[]` for a genuine deny-all outcome), never "unset". The
-// recorded-profile fast-track skips straight to Review, so a silent rewrite
-// here reaches Launch with nobody having seen Egress to catch it.
-describe("wizardStateFromProposal — an empty allowed_domains (deny-all) round-trips as empty, not the fresh-wizard default", () => {
-  const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
-
-  it("a genuinely empty allowlist stays empty, not api.anthropic.com", () => {
-    const spec: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.allowedDomains).toEqual([]);
-    expect(state.allowedDomains).not.toContain("api.anthropic.com");
-  });
-
-  it("re-building emits the SAME deny-all shape, not a rewritten allow-list", () => {
-    const spec: RunPolicySpec = { allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" };
-    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
-    expect(inline_policy.allowed_domains).toEqual([]);
-  });
-
-  it("a non-empty allowlist still round-trips normally (no regression)", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: ["github.com"],
-      first_use_approval: "deny_with_review",
-      min_confinement_class: "CC2",
-    };
-    expect(wizardStateFromProposal(run, spec).allowedDomains).toEqual(["github.com"]);
-  });
-
-  // REGRESSION (a prior fix for this same finding wrote dedupe(spec.allowed_
-  // domains) with no null guard, which THROWS on null instead of crashing
-  // gracefully): a genuine deny-all recorded profile serves allowed_domains:
-  // null on the wire — recordmode.Synthesize leaves the allowlist a NIL slice
-  // (`var allowed []string`, never appended to) for a deny-all outcome, and
-  // types.go's AllowedDomains has no `omitempty`, so a nil slice serializes
-  // to JSON `null`, not `[]`. compose-quick-review.tsx:114's own `?? []`
-  // confirms this null shape occurs in practice for the identical field.
-  // dedupe()'s `xs.map(...)` throws TypeError on null — this must not crash
-  // the recorded-profile fast-track, which skips straight to Review with no
-  // screen in between to catch it.
-  it("a null allowed_domains (the real deny-all wire shape) does not throw, and is treated as empty", () => {
-    const spec = {
-      allowed_domains: null,
-      first_use_approval: "always_deny",
-      min_confinement_class: "CC2",
-    } as unknown as RunPolicySpec;
-    let state: ReturnType<typeof wizardStateFromProposal> | undefined;
-    expect(() => {
-      state = wizardStateFromProposal(run, spec);
-    }).not.toThrow();
-    expect(state?.allowedDomains).toEqual([]);
-    expect(() => buildSpec(wizardStateFromProposal(run, spec))).not.toThrow();
-  });
-});
-
-// Item 3 (medium): "Edit in wizard" used to silently drop every Optional
-// opt-in the operator made on the AI path — the matched selection only ever
-// carried the mount's INFERRED read-only flag, never enabledOptional, because
-// wizardStateFromProposal never saw the compose proposal's OWN
-// workspace_selections echo (ComposeResponse.proposed.workspace_selections).
-describe("wizardStateFromProposal — threads the echoed workspace_selections (Item 3)", () => {
-  const ws: Workspace = {
-    id: "ws-1",
-    name: "app",
-    kind: "local_dir",
-    source: "/home/me/app",
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
-  };
-  const run = { agent: "claude-code", repo: "local:app", interactive: true } as ComposeRunProposal;
-  const spec: RunPolicySpec = {
-    allowed_domains: ["api.anthropic.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC1",
-    workspace_mounts: [{ source: "/home/me/app", target: "/home/agent/work", read_only: false }],
-  };
-
-  it("merges enabled_optional from the echo onto the matched selection", () => {
-    const echoed: RunWorkspaceSelectionWire[] = [
-      { workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"] },
-    ];
-    const state = wizardStateFromProposal(run, spec, [ws], echoed);
-    expect(state.workspaces).toEqual([
-      { workspaceId: "ws-1", readOnly: false, enabledOptional: ["egress:api.stripe.com"] },
-    ]);
-  });
-
-  it("the echo's read_only wins over the workMount-inferred value when both are present", () => {
-    // workMount.read_only is false (writable) but the echo says true (this
-    // run narrowed it) — the echo IS what produced that mount in the first
-    // place, so it must win over the inferred fallback.
-    const echoed: RunWorkspaceSelectionWire[] = [{ workspace_id: "ws-1", read_only: true }];
-    const state = wizardStateFromProposal(run, spec, [ws], echoed);
-    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: true, enabledOptional: undefined }]);
-  });
-
-  it("ignores an echo entry for a different workspace id", () => {
-    const echoed: RunWorkspaceSelectionWire[] = [
-      { workspace_id: "ws-OTHER", enabled_optional: ["egress:unrelated.example.com"] },
-    ];
-    const state = wizardStateFromProposal(run, spec, [ws], echoed);
-    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: false, enabledOptional: undefined }]);
-  });
-
-  it("degrades to the workMount-inferred readOnly with no enabledOptional when nothing was echoed (older server / no match)", () => {
-    const state = wizardStateFromProposal(run, spec, [ws]); // no 4th arg — same as before Item 3
-    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: false, enabledOptional: undefined }]);
   });
 });
 
@@ -421,46 +227,6 @@ describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own p
     expect(primaryWorkspaceId([], [repoWs, localWs])).toBeUndefined();
   });
 });
-
-// UI-RUN-3: applyProfileSpecToState's own docstring promises to KEEP the
-// operator's Basics choices when a saved policy/recorded profile populates
-// steps 2-4 — but it rebuilds from initialWizardState and only re-applied
-// agent/mode/task/workspaces, silently dropping runType and image. Picking a
-// profile after setting up a governed command + BYOI image converted it to
-// an agent run on the default image.
-describe("applyProfileSpecToState — keeps every Basics choice, incl. runType and image (UI-RUN-3)", () => {
-  const spec = {
-    allowed_domains: ["api.anthropic.com"],
-    first_use_approval: "deny_with_review" as const,
-    min_confinement_class: "CC2" as const,
-  };
-
-  it("carries runType forward — a governed command must not silently become an agent run", () => {
-    const state = { ...initialWizardState(), runType: "command" as const, task: "npm test" };
-    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
-    expect(applied.runType).toBe("command");
-  });
-
-  it("carries the BYOI image forward — it must not be discarded", () => {
-    const state = { ...initialWizardState(), image: "ghcr.io/acme/dev@sha256:deadbeef" };
-    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
-    expect(applied.image).toBe("ghcr.io/acme/dev@sha256:deadbeef");
-  });
-
-  it("buildSpec re-emits task_mode: exec and run.image after applying a profile", () => {
-    const state = {
-      ...initialWizardState(),
-      runType: "command" as const,
-      image: "ghcr.io/acme/dev@sha256:deadbeef",
-      task: "npm test",
-    };
-    const applied = applyProfileSpecToState(state, spec, [], "profile-1");
-    const { run } = buildSpec(applied);
-    expect(run.task_mode).toBe("exec");
-    expect(run.image).toBe("ghcr.io/acme/dev@sha256:deadbeef");
-  });
-});
-
 
 // Regression: AddWorkspaceDialog's "Allow writes to this directory" stores
 // sources[].writable=true, but nothing creates a `write:<path>` requirement

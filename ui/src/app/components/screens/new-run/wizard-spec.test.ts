@@ -13,10 +13,9 @@ import {
   buildSpec,
   impliedEgressHosts,
   initialWizardState,
-  wizardStateFromProposal,
 } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
-import type { ComposeRunProposal, RunPolicySpec, Workspace } from "../../../lib/types";
+import type { Workspace } from "../../../lib/types";
 
 // Workspace.requirements isn't on the shared Workspace TS type yet (see
 // wizard-types.ts's own import comment) — cast, matching how the module itself
@@ -141,156 +140,6 @@ describe("buildSpec — write mode resolves honestly into workspace_mounts[].rea
       [ws],
     );
     expect(inline_policy.workspace_mounts?.[0].read_only).toBe(true);
-  });
-});
-
-// W15-W15e-wizard-roundtrip-3 (part 2): the finding also names ssh_key —
-// this wizard has no editable UI for ssh_key/cloud_sts grants at all, so
-// (unlike git_pat, which got dedicated Access fields) they must round-trip
-// through a pass-through bucket instead: hydrated verbatim into
-// WizardState.opaqueGrants and re-emitted unchanged by buildSpec, never
-// silently dropped.
-describe("wizardStateFromProposal + buildSpec — pass through grant kinds this wizard can't edit (ssh_key, cloud_sts)", () => {
-  const run = { agent: "claude-code", repo: "local:corp-app", interactive: true } as ComposeRunProposal;
-
-  it("carries an ssh_key grant through hydration and back out via buildSpec, unchanged (previously silently dropped)", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: ["ssh.dev.azure.com"],
-      first_use_approval: "always_deny",
-      min_confinement_class: "CC2",
-      eligible_grants: [
-        {
-          kind: "ssh_key",
-          scope: { host: "ssh.dev.azure.com", secret_name: "ado-ssh-key" },
-          requires_approval: false,
-        },
-      ],
-    };
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.opaqueGrants).toEqual(spec.eligible_grants);
-    const { inline_policy } = buildSpec(state);
-    expect(inline_policy.eligible_grants).toEqual(spec.eligible_grants);
-  });
-
-  it("carries a cloud_sts grant through the same way", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: [],
-      first_use_approval: "always_deny",
-      min_confinement_class: "CC2",
-      eligible_grants: [{ kind: "cloud_sts", scope: { role_arn: "arn:aws:iam::123:role/x" }, requires_approval: true }],
-    };
-    const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
-    expect(inline_policy.eligible_grants).toEqual(spec.eligible_grants);
-  });
-
-  it("still hydrates git_pat through its own dedicated fields, not the passthrough bucket (no duplicate emission)", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: ["dev.azure.com"],
-      first_use_approval: "always_deny",
-      min_confinement_class: "CC2",
-      eligible_grants: [
-        { kind: "git_pat", scope: { host: "dev.azure.com", secret_name: "ado-pat" }, requires_approval: false },
-      ],
-    };
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.opaqueGrants).toEqual([]); // git_pat is a KNOWN kind — not opaque
-    expect(state.gitPatEnabled).toBe(true); // hydrated via its own dedicated fields instead
-    const { inline_policy } = buildSpec(state);
-    const gitPatGrants = (inline_policy.eligible_grants ?? []).filter((g) => g.kind === "git_pat");
-    expect(gitPatGrants).toHaveLength(1); // not duplicated by the passthrough bucket
-  });
-
-  it("a fresh wizard state emits no opaque grants", () => {
-    const { inline_policy } = buildSpec(initialWizardState());
-    expect(inline_policy.eligible_grants).toBeUndefined();
-  });
-});
-
-// W15-W15e-wizard-roundtrip-4: the two-state read/read+write toggle must
-// never WIDEN an asymmetric source scope — re-emitting a pull_requests:write
-// grant the recording never had contradicts Record Mode's "reuse can only
-// ever subset" claim.
-describe("wizardStateFromProposal + buildSpec — github_token scope never widens on round trip", () => {
-  const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
-
-  it("contents:write ALONE (no pull_requests:write) collapses to read-only, not read+write", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: ["github.com"],
-      first_use_approval: "deny_with_review",
-      min_confinement_class: "CC2",
-      eligible_grants: [
-        { kind: "github_token", scope: { repos: ["org/repo"], permissions: { contents: "write" } }, requires_approval: true },
-      ],
-    };
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.githubPermission).toBe("read");
-    const { inline_policy } = buildSpec(state);
-    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "github_token");
-    expect(grant?.scope?.permissions).toEqual({ contents: "read" });
-    expect(grant?.scope?.permissions).not.toHaveProperty("pull_requests");
-  });
-
-  it("contents:write AND pull_requests:write together round-trip as read+write, unchanged", () => {
-    const spec: RunPolicySpec = {
-      allowed_domains: ["github.com"],
-      first_use_approval: "deny_with_review",
-      min_confinement_class: "CC2",
-      eligible_grants: [
-        {
-          kind: "github_token",
-          scope: { repos: ["org/repo"], permissions: { contents: "write", pull_requests: "write" } },
-          requires_approval: true,
-        },
-      ],
-    };
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.githubPermission).toBe("read+write");
-    const { inline_policy } = buildSpec(state);
-    const grant = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "github_token");
-    expect(grant?.scope?.permissions).toEqual({ contents: "write", pull_requests: "write" });
-  });
-});
-
-// W15-W15e-wizard-roundtrip-6: "Edit in wizard" used to silently drop a
-// composed devcontainer_repo — the wizard's own Launch (buildSpec) then built
-// the plain convention image, a DIFFERENT sandbox than "Approve & launch"
-// (which sends result.proposed.run, devcontainer_repo intact, unchanged)
-// would have built for the identical proposal.
-describe("wizardStateFromProposal + buildSpec — devcontainer_repo round-trips (W15e-6)", () => {
-  const spec: RunPolicySpec = {
-    allowed_domains: ["api.anthropic.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC2",
-  };
-
-  it("carries devcontainer_repo from the proposal into WizardState", () => {
-    const run = {
-      agent: "claude-code",
-      repo: "org/repo",
-      interactive: true,
-      devcontainer_repo: "org/devcontainer-repo",
-    } as ComposeRunProposal;
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.devcontainerRepo).toBe("org/devcontainer-repo");
-  });
-
-  it("re-emits it on buildSpec, so the wizard's own Launch builds the SAME sandbox", () => {
-    const run = {
-      agent: "claude-code",
-      repo: "org/repo",
-      interactive: true,
-      devcontainer_repo: "org/devcontainer-repo",
-    } as ComposeRunProposal;
-    const { run: built } = buildSpec(wizardStateFromProposal(run, spec));
-    expect(built.devcontainer_repo).toBe("org/devcontainer-repo");
-    expect(built.image).toBeUndefined();
-  });
-
-  it("stays absent for a plain proposal with no devcontainer build", () => {
-    const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
-    const state = wizardStateFromProposal(run, spec);
-    expect(state.devcontainerRepo).toBe("");
-    expect(buildSpec(state).run.devcontainer_repo).toBeUndefined();
   });
 });
 
