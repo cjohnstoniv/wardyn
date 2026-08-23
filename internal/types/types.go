@@ -665,17 +665,26 @@ type AuditEvent struct {
 // to a human for "verify on first connect".
 //
 // Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
-// stamped at registration by handleAddSSHKey (migration 0043). It is a STAMP,
-// not a live check — SSH carries no session for requireOperator to read — so a
-// demoted admin's key keeps its override until the key is deleted or
-// re-registered (docs/SSH.md §Bounds).
+// stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
+// on every OIDC login for the authenticating principal's keys (migration
+// 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
+// session for requireOperator to read — so a demoted admin's key keeps its
+// override only until RoleCheckedAt exceeds WARDYN_SSH_ROLE_TTL, or until the
+// key is deleted/re-registered (docs/SSH.md §Bounds).
+//
+// RoleCheckedAt is when Role was last stamped — at registration, or at any
+// later OIDC login (migration 0046). nil means "never refreshed since
+// upgrading to 0046" — a pre-migration row, or a key registered before an
+// OIDC-configured deployment's first login for that principal — and sshAuth
+// treats nil as infinitely stale, never as fresh.
 type SSHPublicKey struct {
-	Fingerprint string    `json:"fingerprint"`
-	Principal   string    `json:"principal"`
-	Name        string    `json:"name"`
-	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
-	Role        string    `json:"role"`
-	CreatedAt   time.Time `json:"created_at"`
+	Fingerprint   string     `json:"fingerprint"`
+	Principal     string     `json:"principal"`
+	Name          string     `json:"name"`
+	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
+	Role          string     `json:"role"`
+	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // CapabilitySubjectType names WHO a capability grant is written against

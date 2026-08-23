@@ -552,19 +552,22 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
 	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "root@example.com", State: types.RunRunning, SandboxRef: "sbx-root"})
 
+	now := time.Now()
 	adminPriv, adminPub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{
-		Fingerprint: ssh.FingerprintSHA256(adminPub),
-		Principal:   "root@example.com",
-		PublicKey:   string(ssh.MarshalAuthorizedKey(adminPub)),
-		Role:        oidc.RoleAdmin,
+		Fingerprint:   ssh.FingerprintSHA256(adminPub),
+		Principal:     "root@example.com",
+		PublicKey:     string(ssh.MarshalAuthorizedKey(adminPub)),
+		Role:          oidc.RoleAdmin,
+		RoleCheckedAt: &now, // fresh — this test is about role/ownership, not staleness (see TestSSHGateway_OverrideRoleIsBoundedStale)
 	})
 	memberPriv, memberPub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{
-		Fingerprint: ssh.FingerprintSHA256(memberPub),
-		Principal:   "mallory@example.com",
-		PublicKey:   string(ssh.MarshalAuthorizedKey(memberPub)),
-		Role:        oidc.RoleMember,
+		Fingerprint:   ssh.FingerprintSHA256(memberPub),
+		Principal:     "mallory@example.com",
+		PublicKey:     string(ssh.MarshalAuthorizedKey(memberPub)),
+		Role:          oidc.RoleMember,
+		RoleCheckedAt: &now,
 	})
 
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
@@ -624,58 +627,98 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 	})
 }
 
-// TestSSHGateway_OverrideRoleIsARegistrationStamp pins the honesty obligation
-// the plan attaches to F1: the override reads the key's STORED role, stamped
-// once at registration, and nothing at connect time re-derives it. A principal
-// whose live role has since changed — in EITHER direction — is therefore
-// governed by the stamp until the key is deleted or re-registered. Both halves
-// are asserted, since "the current role is never consulted" is only
-// demonstrated by showing the stamp ALONE decides.
-func TestSSHGateway_OverrideRoleIsARegistrationStamp(t *testing.T) {
+// TestSSHGateway_OverrideRoleIsBoundedStale pins the migration-0046 ceiling:
+// the override reads the key's STORED role, stamped at registration and
+// refreshed at every OIDC login, but sshAuth never re-derives it live at
+// connect time — EXCEPT that it now also refuses the override once
+// role_checked_at is older than WARDYN_SSH_ROLE_TTL (default 24h in the test
+// harness, since none of these keys override it), or was never stamped at
+// all (nil — a pre-0046 row). A principal whose live role has since changed —
+// in EITHER direction — is governed by the stamp (bounded by the TTL) until
+// the key is deleted, re-registered, or its owner logs in again.
+func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 	st := newSSHMemStore()
 	run := uuid.New()
 	st.putRun(types.AgentRun{ID: run, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
 
-	// A key stamped admin at registration whose principal is a DEMOTED admin:
-	// nothing about them is admin any more, and the gateway has no live check
-	// able to notice — the stamp still opens bob's run.
-	demotedPriv, demotedPub := mustSSHKeypair(t)
-	demotedFP := ssh.FingerprintSHA256(demotedPub)
+	fresh := time.Now()
+	stale := time.Now().Add(-48 * time.Hour) // past the 24h default TTL
+
+	// A key stamped admin RECENTLY (registration, or a login within the TTL)
+	// whose principal is a DEMOTED admin: nothing about them is admin any
+	// more, and the gateway has no live check able to notice — the stamp
+	// still opens bob's run, because it is still within the TTL window.
+	demotedFreshPriv, demotedFreshPub := mustSSHKeypair(t)
+	demotedFreshFP := ssh.FingerprintSHA256(demotedFreshPub)
 	st.putKey(types.SSHPublicKey{
-		Fingerprint: demotedFP,
-		Principal:   "exadmin@example.com",
-		PublicKey:   string(ssh.MarshalAuthorizedKey(demotedPub)),
+		Fingerprint:   demotedFreshFP,
+		Principal:     "exadmin@example.com",
+		PublicKey:     string(ssh.MarshalAuthorizedKey(demotedFreshPub)),
+		Role:          oidc.RoleAdmin,
+		RoleCheckedAt: &fresh,
+	})
+	// The SAME shape, but the stamp is older than WARDYN_SSH_ROLE_TTL: the TTL
+	// bites even though role still reads "admin" — this is the bound migration
+	// 0046 adds, catching a demotion the demoted human never logs in again to
+	// self-correct.
+	demotedStalePriv, demotedStalePub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint:   ssh.FingerprintSHA256(demotedStalePub),
+		Principal:     "exadmin2@example.com",
+		PublicKey:     string(ssh.MarshalAuthorizedKey(demotedStalePub)),
+		Role:          oidc.RoleAdmin,
+		RoleCheckedAt: &stale,
+	})
+	// role=admin but role_checked_at is nil — a pre-0046 row that has never
+	// been through a login refresh. Treated as infinitely stale, same as the
+	// TTL-exceeded case, not as an exemption from the check.
+	neverCheckedPriv, neverCheckedPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: ssh.FingerprintSHA256(neverCheckedPub),
+		Principal:   "exadmin3@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(neverCheckedPub)),
 		Role:        oidc.RoleAdmin,
+		// RoleCheckedAt intentionally left nil.
 	})
 	// A key stamped member at registration whose principal has since been
 	// PROMOTED. The stamp is stale in the other direction, so no override
-	// applies until they re-register.
+	// applies regardless of role_checked_at — role itself must read admin.
 	promotedPriv, promotedPub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{
-		Fingerprint: ssh.FingerprintSHA256(promotedPub),
-		Principal:   "newadmin@example.com",
-		PublicKey:   string(ssh.MarshalAuthorizedKey(promotedPub)),
-		Role:        oidc.RoleMember,
+		Fingerprint:   ssh.FingerprintSHA256(promotedPub),
+		Principal:     "newadmin@example.com",
+		PublicKey:     string(ssh.MarshalAuthorizedKey(promotedPub)),
+		Role:          oidc.RoleMember,
+		RoleCheckedAt: &fresh,
 	})
 
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
-	client, err := sshDial(t, h, run.String(), demotedPriv)
+	client, err := sshDial(t, h, run.String(), demotedFreshPriv)
 	if err != nil {
-		t.Fatalf("a key stamped admin must keep its override until deleted/re-registered, got: %v", err)
+		t.Fatalf("a key stamped admin within the TTL must keep its override, got: %v", err)
 	}
 	client.Close()
+
+	if _, err := sshDial(t, h, run.String(), demotedStalePriv); err == nil {
+		t.Fatal("a key stamped admin but role_checked_at past WARDYN_SSH_ROLE_TTL reached another human's run; the TTL must refuse it")
+	}
+
+	if _, err := sshDial(t, h, run.String(), neverCheckedPriv); err == nil {
+		t.Fatal("a key stamped admin with a nil role_checked_at (pre-0046 row) reached another human's run; nil must read as infinitely stale")
+	}
 
 	if _, err := sshDial(t, h, run.String(), promotedPriv); err == nil {
 		t.Fatal("a key stamped member reached another human's run after its principal was promoted; the stamp, not the live role, must govern")
 	}
 
-	// The remediation the docs promise: delete the stale key and the override
-	// goes with it (re-registering re-stamps from the then-current role).
-	if err := st.DeleteSSHKey(context.Background(), demotedFP, "exadmin@example.com"); err != nil {
-		t.Fatalf("delete stale admin key: %v", err)
+	// The remediation the docs promise: delete the fresh-but-demoted key and
+	// the override goes with it (re-registering, or logging in again, would
+	// re-stamp from the then-current role).
+	if err := st.DeleteSSHKey(context.Background(), demotedFreshFP, "exadmin@example.com"); err != nil {
+		t.Fatalf("delete demoted admin key: %v", err)
 	}
-	if _, err := sshDial(t, h, run.String(), demotedPriv); err == nil {
+	if _, err := sshDial(t, h, run.String(), demotedFreshPriv); err == nil {
 		t.Fatal("a deleted key still authenticated; deletion is the documented remediation for a stale stamp")
 	}
 }

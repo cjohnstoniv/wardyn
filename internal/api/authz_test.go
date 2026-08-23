@@ -839,6 +839,9 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
+	return nil
+}
 
 // ─── capability grants (migration 0042) ───────────────────────────────────
 //

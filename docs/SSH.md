@@ -251,44 +251,59 @@ retention deletes it.
 username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-or-admin, and the admin half is a registration-time stamp — weaker
-than the web terminal's.** SSH authorization is
+**Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
+the web terminal's, but no longer unboundedly so.** SSH authorization is
 `run.created_by == the key's registered principal`, OR the key's `role`
-column (migration `0043`) reads `admin`. A member's key never satisfies the
-override — only the owner check does, same as before. The `role` column is
-stamped once, at `POST /me/ssh-keys` time, from the role the registering
-session actually held **then**; the gateway never re-checks it against the
-human's role **now**. That makes it strictly weaker than the browser
-terminal's `requireOperator` gate, which reads the session's role live on
-every attach: **a demoted admin's already-registered key keeps its override
-until the key is deleted and re-registered, or explicitly revoked** — there
-is no background job or login-time sweep that catches a stale stamp. An
-operator who demotes someone and wants the override gone immediately has
-exactly one lever: delete that principal's key
+column (migration `0043`) reads `admin` AND its `role_checked_at` (migration
+`0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). A member's key
+never satisfies the override — only the owner check does, same as before. The
+`role` column is stamped at `POST /me/ssh-keys` time, from the role the
+registering session actually held **then** — but it is now also RE-stamped,
+along with `role_checked_at`, on every OIDC login for that principal
+(`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in
+`cmd/wardynd/boot_deps.go`): a live read of the human's current role, applied
+to every key they hold, no re-registration required. The gateway still never
+consults the human's role live at connect time — SSH carries no session for
+`requireOperator` to read — so this stays **bounded-stale, not live**, unlike
+the browser terminal's `requireOperator` gate, which reads the session's role
+fresh on every attach. What bounds the staleness now: **a demoted admin's
+already-registered key keeps its override only until whichever comes first —
+their own next login (re-stamping `role=member`), `role_checked_at` aging past
+`WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
+key being deleted/re-registered.** An operator who wants the override gone
+immediately (rather than waiting out the TTL, or waiting for the demoted human
+to log in) has the same lever as before: delete that principal's key
 (`DELETE /me/ssh-keys/{fingerprint}`, self-service only — there is no admin
 view of another human's keys, so this means asking them, or an operator with
-direct store access, to remove it) so the next connection attempt has no
-registered key to authenticate at all. The demoted user's own path back to a
-correctly-scoped key is ordinary re-registration: delete the stale key, then
-`POST` it again — the new row is stamped with whatever role the session
-holds at that later moment, member or admin, honestly. There is no
-in-place "update this key's role" endpoint; delete-then-re-add is the
-supported re-stamp path, not a workaround.
+direct store access, to remove it). Re-registration (delete, then re-`POST`)
+still works too, and still re-stamps immediately; it is no longer the ONLY way
+to force a refresh, just the immediate one that does not wait on either a
+login or the TTL. There is still no in-place "update this key's role"
+endpoint.
 
-**Upgrading from 0.5: your existing key is a `member` key.** The stamp is
-written at registration, and migration `0043` backfills every row that
-predates it as `member` — the fail-closed value, because nothing in the
-schema knows what role a pre-0.6 registrant actually held, and guessing
-`admin` would hand every key already in the deployment a cross-user reach it
-was never granted. There is no boot backfill and no re-stamp sweep, so **an
-admin who registered their key under 0.5 does not have the override**: they
-must `DELETE /me/ssh-keys/{fingerprint}` and `POST` the same key again to be
-stamped with the role they hold now. The same delete-then-re-add, for the
-opposite reason. Which of your own keys carries the stamp is visible without
-reading the database: Settings → SSH keys badges the row **Admin override**,
-and the badge's tooltip carries the delete-and-re-register instruction. It is
-still a self-service view only — there is no console listing of another
-human's keys, for the same reason the API has none.
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+key, and even an `admin`-stamped key loses the override until it is
+refreshed.** `role` is stamped at registration, and migration `0043`
+backfilled every pre-0.6 row as `member` — the fail-closed value, because
+nothing in the schema knows what role a pre-0.6 registrant actually held, and
+guessing `admin` would hand every key already in the deployment a cross-user
+reach it was never granted. Migration `0046` adds a second fail-closed
+backfill on top: `role_checked_at` defaults `NULL` for every pre-existing row,
+and `sshAuth` treats `NULL` as infinitely stale — so **an `admin`-stamped key
+that predates `0046` has no override until its owner does ONE of two things:
+log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both
+`role` and `role_checked_at` for every key that principal owns, no
+re-registration needed) **or `DELETE`/`POST` the key again** (still supported,
+still immediate, useful when you want the refresh before your next login
+rather than after). Which of your own keys carries the `admin` stamp is
+visible without reading the database: Settings → SSH keys badges the row
+**Admin override**. That badge reflects the STORED `role` only — it does not
+currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
+so a badged key can still be refused by the gateway once its stamp goes stale;
+the audit log (`ssh.auth`, `outcome=failure`, reason "admin override stale")
+is the authoritative signal for that, not the badge. It is still a
+self-service view only — there is no console listing of another human's keys,
+for the same reason the API has none.
 
 An override connection is audited distinctly: the `ssh.auth` success event
 carries `override:true` in its data whenever the owner check did NOT match

@@ -65,6 +65,13 @@ const (
 	// one would otherwise let an unauthenticated client park a connection
 	// slot indefinitely.
 	sshAuthTimeout = 5 * time.Second
+	// defaultSSHRoleTTL is Config.SSHRoleTTL's fallback when unset (New,
+	// server.go) — how stale a key's role_checked_at (migration 0046) may be
+	// before sshAuth's admin-override path refuses it. 24h: long enough that
+	// an admin who logs in once a working day never notices the bound, short
+	// enough that a demotion is caught within one business day even if the
+	// demoted human never logs in again. WARDYN_SSH_ROLE_TTL overrides it.
+	defaultSSHRoleTTL = 24 * time.Hour
 )
 
 // sshGo runs fn in a new goroutine with panic recovery — the ONE place that
@@ -186,11 +193,15 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // client supplies, the same way `ssh host` names a machine.
 //
 // The admin override reads the key's ROLE COLUMN (migration 0043), stamped at
-// REGISTRATION time by handleAddSSHKey — deliberately NOT a live role check,
-// because SSH offers no session for requireOperator to read and this stamp is
-// the only role signal that ever reaches this callback. That makes the
-// override strictly weaker than the web terminal's live gate: a DEMOTED
-// admin's already-registered key keeps its override until the key is deleted
+// REGISTRATION time by handleAddSSHKey and REFRESHED on every OIDC login for
+// that principal's keys (oidc.Config.OnLogin, migration 0046) — deliberately
+// NOT a live role check, because SSH offers no session for requireOperator to
+// read, but BOUNDED-STALE rather than fixed forever: sshRoleFresh below also
+// refuses the override once rec.RoleCheckedAt is older than Config.SSHRoleTTL
+// (WARDYN_SSH_ROLE_TTL). That makes the override strictly weaker than the web
+// terminal's live gate: a DEMOTED admin's already-registered key keeps its
+// override until whichever comes first — their own next login re-stamping
+// role=member, the TTL elapsing on its own, or the key being deleted
 // (DELETE /api/v1/me/ssh-keys/{fingerprint}) or re-registered. The ceiling is
 // stated in docs/SSH.md §Bounds, OPERATIONS.md and THREAT-MODEL.md's SSH
 // gateway residual — it is the documented shape of the feature, not an
@@ -256,6 +267,16 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "not the run owner")
 		return nil, errors.New("ssh: not authorized for this run")
 	}
+	if override && !sshRoleFresh(rec.RoleCheckedAt, s.cfg.Now(), s.cfg.SSHRoleTTL) {
+		// role==admin, but the stamp backing that is older than SSHRoleTTL (or
+		// was never checked at all — nil, a pre-0.6-upgrade key). This is the
+		// bounded-stale re-check (migration 0046): unlike the "not the run
+		// owner" branch above, the key genuinely IS admin-tier — the refusal
+		// is purely about how long ago that was last confirmed, so it gets its
+		// own reason string rather than reusing "not the run owner".
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "admin override stale (role not re-checked within WARDYN_SSH_ROLE_TTL)")
+		return nil, errors.New("ssh: not authorized for this run")
+	}
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
 	// the client has not yet proven it holds the private key for this offer.
@@ -272,6 +293,16 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		ext["override"] = "true"
 	}
 	return &ssh.Permissions{Extensions: ext}, nil
+}
+
+// sshRoleFresh reports whether checkedAt is within ttl of now — the
+// bounded-stale re-check migration 0046 adds on top of 0043's role stamp. A
+// nil checkedAt (a key never refreshed since the 0046 upgrade — pre-migration
+// rows, or one registered/logged-in before this deployment ever ran an OIDC
+// login) is treated as infinitely stale, never as fresh: the same fail-closed
+// posture 0043 gave the role column's own DEFAULT 'member'.
+func sshRoleFresh(checkedAt *time.Time, now time.Time, ttl time.Duration) bool {
+	return checkedAt != nil && now.Sub(*checkedAt) <= ttl
 }
 
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {

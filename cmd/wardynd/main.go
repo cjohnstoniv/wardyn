@@ -306,6 +306,7 @@ func run() error {
 		SSHListenAddr:    *f.sshListen,
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
+		SSHRoleTTL:       *f.sshRoleTTL,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.

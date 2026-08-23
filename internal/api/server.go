@@ -411,6 +411,15 @@ type Config struct {
 	// SSHListenAddr is set, so a deployment with SSH off never even mints this
 	// secret).
 	SSHHostKey ed25519.PrivateKey
+	// SSHRoleTTL is WARDYN_SSH_ROLE_TTL: how stale a key's role_checked_at
+	// (migration 0046) may be before sshAuth's admin-override path refuses it
+	// — the bound on the OIDC-login re-check, since SSH itself has no live
+	// session to read a current role from. Zero defaults to a sensible 24h in
+	// New (matching the flag's own default), so a Config built without going
+	// through cmd/wardynd's flags — every test harness, notably — gets the
+	// same posture production does rather than an accidental zero-tolerance
+	// TTL that fails every override.
+	SSHRoleTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
@@ -518,6 +527,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RunnerTarget == "" {
 		cfg.RunnerTarget = "docker"
+	}
+	if cfg.SSHRoleTTL <= 0 {
+		cfg.SSHRoleTTL = defaultSSHRoleTTL
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()

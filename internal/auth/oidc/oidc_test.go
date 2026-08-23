@@ -176,6 +176,30 @@ func (e *idpEnv) newRoleAuth(t *testing.T, roleMap map[string]string, defaultRol
 	return auth
 }
 
+// newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
+// callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string)) *writoidc.Authenticator {
+	t.Helper()
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: e.httpSrv.URL + "/token",
+		replacedToken: e.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	cfg := writoidc.Config{
+		IssuerURL:    e.httpSrv.URL,
+		ClientID:     e.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+		OnLogin:      onLogin,
+	}
+	auth, err := writoidc.New(ctx, cfg, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+	return auth
+}
+
 // ─── TestLoginHandlerSetsStateCookies ────────────────────────────────────────
 
 func TestLoginHandlerSetsStateCookies(t *testing.T) {
@@ -339,6 +363,101 @@ func TestFullCodeFlow(t *testing.T) {
 
 	if capturedPrincipal != "sub-user" {
 		t.Errorf("principal from session = %q, want %q", capturedPrincipal, "sub-user")
+	}
+}
+
+// ─── TestCallbackInvokesOnLoginWithSubAndRole ─────────────────────────────────
+//
+// Migration 0046's refresh hook: a successful login must call Config.OnLogin
+// exactly once, with the ID token's sub and the role CallbackHandler just
+// derived — the two values internal/api's wiring (cmd/wardynd/boot_deps.go)
+// needs to call store.RefreshSSHKeyRoles. A DENIED login (no role derivable)
+// must never call it — internal/api/sshkeys_test.go and
+// internal/api/sshgateway_test.go already cover nil (the zero value: every
+// existing TestFullCodeFlow-shaped test runs with no OnLogin set at all, and
+// passes) being a safe no-op.
+
+func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
+	env := newIdPEnv(t)
+	var gotCtx context.Context
+	var gotSub, gotRole string
+	calls := 0
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string) {
+		calls++
+		gotCtx, gotSub, gotRole = ctx, sub, role
+	})
+
+	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
+	loginW := httptest.NewRecorder()
+	auth.LoginHandler(loginW, loginReq)
+	cookies := cookieMap(loginW.Result().Cookies())
+	stateVal, nonceVal, pkceVal := cookies["wardyn_oidc_state"].Value, cookies["wardyn_oidc_nonce"].Value, cookies["wardyn_oidc_pkce"].Value
+
+	env.buildIDToken(t, "sub-onlogin", "onlogin@example.com", nonceVal, time.Now().Add(time.Hour))
+
+	cbReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: pkceVal})
+	cbW := httptest.NewRecorder()
+	auth.CallbackHandler(cbW, cbReq)
+
+	if cbW.Code != http.StatusFound {
+		t.Fatalf("CallbackHandler status = %d, want 302; body: %s", cbW.Code, cbW.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("OnLogin called %d times, want exactly 1", calls)
+	}
+	if gotCtx == nil {
+		t.Error("OnLogin ctx = nil")
+	}
+	if gotSub != "sub-onlogin" {
+		t.Errorf("OnLogin sub = %q, want %q", gotSub, "sub-onlogin")
+	}
+	// No RoleMap configured: deriveRole's unset-map default is RoleAdmin (see
+	// TestCallbackRoleMapUnsetDefaultsAdmin) — that IS the role this login
+	// derived, so OnLogin must have received exactly that, not a hardcoded
+	// or empty value.
+	if gotRole != writoidc.RoleAdmin {
+		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
+	}
+}
+
+// TestCallbackDeniedLoginNeverInvokesOnLogin: a role-map miss with no
+// DefaultRole denies the login (see TestCallbackRoleNoMatchNoDefaultDenied) —
+// OnLogin must not fire for a login that never actually happened.
+func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
+	env := newIdPEnv(t)
+	calls := 0
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: env.httpSrv.URL + "/token",
+		replacedToken: env.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	auth, err := writoidc.New(ctx, writoidc.Config{
+		IssuerURL:    env.httpSrv.URL,
+		ClientID:     env.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
+		OnLogin:      func(context.Context, string, string) { calls++ },
+	}, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+
+	const stateVal, nonceVal = "state-denied", "nonce-denied"
+	env.buildIDToken(t, "sub-denied", "denied@example.com", nonceVal, time.Now().Add(time.Hour))
+	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=code", nil)
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: "verifier"})
+	w := httptest.NewRecorder()
+	auth.CallbackHandler(w, r)
+
+	if calls != 0 {
+		t.Errorf("OnLogin called %d times for a denied login, want 0", calls)
 	}
 }
 
