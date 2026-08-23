@@ -715,7 +715,13 @@ fi
 
 step "Done"
 if [[ -n "${FINAL}" && -s "${FINAL}" ]]; then
+  # A cut whose driver failed must never read as a publish in a log skim —
+  # the assembled file is kept for debugging, but it leads with INCOMPLETE.
+  if [[ "${DRIVER_RC}" -ne 0 ]]; then
+    log "INCOMPLETE VIDEO (driver failed, do not publish): ${FINAL}  ($(du -h "${FINAL}" | cut -f1))"
+  else
   log "VIDEO: ${FINAL}  ($(du -h "${FINAL}" | cut -f1))"
+  fi
 elif [[ "${DO_RECORD}" == 1 ]]; then
   log "no final video assembled — check the segments above"
 fi

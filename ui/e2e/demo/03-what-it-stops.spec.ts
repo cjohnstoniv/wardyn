@@ -227,12 +227,16 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   for (const demo of STOP_DEMOS) {
     await expect(page.getByRole("heading", { name: demo.label, level: 2 })).toBeVisible({ timeout: 60_000 });
 
-    // The policy block: still shown, as a silent visual — the owner's own
-    // plain-language lines below already say what changed, so a separate
-    // spoken policy-line would just repeat them.
-    const policyBlock = page.getByTestId(`demo-policy-${demo.id}`);
-    await policyBlock.scrollIntoViewIfNeeded().catch(() => {});
-    await spotlight(page, demo.id === "fail-then-approve" ? policyBlock.getByText(/first_use_approval/) : policyBlock);
+    // Ring the demo's own card as its intro speaks — a silent visual; the
+    // owner's plain-language lines below already say what changed. (The old
+    // anchor here, demo-policy-<id>, only ever existed on the FUNNEL's step
+    // pages — /demos' catalog card has no YAML block, and every take since the
+    // cold-open rework silently died on this ring: Playwright reported the
+    // failure, the wrapper still published a truncated cut. Ring what the
+    // catalog actually renders.)
+    const card = page.getByTestId(`demo-card-${demo.id}`);
+    await card.scrollIntoViewIfNeeded().catch(() => {});
+    await spotlight(page, demo.id === "fail-then-approve" ? card.getByTestId("demo-steps") : card);
 
     // P2 (dialog review, owner-ratified 2026-08-23): the cold open promises
     // "Four small tests" and then never numbers them. Each test now says which
