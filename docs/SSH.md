@@ -232,6 +232,18 @@ is binary protocol data, not terminal output, and is never recorded (masking
 and asciicast framing both assume text; recording binary transfer bytes
 would neither work nor mean anything).
 
+**Masking scope, stated plainly.** `internal/secretmask` masks values it was
+told about — platform-managed secrets and minted credentials registered into
+it at run start. A value a human **types** into the shell — pastes an API key,
+exports a token by hand — is not in that registry and is never masked: it
+lands in the recorded asciicast verbatim, permanently, subject to whatever
+retention window `WARDYN_RECORDING_RETENTION_DAYS` is set to (default:
+forever). There is no route to delete or redact one recording in isolation
+once it exists; the only lever is the age-based retention sweep, which acts
+on all eligible recordings, not one. If a human types a secret into an SSH (or
+browser-attach) session, treat that recording as holding it in the clear until
+retention deletes it.
+
 ## Bounds
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.
