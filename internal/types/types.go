@@ -678,6 +678,39 @@ type SSHPublicKey struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// APIToken is one per-user API token (migration 0045): a long-lived bearer
+// credential a HUMAN mints for their own scripts/CI so automation stops sharing
+// the single deployment-wide admin token. The auth branch that accepts one
+// (patAuth in internal/api/http.go) republishes exactly the context a verified
+// SSO session publishes, so grants, RBAC and run ownership bind to the OWNING
+// HUMAN — never to the admin identity.
+//
+// Email/Role/Groups are a SNAPSHOT of the creating session, stamped at create
+// time the way SSHPublicKey.Role is stamped at registration: a bearer token
+// carries no ID token, so there is nothing to re-derive them from per request.
+// The ceiling is the same one SSHPublicKey.Role carries — a demotion does not
+// reach an outstanding token; REVOKE it.
+//
+// Groups distinguishes nil from empty exactly as the session path does (see
+// oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
+// empty means "the IdP sent no usable groups".
+//
+// Token carries the PLAINTEXT credential and is populated on exactly one
+// response — the create call — and is never stored, listed or logged. Every
+// other path leaves it empty, and `omitempty` keeps it out of those bodies.
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Principal  string     `json:"principal"`
+	Email      string     `json:"email,omitempty"`
+	Role       string     `json:"role"`
+	Groups     []string   `json:"groups,omitempty"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	Token      string     `json:"token,omitempty"` // plaintext, create response ONLY
+}
+
 // CapabilitySubjectType names WHO a capability grant is written against
 // (migration 0042). Closed and complete — its DB CHECK is pinned against these
 // constants by internal/db's TestClosedEnumChecksMatchConstants.
