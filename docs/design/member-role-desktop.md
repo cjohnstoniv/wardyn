@@ -86,15 +86,15 @@ does the enforcement; member-mode only asserts the preconditions under which it 
 
 ## (b) MEMBER workspace ownership
 
-### The column: migration `0047` (reserved)
+### The column: migration `0048` (reserved)
 
 ```sql
--- 0047_workspace_owned_by.sql (RESERVED — authored in M2)
+-- 0048_workspace_owned_by.sql (RESERVED — authored in M2)
 ALTER TABLE workspaces ADD COLUMN owned_by TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS workspaces_owned_by_idx ON workspaces (owned_by);
 ```
 
-(Migrations `0044`–`0046` belong to sibling lanes; member-role takes `0047` per the M0
+(Migrations `0044`–`0047` belong to sibling lanes (`0044` is the shipped failure-hint column); member-role takes `0048` per the M0
 task. Highest on this branch today is `0043_ssh_key_role.sql`.)
 
 `owned_by` is the lowercased OIDC `sub` **or** email of the creating member — the same
@@ -314,12 +314,12 @@ No member reach, no ownership scoping — these stay on `operatorOnly` exactly a
 | Milestone | Scope | Key files | Test it owes |
 |---|---|---|---|
 | **M1** | Member-mode boot preconditions. `WARDYN_MEMBER_MODE` flag; `cmd/wardynd` refuse-or-warn if `LocalMode` true or OIDC unconfigured; assert admin token not surfaced to session ctx. No new middleware. | `cmd/wardynd`, `internal/api/http.go` (assertions only) | Boot refuses on `MEMBER_MODE && LocalMode`; a member session has `isOperator==false`. |
-| **M2** | `0047_workspace_owned_by.sql`; `types.Workspace.OwnedBy`; store scan/param plumbing; `ownsWorkspaceOrAdmin` + `getWorkspaceAuthorized`; reclassify the section-(b) routes; owner-scoped `handleListWorkspaces`; stamp `owned_by` in `handleCreateWorkspace`. | `internal/db/migrations/0047_*`, `internal/store/store_workspaces.go`, `internal/api/{helpers,workspaces,routes}.go` | **The adversarial matrix below.** |
+| **M2** | `0048_workspace_owned_by.sql`; `types.Workspace.OwnedBy`; store scan/param plumbing; `ownsWorkspaceOrAdmin` + `getWorkspaceAuthorized`; reclassify the section-(b) routes; owner-scoped `handleListWorkspaces`; stamp `owned_by` in `handleCreateWorkspace`. | `internal/db/migrations/0048_*`, `internal/store/store_workspaces.go`, `internal/api/{helpers,workspaces,routes}.go` | **The adversarial matrix below.** |
 | **M3** | `WARDYN_MEMBER_WORKSPACE_ROOTS` config; `runner.ValidateMemberMountSource`; dotfile deny-list; `SandboxSpec.MemberMountRoots`; the bind-time check in `driver.agentMounts` (`driver.go:572`); member-safe source validation in `handleCreateWorkspace`. | `internal/runner/mount.go`, `internal/runner/docker/driver.go`, `internal/runner/types` (SandboxSpec), `internal/api/workspaces.go`, `cmd/wardynd` | symlink-escape / `..` / TOCTOU / dotfile-deny unit tests (below). |
 | **M4** | Thread member roots from create-run through dispatch for a member-owned-workspace run; ensure `narrowMemberInlinePolicy` (`inline_policy.go:288`) and `capWorkspace` interplay is right for owned workspaces (ownership short-circuits the seam). | `internal/api/{runs_create,runs_dispatch_mounts,workspace_run}.go` | A member-owned-workspace run binds only within a root; an owned run's mount survives, a foreign one 404s at create. |
 | **M5** | UI: member sees "My workspaces"; onboarding a `local_dir` shows the root constraint; admin Permissions screen unchanged (capability grants already there). Docs: OPERATIONS §Multi-user, THREAT-MODEL member-mount section. | `ui/`, `docs/OPERATIONS.md`, `docs/THREAT-MODEL.md` | e2e: member onboards a dir under a root, launches, cannot reach a foreign workspace. |
 
-### `0047` migration shape (M2, restated for the owner)
+### `0048` migration shape (M2, restated for the owner)
 
 ```sql
 ALTER TABLE workspaces ADD COLUMN owned_by TEXT NOT NULL DEFAULT '';
