@@ -155,8 +155,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   used. `--print` emits the raw command and `--config` an `ssh_config` Host
   block, both identical to what the run-detail card renders for the same run;
   the card now names the shortcut inline, above the raw command it replaces.
-  The lane is proven end to end against a Pod on the k8s substrate
-  (`make test-e2e-ssh-k8s`), not only against Docker. See
+  A by-hand lane exercises the gateway against a Pod on the k8s substrate as
+  well as against Docker (`make test-e2e-ssh-k8s`) — a manual proof, not a CI
+  job: it runs against a cluster `make kind-quickstart` leaves behind, so a
+  green result is evidence only for the tip someone actually ran it on. See
   [docs/SSH.md](docs/SSH.md).
 - **`wardyn logs <run-id> [-f]`** tails a run's audited event trail (dispatch,
   egress, credential mints, completion) by reusing the existing audit-events
