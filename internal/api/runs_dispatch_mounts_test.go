@@ -29,7 +29,7 @@ func TestBuildRunMountsDropsSubscriptionForNonModelRun(t *testing.T) {
 	}
 
 	t.Run("non-model run: subscription mounts dropped, others kept", func(t *testing.T) {
-		mounts := buildRunMounts(policy, llmTransport{modelRun: false})
+		mounts := buildRunMounts(policy, llmTransport{modelRun: false}, memberMountPosture{})
 		if len(mounts) != 1 {
 			t.Fatalf("mounts = %+v, want exactly the workspace mount (subscription creds must not reach a non-model run)", mounts)
 		}
@@ -39,7 +39,7 @@ func TestBuildRunMountsDropsSubscriptionForNonModelRun(t *testing.T) {
 	})
 
 	t.Run("model run: every mount, including subscription, is kept", func(t *testing.T) {
-		mounts := buildRunMounts(policy, llmTransport{modelRun: true})
+		mounts := buildRunMounts(policy, llmTransport{modelRun: true}, memberMountPosture{})
 		if len(mounts) != 3 {
 			t.Fatalf("mounts = %+v, want all 3 (a model run is allowed the resident subscription mount)", mounts)
 		}

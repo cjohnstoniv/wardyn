@@ -76,6 +76,11 @@ type routeEntity string
 const (
 	entityRun      routeEntity = "run"
 	entityApproval routeEntity = "approval"
+	// entityWorkspace is the 0048 ownership noun: a MEMBER-OWNED workspace
+	// (owned_by = the member's principal). An operator-owned workspace is a
+	// different case entirely — still admin-only to mutate — and is pinned by
+	// workspace_owner_test.go rather than by this matrix.
+	entityWorkspace routeEntity = "workspace"
 )
 
 type classifiedRoute struct {
@@ -115,11 +120,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/sources/{id}":                               {class: classAdmin},
 	"POST /api/v1/base-images":                                  {class: classAdmin},
 	"DELETE /api/v1/base-images/{id}":                           {class: classAdmin},
-	"POST /api/v1/workspaces":                                   {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}":                               {class: classAdmin},
-	"DELETE /api/v1/workspaces/{id}":                            {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/scan":                         {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/build":                        {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/llm-cred":                      {class: classAdmin},
@@ -174,29 +174,46 @@ var routeMatrix = map[string]classifiedRoute{
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
-	"GET /api/v1/me/run-layout":                   {class: classMember},
-	"PUT /api/v1/me/run-layout":                   {class: classMember},
-	"GET /api/v1/policies":                        {class: classMember},
-	"GET /api/v1/policies/default":                {class: classMember},
-	"GET /api/v1/policies/{id}":                   {class: classMember},
-	"GET /api/v1/runs":                            {class: classMember},
-	"GET /api/v1/secrets":                         {class: classMember},
-	"GET /api/v1/setup/status":                    {class: classMember},
-	"GET /api/v1/site-config":                     {class: classMember},
-	"GET /api/v1/sources":                         {class: classMember},
-	"GET /api/v1/sources/{id}":                    {class: classMember},
+	"GET /api/v1/me/run-layout":    {class: classMember},
+	"PUT /api/v1/me/run-layout":    {class: classMember},
+	"GET /api/v1/policies":         {class: classMember},
+	"GET /api/v1/policies/default": {class: classMember},
+	"GET /api/v1/policies/{id}":    {class: classMember},
+	"GET /api/v1/runs":             {class: classMember},
+	"GET /api/v1/secrets":          {class: classMember},
+	"GET /api/v1/setup/status":     {class: classMember},
+	"GET /api/v1/site-config":      {class: classMember},
+	"GET /api/v1/sources":          {class: classMember},
+	"GET /api/v1/sources/{id}":     {class: classMember},
+	// The workspace READS stay member-class: an operator-owned workspace — every
+	// pre-0048 row — is readable by any authenticated caller exactly as before.
+	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
+	// "scoped internally, proven by the feature's own tests" arrangement GET
+	// /runs and GET /approvals already have here (workspace_owner_test.go).
 	"GET /api/v1/workspaces":                      {class: classMember},
 	"GET /api/v1/workspaces/{id}":                 {class: classMember},
 	"GET /api/v1/workspaces/{id}/build":           {class: classMember},
 	"GET /api/v1/workspaces/{id}/env-as-code":     {class: classMember},
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
-	"POST /api/v1/auth/logout":                    {class: classMember},
-	"POST /api/v1/me/ssh-keys":                    {class: classMember},
-	"POST /api/v1/runs":                           {class: classMember},
-	"POST /api/v1/runs/preflight":                 {class: classMember},
-	"DELETE /api/v1/me/ssh-keys/{fingerprint}":    {class: classMember},
+	// Creating a workspace is the member ON-RAMP (the created row is
+	// owner-stamped from the session) — there is no {id} to own yet.
+	"POST /api/v1/workspaces":                  {class: classMember},
+	"POST /api/v1/auth/logout":                 {class: classMember},
+	"POST /api/v1/me/ssh-keys":                 {class: classMember},
+	"POST /api/v1/runs":                        {class: classMember},
+	"POST /api/v1/runs/preflight":              {class: classMember},
+	"DELETE /api/v1/me/ssh-keys/{fingerprint}": {class: classMember},
 
 	// ── owner-or-admin ──
+	// The workspace CRUD/scan/build tier (0048): a member acts on the workspaces
+	// THEY own, a foreign owned one is the byte-identical 404, and an admin
+	// reaches every one. The 403 an operator-owned row still returns to a member
+	// is NOT exercised here (this probe only ever seeds member-owned fixtures) —
+	// TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly pins it.
+	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace},
+	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace},
+	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace},
+	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun},
@@ -330,6 +347,19 @@ func TestAuthzMatrix(t *testing.T) {
 		runID := seedRun(createdBy)
 		return aap.seed(runID)
 	}
+	// seedWorkspace creates a MEMBER-OWNED workspace (0048). ownedBy is the
+	// member principal; the composition floor (one ephemeral source) keeps the
+	// fixture free of any host path, so these probes exercise ownership alone.
+	seedWorkspace := func(ownedBy string) uuid.UUID {
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.workspaces[id] = types.Workspace{
+			ID: id, Name: "ws-" + ownedBy, OwnedBy: ownedBy, Status: types.WorkspaceScanned,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		}
+		ast.mu.Unlock()
+		return id
+	}
 
 	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
 	discovered := map[string]bool{}
@@ -413,6 +443,8 @@ func TestAuthzMatrix(t *testing.T) {
 					ownedID, foreignID = seedRun(memberSub), seedRun(otherSub)
 				case entityApproval:
 					ownedID, foreignID = seedApproval(memberSub), seedApproval(otherSub)
+				case entityWorkspace:
+					ownedID, foreignID = seedWorkspace(memberSub), seedWorkspace(otherSub)
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}

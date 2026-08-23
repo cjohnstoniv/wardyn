@@ -188,6 +188,37 @@ func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, 
 	return s.hydrateAll(ctx, wss)
 }
 
+// WorkspacesByOwnerPager is the ownership-scoped analogue of
+// Pager.ListWorkspacesPage: a MEMBER's GET /workspaces sees their OWN owned rows
+// plus the operator-owned ones (owned_by = ”), never another member's.
+//
+// Unlike RunsByCreatorPager, an absent implementation here is NOT a
+// fail-closed case: the api-layer fallback fetches all and applies the SAME
+// owned_by filter in Go before windowing, so the scoping still holds — only the
+// LIMIT/OFFSET moves out of the database. Kept out of Pager for the usual
+// reason (a test fake embedding Store must not silently inherit it).
+type WorkspacesByOwnerPager interface {
+	ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error)
+}
+
+// Compile-time assertion: PG satisfies WorkspacesByOwnerPager.
+var _ WorkspacesByOwnerPager = PG{}
+
+// ListWorkspacesPageForOwner is ListWorkspacesPage narrowed to what one member
+// may see: their own owned rows plus every operator-owned row (” — the 0048
+// default, i.e. every pre-0.6 workspace). workspaces_owned_by_idx (0048) covers
+// the IN.
+func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error) {
+	q, args := p.appendTo(
+		`SELECT `+wsCols+` FROM workspaces WHERE owned_by IN ('', $1) ORDER BY created_at DESC`,
+		[]any{owner})
+	wss, err := collect(ctx, s.Pool, "list", "workspaces by owner", q, args, scanWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateAll(ctx, wss)
+}
+
 // ListApprovalsPage returns approvals filtered by state (empty = all) in reverse
 // request order, bounded by p. The all-state feed rides approvals_requested_at_idx
 // (0020); a single-state filter rides approvals_state_requested_at_idx (0023),

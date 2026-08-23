@@ -250,9 +250,47 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 
 // handleListWorkspaces returns onboarded workspaces in reverse creation order,
 // paginated by ?limit=&offset= (see parseListPage).
+//
+// OWNER SCOPING (0048): a MEMBER sees their own owned workspaces plus every
+// operator-owned one (owned_by = ” — every pre-0.6 row and everything an admin
+// creates), never another member's. An admin sees all of them. The narrowing is
+// applied INSIDE the page closure — at the database when the store implements
+// WorkspacesByOwnerPager, otherwise across the full fetch BEFORE servePage
+// windows it — so a member never gets a short page just because a colleague
+// owns the rows that would have filled it.
+//
+// ponytail: the capWorkspace capability is NOT re-applied here. It governs
+// which workspace a member may LAUNCH a run against (denyMemberRequest,
+// runs_create_validate.go), and re-deriving it per row would pay two indexed
+// reads per listed workspace on the console's hot path to hide a NAME the
+// launch seam already refuses. Filter the list too only if a deployment ever
+// needs the name itself hidden.
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
+		return
+	}
+	if !s.isOperator(r.Context()) {
+		principal := principalFromRequest(r)
+		var ownerPageFn func(store.Page) ([]types.Workspace, error)
+		if pg, ok := s.cfg.Store.(store.WorkspacesByOwnerPager); ok {
+			ownerPageFn = func(p store.Page) ([]types.Workspace, error) {
+				return pg.ListWorkspacesPageForOwner(r.Context(), principal, p)
+			}
+		}
+		servePage(w, page, ownerPageFn, func() ([]types.Workspace, error) {
+			all, err := s.cfg.Store.ListWorkspaces(r.Context())
+			if err != nil {
+				return nil, err
+			}
+			out := make([]types.Workspace, 0, len(all))
+			for _, ws := range all {
+				if ws.OwnedBy == "" || (principal != "" && ws.OwnedBy == principal) {
+					out = append(out, ws)
+				}
+			}
+			return out, nil
+		})
 		return
 	}
 	var pageFn func(store.Page) ([]types.Workspace, error)
@@ -268,7 +306,7 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceReadable(w, r, id)
 	if !ok {
 		return
 	}
@@ -337,6 +375,22 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// OWNERSHIP STAMP (0048). A MEMBER's workspace is owner-stamped from the
+	// authenticated session — never from the body, which carries no owned_by
+	// field at all (strict decoding refuses one). An OPERATOR-created workspace
+	// stays owned_by="" (operator-owned), which is exactly today's behavior for
+	// every row, so an admin-only deployment is unchanged by this milestone.
+	owner := ""
+	if !s.isOperator(r.Context()) {
+		owner = principalFromRequest(r)
+	}
+	// A member's own local_dir sources must clear the member-safe mount gate
+	// (root allowlist + canonicalized real path + credential-dotfile deny +
+	// the writable allowlist). An operator's are unaffected.
+	if msg := s.memberSourcesAllowed(r, owner, req.Sources); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	now := s.cfg.Now().UTC()
 	id := uuid.New()
 	ws := types.Workspace{
@@ -345,6 +399,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Sources:   req.Sources,
 		BaseImage: normalizeRecommended(req.BaseImage),
 		LLMCred:   req.LLMCred,
+		OwnedBy:   owner,
 		// USABLE ON CREATE. A workspace used to be born pending_scan and a scan
 		// run promoted it; the 0.5 dialog does one POST and no scan, so nothing
 		// promotes it any more (see migration 0036). Creating it pending_scan
@@ -374,9 +429,37 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.create", id.String(), "success", mustJSON(map[string]any{
-			"name": created.Name, "sources": len(created.Sources),
+			"name": created.Name, "sources": len(created.Sources), "owned_by": created.OwnedBy,
 		})))
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// memberSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
+// through the member-safe mount rules (internal/runner's MemberMountPolicy):
+// the operator/MDM root allowlist matched on the CANONICALIZED real path, the
+// credential-dotfile deny-list, and — only for a source asking to be writable —
+// the separate writable allowlist minus its deny carve-out. It returns "" (fine)
+// or a 400-worthy message.
+//
+// owner=="" means OPERATOR-owned, and returns "" immediately: an operator's
+// mounts keep exactly the reach they have today (runner.ValidateMountSource
+// alone, already run by validateWorkspaceSource). This function only ever
+// NARROWS, never widens — it is additive on top of that deny-list, matching
+// SandboxSpec.MemberMountRoots' nil-means-today's-behavior contract at the
+// other end of the same path.
+func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
+	if owner == "" {
+		return ""
+	}
+	for i, src := range sources {
+		if src.Type != types.WorkspaceSourceTypeLocalDir {
+			continue
+		}
+		if err := s.cfg.MemberMounts.ValidateMemberMount(owner, src.Path, src.Writable); err != nil {
+			return fmt.Sprintf("sources[%d]: %s", i, err.Error())
+		}
+	}
+	return ""
 }
 
 // handleUpdateWorkspace replaces a workspace's editable identity fields (name,
@@ -394,6 +477,14 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// AUTHORIZE FIRST, then parse (0048): the ownership answer must not depend
+	// on the body. Decoding first would leak a foreign workspace's existence
+	// through the response CODE — a malformed body 400s where a well-formed one
+	// 404s — which is exactly the oracle denyForeignWorkspace exists to close.
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
+	if !ok {
+		return
+	}
 	req, msg := decodeWorkspaceRequest(w, r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
@@ -403,8 +494,8 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
-	if !ok {
+	if msg := s.memberSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
@@ -678,7 +769,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceReadable(w, r, id)
 	if !ok {
 		return
 	}
@@ -758,14 +849,15 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// bug-workspace-1: read the row's built image ref BEFORE the delete drops
-	// the only pointer to it — best-effort (a lookup failure here just means
-	// the reclaim is skipped; DeleteWorkspace below still 404s a genuinely
-	// missing row on its own).
-	var staleImage string
-	if ws, gerr := s.cfg.Store.GetWorkspace(r.Context(), id); gerr == nil {
-		staleImage = ws.ImageRef
+	// Owner-or-admin (0048): a member may delete a workspace THEY own; another
+	// member's owned workspace answers the byte-identical 404. The same read
+	// serves bug-workspace-1 — the row's built image ref must be read BEFORE the
+	// delete drops the only pointer to it.
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
+	if !ok {
+		return
 	}
+	staleImage := ws.ImageRef
 	err := s.cfg.Store.DeleteWorkspace(r.Context(), id)
 	if notFoundIf(w, err, "workspace") {
 		return
@@ -800,7 +892,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
 	if !ok {
 		return
 	}

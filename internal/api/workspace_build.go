@@ -253,7 +253,7 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceReadable(w, r, id)
 	if !ok {
 		return
 	}
@@ -273,7 +273,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
 	if !ok {
 		return
 	}

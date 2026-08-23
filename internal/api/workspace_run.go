@@ -455,6 +455,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// Any ephemeral source's scratch target — wireWorkspaceSource's doc
 		// comment — surfaced the same way the ordinary create-run path does.
 		EphemeralDirs: ephemeralDirs,
+		// A member-owned workspace's local_dir stays inside that member's roots
+		// even on an ADMIN-launched record/verify session: the SOURCE was
+		// member-authored, so the bind-time gate follows the source rather than
+		// the launcher. The zero posture for an operator-owned workspace (today's
+		// path) — and even for a member's, it gates that workspace's OWN binds
+		// only, never the session's operator-staged credential mounts.
+		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
 		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.

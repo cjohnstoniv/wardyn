@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -257,6 +258,29 @@ func run() error {
 		return err
 	}
 
+	// MEMBER-MODE DESKTOP posture. Checked here (not in validateConfig) because
+	// both of its inputs only exist this far into boot: lm.enabled is the
+	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
+	// the answer — and feats.authn is the resolved "OIDC is configured" one.
+	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+		return err
+	}
+
+	// Member local_dir mount posture (the section-(c) ceiling). Parsed at boot so
+	// a malformed root fails closed here rather than at a member's first
+	// onboarding. O4: a root of "/" or $HOME is permitted but WARNED about,
+	// matching the LocalMode unspecified-bind warn precedent — refusing it would
+	// be safer, warning is what the surrounding code already does for a posture
+	// the operator may have chosen deliberately.
+	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
+	if err != nil {
+		return err
+	}
+	for _, warn := range memberWarns {
+		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
+	}
+
 	srv := api.New(api.Config{
 		Store:     store.NewPG(pool),
 		Identity:  idp,
@@ -290,6 +314,7 @@ func run() error {
 		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
 		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
+		MemberMounts:              memberMounts,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
 		AgentAnthropicModel:       *f.agentModel,
@@ -541,6 +566,46 @@ func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allow
 		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
 		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
 		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
+}
+
+// validateMemberModePosture enforces WARDYN_MEMBER_MODE's two preconditions.
+//
+// Member mode is an ASSERTION about topology, not a new authorization tier: it
+// claims the human driving this daemon is a member and the operator authority
+// lives elsewhere (an org IdP, MDM-managed config). The role split in
+// http.go/routes.go already does all the enforcing; what member mode adds is a
+// boot-time check that the assertion is actually TRUE — because if it is not,
+// every clamp the member path relies on is reachable by the person at the
+// keyboard, silently.
+//
+//  1. LocalMode must be OFF. humanOrAdminAuth branches on LocalMode FIRST and
+//     bypasses public-API auth entirely, which makes the loopback developer an
+//     admin (isOperator returns true with no session to demote) — the exact
+//     opposite of what member mode asserts.
+//  2. OIDC must be configured. Without an issuer there is no identity to derive
+//     a role from, so isOperator returns true for every caller (no session role
+//     to demote) and "member mode" would describe nobody.
+//
+// O2 (owner decision, 2026-08-23): real OIDC only. There is deliberately no
+// "MDM asserts the identity" variant profile — a second identity path would be
+// a second place a role can be forged, for a deployment shape 0.6 does not have.
+func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error {
+	if !memberMode {
+		return nil
+	}
+	if localMode {
+		return errors.New("refusing to start: WARDYN_MEMBER_MODE is set but local mode is active — " +
+			"local mode bypasses public-API auth entirely and makes the loopback developer an ADMIN, " +
+			"which is precisely what member mode asserts is impossible; unset WARDYN_LOCAL_MODE " +
+			"(or WARDYN_MEMBER_MODE if this really is a single-developer machine that owns its own policy)")
+	}
+	if !oidcConfigured {
+		return errors.New("refusing to start: WARDYN_MEMBER_MODE is set but no OIDC issuer is configured — " +
+			"with no signed-in identity there is no role to derive, so every caller is an admin; " +
+			"configure WARDYN_OIDC_ISSUER (plus WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS " +
+			"so the developer derives the member role) or unset WARDYN_MEMBER_MODE")
+	}
+	return nil
 }
 
 // knownPublicAgeKeys are age identities this repository has published — each was

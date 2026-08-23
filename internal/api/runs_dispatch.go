@@ -47,6 +47,15 @@ type dispatchParams struct {
 	// full accommodation set — "unknown" must not break the proven CI and
 	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
 	Toolchains *toolchainNeeds
+	// MemberMounts, when its Roots are non-nil, marks this as a run against a
+	// MEMBER-OWNED workspace and carries the operator/MDM-set roots that member's
+	// local_dir binds must resolve inside plus which sources those binds are
+	// (memberMountPosture, workspace_refs.go). Roots ride straight onto
+	// SandboxSpec.MemberMountRoots and Sources stamp runner.Mount.MemberAuthored,
+	// so the driver re-checks every MEMBER-authored bind against the canonicalized
+	// real path as late as this process can. The ZERO value is every operator run
+	// — the driver then takes exactly today's path.
+	MemberMounts memberMountPosture
 	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
 	// ephemeral workspace source(s) declare — no host mount, no clone; the
 	// sandbox just needs the directory to exist. Surfaced as
@@ -286,7 +295,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
-	mounts := buildRunMounts(policy, llm)
+	mounts := buildRunMounts(policy, llm, p.MemberMounts)
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
@@ -312,6 +321,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
 		Mounts:           mounts,
+		// nil for an operator run (the driver then behaves exactly as it does
+		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
+		// binds (stamped above by buildRunMounts) the driver re-checks against
+		// these roots — see runner/member_mount.go.
+		MemberMountRoots: p.MemberMounts.Roots,
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.

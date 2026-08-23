@@ -40,17 +40,29 @@ type bootFlags struct {
 	// (bug-rbac-1) — a configured SSO deployment must not silently lose its
 	// RBAC to one stray env var.
 	allowLocalModeWithOIDC *bool
-	uiDir                  *string
-	runnerSel              *string
-	identitySel            *string
-	secretStoreSel         *string
-	recordingSel           *string
-	confinementMap         *string
-	trustDomain            *string
-	controlURL             *string
-	policyPath             *string
-	ageKey                 *string
-	proxyImage             *string
+	// MEMBER-MODE DESKTOP (W-MEMB, docs/design/member-role-desktop.md). memberMode
+	// asserts the topology in which the human at the keyboard is a MEMBER and the
+	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
+	// unless that is actually true. The four member*Roots knobs bound what a
+	// member may bind into a sandbox from their own machine — parsed by
+	// runner.ParseMemberMountPolicy, which fails boot closed on a malformed value
+	// and returns the O4 posture warnings.
+	memberMode          *bool
+	memberRoots         *string
+	memberRootsMap      *string
+	memberWritableRoots *string
+	memberWritableDeny  *string
+	uiDir               *string
+	runnerSel           *string
+	identitySel         *string
+	secretStoreSel      *string
+	recordingSel        *string
+	confinementMap      *string
+	trustDomain         *string
+	controlURL          *string
+	policyPath          *string
+	ageKey              *string
+	proxyImage          *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -152,6 +164,11 @@ func parseBootFlags() *bootFlags {
 		localOperator:          flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)"),
 		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access."),
 		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "override: allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, i.e. — silently disable the configured SSO/RBAC deployment and attribute every request to the fixed local operator (normally refused — unset -local-mode or -oidc-issuer instead)"),
+		memberMode:             flagBool("member-mode", "WARDYN_MEMBER_MODE", false, "MEMBER-MODE DESKTOP: assert that the human using this daemon is a MEMBER and the operator authority is elsewhere (an org IdP / MDM). Refuses to start unless -local-mode is off AND OIDC is configured — the two preconditions under which isOperator is false for the developer's every request. Adds no middleware; it makes the assumption checkable instead of assumed."),
+		memberRoots:            flagEnv("member-workspace-roots", "WARDYN_MEMBER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a MEMBER's own local_dir workspace source may live under. A member source is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, credential dotfiles denied regardless). Empty (the default) = members may not mount host directories at all; repos and operator-owned workspaces are unaffected. Point it at a dedicated projects dir, NEVER $HOME."),
+		memberRootsMap:         flagEnv("member-workspace-roots-map", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email. A principal with an entry uses ONLY that entry — per-member REPLACES the shared list (it exists to narrow, so a union would make adding a row widen). An empty list for a principal means that member mounts nothing.`),
+		memberWritableRoots:    flagEnv("member-writable-roots", "WARDYN_MEMBER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a MEMBER may mark their own mount WRITABLE. Empty (the default) = no writable member mounts at all; a member's mounts are read-only. Operators keep their unrestricted per-source writable opt-in."),
+		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:              flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		identitySel:            flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),

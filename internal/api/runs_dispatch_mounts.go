@@ -38,7 +38,16 @@ import (
 // the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchWithVerify.
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount {
+//
+// member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
+// Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
+// driver's bind-time within-roots check keys on. Everything NOT in that set is
+// operator/Wardyn-authored (the blessed credential mounts copied from the
+// ceiling, the Bedrock ~/.aws dir below, an operator-owned workspace's dir) and
+// lives under no member root by construction, so stamping it would refuse the
+// very credential mounts a member-owned workspace's model run needs. The zero
+// posture (every operator run) stamps nothing.
+func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
 		// W5-S1-5: the resident ~/.claude subscription mount is a MODEL-RUN-ONLY
@@ -57,6 +66,10 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount
 			// Safe default: omitted read_only => read-only. RW only on explicit
 			// read_only=false in the policy.
 			ReadOnly: wm.ReadOnlyOrDefault(),
+			// Keyed on SOURCE, the same key validateWorkspaceSources resolves the
+			// owning workspace by — so a bind is member-authored here exactly when
+			// the run-create gate treated it as member-authored.
+			MemberAuthored: member.Sources[wm.Source],
 		})
 	}
 	if llm.bedrockReady && llm.bedrock.awsMount {

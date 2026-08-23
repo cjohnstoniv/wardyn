@@ -636,3 +636,32 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateMemberModePosture pins WARDYN_MEMBER_MODE's two preconditions
+// (W-MEMB M1). Member mode asserts a topology — the human at the keyboard is a
+// MEMBER, the operator authority is elsewhere — and the whole value of the flag
+// is that boot REFUSES when the assertion is false. Local mode makes the
+// loopback developer an admin; no OIDC means there is no identity to derive a
+// member role from. Either one silently inverts the posture, so both fail closed.
+func TestValidateMemberModePosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                                  string
+		memberMode, localMode, oidcConfigured bool
+		wantErr                               bool
+	}{
+		{name: "off: nothing asserted, nothing checked", localMode: true},
+		{name: "off with no oidc either", memberMode: false},
+		{name: "on with oidc and no local mode", memberMode: true, oidcConfigured: true},
+		{name: "on with local mode", memberMode: true, localMode: true, oidcConfigured: true, wantErr: true},
+		{name: "on without oidc", memberMode: true, wantErr: true},
+		{name: "on with both wrong", memberMode: true, localMode: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMemberModePosture(tt.memberMode, tt.localMode, tt.oidcConfigured)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateMemberModePosture(member=%v, local=%v, oidc=%v) error = %v, want error: %v",
+					tt.memberMode, tt.localMode, tt.oidcConfigured, err, tt.wantErr)
+			}
+		})
+	}
+}

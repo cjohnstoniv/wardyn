@@ -317,10 +317,26 @@ type Workspace struct {
 	// picks this workspace inherits it (refs/names only). Nil => no binding.
 	// Folded into the run policy at create (applyWorkspaceCreds); written only
 	// via the scoped SetWorkspaceLLMCred, mirroring ApprovedEgress.
-	LLMCred   *WorkspaceLLMCred `json:"llm_cred,omitempty"`
-	Status    WorkspaceStatus   `json:"status"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	LLMCred *WorkspaceLLMCred `json:"llm_cred,omitempty"`
+	// OwnedBy is the MEMBER who created this workspace (their lowercased OIDC
+	// sub or email — the same dual-key identity a capability_grants `user`
+	// subject carries). EMPTY means OPERATOR-OWNED, which is every workspace an
+	// admin creates and every workspace that existed before migration 0048: an
+	// operator-owned row stays member-READABLE and admin-writable exactly as it
+	// always was, so an upgrade changes nothing until a member creates their
+	// first owned workspace.
+	//
+	// A non-empty value is the ownership relation ownsWorkspaceOrAdmin keys on:
+	// only that member (or an admin) may read or write the row, and a foreign
+	// member gets the byte-identical 404 a missing workspace gets — no existence
+	// oracle, the posture AgentRun.CreatedBy already has for runs. Set ONLY by
+	// handleCreateWorkspace from the authenticated session; never accepted from
+	// a request body, and never rewritten by an edit (UpdateWorkspace does not
+	// carry the column).
+	OwnedBy   string          `json:"owned_by,omitempty"`
+	Status    WorkspaceStatus `json:"status"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a
