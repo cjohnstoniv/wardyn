@@ -175,6 +175,7 @@ func rootCmd() *cobra.Command {
 		setupCmd(client),
 		siteConfigCmd(client),
 		sessionsCmd(client),
+		supportBundleCmd(client),
 	)
 	return root
 }
