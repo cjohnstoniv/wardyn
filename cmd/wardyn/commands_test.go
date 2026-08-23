@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1692,5 +1693,57 @@ func TestWorkspaceCreateCmd(t *testing.T) {
 	}
 	if body["name"] != "/home/you/svc" {
 		t.Errorf("name = %v, want it defaulted to --source", body["name"])
+	}
+}
+
+// TestApprovalsGetCmd_PagesPastTheFirstPage: `approvals get` has no
+// server-side get-by-id, so it scans --run's approvals — and an unparameterised
+// list is ONE server-default page (200). An approval past that read as "not
+// found on run", which a long-running run with a busy egress lane reaches
+// easily. The scan pages until it finds the row or the page comes back short.
+func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
+	runID := uuid.New()
+	wantID := uuid.New()
+	// 201 approvals: a full first page, then the one we are looking for.
+	all := make([]types.ApprovalRequest, 0, 201)
+	for range 200 {
+		all = append(all, types.ApprovalRequest{ID: uuid.New(), RunID: runID, State: types.ApprovalPending})
+	}
+	all = append(all, types.ApprovalRequest{
+		ID: wantID, RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"host":"api.example.com"}`),
+	})
+
+	var offsets []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		offsets = append(offsets, q.Get("offset"))
+		off, _ := strconv.Atoi(q.Get("offset"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		if limit == 0 {
+			limit = 200
+		}
+		page := []types.ApprovalRequest{}
+		if off < len(all) {
+			page = all[off:min(off+limit, len(all))]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals get returned error: %v (offsets requested: %v)", err, offsets)
+	}
+	if !strings.Contains(out.String(), wantID.String()) {
+		t.Errorf("output = %q, want it to name %s", out.String(), wantID)
+	}
+	if len(offsets) < 2 {
+		t.Errorf("requested offsets = %v, want a second page to have been fetched", offsets)
 	}
 }

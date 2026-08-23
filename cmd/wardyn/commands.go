@@ -608,6 +608,12 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	cmd.AddCommand(list)
 
+	// approvalScanPage is the page size `approvals get` scans a run with. It
+	// matches the server's own default page (defaultListLimit, well under
+	// maxListLimit=1000), and asking for it EXPLICITLY is what makes the next
+	// page reachable at all — offset only advances if the request carries one.
+	const approvalScanPage = 200
+
 	// get has no server-side counterpart (the human/admin API has no GET
 	// /approvals/{id} — only the sandbox-internal lane does) so it scopes a
 	// list-by-run call to one ID client-side. --run is required for exactly
@@ -631,21 +637,30 @@ func approvalsCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid --run %q: %w", getRun, err)
 			}
-			aps, err := client().ListApprovals(cmd.Context(), "", runID)
-			if err != nil {
-				return err
-			}
-			for _, a := range aps {
-				if a.ID != apID {
-					continue
+			// PAGE, don't peek: an unparameterised list is one server-default
+			// page (200), so an approval past it read as "not found" — a
+			// long-running run with a busy egress lane passes 200 easily.
+			c := client()
+			for offset := 0; ; offset += approvalScanPage {
+				aps, err := c.ListApprovals(cmd.Context(), "", runID, sdk.ListOpts{Limit: approvalScanPage, Offset: offset})
+				if err != nil {
+					return err
 				}
-				if getJSON {
-					return emitJSON(a)
+				for _, a := range aps {
+					if a.ID != apID {
+						continue
+					}
+					if getJSON {
+						return emitJSON(a)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
+						a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
+						a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
+					return nil
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
-					a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
-					a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
-				return nil
+				if len(aps) < approvalScanPage {
+					break // a short page is the last page
+				}
 			}
 			return fmt.Errorf("approval %s not found on run %s", apID, runID)
 		},
