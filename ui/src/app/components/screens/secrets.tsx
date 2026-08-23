@@ -341,6 +341,7 @@ export function AddSecretDialog({
     if (open) {
       setName(initialName);
       setValue("");
+      setReveal(false);
       setError(null);
       setSaving(false);
       setConfirmOverwrite(false);

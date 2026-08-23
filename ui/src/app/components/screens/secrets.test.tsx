@@ -436,3 +436,29 @@ describe("AddSecretDialog — required fields + error announcement (ui-secretsPo
     );
   });
 });
+
+describe("AddSecretDialog — reveal state (G3/P4)", () => {
+  // The dialog component stays mounted across close/open — only Radix's content
+  // unmounts — so `reveal` survives unless the open-effect resets it. Without
+  // that reset, the next Add/Rotate opens showing the previous plaintext.
+  // The mask itself is `-webkit-text-security`, which jsdom does not keep, so
+  // the toggle's aria-pressed is what `reveal` is read through here; the
+  // Playwright lane sees the rendered masking.
+  it("re-masks the Value field when the dialog is closed and re-opened", () => {
+    const { rerender } = render(<AddSecretDialog open onOpenChange={() => {}} />);
+    const toggle = () => screen.getByRole("button", { name: /(show|hide) value/i });
+
+    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(toggle()).toHaveAccessibleName("Show value");
+
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    expect(toggle()).toHaveAccessibleName("Hide value");
+
+    rerender(<AddSecretDialog open={false} onOpenChange={() => {}} />); // Cancel
+    rerender(<AddSecretDialog open onOpenChange={() => {}} />); // re-open
+
+    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(toggle()).toHaveAccessibleName("Show value");
+  });
+});

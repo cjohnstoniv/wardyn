@@ -229,6 +229,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Secrets: the Value field masks at entry, with a reveal toggle.** A
+  write-only store no longer puts the plaintext on screen while it is typed
+  (`-webkit-text-security`, so multiline PEM values keep working; Firefox
+  ignores it and degrades to plaintext — cosmetic masking, not a security
+  boundary). The reveal state resets each time the dialog opens, so the next
+  Add/Rotate never inherits the previous one's plaintext.
 - **An exec-mode run's page stops calling it an agent.** A run launched with
   no agent and no model was chipped "autonomous — the agent drives", badged
   "agent exit 0", and watched "anything the agent tries". `task_mode` is
