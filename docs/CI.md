@@ -245,11 +245,16 @@ oversight — do not wire them into `.github/workflows/ci.yml`:
   gateway proven against a **Pod** rather than a container: the run's sandbox
   confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec
   lane, a nonzero exit code surviving that lane's out-of-band status channel,
-  the interactive shell reaching tmux, and the `ssh.exec` /
-  `session.attach{transport:ssh}` rows for both. It does **not** create or
+  the interactive shell reaching tmux, the `ssh.exec` /
+  `session.attach{transport:ssh}` rows for both, and both authorization arms —
+  a second principal's `member` key refused on a run it does not own (audited
+  `ssh.auth` failure) and a third principal's `admin` key reaching that same
+  run with `data.override=true`. Those two principals go in through
+  `kubectl exec deploy/postgres`, because the API only ever stamps the
+  *caller's* key and this install has one credential. It does **not** create or
   delete a cluster — it runs against the one `make kind-quickstart` leaves
-  behind, and cleans up only its own run and key. Needs `kubectl` and a real
-  `ssh` client; self-skips unless `WARDYN_TEST_K8S=1`.
+  behind, and cleans up only its own run and the keys it registered. Needs
+  `kubectl` and a real `ssh` client; self-skips unless `WARDYN_TEST_K8S=1`.
 - **`deploy/kind/quickstart.sh`** (`make kind-quickstart`, `make kind-down`) —
   not a test at all: it builds `wardynd`, creates a `kind` cluster with a
   pinned Calico CNI and the k8s runner substrate on, `helm install`s the

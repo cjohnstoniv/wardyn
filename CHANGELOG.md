@@ -199,8 +199,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   grant (unenforced still refuses, exactly as 0.5 did), while naming a workspace
   stays allowed until an admin enforces `workspace`. A member's `inline_policy`
   is narrowed, after the existing operator clamp, to the hosts and secrets that
-  member personally holds — dropped with a preflight/Review warning, never
-  rejected, so the run still launches on its admin-authored egress — and `GET
+  member personally holds — dropped with a warning, never rejected, so the run
+  still launches on its admin-authored egress. The warning appears twice: on
+  the preflight/Review dry-run *before* launch, and again on the `201` of the
+  launch itself, where the console raises it as a toast and `wardyn run`
+  prints it to stderr — and `GET
   /secrets` lists a member only the names their own grants cover once `secret`
   is enforced.
 - **BREAKING — `pkg/client.ListApprovals` gains a `runID uuid.UUID`
@@ -211,15 +214,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the server has supported since decision scopes shipped; adding it as an
   option would have left the filter as easy to forget as it already was.
   Every SDK caller must update to compile.
-- **Upgrading a Kubernetes install: `helm upgrade --reuse-values` is not the
-  path across 0.5 → 0.6.** `--reuse-values` replaces the new chart's
+- **Upgrading a Kubernetes install: `helm upgrade --reuse-values` is still not
+  the path across 0.5 → 0.6.** `--reuse-values` replaces the new chart's
   `values.yaml` with the previous release's, so the value blocks 0.6 added
-  (the UI-sandbox gateway, the readiness-probe path) are absent and the
-  templates fail at render on a nil map rather than installing something
-  crippled. Use `-f your-values.yaml`, or `--reset-then-reuse-values` (Helm
-  ≥ 3.14), which starts from the new chart's defaults and layers the previous
-  release's overrides on top. [docs/OPERATIONS.md](docs/OPERATIONS.md) →
-  "`helm upgrade`, and why `--wait` is not optional" carries the recipe and
+  (the UI-sandbox gateway, the readiness-probe path) are absent from the map
+  the templates read. The chart now reads every one of them through a
+  `default dict` and its `values.yaml` leaf default, so that upgrade renders
+  instead of dying on a nil map — but it renders with the new defaults and no
+  way to see them. Use `-f your-values.yaml`, or `--reset-then-reuse-values`
+  (Helm ≥ 3.14), which starts from the new chart's defaults and layers the
+  previous release's overrides on top. [docs/OPERATIONS.md](docs/OPERATIONS.md)
+  → "`helm upgrade`, and why `--wait` is not optional" carries the recipe and
   the two Helm sharp edges it steps around.
 
 ### Fixed

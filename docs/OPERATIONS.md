@@ -321,6 +321,16 @@ because two host matchers that disagree is how a deny gets bypassed by a port
 suffix. Every other kind is an exact compare: a secret name, a uuid, and an
 image ref are identifiers where a near-miss must not match.
 
+A **deny** on `egress_host` asks that matcher in BOTH directions, and bites
+whenever the two sets intersect: `deny secret.example.com` stops a member
+asking for `*.example.com`, and `deny *.corp` stops one asking for
+`evil.corp`. An allow still has to COVER the request outright — a grant that
+half-overlaps what was asked for permits nothing. The proxy's label boundary
+is unchanged either way: `*.example.com` never covers `example.com`. Grant
+values are shape-checked when they are written, by the same validator every
+`allowed_domains` ingest uses, so a value that could never match any request
+is a `400` on the grant rather than a row that quietly does nothing.
+
 `devcontainer_repo` is **not** a kind and stays unconditionally admin-only. It
 hands attacker-authored build configuration to the image builder, which is not
 a power to hand out one row at a time.
@@ -1300,19 +1310,22 @@ render cleanly and take the pod down at boot (see
 [the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
 below).
 
-**The second, and the reason `--reuse-values` is NOT the fix for the first:
-`--reuse-values` replaces the new chart's `values.yaml` with the previous
-release's, so every value the new version ADDED is simply absent.** That is
-fine while a chart only gains optional scalars and fatal the moment it gains a
-block the templates dereference — a `0.5` release upgraded to `0.6` with
-`--reuse-values` fails at render on the blocks `0.6` introduced (the UI-sandbox
-gateway and the readiness-probe path among them), because the old values map
-has no key there to read. Use `--reset-then-reuse-values` instead (Helm ≥ 3.14:
-it starts from the NEW chart's defaults and layers the previous release's
-overrides on top), or — better — pass `-f your-values.yaml` as above, which is
-the same idea with the overrides somewhere you can review them. Neither the
-break nor the fix is Wardyn-specific: any chart that adds a required-shaped
-block hits it, and `--reuse-values` is a trap in exactly that upgrade.
+**The second, and the reason `--reuse-values` is still not the fix for the
+first: `--reuse-values` replaces the new chart's `values.yaml` with the previous
+release's, so every value block the new version ADDED is absent from the map the
+templates read.** That is fatal for any chart that dereferences a new block
+without a default — the render dies on a nil map, not on a refusal. This chart
+is written not to: each `0.6`-only block (the UI-sandbox gateway, the
+readiness-probe path) is read through a `default dict` and its `values.yaml`
+leaf default, so a `0.5` values map renders as though you had accepted the new
+defaults, with and without `k8s.enabled`. It renders — but only ever with those
+defaults: the knobs `0.6` added never appear in the map, so what a fresh install
+would have made you choose is chosen for you, silently. Use
+`--reset-then-reuse-values` instead (Helm ≥ 3.14: it starts from the NEW
+chart's defaults and layers the previous release's overrides on top), or —
+better — pass `-f your-values.yaml` as above, which is the same idea with the
+overrides somewhere you can review them. None of this is Wardyn-specific: it is
+what `--reuse-values` does to every chart that grows a values block.
 
 The new pod applies nothing, because `schema_migrations` already records every
 file — the forward-only rule at work, visible as an empty count:

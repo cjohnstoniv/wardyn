@@ -272,7 +272,11 @@ was never granted. There is no boot backfill and no re-stamp sweep, so **an
 admin who registered their key under 0.5 does not have the override**: they
 must `DELETE /me/ssh-keys/{fingerprint}` and `POST` the same key again to be
 stamped with the role they hold now. The same delete-then-re-add, for the
-opposite reason.
+opposite reason. Which of your own keys carries the stamp is visible without
+reading the database: Settings → SSH keys badges the row **Admin override**,
+and the badge's tooltip carries the delete-and-re-register instruction. It is
+still a self-service view only — there is no console listing of another
+human's keys, for the same reason the API has none.
 
 An override connection is audited distinctly: the `ssh.auth` success event
 carries `override:true` in its data whenever the owner check did NOT match
