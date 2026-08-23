@@ -138,6 +138,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":                           {class: classAdmin},
 	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
 	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
+	"POST /api/v1/sessions/revoke":                              {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -274,6 +275,19 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	}
 }
 
+// fakeAuthzSessionRevocations is a no-op oidc.SessionRevocations double that
+// exists only to make POST /api/v1/sessions/revoke visible to chi.Walk: the
+// route is mounted conditionally (see routes.go) on cfg.SessionRevocations
+// != nil, same as Secrets/RecordingStore above — the matrix's "every
+// conditional route mounted" doctrine requires it wired here too.
+type fakeAuthzSessionRevocations struct{}
+
+func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }
+func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { return nil }
+
 func TestAuthzMatrix(t *testing.T) {
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
@@ -287,6 +301,7 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.RecordingStore = rs
+	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	srv := New(cfg)
 
 	const memberSub = "sub-member"

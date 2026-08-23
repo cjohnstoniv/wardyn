@@ -127,6 +127,7 @@ internal action can rename across releases without notice.
 | `harness.login.started` | A harness SSO login flow starts | `egress`, `provider`, `sso_start_url` | `internal/api/harnesscred.go:465` | internal |
 | `token.create` | A signed-in human mints a per-user API token for themselves (`POST /me/tokens`). The actor is that human and `Target` is the token id — never the credential, which is returned once and stored only as a hash | `name`, `role` | `internal/api/apitokens.go:216` | internal |
 | `token.revoke` | A per-user API token is revoked, by its owner (`DELETE /me/tokens/{id}`) or by an admin revoking anyone's (`DELETE /tokens/{id}`). `principal` names the token's OWNER, which is the point on the admin lane: the actor is the admin, the subject is someone else | `name`, `principal` | `internal/api/apitokens.go:288` | internal |
+| `session.revoke` | An admin revokes active OIDC console sessions — `target` is the revoked `sub`, or `*` for a revoke-all (`POST /api/v1/sessions/revoke`, D16) | `scope` (`sub` or `all`), `sub` (sub-scoped only) | `internal/api/sessions.go:47,54` | internal |
 
 ## Policy, capability & authorization
 

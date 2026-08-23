@@ -184,6 +184,15 @@ func (s *Server) routes() chi.Router {
 			// client's existing call actually terminates the session. Nil-OIDC
 			// (local/token mode) is a safe no-op — see handleLogout.
 			r.Post("/auth/logout", s.handleLogout)
+			// D16: revoke-a-human-now — mounted only when the store is wired
+			// (same "if s.cfg.X != nil" pattern as the Secrets block below),
+			// which cmd/wardynd does exactly when OIDC is configured (there is
+			// nothing to revoke without an OIDC session mechanism). operatorOnly:
+			// a fleet-wide, other-humans' blast radius, the same tier as secret
+			// writes.
+			if s.cfg.SessionRevocations != nil {
+				operatorOnly.Post("/sessions/revoke", s.handleRevokeSessions)
+			}
 			// First-run setup readiness. MUST stay in this humanOrAdminAuth group
 			// (anonymous non-local => 401): it enumerates providers/keys/CLIs
 			// (capability disclosure) and must never sit on the public /healthz.

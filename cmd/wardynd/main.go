@@ -270,20 +270,25 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:                auditSpool,
-		AuditDrainRecorder:        auditDrainRec,
-		AuditSinkDrops:            sinkDropsReporter(fan),
-		Runner:                    run,
-		AdminToken:                *f.adminToken,
-		LocalMode:                 lm.enabled,
-		LocalOperator:             lm.operator,
-		TrustDomain:               *f.trustDomain,
-		DefaultPolicy:             defaultPolicy,
-		RunnerTarget:              runnerTarget,
-		UIDir:                     *f.uiDir,
-		ControlPlaneURL:           *f.controlURL,
-		RecordingStore:            feats.recStore,
-		OIDC:                      feats.authn,
+		AuditSpool:         auditSpool,
+		AuditDrainRecorder: auditDrainRec,
+		AuditSinkDrops:     sinkDropsReporter(fan),
+		Runner:             run,
+		AdminToken:         *f.adminToken,
+		LocalMode:          lm.enabled,
+		LocalOperator:      lm.operator,
+		TrustDomain:        *f.trustDomain,
+		DefaultPolicy:      defaultPolicy,
+		RunnerTarget:       runnerTarget,
+		UIDir:              *f.uiDir,
+		ControlPlaneURL:    *f.controlURL,
+		RecordingStore:     feats.recStore,
+		OIDC:               feats.authn,
+		// D16: same store buildOptionalFeatures wired into oidc.Config.Revocations
+		// (the read side Middleware checks), given here to internal/api so the
+		// admin revoke-sessions endpoint has the write side. nil exactly when
+		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
+		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,

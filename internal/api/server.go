@@ -225,6 +225,13 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
+	// SessionRevocations (D16) is the write side of the revoke-a-human-now
+	// lever: handleRevokeSessions calls RevokeSub/RevokeAll on it.
+	// oidc.Middleware holds the matching READ side (Config.Revocations, wired
+	// by the same cmd/wardynd adapter) — this field is nil exactly when OIDC
+	// is unconfigured, and the revoke-sessions route only mounts when it is
+	// set (see routes.go).
+	SessionRevocations oidc.SessionRevocations
 	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
 	// internal/api no longer reads this field directly: requireOperator/isOperator
 	// (http.go) gate on the session's B1-derived Role instead. The list still

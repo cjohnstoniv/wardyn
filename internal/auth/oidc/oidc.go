@@ -46,6 +46,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -123,6 +124,44 @@ type Config struct {
 	// are never sent over plain HTTP, so leaving this false (the default) is
 	// required for plain-HTTP demo deployments — otherwise login silently breaks.
 	SecureCookies bool
+	// Revocations is the pg-backed revoke-a-human-now lever (D16). Sessions
+	// are stateless signed cookies with no server-side session table (see the
+	// package doc's "Session storage" section), so there is nothing to delete
+	// on revoke — instead Revocations tracks a per-principal (and a global)
+	// CUTOFF time, and Middleware treats any session whose IssuedAt is
+	// at-or-before the applicable cutoff as invalid. nil (the default) means
+	// revocation is never checked — unset changes nothing, same as every
+	// other optional Config field.
+	Revocations SessionRevocations
+}
+
+// SessionRevocations is the store D16's revoke-a-human-now admin action
+// reads and writes. It is scoped to the STATELESS OIDC human session cookie
+// (Session, above) — a distinct concern from internal/identity's per-run
+// SPIFFE-style identity_revocations denylist, which this package never
+// touches.
+type SessionRevocations interface {
+	// IsSessionRevoked reports whether a session for sub, issued at issuedAt,
+	// must be treated as revoked — because of a revoke targeting exactly sub,
+	// or the reserved "" (global revoke-all) sub, whichever cutoff is later.
+	// issuedAt.IsZero() (a pre-D16 cookie with no iat) is always revoked once
+	// ANY matching cutoff exists: an old session predating this feature has
+	// no reliable issued-at to compare, so it fails closed the moment revoke
+	// is used for the first time against it, rather than staying immune.
+	//
+	// ponytail: Middleware calls this on every authenticated request with no
+	// in-process cache — one extra indexed point-lookup per request against
+	// the store wardynd already requires (Postgres). Add a short-TTL
+	// in-memory cache keyed on sub if that round trip ever shows up in
+	// latency; a POC-scale deployment's request volume doesn't justify one
+	// yet, and a cache is one more place revocation could go stale.
+	IsSessionRevoked(ctx context.Context, sub string, issuedAt time.Time) (bool, error)
+	// RevokeSub invalidates every CURRENT session for sub, effective now —
+	// a targeted "log this one person out everywhere".
+	RevokeSub(ctx context.Context, sub string) error
+	// RevokeAll invalidates every CURRENT session for every principal,
+	// effective now — the incident-response "log everyone out" lever.
+	RevokeAll(ctx context.Context) error
 }
 
 // Session is the content of the wardyn_session cookie, signed and stored
@@ -135,6 +174,14 @@ type Session struct {
 	Email  string    `json:"email"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
+	// IssuedAt (D16) is when CallbackHandler minted this cookie — the value
+	// SessionRevocations.IsSessionRevoked compares against a revoke cutoff.
+	// omitempty, unlike Groups below: an absent key decodes to the zero
+	// time either way (a pre-D16 cookie or a same-version cookie that
+	// happened to omit it are indistinguishable, and both SHOULD read as
+	// "issued at the beginning of time" — see IsSessionRevoked's doc — so
+	// there is no second state worth spending cookie bytes to keep apart).
+	IssuedAt time.Time `json:"iat,omitempty"`
 	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity: the
 	// normalized union of the ID token's "roles" and "groups" claims (see
 	// sessionGroups). It is what a `group`-subject capability grant matches
@@ -325,11 +372,20 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
-	token, err := a.oauth2.Exchange(exchangeCtx, code,
-		oauth2.VerifierOption(pkceCookie.Value),
-	)
-	if err != nil {
-		http.Error(w, "token exchange failed", http.StatusUnauthorized)
+	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
+	// hard-fail the whole login on the FIRST blip — retryExchange gives it
+	// tokenExchangeRetries short-backoff attempts before giving up. A
+	// PERMANENT rejection (bad client secret, expired/replayed code —
+	// invalid_grant is the common case) is never retried: the code is
+	// single-use, so re-sending it after the IdP has already consumed it
+	// would just trade one clear error for a confusing "invalid_grant" one.
+	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, pkceCookie.Value)
+	if exchangeErr != nil {
+		if isTransientOIDCErr(exchangeErr) {
+			redirectAuthError(w, r, authErrorOIDCTransient)
+		} else {
+			redirectAuthError(w, r, authErrorOIDCConfig)
+		}
 		return
 	}
 
@@ -415,11 +471,12 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// enough to contribute nothing to the role contributes nothing here either,
 	// and never fails the login.
 	sess := Session{
-		Sub:    idToken.Subject,
-		Email:  claims.Email,
-		Role:   role,
-		Expiry: idToken.Expiry,
-		Groups: sessionGroups(rc.Roles, gc.Groups),
+		Sub:      idToken.Subject,
+		Email:    claims.Email,
+		Role:     role,
+		Expiry:   idToken.Expiry,
+		IssuedAt: time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
+		Groups:   sessionGroups(rc.Roles, gc.Groups),
 	}
 	if sess.Expiry.IsZero() {
 		// Default to 1 hour if the IdP didn't set an expiry.
@@ -456,6 +513,29 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		sess, err := a.decodeSession(r)
 		if err == nil {
 			if time.Now().UTC().Before(sess.Expiry) {
+				// D16: a revoked-but-not-yet-expired session must stop working
+				// on its VERY NEXT request, not linger until the cookie's own
+				// Expiry — that immediacy is the entire point of "revoke a
+				// human now". Checked only when a store is actually wired
+				// (nil Revocations => unset changes nothing, the same rule
+				// every other optional Config field follows).
+				if a.cfg.Revocations != nil {
+					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.IssuedAt)
+					if rerr != nil {
+						// Fail CLOSED: a store error must never look
+						// indistinguishable from "not revoked" on a security
+						// gate checked on every authenticated request. The
+						// caller falls through with NO principal set, exactly
+						// like an invalid/expired cookie.
+						next.ServeHTTP(w, r)
+						return
+					}
+					if revoked {
+						clearCookie(w, sessionCookieName)
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
 				// Valid session: stash the principal and continue.
 				ctx := contextWithPrincipal(r.Context(), sess)
 				next.ServeHTTP(w, r.WithContext(ctx))
@@ -694,6 +774,19 @@ const (
 	authErrorEmailUnverified = "email_unverified"
 	authErrorEmailDomain     = "email_domain"
 	authErrorNoRole          = "no_role"
+	// authErrorOIDCTransient (D12): the token exchange kept failing with a
+	// network timeout or a 5xx from the IdP after retryExchange's retries —
+	// the IdP is having a bad moment, not the deployment being misconfigured.
+	// Distinguishing this from authErrorOIDCConfig is the whole point: a user
+	// hitting this should just try signing in again shortly, not go file a
+	// ticket about the OIDC client config.
+	authErrorOIDCTransient = "oidc_transient"
+	// authErrorOIDCConfig (D12): the token exchange failed with anything else
+	// (invalid_client, invalid_grant on an already-consumed/expired code, a
+	// 4xx the IdP won't retry its way out of) — retrying the SAME login
+	// attempt cannot help; the user needs a fresh `/auth/login`, or an
+	// operator needs to look at the client credentials.
+	authErrorOIDCConfig = "oidc_config"
 )
 
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code> —
@@ -701,6 +794,68 @@ const (
 // a bare http.Error text response with no way back to the console.
 func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
 	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
+}
+
+// ─── D12: bounded retry for a transient IdP error on the token endpoint ──────
+
+// tokenExchangeRetries is the total number of attempts (the first try plus
+// tokenExchangeRetries-1 retries) retryExchange makes against the token
+// endpoint before giving up. tokenExchangeBackoff is the base delay between
+// attempts, applied linearly (attempt N waits N*tokenExchangeBackoff) — short
+// enough that a real user waiting on the redirect barely notices, long enough
+// to ride out a blip that clears in under a second.
+const (
+	tokenExchangeRetries = 3
+	tokenExchangeBackoff = 250 * time.Millisecond
+)
+
+// retryExchange calls oauth2.Config.Exchange, retrying up to
+// tokenExchangeRetries times ONLY when isTransientOIDCErr judges the failure
+// retriable (a network timeout or a 5xx from the token endpoint). Any other
+// error — including invalid_grant, which a retry can never fix because the
+// authorization code is single-use — returns on the first attempt.
+//
+// ponytail: fixed linear backoff, no jitter — this is a human waiting on a
+// browser redirect for at most ~3 attempts, not a fleet of clients that could
+// synchronize and thunder the IdP; add jitter if that ever becomes true.
+func retryExchange(ctx context.Context, cfg oauth2.Config, code, verifier string) (*oauth2.Token, error) {
+	var lastErr error
+	for attempt := 1; attempt <= tokenExchangeRetries; attempt++ {
+		token, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+		if err == nil {
+			return token, nil
+		}
+		lastErr = err
+		if !isTransientOIDCErr(err) || attempt == tokenExchangeRetries {
+			break
+		}
+		select {
+		case <-time.After(tokenExchangeBackoff * time.Duration(attempt)):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// isTransientOIDCErr reports whether err looks like a passing IdP hiccup
+// (worth a retry) rather than a durable configuration problem: a 5xx
+// response from the token endpoint (oauth2.RetrieveError — 4xx there is the
+// IdP actively rejecting the request, e.g. invalid_client/invalid_grant, and
+// retrying changes nothing), or a network-level timeout.
+func isTransientOIDCErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		return retrieveErr.Response != nil && retrieveErr.Response.StatusCode >= 500
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
 }
 
 // contextWithPrincipal stores the verified session's sub, email, role, and

@@ -284,6 +284,11 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// keeps working as an admin allowlist with zero re-configuration
 			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
 			LegacyAdminEmails: splitCSV(*f.oidcOperatorEmails),
+			// D16: revoke-a-human-now over the pg-backed cutoff table. Always
+			// wired whenever OIDC is (pool is already required), unlike the
+			// jti-level identity_revocations store which is a separate
+			// concern — see pgSessionRevocations' doc comment.
+			Revocations: &pgSessionRevocations{pool: pool},
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
