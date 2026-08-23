@@ -66,6 +66,22 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // other key in this file.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
+// SecretRekeyLockKey serializes the `wardynd -rotate-age-key` maintenance mode
+// (cmd/wardynd's rotateAgeKeyMode): two concurrent rekeys of the same store
+// would each re-encrypt from an old key the other has already replaced, so the
+// second is refused rather than queued (TryAdvisoryLock, like
+// ReaperAdvisoryLockKey).
+//
+// HONEST CEILING — this does NOT detect a running wardynd. No wardynd holds a
+// process-lifetime lock on this key or any other unconditional one (the reaper
+// takes ReaperAdvisoryLockKey per tick and releases it; GroundTruthRotatorLockKey
+// is only taken when the rotator is configured), so a serving daemon is
+// invisible to this check. "Stop the daemon first" is an operator procedure
+// documented in docs/OPERATIONS.md, not something this lock enforces — a live
+// daemon holds the OLD identity in memory and would write ciphertext under a key
+// the rekey has already retired.
+const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
 // from pool WITHOUT waiting, reporting ok=false when another session already
 // holds it. Call the returned release (deferred) to unlock and hand the
