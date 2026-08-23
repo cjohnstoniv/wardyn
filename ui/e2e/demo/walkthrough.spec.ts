@@ -413,43 +413,61 @@ test("act 5 — a real run", async () => {
   );
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
 
-  // Confinement — these are REAL radios whose accessible name is title + hint
-  // ("Confined Default-deny. New hosts are held at the door…"), so prefix-match
-  // the title. Note this is a DIFFERENT component from the Add-workspace
-  // dialog's OptionCard, which is an aria-pressed <button>. Same look, two
-  // roles: check the a11y snapshot rather than assuming.
-  await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined: default-deny egress, and only what we list gets through.");
+  // The Confinement card and its "Confined" radio are GONE — policy-panel.tsx
+  // replaces the Confinement + Network cards with one spec-JSON Policy card,
+  // which already OPENS on the Minimal template (allowed_domains:
+  // [api.anthropic.com], first_use_approval: deny_with_review) — confined by
+  // construction, the same default the old "Confined" radio asserted. The
+  // click below re-asserts the Minimal chip rather than changing anything —
+  // same "for the camera" role the old radio click played.
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined: default-deny egress, and only what we list gets through.");
 
   // Network — the load-bearing part of the whole run.
-  await act(page, page.getByRole("button", { name: /Edit hosts/ }), "This is the part that matters.");
-  const net = page.getByRole("dialog");
-  await expect(net.getByText("Network for this run")).toBeVisible();
+  //
+  // network-dialog.tsx (Edit hosts…, the model-host toggle chip, the "Hold it
+  // for approval" unlisted-host radio) is DELETED — the same choices are now
+  // made IN the policy spec's JSON, through the Policy card the Minimal click
+  // above already opened. Minimal scopes allowed_domains to exactly
+  // api.anthropic.com by construction; the one edit left is
+  // first_use_approval: deny_with_review -> wait_for_review, the field that
+  // makes the held-at-the-boundary beat below genuine (a HELD connection, not
+  // a denied-then-retried one). Read-modify-fill rather than a hardcoded
+  // literal so the floor (min_confinement_class) stays whatever is actually
+  // on screen — same pattern policies.spec.ts's fillEditor uses for this
+  // textarea.
+  const specBox = page.getByLabel("Spec (JSON)");
+  await caption(page, "This is the part that matters.");
+  await spotlight(page, specBox);
+  const heldSpec = JSON.stringify(
+    { ...JSON.parse(await specBox.inputValue()), first_use_approval: "wait_for_review" },
+    null,
+    2,
+  );
+  await specBox.fill(heldSpec);
   await beat(page, PACE.read);
+  await expect(page.getByText("1 domain allowed")).toBeVisible({ timeout: 15_000 });
 
-  // Host chips are aria-pressed TOGGLES, and the wizard SEEDS this one on
-  // (initialWizardState's allowedDomains). Clicking it therefore REMOVES it —
-  // on camera the ✓ vanishes and the header ticks to "0 hosts" while the
-  // narration says "allow it". Point at it when it is already on; only click
-  // when it is genuinely off.
-  const modelChip = net.getByRole("button", { name: new RegExp(MODEL_HOST.replace(/\./g, "\\.")) }).first();
-  if ((await modelChip.getAttribute("aria-pressed")) === "true") {
-    await caption(page, `${MODEL_HOST} is already on the list — without it the agent has no model at all.`);
-    await spotlight(page, modelChip);
-    await beat(page, PACE.read);
-    await spotlight(page, null);
-  } else {
-    await act(page, modelChip, `Allow ${MODEL_HOST} and nothing else — without it the agent has no model at all.`);
-  }
-  // The unlisted-host rules ARE radios, but each card's accessible name
-  // includes its explanatory body copy — prefix-match the title.
-  await act(
+  // The model-host toggle chip (network-dialog.tsx) this if/else used to
+  // drive is DELETED — Minimal's allowed_domains always includes
+  // api.anthropic.com, so the host is unconditionally already on the list;
+  // the toggle's "off" branch can no longer fire.
+  await caption(page, `${MODEL_HOST} is already on the list — without it the agent has no model at all.`);
+  await beat(page, PACE.read);
+  // DIALOG-STALE(old UI): "Allow ${MODEL_HOST} and nothing else — without it
+  // the agent has no model at all." narrated clicking the deleted model-host
+  // toggle chip when it started OFF — Minimal's allowed_domains always
+  // includes api.anthropic.com now, so this branch can never fire. See
+  // local/light-episodes-dialog-flags.md.
+
+  // The unlisted-host rules (network-dialog.tsx's radios) are DELETED —
+  // "Hold it for approval" is now the first_use_approval: "wait_for_review"
+  // edit made above.
+  await caption(
     page,
-    net.getByRole("radio", { name: /^Hold it for approval/ }),
     "And for any host that is not on the list: stop, and ask me — nothing off this list goes out unseen.",
   );
   await beat(page, PACE.read);
-  await act(page, net.getByRole("button", { name: "Save hosts" }));
-  await expect(net).toBeHidden({ timeout: 30_000 });
+  await spotlight(page, null);
 
   await caption(page, "That is the entire blast radius of this run, declared before it starts.");
   await beat(page, PACE.read + 800);

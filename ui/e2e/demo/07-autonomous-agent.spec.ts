@@ -61,7 +61,7 @@
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
-import { DEMO_TASK, HELD_HOST, MODEL_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
+import { DEMO_TASK, HELD_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
 import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
@@ -385,13 +385,14 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
 
   // --- B4 Confinement -----------------------------------------------------
   //
-  // "Confined" is already the screen's default (new-run-screen.tsx:167) — the
-  // click is for the camera. These are REAL radios whose accessible name is
-  // title + body ("Confined Default-deny. New hosts are held at the door…"), so
-  // prefix-match the title. Note this is a DIFFERENT component from the
-  // Add-workspace dialog's OptionCard, which is an aria-pressed <button>. Same
-  // look, two roles: check the a11y snapshot rather than assuming.
-  await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined.");
+  // The Confinement card and its "Confined" radio are GONE — policy-panel.tsx
+  // replaces the Confinement + Network cards with one spec-JSON Policy card,
+  // which already OPENS on the Minimal template (allowed_domains:
+  // [api.anthropic.com], first_use_approval: deny_with_review) — confined by
+  // construction, the same default the old "Confined" radio asserted. The
+  // click below is still for the camera, same as the old one: it re-asserts
+  // the Minimal chip rather than changing anything.
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined.");
   await caption(page, "Network starts closed.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We'll give it the destinations it needs and let everything else ask.");
@@ -399,44 +400,41 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
 
   // --- B5 Network -----------------------------------------------------
   //
-  // No owner line covers the dialog's contents — the script's next line is
-  // the Save click itself — so the model-host chip and the unlisted-host
-  // radio are set silently; the choreography still has to happen for beats
-  // 7-8 to have anything to hold.
-  await act(page, page.getByRole("button", { name: /Edit hosts/ }));
-  const net = page.getByRole("dialog");
-  await expect(net.getByText("Network for this run")).toBeVisible();
-
-  // Host chips are aria-pressed TOGGLES, and the wizard SEEDS this one on
-  // (initialWizardState's allowedDomains: ["api.anthropic.com"]). Clicking it
-  // therefore REMOVES it — on camera the ✓ vanishes and the header ticks to
-  // "0 hosts". Only click when it is genuinely off.
-  const modelChip = net.getByRole("button", { name: new RegExp(MODEL_HOST.replace(/\./g, "\\.")) }).first();
-  if ((await modelChip.getAttribute("aria-pressed")) !== "true") {
-    await act(page, modelChip);
-  }
-  // "Only one host" is asserted, not narrated: the section header reads
-  // "Hosts this run can reach · N" (network-dialog.tsx). A seeded preset that
-  // quietly carries more must never be allowed through silently.
-  await expect(net.getByRole("heading", { name: /Hosts this run can reach\s*·\s*1\b/ })).toBeVisible({
-    timeout: 15_000,
-  });
-
-  // The unlisted-host rules ARE radios, but each card's accessible name
-  // includes its explanatory body copy — prefix-match the title.
-  await act(page, net.getByRole("radio", { name: /^Hold it for approval/ }));
-  await act(page, net.getByRole("button", { name: "Save hosts" }), "Save hosts.");
-  await expect(net).toBeHidden({ timeout: 30_000 });
+  // network-dialog.tsx (Edit hosts…, the model-host toggle chip, the "Hold it
+  // for approval" unlisted-host radio) is DELETED — the same choices are now
+  // made IN the policy spec's JSON. Minimal already scopes allowed_domains to
+  // exactly api.anthropic.com; the one edit left is first_use_approval:
+  // deny_with_review -> wait_for_review, the field that makes beat 8's hold
+  // genuine (a HELD connection, not a denied-then-retried one). Read-modify-
+  // fill rather than a hardcoded literal so the floor (min_confinement_class)
+  // stays whatever is actually on screen — same pattern policies.spec.ts's
+  // fillEditor uses for this textarea.
+  const specBox = page.getByLabel("Spec (JSON)");
+  const heldSpec = JSON.stringify(
+    { ...JSON.parse(await specBox.inputValue()), first_use_approval: "wait_for_review" },
+    null,
+    2,
+  );
+  await spotlight(page, specBox);
+  await specBox.fill(heldSpec);
+  await spotlight(page, null);
+  // DIALOG-STALE(old UI): "Save hosts." narrated clicking the deleted Network
+  // dialog's own Save button — the panel has no separate save step; the JSON
+  // edit above IS the save. See local/light-episodes-dialog-flags.md.
+  await caption(page, "Save hosts.");
+  await beat(page, BEAT_SHORT);
 
   // --- B6 The rail is the contract ----------------------------------------
   const rail = page.locator("aside").filter({ hasText: "What this run can do" }).first();
-  // The rail is what the beat spotlights, so what it says had better be right:
-  // one host, and no warning banner over the credential line. The model warning
-  // in particular ("No model provider is connected. This run launches; its first
-  // model call fails.") would sit in frame for the whole beat and make a liar of
-  // the next line — and of the entire run, which would launch and fail its first
-  // model call.
-  await expect(rail).toContainText("1 host allowed", { timeout: 20_000 });
+  // The host count lives on the Policy card now, not the rail — the rail's
+  // own "Network" section died with the Confinement/Network cards
+  // (policy-panel.tsx's egress chip renders "N domain(s) allowed" instead).
+  // The rail itself still carries the credential warning this beat depends
+  // on staying absent: the model warning in particular ("No model provider is
+  // connected. This run launches; its first model call fails.") would sit in
+  // frame for the whole beat and make a liar of the next line — and of the
+  // entire run, which would launch and fail its first model call.
+  await expect(page.getByText("1 domain allowed")).toBeVisible({ timeout: 20_000 });
   await expect(
     page.getByText(/No model provider is connected/),
     "no model provider is connected — V01's model step did not stick, and this run cannot do its task",

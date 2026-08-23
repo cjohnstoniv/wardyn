@@ -239,14 +239,29 @@ test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
   await caption(page, "The agent still gets the same workspace.");
   await beat(page, BEAT_SHORT + 400);
 
-  await act(page, page.getByRole("radio", { name: /^Confined/ }), "Confined.");
+  // The Confinement/Network cards and their "Confined" radio + "Just the
+  // model provider" preset are GONE — policy-panel.tsx replaces both with one
+  // spec-JSON Policy card. It already OPENS on the Minimal template
+  // (allowed_domains: [api.anthropic.com], first_use_approval:
+  // deny_with_review) — confined by construction, the same default the old
+  // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
+  // the camera in one click.
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined.");
   await caption(page, "And the network is still default-deny.");
   await beat(page, PACE.read);
   await caption(page, "The model needs one destination, so we'll allow one.");
   await beat(page, PACE.read);
-  await act(page, page.getByRole("radio", { name: /^Just the model provider/ }), "Add api.anthropic.com.");
+  // DIALOG-STALE(old UI): "Add api.anthropic.com." narrated clicking the
+  // deleted "Just the model provider" Network preset radio. The Minimal chip
+  // clicked above already scopes allowed_domains to exactly
+  // api.anthropic.com, so there is no second click left to attach this line
+  // to — re-spotlighting the panel's Spec (JSON) textarea is the closest
+  // honest on-screen event. See local/light-episodes-dialog-flags.md.
+  await spotlight(page, page.getByLabel("Spec (JSON)"));
+  await caption(page, "Add api.anthropic.com.");
   await caption(page, "That's the entire network contract for this run.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });

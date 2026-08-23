@@ -753,14 +753,17 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // fails FAST here rather than hanging, which is a visible difference from the
   // demo sandbox above.
   //
-  // The unlisted-hosts rule now sits ON THE CARD FACE (new-run-screen's
-  // "Unlisted hosts" Seg, not buried in "Edit hosts…"), so it is in frame —
-  // asserted rather than assumed, because a changed default would make the
-  // approval below never fire while the take still went green.
+  // The Confinement/Network cards and their on-card "Unlisted hosts" Seg are
+  // GONE — the same rule now lives IN the policy spec, as the Policy card's
+  // shipped default (policy-panel.tsx's Minimal template, which is what a
+  // fresh /runs/new opens on: first_use_approval: "deny_with_review").
+  // Asserted straight off the JSON textarea rather than a radio's
+  // aria-checked, because a changed default would make the approval below
+  // never fire while the take still went green.
   await expect(
-    page.getByRole("radio", { name: "Deny, but ask" }),
-    "the default unlisted-hosts rule is no longer deny_with_review",
-  ).toHaveAttribute("aria-checked", "true");
+    page.getByLabel("Spec (JSON)"),
+    "the default first_use_approval is no longer deny_with_review",
+  ).toHaveValue(/"first_use_approval": "deny_with_review"/);
 
   // Silent launch, same reasoning as the Terminal click above.
   await act(page, page.getByRole("button", { name: "Launch run" }));
