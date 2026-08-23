@@ -4,9 +4,11 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -52,12 +54,12 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
 		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
 			ps, err := pg.ListPoliciesPage(r.Context(), p)
-			return redactPoliciesForRead(ps), err
+			return redactPoliciesForRead(ps, s.isOperator(r.Context())), err
 		}
 	}
 	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) {
 		ps, err := s.cfg.Store.ListPolicies(r.Context())
-		return redactPoliciesForRead(ps), err
+		return redactPoliciesForRead(ps, s.isOperator(r.Context())), err
 	})
 }
 
@@ -75,7 +77,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get policy: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, redactPolicyForRead(p))
+	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isOperator(r.Context())))
 }
 
 // handleGetDefaultPolicy returns the control plane's configured default policy
@@ -85,7 +87,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // policies.tsx's own comment said so. Member-reachable like the other policy
 // reads (routes.go), since members are the ones actually clamped by it.
 func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, redactSpecForRead(s.cfg.DefaultPolicy))
+	writeJSON(w, http.StatusOK, redactSpecForRead(s.cfg.DefaultPolicy, s.isOperator(r.Context())))
 }
 
 // redactPolicyForRead returns p with any llm_inspection.workspace_secret_values
@@ -98,15 +100,18 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 // (runs_dispatch.go) — same shape, different chokepoint. Does not mutate p's
 // own LLMInspection (a fresh copy is substituted), so a caller holding the
 // original is never surprised by an in-place edit.
-func redactPolicyForRead(p types.RunPolicy) types.RunPolicy {
-	p.Spec = redactSpecForRead(p.Spec)
+func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
+	p.Spec = redactSpecForRead(p.Spec, operator)
 	return p
 }
 
 // redactSpecForRead is redactPolicyForRead's logic, factored out so
 // handleGetDefaultPolicy (which reads a bare spec, not a stored types.RunPolicy)
 // gets the same redaction without a fake wrapper row.
-func redactSpecForRead(spec types.RunPolicySpec) types.RunPolicySpec {
+func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
+	if !operator {
+		spec = redactSpecForMember(spec)
+	}
 	li := spec.LLMInspection
 	if li == nil || len(li.WorkspaceSecretValues) == 0 {
 		return spec
@@ -118,11 +123,75 @@ func redactSpecForRead(spec types.RunPolicySpec) types.RunPolicySpec {
 }
 
 // redactPoliciesForRead maps redactPolicyForRead over a list read (handleListPolicies).
-func redactPoliciesForRead(ps []types.RunPolicy) []types.RunPolicy {
+func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolicy {
 	for i := range ps {
-		ps[i] = redactPolicyForRead(ps[i])
+		ps[i] = redactPolicyForRead(ps[i], operator)
 	}
 	return ps
+}
+
+// memberSecretScopeKeys are the eligible-grant scope fields that NAME an
+// operator secret. The `secret` capability exists to bound which secret names a
+// member can see (it narrows GET /secrets), and a policy read handed the same
+// names back to every member — including on GET /policies/default, which every
+// member reaches because the ceiling is what clamps them.
+var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hosts_secret_ref"}
+
+// redactSpecForMember strips the two operator-only details a policy spec
+// carries out of a MEMBER-reachable read: the host filesystem paths behind
+// workspace_mounts[].source (the blessed ~/.claude credential mount among
+// them) and the stored-secret names on the eligible grants. Everything else —
+// the egress allowlist, the confinement floor, the grant KINDS and hosts — is
+// exactly what a member is being clamped by and stays visible.
+//
+// Copies before it edits: the default policy is server config held for the
+// process's whole life, so an in-place edit here would redact it permanently
+// for the operator too.
+func redactSpecForMember(spec types.RunPolicySpec) types.RunPolicySpec {
+	if len(spec.WorkspaceMounts) > 0 {
+		mounts := slices.Clone(spec.WorkspaceMounts)
+		for i := range mounts {
+			mounts[i].Source = "<redacted>"
+		}
+		spec.WorkspaceMounts = mounts
+	}
+	if len(spec.EligibleGrants) > 0 {
+		grants := slices.Clone(spec.EligibleGrants)
+		for i := range grants {
+			grants[i].Scope = redactScopeSecretRefs(grants[i].Scope)
+		}
+		spec.EligibleGrants = grants
+	}
+	return spec
+}
+
+// redactScopeSecretRefs drops the secret-naming keys from one grant scope,
+// leaving the rest (host, repos, permissions, username) intact. A scope that
+// does not decode as an object is dropped whole rather than guessed at — the
+// same fail-closed direction storedSecretGrantPairing's callers take.
+func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
+	if len(scope) == 0 {
+		return scope
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(scope, &fields); err != nil {
+		return nil
+	}
+	found := false
+	for _, k := range memberSecretScopeKeys {
+		if _, ok := fields[k]; ok {
+			delete(fields, k)
+			found = true
+		}
+	}
+	if !found {
+		return scope
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
