@@ -62,7 +62,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 import { DEMO_TASK, HELD_HOST, MODEL_HOST, WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
@@ -491,6 +491,29 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   // a row that could no longer exist. These three lines are all B7 keeps; the
   // "watch the tape" promise moved into the post-approval tour, where the run's
   // pace no longer races the narration.
+  // FAST-FORWARD IMMEDIATELY — the walk-away stanzas moved BELOW the span
+  // (owner, 2026-08-23): the viewer should watch the agent WORKING, so the
+  // ask lands with context instead of out of nowhere. Sandbox boot is the
+  // only dead air; the span ends at the run's first visible pulse. Nothing
+  // is narrated inside the span.
+  await ffwdStart(page);
+
+  // An autonomous run has no terminal to watch; its visible pulse is the
+  // EGRESS widget — the model calls stream in as allows, and the off-list
+  // ask then arrives in the SAME panel the camera is already parked on.
+  // Raced three ways: first model-call row, OR the held row itself (the
+  // task puts the curl FIRST, so a fast agent can beat the model row to
+  // the screen), OR the run ending (the 2026-08-18 failure class) — any
+  // of the three ends the span; the b8 race below then names the outcome.
+  const egressLive = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
+  await Promise.race([
+    egressLive.getByText("api.anthropic.com").first().waitFor({ state: "visible", timeout: RUN_FINISHES }).catch(() => {}),
+    page.getByTestId("live-approval-row").filter({ hasText: HELD_HOST }).first().waitFor({ state: "visible", timeout: RUN_FINISHES }).catch(() => {}),
+    page.getByText(/^(Completed|Failed|Stopped|Killed)$/).first().waitFor({ state: "visible", timeout: RUN_FINISHES }).catch(() => {}),
+  ]);
+  await ffwdEnd(page);
+  await centerInFrame(egressLive);
+  await spotlight(page, egressLive);
   await caption(page, "And now we walk away.");
   await beat(page, BEAT_SHORT);
   await caption(page, "There is no terminal to drive.");
@@ -498,19 +521,8 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   await caption(page, "No human typing commands.");
   await beat(page, BEAT_SHORT);
   await caption(page, "The agent works inside the envelope we just defined.");
-  // No trailing beat and no dead-air allowance: beat 8's own wait carries the
-  // spin-up, with the strip already under the camera's eye — and FAST-FORWARDED
-  // (owner, 2026-08-18): the ~30-50s of sandbox boot + the agent reaching its
-  // first host is real time nobody needs to sit through in the published cut.
-  // The span ends the moment the held row lands, so the hold itself — and the
-  // decision, the entire point of the video — plays at human speed. Nothing is
-  // narrated inside the span (a spoken cue inside compressed footage desyncs
-  // the whole timeline). The beat(0) first DRAINS the last line's audio —
-  // ffwdStart during a still-speaking caption puts the tail of its speech
-  // inside compressed footage, and every cue after it lands early (the one
-  // overlap the take-6 verifier caught).
-  await beat(page, 200);
-  await ffwdStart(page);
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // --- B8 Held at the boundary --------------------------------------------
   //
@@ -594,7 +606,11 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   // series when it fires. A live agent's own behavior is never guaranteed, so
   // this stays conditional and skips silently when it doesn't happen.
   const telemetryRow = page.getByTestId("live-approval-row").filter({ hasText: /datadoghq/ });
-  if (await telemetryRow.count()) {
+  // Only a row still marked "waiting" is a live hold — a zombie row (hold
+  // resolved server-side, list not yet re-polled) starts a beat that cannot
+  // finish. If it is not live, the whole beat skips and no orphan intro
+  // lines play.
+  if (await telemetryRow.getByText("waiting").count()) {
     await caption(page, "And here's another request we didn't script.");
     await beat(page, PACE.read);
     await caption(page, "The tool's own telemetry.");
@@ -610,15 +626,27 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
     // stays true; on any failure the dialog is dismissed and only the two
     // closing lines are skipped. decide()'s own landed-proof still gates the
     // success path, so "Denied." can never be narrated over a failed deny.
+    // LOCAL mini-decide with TIGHT timeouts, not funnel.decide(): the shared
+    // helper's fixed 45s overlay waits burned 93 SECONDS of silent film when
+    // this hold died between the click and its confirm (owner report,
+    // 2026-08-23 cut). Same visible steps, bounded: worst case ~26s, typical
+    // ~6. Any step failing skips the closing lines with a warning.
     let denied = false;
     try {
-      await decide(page, "Deny", "Deny.", "datadoghq");
+      await telemetryRow.scrollIntoViewIfNeeded();
+      await spotlight(page, telemetryRow);
+      await caption(page, "Deny.");
+      await beat(page, PACE.read + 900);
+      await telemetryRow.getByRole("button", { name: "Deny" }).click({ timeout: 8_000 });
+      const confirm = page.getByRole("alertdialog");
+      await confirm.getByRole("button", { name: "Deny" }).click({ timeout: 8_000 });
+      await expect(telemetryRow).toHaveCount(0, { timeout: 10_000 });
       denied = true;
     } catch {
       console.warn("[v07] telemetry hold resolved mid-beat — Deny not filmed this take");
       await page.keyboard.press("Escape").catch(() => {});
-      await spotlight(page, null);
     }
+    await spotlight(page, null);
     if (denied) {
       await caption(page, "Denied.");
       await beat(page, BEAT_SHORT);
