@@ -21,6 +21,15 @@
 #     the session.attach/session.detach pair carrying transport:ssh
 #   - the audit rows for both: ssh.exec (with the exact exit codes) and
 #     session.attach{transport:ssh}
+#   - authorization, both arms (the compose lane's counterpart checks): a
+#     second principal's MEMBER key is refused on a run it does not own and
+#     the refusal is audited, while a third principal's ADMIN-role key reaches
+#     that same run with data.override=true on the ssh.auth row
+#
+# NOT RUN BY CI: no workflow invokes `make test-e2e-ssh-k8s` — it needs a kind
+# cluster this script deliberately does not create. It is a MANUAL proof, run
+# by hand against `make kind-quickstart`; treat a green result as evidence
+# only for the tip someone actually ran it on.
 #
 # DELIBERATELY NOT PROVEN HERE — sftp and `-L`. Both are an IMAGE contract,
 # not a substrate one (docs/SSH.md "Image contract (BYOI)": the gateway execs
@@ -90,6 +99,14 @@ teardown() {
     curl -sS -X DELETE "${BASE}/api/v1/me/ssh-keys/$(printf '%s' "${OWNER_FP}" | jq -sRr @uri)" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   fi
+  # The two extra principals' keys went straight into Postgres (see the
+  # member-denial step) — they are not the admin token's, so the API cannot
+  # delete them. Out the way they came in, and never leave a key behind in a
+  # cluster that outlives this script.
+  for fp in "${FOREIGN_FP:-}" "${ADMIN_FP:-}"; do
+    [[ -n "${fp}" ]] || continue
+    psql_exec "DELETE FROM ssh_public_keys WHERE fingerprint = '${fp}';" || true
+  done
   rm -rf "${TMPDIR}"
 }
 trap teardown EXIT
@@ -104,6 +121,17 @@ api() {
     curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}"
   fi
+}
+
+# psql_exec SQL -- run one statement in the Postgres quickstart.sh deployed into
+# this namespace (same wardyn/wardyn credentials it wrote into the DSN
+# Secret). The API cannot create a SECOND principal: POST /me/ssh-keys always
+# stamps the CALLER's, and this install has exactly one credential, the admin
+# token. The compose lane reaches its database the same way, for the same
+# reason (scripts/run-e2e-ssh.sh sections 9-10).
+psql_exec() {
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deploy/postgres -- \
+    psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -c "$1" >"${TMPDIR}/psql.log" 2>&1
 }
 
 # ── 0. it is the k8s install answering, and the gateway is on ───────────────
@@ -243,7 +271,53 @@ else
   fail "audit: no session.detach row with transport:ssh"
 fi
 
-# ── 6. the two deliberate skips, named, not silent ──────────────────────────
+# ── 6. member-key denial: a non-owner, non-admin key is refused ─────────────
+# A SECOND principal, inserted the direct-Postgres way (see psql() above). The
+# run is owned by the admin token's principal, so this key is neither the
+# owner's nor an admin's — sshAuth must refuse it and audit the refusal.
+# Single-quoted interpolation is safe for exactly the reason the compose lane
+# gives: both values are ssh-keygen's OWN output (a "SHA256:<base64>"
+# fingerprint and an "ssh-ed25519 <base64> <comment>" line), neither of which
+# can contain a single quote.
+ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/foreign_key" -C "wardyn-e2e-k8s-foreign"
+FOREIGN_FP="$(ssh-keygen -lf "${TMPDIR}/foreign_key.pub" | awk '{print $2}')"
+FOREIGN_PUB="$(cat "${TMPDIR}/foreign_key.pub")"
+if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at) VALUES ('${FOREIGN_FP}', 'e2e-k8s-foreign-principal', 'foreign-e2e-k8s-key', '${FOREIGN_PUB}', now());"; then
+  fail "member-key denial setup: could not insert the second principal's key: $(cat "${TMPDIR}/psql.log")"
+else
+  denial_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/foreign_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo should-never-run" 2>&1)"
+  denial_rc=$?
+  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"failure\" and .target==\"${FOREIGN_FP}\" and .data.reason==\"not the run owner\")]")"
+  if [[ "${denial_rc}" -ne 0 && "${denial_out}" != *"should-never-run"* && "${n}" -ge 1 ]]; then
+    pass "member-key denial: non-owner, non-admin key refused on k8s (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
+  else
+    fail "member-key denial: rc=${denial_rc} out='${denial_out}' audited_denial_rows=${n}"
+  fi
+fi
+
+# ── 7. admin override: an ADMIN-role key reaches a run it does not own ──────
+# A THIRD principal, same route, but with role='admin' (the column migration
+# 0043 adds). The run belongs to the admin token's principal, not this key's,
+# so a success here can only come from sshAuth's admin arm
+# (run.CreatedBy != rec.Principal but rec.Role == oidc.RoleAdmin,
+# internal/api/sshgateway.go) — and that arm is what stamps data.override.
+ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/admin_key" -C "wardyn-e2e-k8s-admin"
+ADMIN_FP="$(ssh-keygen -lf "${TMPDIR}/admin_key.pub" | awk '{print $2}')"
+ADMIN_PUB="$(cat "${TMPDIR}/admin_key.pub")"
+if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, created_at) VALUES ('${ADMIN_FP}', 'e2e-k8s-admin-principal', 'admin-e2e-k8s-key', '${ADMIN_PUB}', 'admin', now());"; then
+  fail "admin-override setup: could not insert the admin-role key: $(cat "${TMPDIR}/psql.log")"
+else
+  override_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/admin_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo wardyn-override-ok" 2>&1)"
+  override_rc=$?
+  n="$(audit_probe "[.[] | select(.action==\"ssh.auth\" and .outcome==\"success\" and .target==\"${ADMIN_FP}\" and .data.override==true)]")"
+  if [[ "${override_rc}" -eq 0 && "${override_out}" == *"wardyn-override-ok"* && "${n}" -ge 1 ]]; then
+    pass "admin override: admin-role key reached a run it does not own on k8s, ssh.auth success audited with data.override=true"
+  else
+    fail "admin override: rc=${override_rc} out='${override_out}' audited_override_rows=${n}"
+  fi
+fi
+
+# ── 8. the two deliberate skips, named, not silent ──────────────────────────
 skip "sftp: an IMAGE contract, not a substrate one — the gateway execs /usr/lib/openssh/sftp-server INSIDE the sandbox (docs/SSH.md 'Image contract (BYOI)'), and on a cluster that image is whatever WARDYN_AGENT_IMAGES points at. Proven against Wardyn's own image by 'make test-e2e-ssh'."
 skip "-L forwarding: same contract, same binary convention (socat inside the sandbox). The substrate code underneath it is the Runner.ExecStream lane sections 3-4 above already exercise on k8s. Proven end-to-end by 'make test-e2e-ssh'."
 
