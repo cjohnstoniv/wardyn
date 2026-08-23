@@ -82,7 +82,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { FUNNEL_DEMOS } from "./task";
-import { act, beat, caption, centerInFrame, chapter, PACE, spotlight, typeInTerminal } from "./overlay";
+import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each act
 // reads the page out of stage() rather than closing over a module-level `let`.
@@ -178,7 +178,7 @@ async function silentCard(page: Page, text: string): Promise<void> {
 // Act 1 — back into the funnel
 // ---------------------------------------------------------------------------
 
-test("V03 act 1 — back to the funnel", async () => {
+test("V03 act 1 — reach the demos (silent)", async () => {
   test.setTimeout(240_000);
   const page = stage();
   await page.goto("/setup");
@@ -192,41 +192,39 @@ test("V03 act 1 — back to the funnel", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  // A fresh browser session lands on the first-light hero, not inside the
-  // funnel — the steps only mount behind "Get started" (episode 02 clicked it
-  // on camera; here it is silent, no owner line covers it). Past that, the
-  // barrier pick and Secrets carry over from this host's own state (video two
-  // proved them); Network does not — steps.ts's CorpNetworkState is
-  // deliberately SESSION-only ("never a stale 'reached' surviving a reload").
-  await act(page, page.getByRole("button", { name: /Get started/ }));
-  await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(
-    page,
-    "Before we test the boundary, let's quickly bring back the three things we established in episode two.",
-  );
-  await beat(page, PACE.read);
-  await caption(page, "The sandbox.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "The network.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And the secrets.");
-  await beat(page, BEAT_SHORT);
-  const tiers = page.getByRole("radiogroup", { name: "Barrier tier" });
-  const fence = tiers.getByRole("radio", { name: /Fence/ });
-  await expect(fence).toBeEnabled();
-  await act(page, fence);
-  await expect(fence).toHaveAttribute("aria-checked", "true");
-  await advance();
+  // Owner cut (2026-08-23): the episode no longer re-reviews episode 02 — it
+  // SPEAKS from act 2's "What it stops" card. The funnel walk below is still
+  // mechanically required (the demos step sits behind the funnel's gates:
+  // barrier picked, connectivity proven, secrets passed), so it plays SILENT
+  // inside one ffwd span and lands on film as a ~2s blur. Nothing may speak
+  // inside the span. Barrier pick and Secrets carry over from this host's own
+  // state; Network does not — steps.ts's CorpNetworkState is deliberately
+  // SESSION-only ("never a stale 'reached' surviving a reload").
+  await ffwdStart(page);
+  try {
+    await act(page, page.getByRole("button", { name: /Get started/ }));
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
+    const tiers = page.getByRole("radiogroup", { name: "Barrier tier" });
+    const fence = tiers.getByRole("radio", { name: /Fence/ });
+    await expect(fence).toBeEnabled();
+    await act(page, fence);
+    await expect(fence).toHaveAttribute("aria-checked", "true");
+    await advance();
 
-  await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await act(page, page.getByRole("button", { name: "Test connectivity" }), "Test connectivity.");
-  await expect(page.getByText(/^Reached · direct/).first()).toBeVisible({ timeout: SANDBOX_UP });
-  await advance();
+    await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
+    await act(page, page.getByRole("button", { name: "Test connectivity" }));
+    await expect(page.getByText(/^Reached · direct/).first()).toBeVisible({ timeout: SANDBOX_UP });
+    await advance();
 
-  await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await advance();
+    await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
+    await advance();
 
-  await expect(page.getByRole("heading", { name: "The sealed box", level: 2 })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: "The sealed box", level: 2 })).toBeVisible({ timeout: 30_000 });
+  } finally {
+    // Close the span even on a failed walk, so the encoder never gets an
+    // unterminated stretch.
+    await ffwdEnd(page);
+  }
 });
 
 // ---------------------------------------------------------------------------
