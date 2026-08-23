@@ -44,6 +44,8 @@ internal action can rename across releases without notice.
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails | `error`, `errors`, `id`, `state` | `internal/api/runs_lifecycle.go:198`; reaper failure at `internal/lifecycle/lifecycle.go:368` | internal |
 | `run.autostop` | Idle-timeout autostop fires | `idle_for_sec`, `reason`, `threshold_sec` | `internal/lifecycle/lifecycle.go:340` | internal |
 | `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:594` | internal |
+| `sandbox.orphan_sweep` | The boot-time orphan reconciler (`reconcileOrphanedSandbox`) FAILS to tear down a terminal run's still-live sandbox — emitted on failed teardown only; a still-failing teardown leaves the ref set for the next boot to retry | `sandbox_ref`, `teardown_error` | `internal/api/reconcile.go:138` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:164`) | internal |
+| `sandbox.sweep` | `SweepTerminalSandboxes` (the callable sweep primitive over terminal runs with a live probed sandbox) FAILS to tear one down — emitted on failed teardown only, like its boot-time sibling | `sandbox_ref`, `teardown_error` | `internal/api/runs_lifecycle.go:236` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:164`) | internal |
 | `run.artifact.redirect` | Package-registry (artifact) redirect configured for a run | `detail`, `ecosystem`, `error`, `header`, `host`, `integration_id`, `port`, `secret_name` | `internal/api/artifact_redirect.go:231` | internal |
 | `run.policy.effective` | The effective (post-merge) policy snapshot is recorded at dispatch | (full policy snapshot) | `internal/api/runs_dispatch.go:369` | internal |
 | `run.upstream_proxy.resolve` | Upstream (corporate) proxy resolution for a run | `reason` | `internal/api/runs_dispatch_mounts.go:88` | internal |
@@ -135,7 +137,7 @@ internal action can rename across releases without notice.
 | `capability.grant.deleted` | `DELETE /permissions/grants/{id}` | — | `internal/api/permissions.go:199` | internal |
 | `capability.enforcement.write` | `PUT /permissions/enforcement` (whole-map replace) | (saved enforcement map) | `internal/api/permissions.go:229`; documented `docs/OPERATIONS.md`'s capability-grants section | internal |
 | `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:444-460` | **stable** (documented, closed `reason` enum) |
-| `egress.deny` | Egress denied at the proxy for a run (the deny-list/allow-list decision itself) | `denied`, `runs_examined` | `internal/api/workspaces.go:718` and others | internal |
+| `egress.*` | The proxy reports an egress decision for a run — the literal suffix is the decision itself: `egress.allow`, `egress.deny`, or `egress.pending` (`egress.Decision`, `internal/egress/egress.go:27-31`). A synthetic `blind` scan decision emits only `llm.scan.blind`, never a duplicate `egress.allow` for the tunnel | `approval_id`, `host`, `method`, `path`, `port`, `rule_source` | `internal/api/internal.go:80` | internal |
 
 ## Kernel ground-truth (eBPF/Tetragon stream)
 
