@@ -14,20 +14,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **The `wait_for_review` hold window and concurrency are configurable.** A
   policy may set `first_use_hold_seconds` and `max_holds` instead of living
-  with the built-in 30s/8; absent or zero keeps today's defaults. Note the cap
-  is per held connection, not per distinct host — N concurrent connections to
-  one unknown host consume N slots.
+  with the built-in 30s/16; absent or zero keeps today's defaults. Note the
+  cap is per held connection, not per distinct host — N concurrent connections
+  to one unknown host consume N slots.
 - **A denied CONNECT is distinguishable from one waiting on approval.** The
-  proxy's 403 now carries `X-Wardyn-Egress: denied|pending` (plus the rule
-  source), so an agent — or a person reading its logs — can tell a hard deny
-  from a first-use hold without grepping the audit log.
+  proxy's 403 now carries `X-Wardyn-Egress: denied|approval-pending` plus
+  `X-Wardyn-Host` (the refused host), so an agent — or a person reading its
+  logs — can tell a hard deny from a first-use hold without grepping the
+  audit log.
 - **Audit list: per-principal `?actor=` filter and an uncapped NDJSON
   export.** `GET /audit` takes `?actor=` alongside the existing filters, and
   `GET /audit/export` streams the full filtered result as NDJSON — the "give
   the auditor everything for this principal" request stops being a pagination
   exercise.
 - **Per-sink SIEM delivery-drop counter on `/metrics`.** A webhook sink that
-  exhausts its retries now increments `wardyn_audit_sink_dropped_total{sink=…}`
+  exhausts its retries now increments `wardyn_audit_sink_drops_total{sink=…}`
   instead of failing silently — the number a pilot's monitoring should alarm
   on.
 - **A run that dies before its agent starts carries a `failure_hint`.**
@@ -438,9 +439,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for a brokered credential mint committed separately from the mint itself, so
   a crash between the two could leave a minted credential with no audit trace
   (or the reverse). The row now commits atomically with the mint; the same
-  pass closed the sibling seams — a decided `always` egress approval
-  reconciles onto its workspace in the same transaction, and the audit spool's
-  crash-recovery keeps the good head of a torn tail instead of discarding it.
+  pass closed the sibling seams — a decided `always` egress approval whose
+  workspace write-back was lost to a crash is now healed by a boot-time
+  reconcile (the API layer cannot share a transaction across the decision and
+  the workspace write, so the window closes at the next daemon boot rather
+  than shrinking to zero), and the audit spool's crash-recovery keeps the
+  good head of a torn tail instead of discarding it.
 - **Secrets masked in audit `Data` even when JSON-escaped.** The audit masker
   compared raw secret bytes, so a value containing quotes/backslashes appeared
   unmasked in event payloads once JSON-encoded. The masker now also matches
