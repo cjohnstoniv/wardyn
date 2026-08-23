@@ -13,7 +13,6 @@ package sinks
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"log/syslog"
@@ -132,7 +131,7 @@ func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 		return nil
 	default:
 	}
-	b, err := json.Marshal(ev)
+	b, err := marshalEvent(ev)
 	if err != nil {
 		return fmt.Errorf("sinks.syslog: marshal: %w", err)
 	}
