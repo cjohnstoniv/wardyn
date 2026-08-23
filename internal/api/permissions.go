@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -97,6 +98,19 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 	}
 	if len(g.Value) > maxCapabilityGrantFieldLen || !controlCharFree(g.Value) {
 		return fmt.Errorf("value: invalid")
+	}
+	// egress_host values are HOSTS, and they are matched by the proxy's own
+	// entry semantics — so they get the proxy's own shape check, the same one
+	// every allowed_domains ingest runs. Without it "*example.com" stored fine
+	// and then covered "evilexample.com" (entryCoversAny is a bare suffix
+	// test), and a mid-label or URL-shaped value stored as a row that can never
+	// match — a deny that protects nothing. The "*" wildcard is this table's
+	// own spelling for "every value of this kind", not a domain, so it is
+	// exempt.
+	if g.Capability == capEgressHost && g.Value != capWildcard {
+		if err := proxy.ValidDomainEntry(g.Value); err != nil {
+			return fmt.Errorf("value: %w", err)
+		}
 	}
 	if g.SubjectType == types.CapabilitySubjectAll {
 		// "all" names every signed-in human; the migration is explicit that
