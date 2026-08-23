@@ -411,3 +411,29 @@ existing `mount_test.go` shows the pattern, including the remote-daemon note at
   (`owned_by` points at a gone identity). Do we need a reassign-to-operator (`owned_by=''`)
   admin action in M2, or is admin's existing full access (they can already GET/DELETE any
   owned workspace) sufficient for 0.6?
+
+## DECISIONS (owner, 2026-08-23) — authoritative over every assumption above
+
+- **O1 = BOTH.** The shared `WARDYN_MEMBER_WORKSPACE_ROOTS` list ships, AND a per-member
+  mapping ships beside it: `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` (JSON,
+  `{"<principal>": ["/abs/root", ...]}`). When a principal has a map entry it **replaces**
+  the shared list for that member (per-member is the more-restrictive admin control, not a
+  union); absent an entry, the shared list applies. Both surfaces are operator/MDM-set env,
+  never SiteConfig (the 0042 full-replace hazard).
+- **O2 = real OIDC only.** Full org-IdP round-trip, `deriveRole`→member. NO
+  "MDM-asserts-identity" variant profile in 0.6 — drop that fork from M1 scope.
+- **O3 = admin-controlled writable list.** A member may mark their own mount writable ONLY
+  under an admin/MDM-set allowlist `WARDYN_MEMBER_WRITABLE_ROOTS` (same canonicalized-prefix
+  matching as the roots), with an optional carve-out denylist `WARDYN_MEMBER_WRITABLE_DENY`
+  that wins over allow. Default (both unset) = **no writable member mounts at all**.
+  Operators keep the unrestricted `Writable` opt-in they have today.
+- **O4 = WARN** on `/` or `$HOME` roots at boot, matching the `LocalMode`
+  unspecified-bind precedent (`http.go:243-247`). No refuse.
+- **O5 = YES, and no impersonation.** When an admin acts on a member-owned workspace the
+  audit actor is the ADMIN's own identity (never the member's — this already falls out of
+  `auditEvent` using the session principal; M2 adds a guard test pinning it), plus a
+  distinguishing Data field `workspace_owner: "<member principal>"` on every such event so
+  cross-user admin access is queryable (`?actor=<admin>` + workspace_owner ≠ actor).
+- **O6 = reassign action in M2.** `POST /workspaces/{id}/reassign` (admin-only) sets
+  `owned_by=''` (operator-owned); audited `workspace.reassign` with `from_owner` in Data.
+  This is the offboarding path; admin full access alone was judged insufficient.
