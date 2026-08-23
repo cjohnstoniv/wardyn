@@ -355,6 +355,32 @@ const (
 	// the same posture as WARDYN_GIT_HELPER_SECRET: code running AS the agent uid
 	// can read the key during that window. See broker.mintSSHKey + threat model.
 	GrantSSHKey GrantKind = "ssh_key"
+	// GrantEnvSecret places a STORED SECRET's value into the sandbox environment
+	// under an operator-named variable, at dispatch. It is the second DOCUMENTED
+	// EXCEPTION to the no-resident-secret invariant, and the honest reason is
+	// coverage, not impossibility: a PAT-authenticated CLI or REST tool reads a
+	// *_TOKEN env var, and neither the git_pat helper seam (git-only) nor api_key
+	// proxy-side injection (one host, one header) can reach it. See
+	// docs/adoption/corp-network-onboarding-findings.md B1.
+	//
+	// It is UNLIKE every other kind in three ways an operator must weigh:
+	//
+	//   - NOT BROKERED. There is no mint, no approval gate, no TTL and no JTI —
+	//     the value is resolved store->env at dispatch (api.resolveEnvSecretGrants,
+	//     the same seam resolveLLMInspectionSecrets uses) and the broker refuses
+	//     the kind outright (mintKind's ErrUnknownGrantKind).
+	//   - RESIDENT FOR THE WHOLE RUN. Unlike ssh_key's clone window, an env var
+	//     lives as long as the process tree does; anything running as the agent
+	//     uid can read /proc/self/environ.
+	//   - NO REVOCATION. The kill-switch cascade revokes minted credentials; a
+	//     value already in a process env is not one, so killing the run stops the
+	//     process but does not un-disclose the secret.
+	//
+	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
+	// env_secret grant is dropped unless the operator opens
+	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
+	GrantEnvSecret GrantKind = "env_secret"
 )
 
 // SubscriptionOAuthSecret is a SENTINEL secret name (NOT a stored secret). An

@@ -530,7 +530,8 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 // mintKind dispatches to the kind-specific minter. github_token scopes are
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
-// (secret value never returned). cloud_sts is refused (caller already checked).
+// (secret value never returned). cloud_sts is refused (caller already checked),
+// and so is env_secret — see its case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -544,6 +545,15 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		return b.mintSSHKey(ctx, spec)
 	case types.GrantCloudSTS:
 		return Minted{}, ErrRequiresSPIRE
+	case types.GrantEnvSecret:
+		// NOT a brokered kind, refused EXPLICITLY rather than by falling into
+		// the default arm: an env_secret is resolved store->sandbox env at
+		// dispatch (api.resolveEnvSecretGrants) and has no mint, no TTL and no
+		// JTI. Its credential_grants row exists only so the run's grant list is
+		// complete, so a caller POSTing that id at the mint route must get a
+		// clear refusal — not a token, and not a puzzling "unknown kind" for a
+		// kind this binary knows perfectly well.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}

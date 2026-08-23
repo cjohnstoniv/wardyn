@@ -177,7 +177,8 @@ func validateUIAppPath(p string) error {
 // function under the gocyclo gate; behavior is identical).
 func validateEligibleGrant(i int, g types.GrantSpec) error {
 	switch g.Kind {
-	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT, types.GrantSSHKey:
+	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT,
+		types.GrantSSHKey, types.GrantEnvSecret:
 	default:
 		return fmt.Errorf("eligible_grants[%d]: unknown kind %q", i, g.Kind)
 	}
@@ -260,6 +261,31 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		}
 		if _, ok := sshOver443Endpoint(host); !ok {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key host %q is not a supported SSH-over-443 provider (github.com / dev.azure.com)", i, host)
+		}
+	}
+	// An env_secret grant puts a STORED SECRET VALUE in the sandbox env for the
+	// whole run (see GrantEnvSecret). Require a portable, non-WARDYN_ env var
+	// name and a secret_name, and reject a reserved platform-internal secret at
+	// WRITE time — the same fail-closed shape git_pat/ssh_key get, and for the
+	// same reason: this kind returns a raw value into the sandbox, so nothing
+	// downstream can un-disclose a wrong one. The dispatch sink
+	// (resolveEnvSecretGrants) re-checks both, defense in depth.
+	//
+	// requires_approval is deliberately NOT honored for this kind and is refused
+	// rather than silently ignored: there is no mint to gate — resolution
+	// happens at dispatch, before any approval could be raised — so accepting
+	// the flag would advertise a human gate that never fires.
+	if g.Kind == types.GrantEnvSecret {
+		_, secretName, derr := envSecretScopeFields(g.Scope)
+		if derr != nil {
+			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, derr)
+		}
+		if sinkReservedSecret(secretName) {
+			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
+		}
+		if g.RequiresApproval {
+			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
+				"not minted, so there is no mint for an approval to gate", i)
 		}
 	}
 	return nil

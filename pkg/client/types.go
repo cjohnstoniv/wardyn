@@ -219,6 +219,7 @@ const (
 	GrantCloudSTS    = types.GrantCloudSTS
 	GrantAPIKey      = types.GrantAPIKey
 	GrantSSHKey      = types.GrantSSHKey
+	GrantEnvSecret   = types.GrantEnvSecret
 )
 
 // ApprovalKind values.
