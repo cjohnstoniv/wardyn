@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // Pagination defaults for the public list endpoints. defaultListLimit is what an
@@ -268,7 +269,19 @@ func agentImage(agent string, images map[string]string) string {
 	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
 		key = def.ImageKey
 	}
-	return "ghcr.io/cjohnstoniv/agent-" + key + ":latest"
+	return "ghcr.io/cjohnstoniv/agent-" + key + ":" + agentImageTag(version.Version)
+}
+
+// agentImageTag picks the tag for a convention agent image: the daemon's OWN
+// version (images are published per-semver, so a 0.6 daemon pulls a 0.6 agent)
+// rather than a floating ":latest" that a later release re-points under a
+// version-pinned fleet's feet. ":latest" is the last resort only when the build
+// carries no version string.
+func agentImageTag(v string) string {
+	if v == "" {
+		return "latest"
+	}
+	return v
 }
 
 // primaryWorkspacePath returns the run's first local host workspace mount source
