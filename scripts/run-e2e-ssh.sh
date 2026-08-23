@@ -27,11 +27,12 @@
 #     owned) run — and the resulting ssh.auth success row carries
 #     data.override=true (internal/api/sshgateway.go's sshVerifiedAuth)
 #
-# NOTE (F1.2, phase 2 of the 0.6 SSH-override lane): the admin-override block
-# below is AUTHORED and unit-shape-checked (bash -n / shellcheck) in this
-# stage only — it has not been exercised against a live stack yet. The live
-# run (WARDYN_TEST_DOCKER=1 against a real compose stack) happens in the
-# phase-3 integration sweep alongside the rest of this script.
+# NOTE (F1.2, the 0.6 SSH-override lane): the admin-override block below HAS
+# now been exercised against a live stack — 15/15 checks green, both override
+# assertions included, in the 0.6 verification sweep. It needs an image built
+# from THIS tree: the first red run was a stale shared wardyn/wardynd:local
+# that predated migration 0043, so the key registration failed on a missing
+# ssh_public_keys.role column, not on anything this script does.
 #
 # GUARD: Docker-dependent, like the other live lanes. No-op unless
 # WARDYN_TEST_DOCKER=1.
