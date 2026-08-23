@@ -240,7 +240,12 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 		}
 		snap := m.reg.Snapshot(runID)
 		if len(snap) > 0 {
-			masker := secretmask.NewMasker(snap)
+			// D31: ev.Data is JSON, so a registered secret bearing a newline,
+			// quote, or backslash (e.g. a minted ssh_key PEM) lands there in its
+			// JSON-escaped form, which the raw-value masker would miss. Expand the
+			// snapshot with the same escaped variants the recording-upload path
+			// applies to asciicast bodies before building the masker.
+			masker := secretmask.NewMasker(secretmask.JSONEscapedVariants(snap))
 			if len(ev.Data) > 0 {
 				masked := masker.Mask([]byte(ev.Data))
 				ev.Data = json.RawMessage(masked)

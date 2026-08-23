@@ -19,6 +19,7 @@ package secretmask
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"sort"
 	"sync"
@@ -138,6 +139,66 @@ func (r *Registry) RunIDs() []uuid.UUID {
 		out = append(out, id)
 	}
 	return out
+}
+
+// JSONEscapedVariants returns snap plus, for every secret whose JSON-string
+// encoding alters its bytes, that escaped rendering as it appears INSIDE a JSON
+// string value — the form a secret takes once it lands in JSON-encoded output:
+// an audit event's Data field, or an asciicast "o" event body. A raw-value
+// Masker misses those (a MULTI-LINE SSH key's newlines become \n; a quote
+// becomes \"), so without this a special-char secret slips through unmasked on
+// any JSON sink. Both JSON encoders wardyn's outputs use are covered: Go's
+// default json.Marshal — HTML-escaping ON, so <>& become <… — which writes
+// audit ev.Data (via mustJSON), and SetEscapeHTML(false), which is how asciinema
+// (the recorder that writes cast bodies) renders them. A secret with no
+// JSON-special bytes contributes no variant, and duplicates (a secret already in
+// snap, or whose two escapings coincide) are dropped.
+//
+// This is the ONE home for the expansion both the recording-upload path and the
+// audit maskingRecorder need (D31): the audit recorder previously masked the raw
+// snapshot only, so a JSON-escaped secret in ev.Data was left intact.
+//
+// ponytail: O(n²) de-dup over the snapshot, which holds a handful of secrets per
+// run; switch to a set only if a run ever registers thousands.
+func JSONEscapedVariants(snap [][]byte) [][]byte {
+	out := make([][]byte, len(snap), len(snap)*3)
+	copy(out, snap)
+	for _, s := range snap {
+		for _, escapeHTML := range [...]bool{false, true} {
+			if esc, ok := jsonStringEscape(s, escapeHTML); ok && !containsSlice(out, esc) {
+				out = append(out, esc)
+			}
+		}
+	}
+	return out
+}
+
+// jsonStringEscape returns the bytes of s as they appear INSIDE a JSON string
+// (json.Marshal's output minus the surrounding quotes). escapeHTML selects the
+// encoder mode: false matches asciinema's cast bytes (`<`,`>`,`&` left literal),
+// true matches Go's default json.Marshal (used for audit ev.Data). Returns
+// ok=false only when encoding fails or the result is degenerate.
+func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(escapeHTML)
+	if err := enc.Encode(string(s)); err != nil {
+		return nil, false
+	}
+	b := bytes.TrimRight(buf.Bytes(), "\n") // Encoder.Encode appends a '\n'
+	if len(b) < 2 {
+		return nil, false
+	}
+	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
+}
+
+func containsSlice(set [][]byte, v []byte) bool {
+	for _, s := range set {
+		if bytes.Equal(s, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Masker ──────────────────────────────────────────────────────────────────
