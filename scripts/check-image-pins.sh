@@ -33,7 +33,11 @@ while IFS= read -r df; do
   # (FROM <alias>); those refs are not external images and need no digest.
   mapfile -t aliases < <(grep -iE '^FROM .+ [Aa][Ss] ' "$df" | sed -E 's/.* [Aa][Ss] +([^ ]+).*/\1/')
   while IFS= read -r line; do
-    ref=$(echo "$line" | awk '{print $2}')
+    # The ref is the first token after FROM that is not a FLAG: a build stage
+    # may carry `FROM --platform=$BUILDPLATFORM <image>` (cross-compiling Go
+    # stages pin themselves to the builder's arch). Taking $2 blindly read the
+    # flag AS the image and failed every such stage as unpinned.
+    ref=$(echo "$line" | awk '{for (i=2;i<=NF;i++) if ($i !~ /^--/) {print $i; exit}}')
     # `FROM ${VAR}` is BuildKit's global-ARG stage selector (e.g. UI_STAGE picks
     # ui-build vs ui-prebuilt). Resolve it against the Dockerfile's own
     # `ARG VAR=default` so the alias check below sees the stage name. Only the
