@@ -53,11 +53,13 @@ import {
   isRecording,
   isEmptyCapture,
   egressPromotionDiff,
+  lastCleanReplay,
   policyNameFor,
   sessionStage,
   verifyKeyOf,
   type SessionStage,
 } from "./session-helpers";
+import { relativeTime } from "../../../lib/format";
 import { Observations } from "../profile-review";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
@@ -142,6 +144,9 @@ export function RecordPane({
   // Scan-detected commands become copy-paste hints so a clueless operator
   // knows what to run in the session — guidance without a taxonomy.
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
+  // Workstream B3: the workspace-wide roll-up — has the loop closed clean at
+  // least once, for ANY session? Client-derived, no new WorkspaceStatus.
+  const cleanReplay = lastCleanReplay(ws);
 
   return (
     // Every control in this pane (record/replay/approve-host/promote-egress)
@@ -225,6 +230,14 @@ export function RecordPane({
             ))}
           </ul>
         </div>
+      )}
+
+      {cleanReplay && (
+        <p className="text-xs text-muted-foreground" data-testid="record-last-clean-replay">
+          Last clean confined replay:{" "}
+          <span className="font-medium text-foreground">{cleanReplay.label}</span>
+          {cleanReplay.finishedAt && <> · {relativeTime(cleanReplay.finishedAt)}</>}
+        </p>
       )}
 
       {sessions.length > 0 && (

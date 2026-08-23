@@ -214,3 +214,30 @@ export function sessionStage(ws: Workspace, key: string): SessionStage {
   if (open?.status === "record_failed") return "record_failed";
   return "recorded";
 }
+
+// lastCleanReplay is the workspace-wide roll-up (Workstream B3): the latest
+// SETTLED confined entry, across every session, whose server verdict
+// (recordmode.CleanReplay) was clean===true — "the loop has closed, at least
+// once, as of this replay." Picks the latest by finished_at (reconcileRecordRun
+// always stamps it on settle, recorded or record_failed alike); undefined
+// when no session has ever replayed clean. No new WorkspaceStatus — this is
+// purely a client-side fold of record_results, same as recordSessions above.
+export interface CleanReplaySummary {
+  label: string;
+  finishedAt?: string;
+}
+
+export function lastCleanReplay(ws: Workspace): CleanReplaySummary | undefined {
+  const results = ws.record_results ?? {};
+  let bestKey = "";
+  let best: RecordResult | undefined;
+  for (const [key, rr] of Object.entries(results)) {
+    if (!rr.confined || rr.status !== "recorded" || rr.clean !== true) continue;
+    if (!best || (rr.finished_at ?? "") > (best.finished_at ?? "")) {
+      bestKey = key;
+      best = rr;
+    }
+  }
+  if (!best) return undefined;
+  return { label: best.label || bestKey.replace(/^verify:/, ""), finishedAt: best.finished_at };
+}

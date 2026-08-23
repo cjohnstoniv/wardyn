@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,15 @@ func (s *recordStore) MergeWorkspaceRequirements(_ context.Context, _ uuid.UUID,
 	for k, v := range add {
 		s.ws.Requirements[k] = v
 	}
+	return s.ws, nil
+}
+
+// SetWorkspaceRequirements mirrors the real handler's FULL-REPLACEMENT PUT
+// (handleSetWorkspaceRequirements — the requirements-lane "approve" endpoint
+// B2 wired the guided per-host approve button onto), backing
+// TestRecordCrossSession_ApprovalWidensNextConfinedLaunch below.
+func (s *recordStore) SetWorkspaceRequirements(_ context.Context, _ uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
+	s.ws.Requirements = reqs
 	return s.ws, nil
 }
 
@@ -502,6 +512,68 @@ func TestReconcileRecordRun_IgnoresNonRecordAndSupersededRuns(t *testing.T) {
 	srv2.reconcileRecordRun(context.Background(), runID)
 	if fake2.saved != nil {
 		t.Error("superseded run wrote record_results")
+	}
+}
+
+// TestRecordCrossSession_ApprovalWidensNextConfinedLaunch is Workstream B /
+// B4: the A→B loop through the API/reconcile layer, end to end — not just the
+// pure union function alone (already pinned directly on a hand-built
+// types.Workspace by TestConfinedEgressDomains_HonorsFoldedRequiredRows,
+// verify_loop_test.go:113-133; not duplicated here).
+//
+// Session A (an OPEN recording) observes a host via the SAME reconcile path
+// TestReconcileRecordRun_CapturesObservationsAndSecretNames drives. The
+// operator then approves it through the REAL requirements-lane endpoint
+// (PUT /workspaces/{id}/requirements, handleSetWorkspaceRequirements) — the
+// same endpoint B2 wired the guided per-host approve button onto
+// (workspace-detail.tsx's approveHosts -> api.setRequirements). Session B is
+// a LATER, differently-named confined replay: launchRecordRun computes its
+// AllowedDomains as confinedEgressDomains(ws) (workspace_run.go:283) off
+// whatever the workspace row looks like at that moment — so re-deriving that
+// same union from the workspace the PUT left behind is exactly what session
+// B's launch would see, without needing to fake the sandbox dispatch itself.
+func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
+	h := newHarness(t)
+	runIDA, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runIDA, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runIDA, "session-a")},
+		events:          []types.AuditEvent{egressAllowEvent(runIDA, "registry.npmjs.org")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	// Session A: an OPEN recording observes the host, via reconcileRecordRun —
+	// the same capture path every record session settles through.
+	srv.reconcileRecordRun(context.Background(), runIDA)
+	resA := fake.savedResult(t, "session-a")
+	if resA.Status != recordStatusRecorded || len(resA.Observations.Domains) != 1 {
+		t.Fatalf("session A capture = %+v", resA)
+	}
+
+	// Before the operator approves anything, a confined session B's egress
+	// union does not carry the observed-only host.
+	if slices.Contains(confinedEgressDomains(fake.ws), "registry.npmjs.org") {
+		t.Fatal("host must not be in the egress union before it's approved")
+	}
+
+	// The operator approves the observed host through the REAL requirements
+	// PUT — not a hand-built types.Workspace.
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+wsID.String()+"/requirements", adminToken,
+		`{"requirements":{"egress:registry.npmjs.org":{"level":"required","provenance":"operator_set"}}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("requirements PUT: code = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	// Session B: a LATER confined replay's egress union is exactly
+	// confinedEgressDomains(ws) — what launchRecordRun's AllowedDomains uses
+	// (workspace_run.go:283) — computed off the workspace the approval left
+	// behind, re-fetched the way a fresh launch would.
+	got, err := fake.GetWorkspace(context.Background(), wsID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if !slices.Contains(confinedEgressDomains(got), "registry.npmjs.org") {
+		t.Errorf("session B's confined egress union %v missing session A's approved+observed host", confinedEgressDomains(got))
 	}
 }
 

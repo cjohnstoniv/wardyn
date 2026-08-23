@@ -257,6 +257,25 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
   });
 
+  // B4: the K>0 counterpart above — egress_promoted is a boolean the server
+  // flips on ANY promoted>0, so a promote that landed SOME but not all of what
+  // was observed must say so honestly (never a blanket "Promoted"), and the
+  // remainder keeps BOTH its list and its Approve button (the all-done branch
+  // above hides both).
+  it("partial promote: 'Promoted — K still need approval' keeps the remaining host's list and Approve button", async () => {
+    const onPromoteEgress = vi.fn();
+    renderPane(
+      { record_results: { "build-test": recorded({ egress_promoted: true }) }, approved_egress: ["github.com"], profile },
+      { onPromoteEgress },
+    );
+    const review = screen.getByTestId("record-review");
+    expect(within(review).getByText("Promoted — 1 still needs approval")).toBeInTheDocument();
+    expect(within(review).getByTestId("record-new-hosts")).toHaveTextContent("registry.npmjs.org");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(review).getByRole("button", { name: /approve 1 observed host/i }));
+    expect(onPromoteEgress).toHaveBeenCalledWith("build-test");
+  });
+
   // W20-S1-1: an observed-and-allowed host that is platform plumbing (the
   // model-provider harness host every session needs, or the console's own
   // origin) must never be offered for approval, and — since nothing needed
@@ -542,6 +561,105 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     );
     expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeEnabled();
+  });
+});
+
+// B4: the settled-CONFINED chip's four verdict branches (replayedChipMeta) —
+// B2 shipped the logic but pinned none of these; the earlier "confined
+// replay" describe above only ever exercises the caught (deny) case.
+describe("RecordPane — replayed chip verdict (clean/caught)", () => {
+  const learningRR: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+  const confined = (over: Partial<RecordResult> = {}): RecordResult => ({
+    run_id: "vr1",
+    label: "build & test",
+    mode: "interactive",
+    confined: true,
+    status: "recorded",
+    observations: obs(),
+    ...over,
+  });
+
+  it("clean===true renders the green 'Replayed clean' chip", () => {
+    renderPane({ record_results: { "build-test": learningRR, "verify:build-test": confined({ clean: true, caught: 0 }) } });
+    expect(within(screen.getByTestId("session-build-test")).getByText("Replayed clean")).toBeInTheDocument();
+  });
+
+  it("clean===false with caught>0 renders 'Replayed — caught N'", () => {
+    renderPane({ record_results: { "build-test": learningRR, "verify:build-test": confined({ clean: false, caught: 2 }) } });
+    expect(within(screen.getByTestId("session-build-test")).getByText("Replayed — caught 2")).toBeInTheDocument();
+  });
+
+  // clean can fail with ZERO caught hosts too: a live mid-replay approval
+  // release, or a truncated capture — neither is a denied/held host, so the
+  // wording must not claim a count of zero.
+  it("clean===false with caught 0 renders the honest 'Replayed — not clean' wording", () => {
+    renderPane({ record_results: { "build-test": learningRR, "verify:build-test": confined({ clean: false, caught: 0 }) } });
+    expect(within(screen.getByTestId("session-build-test")).getByText("Replayed — not clean")).toBeInTheDocument();
+  });
+
+  it("clean absent (a pre-Workstream-B row) renders the neutral legacy 'Replayed confined' chip", () => {
+    renderPane({ record_results: { "build-test": learningRR, "verify:build-test": confined() } });
+    expect(within(screen.getByTestId("session-build-test")).getByText("Replayed confined")).toBeInTheDocument();
+  });
+});
+
+// B4: the guided selector's per-host default — a footgun the moment ANY
+// caught host is a genuine villain (ep 09's own scenario), so a live-denied
+// host must default OUT of the batch while a merely-held one defaults in.
+describe("RecordPane — guided approve: caught-host checkbox defaults", () => {
+  it("a live-denied host starts unchecked; a merely-held host starts checked", () => {
+    const learningRR: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: obs({
+        domains: [
+          { host: "evil.example.com", allow_count: 0, deny_count: 1, pending_count: 0 }, // denied live
+          { host: "files.pythonhosted.org", allow_count: 0, deny_count: 0, pending_count: 1 }, // held only
+        ],
+      }),
+    };
+    renderPane({ record_results: { "build-test": learningRR, "verify:build-test": confinedRR } });
+    const blocked = screen.getByTestId("verify-session-blocked");
+    expect(within(blocked).getByRole("checkbox", { name: "Approve evil.example.com" })).not.toBeChecked();
+    expect(within(blocked).getByRole("checkbox", { name: "Approve files.pythonhosted.org" })).toBeChecked();
+    // The guided button's own count follows the default selection: the held
+    // host only — bulk-approving the denied one too would be the exact
+    // footgun the default exists to prevent.
+    expect(screen.getByRole("button", { name: /^approve 1 selected host and replay again$/i })).toBeInTheDocument();
+  });
+});
+
+// B4 / root-cause bucket fix (B2): ConfinedReviewCard's caught bucket must
+// subtract the SAME union egressPromotionDiff does (approvedEgressSet: legacy
+// ApprovedEgress + profile.egress_domains + effective egress:<host>
+// requirement rows) — not ws.approved_egress alone, or a host approved
+// through the requirements lane (promote, and the per-host approve since B2)
+// keeps rendering as off-policy under a button that would fold in nothing new.
+describe("RecordPane — off-policy bucket subtracts the requirements lane too", () => {
+  it("a host approved via effective_requirements (not legacy approved_egress) no longer buckets as blocked", () => {
+    const learningRR: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: obs({
+        domains: [{ host: "registry.npmjs.org", allow_count: 0, deny_count: 1, pending_count: 0 }],
+      }),
+    };
+    renderPane({
+      record_results: { "build-test": learningRR, "verify:build-test": confinedRR },
+      effective_requirements: { "egress:registry.npmjs.org": { level: "required", provenance: "operator_set" } },
+    });
+    // The chip still reports the replay's own history (caught it), but the
+    // requirements-lane approval already covers the host, so the bucket that
+    // drives the guided "approve + replay" action must not offer it again.
+    expect(screen.queryByTestId("verify-session-blocked")).not.toBeInTheDocument();
   });
 });
 

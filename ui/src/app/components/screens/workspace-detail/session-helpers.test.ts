@@ -18,6 +18,7 @@ import {
   newEgressHosts,
   egressPromotionDiff,
   isEmptyCapture,
+  lastCleanReplay,
   sessionStage,
   verifyKeyOf,
   policyNameFor,
@@ -296,6 +297,61 @@ describe("record helpers — read the server-authored record fields", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+// B3: the workspace-wide roll-up — the latest settled confined entry whose
+// server verdict was clean===true, across every session.
+describe("lastCleanReplay — the workspace-wide roll-up", () => {
+  it("undefined when no session has ever replayed clean", () => {
+    expect(lastCleanReplay(ws())).toBeUndefined();
+    const w = ws({
+      record_results: {
+        s: { run_id: "r", mode: "interactive", status: "recorded" }, // open — never eligible
+        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", clean: false, caught: 1 },
+      },
+    });
+    expect(lastCleanReplay(w)).toBeUndefined();
+  });
+
+  it("picks the LATEST clean confined entry by finished_at, across different sessions", () => {
+    const w = ws({
+      record_results: {
+        a: { run_id: "ra", mode: "interactive", status: "recorded" },
+        "verify:a": {
+          run_id: "ra2", label: "build & test", mode: "interactive", confined: true, status: "recorded",
+          clean: true, caught: 0, finished_at: "2026-01-01T00:00:00Z",
+        },
+        b: { run_id: "rb", mode: "interactive", status: "recorded" },
+        "verify:b": {
+          run_id: "rb2", label: "agent loop", mode: "interactive", confined: true, status: "recorded",
+          clean: true, caught: 0, finished_at: "2026-01-03T00:00:00Z", // latest
+        },
+      },
+    });
+    expect(lastCleanReplay(w)).toEqual({ label: "agent loop", finishedAt: "2026-01-03T00:00:00Z" });
+  });
+
+  it("excludes a non-confined (open) entry, a not-clean entry, and a still-in-flight entry", () => {
+    const w = ws({
+      record_results: {
+        s: { run_id: "r1", mode: "interactive", status: "recorded", clean: true, caught: 0 }, // open: clean is meaningless here
+        t: { run_id: "r2", mode: "interactive", status: "recorded" },
+        "verify:t": { run_id: "r3", mode: "interactive", confined: true, status: "recorded", clean: false, caught: 0 },
+        u: { run_id: "r4", mode: "interactive", status: "recorded" },
+        "verify:u": { run_id: "r5", mode: "interactive", confined: true, status: "recording", clean: true, caught: 0 },
+      },
+    });
+    expect(lastCleanReplay(w)).toBeUndefined();
+  });
+
+  it("falls back to the key (verify: prefix stripped) when the entry carries no label", () => {
+    const w = ws({
+      record_results: {
+        "verify:build-test": { run_id: "r", mode: "interactive", confined: true, status: "recorded", clean: true, caught: 0 },
+      },
+    });
+    expect(lastCleanReplay(w)).toEqual({ label: "build-test", finishedAt: undefined });
   });
 });
 
