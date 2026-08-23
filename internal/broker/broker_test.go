@@ -49,6 +49,10 @@ type fakeApproval struct {
 	state     types.ApprovalState
 	mintedJTI string
 	reason    string
+	// decScope mirrors approvals.decision_scope AS STORED. "" is the shipped
+	// value for every credential approval (the column's NOT NULL DEFAULT), which
+	// is exactly the value the lease must NOT treat as run-scoped.
+	decScope types.ApprovalScope
 }
 
 // fakeDB models just enough of the grants/approvals tables for the broker's
@@ -71,6 +75,10 @@ type auditRow struct {
 	action, actor, outcome string
 	actorType              types.ActorType
 	preCommit              bool
+	// data is the marshalled Data column — the lease tests read the lease
+	// marker off it, so the fake stores what the statement actually bound
+	// rather than a re-derived guess.
+	data string
 }
 
 // mintAudits returns the credential.mint rows written on the tx.
@@ -224,6 +232,7 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 			action:    args[5].(string),
 			outcome:   args[7].(string),
 			preCommit: !tx.committed,
+			data:      string(args[9].([]byte)),
 		})
 		return 1, nil
 	}
@@ -248,7 +257,8 @@ type grantJoinRow struct {
 }
 
 // Scan mirrors selectGrantApprovalForUpdate's dest order:
-// g.id, g.run_id, g.spec, a.id, a.run_id, a.state, a.requested_scope, a.minted_jti
+// g.id, g.run_id, g.spec, a.id, a.run_id, a.state, a.requested_scope,
+// a.minted_jti, a.decision_scope
 func (r *grantJoinRow) Scan(dest ...any) error {
 	*dest[0].(*uuid.UUID) = r.grantID
 	*dest[1].(*uuid.UUID) = r.g.runID
@@ -262,6 +272,8 @@ func (r *grantJoinRow) Scan(dest ...any) error {
 		*dest[6].(*[]byte) = []byte(r.ap.scope)
 		mj := r.ap.mintedJTI
 		*dest[7].(**string) = &mj
+		ds := string(r.ap.decScope)
+		*dest[8].(**string) = &ds
 	}
 	return nil
 }

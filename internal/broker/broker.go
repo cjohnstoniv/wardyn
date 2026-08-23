@@ -306,6 +306,9 @@ type grantApprovalRow struct {
 	requestedScope json.RawMessage
 	mintedJTI      string
 	hasApproval    bool
+	// decisionScope is approvals.decision_scope AS STORED — deliberately RAW,
+	// never types.ApprovalScope.Normalize()d. See leaseCoversRemint.
+	decisionScope types.ApprovalScope
 }
 
 // MintForGrant is the public entry point. It verifies the caller's run owns the
@@ -398,9 +401,19 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		return Minted{}, ErrRequiresSPIRE
 	}
 
-	// Single-use guard: a written minted_jti blocks re-mint.
+	// Single-use guard: a written minted_jti blocks re-mint — UNLESS the human
+	// scoped their decision to the whole run, which is the B2 lease (see
+	// leaseCoversRemint). `leased` rides the rest of this function: it suppresses
+	// the minted_jti burn below (already burnt, and the conditional UPDATE would
+	// return 0 rows and fail the mint closed) and it is stamped on the audit
+	// event, because a lease widens what ONE approval authorizes and the stream
+	// has to say which mints were the human's and which were the lease's.
+	leased := false
 	if row.mintedJTI != "" {
-		return Minted{}, ErrAlreadyMinted
+		if !leaseCoversRemint(row) {
+			return Minted{}, ErrAlreadyMinted
+		}
+		leased = true
 	}
 
 	// Chokepoint self-enforcement: an approval-required grant must carry an
@@ -467,7 +480,14 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// the deferred Rollback discards the tx, so the minted token above is never
 	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
 	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
-	if row.hasApproval {
+	//
+	// SKIPPED UNDER A LEASE, and that is the lease: the burn already happened on
+	// the first mint, so this conditional UPDATE would match 0 rows and fail a
+	// re-mint the human explicitly authorized. Nothing else is skipped — the
+	// approval state, run ownership, no-widening and kill-switch checks above all
+	// still ran on this transaction, so a revoked run's lease is dead the moment
+	// the revocation commits.
+	if row.hasApproval && !leased {
 		n, err := tx.Exec(ctx,
 			`UPDATE approvals SET minted_jti = $1 WHERE id = $2 AND minted_jti = ''`,
 			minted.JTI, row.approvalID)
@@ -492,6 +512,14 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// cannot be written, roll the whole mint back rather than hand out an
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	if leased {
+		// A lease widens what ONE human decision authorizes, so the stream must
+		// say which mints the human made and which the lease did — B2's own
+		// condition for the feature. Stamped on the event rather than raised as a
+		// separate action so an existing credential.mint consumer sees it without
+		// subscribing to anything new.
+		mintEv.Data = withLeaseMarker(mintEv.Data, row.decisionScope)
+	}
 	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
 		return Minted{}, err
 	}
@@ -527,10 +555,71 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	return minted, nil
 }
 
+// leaseCoversRemint reports whether an ALREADY-MINTED approval still authorizes
+// another mint for this grant — the per-run credential lease B2 asks for
+// (docs/adoption/corp-network-onboarding-findings.md). Without it a git_pat run
+// has no middle ground: requires_approval=true raises a fresh approval on every
+// single git operation (pull then push = two clicks), and requires_approval=false
+// auto-mints a real personal credential silently for the whole session.
+//
+// Four conditions, all required, and each is doing work:
+//
+//   - git_pat ONLY. It is the kind with a STANDING consumer — git's credential
+//     helper is invoked on every operation — so it is the kind whose single-use
+//     guard fights its own delivery mechanism. github_token is brokered
+//     proxy-side and never re-minted from inside a sandbox; ssh_key is materialized
+//     once and wiped; api_key never leaves the broker. Widening those would be
+//     unasked-for blast radius, so this stays one kind wide until another one
+//     demonstrates the same friction.
+//   - The decision is APPROVED. A denied/expired approval leases nothing.
+//   - decisionScope is EXACTLY types.ScopeRun, compared RAW — never through
+//     types.ApprovalScope.Normalize(). This is the whole hazard: Normalize()
+//     maps the empty string to ScopeRun, and EVERY credential approval ever
+//     decided carries an EMPTY decision_scope (the column's NOT NULL DEFAULT,
+//     and
+//     until this change api.decide 400'd any explicit scope on a credential
+//     approval). Comparing normalized would therefore convert every legacy
+//     approval in every deployment into a standing re-mint lease on upgrade —
+//     silently deleting the single-use guarantee those decisions were made
+//     under. Raw means a lease exists only where a human, on this build, chose
+//     "run". (TestLease_NormalizedLegacyDecisionIsNotALease is the regression.)
+//   - The approval's requested_scope still deep-equals the grant's scope. The
+//     lease is per-run PER SCOPE: what the human saw is what it covers, so a
+//     grant whose scope moved after the decision falls back to single-use rather
+//     than riding an approval for a different (host, secret) pairing. mint's own
+//     no-widening check re-tests this a few lines later; it is repeated here so
+//     the lease decision is readable on its own rather than by trusting what
+//     comes after it.
+func leaseCoversRemint(row grantApprovalRow) bool {
+	return row.grantSpec.Kind == types.GrantGitPAT &&
+		row.hasApproval &&
+		row.approvalState == types.ApprovalApproved &&
+		row.decisionScope == types.ScopeRun &&
+		jsonScopeEqual(row.requestedScope, row.grantSpec.Scope)
+}
+
+// withLeaseMarker adds the lease fields to a credential.mint event's Data. A
+// decode failure returns data unchanged rather than dropping the event: an
+// unmarked lease mint in the stream is bad, an absent one is worse.
+func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMessage {
+	var d map[string]any
+	if err := json.Unmarshal(data, &d); err != nil {
+		return data
+	}
+	d["lease"] = true
+	d["decision_scope"] = string(scope)
+	out, err := json.Marshal(d)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
 // mintKind dispatches to the kind-specific minter. github_token scopes are
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
-// (secret value never returned). cloud_sts is refused (caller already checked).
+// (secret value never returned). cloud_sts is refused (caller already checked),
+// and so is env_secret — see its case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -544,6 +633,15 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		return b.mintSSHKey(ctx, spec)
 	case types.GrantCloudSTS:
 		return Minted{}, ErrRequiresSPIRE
+	case types.GrantEnvSecret:
+		// NOT a brokered kind, refused EXPLICITLY rather than by falling into
+		// the default arm: an env_secret is resolved store->sandbox env at
+		// dispatch (api.resolveEnvSecretGrants) and has no mint, no TTL and no
+		// JTI. Its credential_grants row exists only so the run's grant list is
+		// complete, so a caller POSTing that id at the mint route must get a
+		// clear refusal — not a token, and not a puzzling "unknown kind" for a
+		// kind this binary knows perfectly well.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}

@@ -638,3 +638,51 @@ func TestCreateRun_StoredPolicyNoSecretStoreRejected(t *testing.T) {
 		t.Fatalf("stored policy, no secret store: code = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// TestStoredSecretGrantPairing_UnknownKindIsRefused is the closed-switch
+// regression. storedSecretGrantPairing's default arm used to return
+// covered=false — indistinguishable from "github_token names no stored secret"
+// — so BOTH member gates waved an unrecognized kind straight through:
+// filterMemberGrants kept it unclamped by the operator's eligible-grant
+// pairing, and narrowMemberInlinePolicy kept it unchecked against capSecret.
+// Any grant kind added to types.GrantKind and wired to a stored secret was
+// therefore member-authorable until somebody remembered to extend the switch.
+// It must now be REFUSED (covered=true WITH an error), which filterMemberGrants
+// renders as a 422 and narrowMemberInlinePolicy as a drop.
+func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
+	unknown := types.GrantSpec{
+		Kind:  types.GrantKind("some_future_kind"),
+		Scope: mustJSON(map[string]any{"secret_name": "prod-db-password"}),
+	}
+
+	_, _, _, covered, err := storedSecretGrantPairing(unknown)
+	if !covered || err == nil {
+		t.Fatalf("unknown kind: covered=%v err=%v, want (true, error) — the default arm must refuse, not fall through", covered, err)
+	}
+
+	// Gate 1: the whole spec is rejected 422, never silently narrowed.
+	h := newHarness(t)
+	kept, _, code, ferr := h.srv.filterMemberGrants([]types.GrantSpec{unknown})
+	if code != http.StatusUnprocessableEntity || ferr == nil || len(kept) != 0 {
+		t.Fatalf("filterMemberGrants(unknown kind): kept=%d code=%d err=%v, want (0, 422, error)", len(kept), code, ferr)
+	}
+
+	// Gate 2 (defense in depth — gate 1 runs first in the only shipped order):
+	// dropped rather than kept, so the ordering is not the only thing holding.
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{unknown}}
+	warns, drops, nerr := h.srv.narrowMemberInlinePolicy(context.Background(), &spec)
+	if nerr != nil {
+		t.Fatalf("narrowMemberInlinePolicy: unexpected error %v", nerr)
+	}
+	if len(spec.EligibleGrants) != 0 || len(warns) != 1 || len(drops) != 1 {
+		t.Fatalf("narrowMemberInlinePolicy(unknown kind): kept=%d warns=%d drops=%d, want (0,1,1)",
+			len(spec.EligibleGrants), len(warns), len(drops))
+	}
+
+	// The two kinds that genuinely name no stored secret stay uncovered.
+	for _, k := range []types.GrantKind{types.GrantGitHubToken, types.GrantCloudSTS} {
+		if _, _, _, covered, err := storedSecretGrantPairing(types.GrantSpec{Kind: k}); covered || err != nil {
+			t.Fatalf("%s: covered=%v err=%v, want (false, nil)", k, covered, err)
+		}
+	}
+}

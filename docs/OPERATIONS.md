@@ -281,6 +281,64 @@ self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
 bound, both under the same authority the operator ceiling is meant to
 constrain.
 
+**Optional: require a SECOND human on egress decisions.** Set
+`WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain`
+approval may not be the human who created the run — four-eyes, on the one
+decision that widens what a running agent can reach. Off by default, because
+turning it on unprompted would deadlock every single-operator deployment. Both
+verbs are covered: a self-*deny* is refused too, since a deny is how an operator
+closes an approval they would rather nobody saw. A refusal is a `403` recorded as
+`authz.denied` with `reason: second_human_required`, and it lands **before** the
+decision is written, so a refused decision leaves the approval `PENDING` for
+someone else.
+
+**The `admin-token` principal BYPASSES it, and you should plan around that
+rather than be surprised by it.** A bare `WARDYN_ADMIN_TOKEN` caller is
+attributed `system`/`admin-token` precisely because a shared token carries no
+per-human identity — there is no second human to compare it against, and
+`X-Wardyn-Principal` is ignored off local mode specifically so a token bearer
+cannot forge one. Refusing the token instead would lock you out of your own
+approval queue the moment SSO breaks, which is when you need it most, so the
+bypass is the deliberate break-glass. It is not silent: every one writes an
+`approval.second_human.bypass` audit event beside the `actor_type=system`
+`approval.decide`. **For this gate to actually bind, treat the admin token as a
+break-glass credential** — configure SSO, and hold the token out of band.
+
+Local mode is the same story with a different label: the injected operator IS a
+verified human there, so `local:alice` deciding `local:alice`'s own run is
+refused like any other self-decision. On a single-dev machine this switch is
+simply not one to turn on. A run with an empty `created_by` (system-created
+follow-on runs) has no human creator to be the same as, so the rule cannot apply
+and the decision proceeds. The switch is scoped to `egress_domain` only —
+`credential` and `tool_call` approvals are already admin-only regardless of
+ownership.
+
+**A `credential` decision carries one scope: `run` — the per-run credential
+lease.** Every other scope on a `credential` approval is a `400`, and so is any
+scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
+credential helper git invokes on every operation, so single-use forced the
+operator to choose between a click per git op and standing auto-issue of a real
+personal credential (`docs/adoption/corp-network-onboarding-findings.md` B2).
+Approving with `decision_scope=run` (`wardyn approve <id> --scope run`) makes
+that one decision re-mintable for the rest of the run.
+
+Three things bound it. It applies to **`git_pat` only** — `github_token` is
+brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never
+leaves the broker, so none of them has the standing-consumer problem, and
+`broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped
+decision. It is **per scope**: if the grant's scope no longer matches what the
+human approved, the lease does not carry over. And it is **killed by
+revocation** — a leased re-mint still runs the whole mint transaction, so the
+kill-switch cascade ends it the moment the revocation commits.
+
+The audit says which mints were the human's and which were the lease's:
+`credential.mint` carries `lease: true` plus the raw `decision_scope`. The
+comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d — an
+empty `decision_scope` normalizes to `run`, and every credential approval
+decided before this feature carries an empty one, so a normalized comparison
+would have turned every legacy approval in the deployment into a standing lease
+on upgrade. Nothing you approved before v0.6 leases anything.
+
 **An `egress_domain` decision's *scope* adds a second, narrower gate on top
 of the kind check above — and one of the four scopes is gated on ROLE, not
 ownership.** A member who owns the run may still choose `once`, `run`, or
@@ -537,6 +595,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | `403`, or a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | drop |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | drop |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | `403` |
 
 The three drop rows are why `POST /runs` mostly *narrows* rather than refuses:
 a member whose whole allowlist is ungranted gets a run with no member-authored

@@ -149,10 +149,11 @@ transport reports model access as provisioned; and the Review banner defers to t
 of guessing locally. When the preflight is absent or still loading, the local guess still applies, so
 a genuine gap is never hidden.
 
-### B1 / B2 / B3 — open, need a maintainer design call
+### B1 / B2 — shipped in v0.6; B3 still open
 
-Each is confirmed real. None is shipped, because each widens what a credential or an approval
-authorizes, and that is a design decision rather than a patch.
+Each is confirmed real. B1 and B2 are now shipped (each widened what a credential or an approval
+authorizes, so each landed with the bound that widening needs stated in the code and the threat
+model, not just the feature). B3 still needs a maintainer design call.
 
 - **B1 — no grant delivers a secret as a sandbox environment variable.** The grant kinds are
   `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`. `git_pat` wires git's credential
@@ -161,9 +162,16 @@ authorizes, and that is a design decision rather than a patch.
   brokered at all**. Workaround today: log in inside the sandbox terminal on an *interactive* run and
   paste the token on stdin — fine interactively, useless for autonomous runs.
   *Ask:* an `env_secret` grant kind (secret name → sandbox env var; resident, masked, run-scoped).
-  *Implementation note for whoever takes it:* the closest precedent is **not** `ssh_key` — it is the
-  resident Bedrock SigV4 path, which already injects secret material at dispatch with no broker mint,
-  no proxy route, and no agent-image change. Note that masking is **not** automatic; it is per-call-site.
+  **SHIPPED (v0.6).** `types.GrantEnvSecret`, scope `{"name":"MY_TOKEN","secret_name":"…"}`, resolved
+  store→sandbox env at dispatch by `api.resolveEnvSecretGrants` — the note below was right, the
+  precedent used is `resolveLLMInspectionSecrets` (same dispatch-time seam: no broker mint, no proxy
+  route, no agent-image change), and masking is wired explicitly at that call site because it is not
+  automatic. It is the weakest-bounded kind Wardyn has and says so everywhere it appears: resident for
+  the whole run, no mint/TTL/JTI (the broker refuses the kind), nothing for the kill-switch to revoke.
+  Bounded by: a `[A-Z_][A-Z0-9_]*`, non-`WARDYN_` variable name; reserved secret names refused at write
+  and at the sink; no overwriting a platform-authored variable; `requires_approval` refused rather than
+  silently ignored; and **admin-only unless `WARDYN_ALLOW_MEMBER_ENV_SECRET`**. See
+  `docs/POLICIES.md` and `threatmodel/THREAT-MODEL.md` §5.1a.
 
 - **B2 — `git_pat` approval is single-use, so there is no "approve once per sandbox".** `git_pat`
   installs a *standing* credential helper that git invokes on *every* operation, but approval is
@@ -174,6 +182,16 @@ authorizes, and that is a design decision rather than a patch.
   *Ask:* a per-run credential **lease** — approve once, cache for the run's lifetime (or a TTL),
   reuse across git ops in that run, revoke at run end. A lease widens what one approval authorizes,
   so the audit event must say so explicitly.
+  **SHIPPED (v0.6), opt-in per decision.** Approve with `decision_scope=run`
+  (`wardyn approve <id> --scope run`) and `broker.leaseCoversRemint` lets that one decision re-mint
+  the grant for the rest of the run; every other scope, and every legacy decision, stays single-use.
+  "Revoke at run end" is real rather than aspirational: a leased re-mint still runs the whole mint
+  transaction, so `runRevoked` kills it the moment the kill-switch cascade commits. The audit event
+  does say so explicitly — `credential.mint` carries `lease: true` plus the raw `decision_scope`.
+  **The comparison is RAW, never `ApprovalScope.Normalize()`d**, and that is the load-bearing detail:
+  `Normalize()` maps the empty string to `run`, and every credential approval ever decided carries an
+  empty `decision_scope`, so a normalized comparison would have converted every legacy approval in
+  every deployment into a standing lease on upgrade.
 
 - **B3 — the `ssh_key` grant is clone-only and doesn't fit a bind-mounted workspace.** The key is
   minted at *clone* time, used, then wiped (git has no SSH credential-helper seam, so it must be
