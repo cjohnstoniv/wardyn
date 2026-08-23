@@ -342,8 +342,8 @@ const (
 	// harness.go's reasonXAzureHarness). A stored row of the old kind now fails
 	// closed at validateIntegrationWrite like any other unknown kind, and an
 	// azure-openai-key secret is left untouched but inert.
-	IntegrationKindGitHubApp             = "github_app"
-	IntegrationKindGitHost               = "git_host"
+	IntegrationKindGitHubApp = "github_app"
+	IntegrationKindGitHost   = "git_host"
 )
 
 // ClosedIntegrationKinds is the closed kind set — the kinds with bespoke
