@@ -193,6 +193,15 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 							found = true
 							break
 						}
+						// A file-path anchor (`docs/ENV.md`, `internal/foo/bar.go`)
+						// is not a dotted symbol -- its "tail after the last dot" is
+						// just an extension ("md", "go"), which matches almost any
+						// window and would let a merge-shifted citation on a
+						// file-path anchor evade the guard entirely. Skip the
+						// bare-tail fallback for anything that looks like a path.
+						if strings.Contains(a, "/") || strings.HasSuffix(a, ".go") || strings.HasSuffix(a, ".md") {
+							continue
+						}
 						if idx := strings.LastIndex(a, "."); idx >= 0 && strings.Contains(window, a[idx+1:]) {
 							found = true
 							break
