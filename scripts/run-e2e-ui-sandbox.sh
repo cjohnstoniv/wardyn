@@ -61,6 +61,12 @@ REGISTRY_PORT=15011
 # on a shared daemon the mutable wardyn/*:local tag can be re-pointed by another
 # job between the image check and the run actually launching.
 AGENT_IMAGE="wardynv06uisbx/agent-vscode:pinned"
+# Same reason, for the two images the stack itself runs: reusing wardyn/*:local
+# meant this lane graded whatever another job on the daemon last built.
+# docker-compose.yaml takes these overrides and defaults to the :local names,
+# so no other caller changes.
+WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 # The app the relay serves. Port 8080 is what deploy/images/vscode/wardyn-ui-vscode
 # binds; the echo app below has no launcher on purpose (this script starts it),
 # which is also what proves the "already listening -> nothing was started" path.
@@ -75,6 +81,7 @@ compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
     WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_PORT}" \
+    WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_UI_SANDBOX_LISTEN=":8081" WARDYN_UI_SANDBOX_ADVERTISE="http://127.0.0.1:${UI_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
@@ -108,7 +115,10 @@ trap teardown EXIT
 compose down --volumes >/dev/null 2>&1 || true
 
 # ── build what we need ───────────────────────────────────────────────────────
-docker image inspect wardyn/wardynd:local >/dev/null 2>&1 || make -s compose-build
+# wardynd/wardyn-proxy: always built, to this project's OWN tags — never the
+# shared, mutable wardyn/*:local. The layer cache makes the rebuild near-free.
+compose build wardynd >/dev/null || die "build ${WARDYND_IMAGE} failed"
+compose --profile build-only build proxy-image >/dev/null || die "build ${PROXY_IMAGE} failed"
 if ! docker image inspect wardyn/agent-vscode:local >/dev/null 2>&1; then
   log "wardyn/agent-vscode:local absent; building it (make agent-image-vscode, +~300MB)"
   make agent-image-vscode || die "make agent-image-vscode failed"
@@ -130,7 +140,7 @@ for _ in $(seq 1 10); do
 done
 if [[ "${UI_ENABLED}" != "true" ]]; then
   compose logs wardynd | tail -80
-  die "ui-sandbox gateway not enabled per /healthz (WARDYN_UI_SANDBOX_LISTEN wiring broken, or wardyn/wardynd:local on this daemon predates the gateway) -- last /healthz body: ${HEALTHZ_RAW}"
+  die "ui-sandbox gateway not enabled per /healthz (WARDYN_UI_SANDBOX_LISTEN wiring broken, or ${WARDYND_IMAGE} was built from a tree without it) -- last /healthz body: ${HEALTHZ_RAW}"
 fi
 pass "stack up, healthy, /healthz reports ui_sandbox.enabled=true"
 

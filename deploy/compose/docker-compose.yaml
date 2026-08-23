@@ -147,7 +147,11 @@ services:
         # it can extract and run that binary for host-side proxy detection.
         HOST_GOOS: "${WARDYN_HOST_GOOS:-linux}"
         HOST_GOARCH: "${WARDYN_HOST_GOARCH:-amd64}"
-    image: wardyn/wardynd:local
+    # Overridable so a job that must NOT share the mutable :local tag with a
+    # concurrent build on the same daemon can build+run its own (scripts/
+    # run-e2e-ssh.sh, run-e2e-ui-sandbox.sh). Default unchanged for every
+    # other caller.
+    image: ${WARDYN_WARDYND_IMAGE:-wardyn/wardynd:local}
     container_name: ${WARDYN_NS:-wardyn}-api
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
@@ -219,7 +223,7 @@ services:
       # directory plainly exists on the host. Empty = no root mounted (the
       # default), which the error message also states rather than implies.
       WARDYN_WORKSPACES_ROOT: "${WARDYN_WORKSPACES_ROOT:-}"
-      WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:local"
+      WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
@@ -570,7 +574,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.proxy
-    image: wardyn/wardyn-proxy:local
+    # Same override knob as wardynd's, and the same variable wardynd reads
+    # above — building this stanza and running the stack agree by construction.
+    image: ${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}
     # Never started; build-only. `command: true` would still require an entry,
     # so we park it under a profile that the demo never activates.
     profiles: ["build-only"]

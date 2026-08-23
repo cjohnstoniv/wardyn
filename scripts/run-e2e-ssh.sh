@@ -76,15 +76,22 @@ REGISTRY_PORT=15010
 # script: the shared tag briefly resolved to a pre-SSH-gateway image with
 # neither socat nor sftp-server, failing every sftp/-L check with a clean but
 # confusing "executable file not found in $PATH"). A repository name nobody
-# else has any reason to write to removes the collision entirely; wardynd and
-# wardyn-proxy stay on the shared tag (docker-compose.yaml hardcodes
-# `image: wardyn/wardynd:local`, no override knob) and accept the residual risk.
+# else has any reason to write to removes the collision entirely. wardynd and
+# wardyn-proxy now get the same treatment: reusing the shared :local tag meant
+# this lane graded whatever another job last built (observed live: 12 checks
+# passed against a pre-0043 binary, then the override assertions died on a
+# missing `role` column). docker-compose.yaml takes WARDYN_WARDYND_IMAGE /
+# WARDYN_PROXY_IMAGE overrides; both default to the :local names, so no other
+# caller changes.
 AGENT_IMAGE="wardynv05e2e/agent-claude-code:pinned"
+WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
     WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" \
+    WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_SSH_LISTEN=":2222" WARDYN_SSH_ADVERTISE="127.0.0.1:${SSH_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
@@ -123,14 +130,11 @@ trap teardown EXIT
 compose down --volumes >/dev/null 2>&1 || true
 
 # ── build what we need ────────────────────────────────────────────────────────
-# wardynd/wardyn-proxy: reuse the shared make target, skip if present. NOTE for
-# a shared-daemon box (wardyn_pick_docker_host above may have pointed this at a
-# native dockerd distinct from Docker Desktop's default socket): this trusts
-# the wardyn/*:local TAG, which is per-daemon and mutable — a concurrent build
-# on the SAME daemon (another agent/job) can silently replace its content. If
-# the ssh-enabled check below ever dies unexpectedly, force a rebuild first:
-#   docker compose -f deploy/compose/docker-compose.yaml build wardynd
-docker image inspect wardyn/wardynd:local >/dev/null 2>&1 || make -s compose-build
+# wardynd/wardyn-proxy: always built, to this project's OWN tags — never the
+# shared, mutable wardyn/*:local, which on a shared daemon holds whatever
+# another job last built. The layer cache makes the rebuild near-free.
+compose build wardynd >/dev/null || die "build ${WARDYND_IMAGE} failed"
+compose --profile build-only build proxy-image >/dev/null || die "build ${PROXY_IMAGE} failed"
 # agent-claude-code: build straight to AGENT_IMAGE's project-unique repo (see
 # its definition above) instead of make agent-images-core's shared :local tag.
 docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
@@ -152,7 +156,7 @@ for _ in $(seq 1 10); do
 done
 if [[ "${SSH_ENABLED}" != "true" ]]; then
   compose logs wardynd | tail -80
-  die "ssh gateway not enabled per /healthz (WARDYN_SSH_LISTEN wiring broken, OR wardyn/wardynd:local on this daemon predates the SSH gateway/is stale -- see the NOTE above) -- last /healthz body: ${HEALTHZ_RAW}"
+  die "ssh gateway not enabled per /healthz (WARDYN_SSH_LISTEN wiring broken, OR ${WARDYND_IMAGE} was built from a tree without it) -- last /healthz body: ${HEALTHZ_RAW}"
 fi
 pass "stack up, healthy, ssh gateway enabled (${BASE}, /healthz reports ssh.enabled=true)"
 
