@@ -17,8 +17,9 @@ fix is released.
 
 > Email channel `security@<project-domain>` is reserved and will be published once
 > the project name and domain are finalized (the name "Wardyn" is a working
-> placeholder pending trademark search). Until then, use the GitHub private
-> advisory flow above.
+> placeholder pending trademark search). Until then, the **GitHub private
+> advisory flow above is the canonical reporting channel** — no email address is
+> live yet.
 
 In your report, please include:
 
@@ -60,7 +61,7 @@ disclose them — but a *more severe than documented* instance is in scope):
 - The model-API channel as a data-exit path (logged, not blocked, by design).
 - Domain-fronting / DNS-tunnel exfil on hosts that are not TLS-intercepted —
   interception ships only for operator-listed MITM-eligible hosts (opt-in, off by
-  default); arbitrary-domain interception is the v0.5 target.
+  default); arbitrary-domain interception is planned for v1.0 (see `ROADMAP.md`).
 - Kernel 0-day on a CC1 (shared-kernel runc) host; gVisor-sentry 0-day on CC2.
 - The `ld-linux`/`mmap` bypass of in-guest exec hooks (detection, not prevention).
 - The bounded minted-token usage window before kill-switch revocation.
