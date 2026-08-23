@@ -178,16 +178,15 @@ on one of those, add
 different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 `/examples/policies/` (`demo.json`, ...).
 
-**Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
-targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
-`image.tag` resolves to `.Chart.AppVersion`, now `0.6.0`, so a stock install
-needs nothing here. It still matters if you **pin an image at or below
-`0.5.0`** — those predate `/readyz`, so the probe 404s forever, the pod never
-becomes Ready, and the `rollout status` below hangs with no other symptom
-(nothing crashes, nothing logs an error). On any such image, pin the probe
-back: `--set readinessProbe.path=/healthz`, accepting that version's ceiling —
-a dead Postgres reads healthy again, which is exactly what `/readyz` exists to
-fix. CI never sees this: `helm-install-test` and the kind quickstart both build
+**`/readyz` is a 0.6-and-later endpoint, and the chart's default image is not
+yet.** The readiness probe targets `/readyz`; images at or below `0.5.0` — which
+is what an empty `image.tag` resolves to today, via `.Chart.AppVersion` — do not
+serve it, so the probe 404s forever, the pod never becomes Ready, and the
+`rollout status` below hangs with no other symptom (nothing crashes, nothing
+logs an error). On any such image, pin the probe back:
+`--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead
+Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
+CI never sees this: `helm-install-test` and the kind quickstart both build
 `wardynd` from source, so their image always has `/readyz`.
 
 The chart **refuses to render** without an admin token or an OIDC issuer: an
@@ -568,9 +567,8 @@ See `values.yaml` for all options. Key settings:
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
   acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
 - `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
-  Postgres — liveness and startup stay on `/healthz` regardless). The chart's
-  own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
-  you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
+  Postgres — liveness and startup stay on `/healthz` regardless). **Only override
+  this for an image at or below `0.5.0`**, which serves no `/readyz`: see
   [Installation](#installation) for what that failure looks like.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
