@@ -62,6 +62,31 @@ func TestBuildBaseSandboxEnv_GitPromptsDisabled(t *testing.T) {
 	}
 }
 
+// The first pending egress approval a Confined pilot sees must be a host their
+// TASK needs, not Claude Code's own Datadog telemetry endpoint. buildBaseSandboxEnv
+// suppresses agent-CLI telemetry by DEFAULT; the operator opt-out
+// (WARDYN_ALLOW_AGENT_TELEMETRY) removes the suppression when they explicitly want it.
+func TestBuildBaseSandboxEnv_TelemetrySuppressedByDefault(t *testing.T) {
+	run := types.AgentRun{CreatedBy: "op", Agent: "claude-code"}
+
+	def := buildBaseSandboxEnv(run, "http://p:3128", nil)
+	if def["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" || def["DISABLE_TELEMETRY"] != "1" {
+		t.Errorf("agent telemetry must be suppressed by default, got NONESSENTIAL=%q DISABLE_TELEMETRY=%q",
+			def["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], def["DISABLE_TELEMETRY"])
+	}
+
+	// Operator opt-out: the suppression vars are absent so the agent's own
+	// telemetry defaults apply again.
+	t.Setenv("WARDYN_ALLOW_AGENT_TELEMETRY", "1")
+	out := buildBaseSandboxEnv(run, "http://p:3128", nil)
+	if _, present := out["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"]; present {
+		t.Error("WARDYN_ALLOW_AGENT_TELEMETRY=1 must remove CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+	}
+	if _, present := out["DISABLE_TELEMETRY"]; present {
+		t.Error("WARDYN_ALLOW_AGENT_TELEMETRY=1 must remove DISABLE_TELEMETRY")
+	}
+}
+
 func TestRunToolchainNeeds(t *testing.T) {
 	wsWith := func(p workspacescan.WorkspaceProfile) types.Workspace {
 		raw, err := json.Marshal(p)
