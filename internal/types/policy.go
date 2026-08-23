@@ -146,9 +146,9 @@ type RunPolicySpec struct {
 	// internal/egress/proxy configureHold.
 	FirstUseHoldSeconds int `json:"first_use_hold_seconds,omitempty"`
 	// MaxHolds caps concurrent wait_for_review holds (one held goroutine per
-	// distinct unknown host). 0/absent keeps the built-in 16 default; a positive
-	// value overrides it. The (N+1)th concurrent held host fails fast rather than
-	// consuming an unbounded goroutine per host.
+	// held connection). 0/absent keeps the built-in 16 default; a positive value
+	// overrides it. The (N+1)th concurrent held connection fails fast rather than
+	// consuming an unbounded goroutine.
 	MaxHolds int `json:"max_holds,omitempty"`
 	// AllowedMethods optionally restricts HTTP methods (empty = all).
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
