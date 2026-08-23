@@ -271,7 +271,13 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
         minted_grant_ids: [],
       } as unknown as RecordResult["observations"],
     };
-    getWorkspaceMock.mockResolvedValue(ws({ record_results: { "build-test": rr } }));
+    // A host approved EARLIER is in the workspace's allowlist but was not
+    // observed by this recording. The retired 404-fallback computed
+    // approved ∪ observed and PUT that whole union; the third argument is now
+    // the promote SUBSET the confirm approved, so this host must not appear.
+    getWorkspaceMock.mockResolvedValue(
+      ws({ record_results: { "build-test": rr }, approved_egress: ["already.example.com"] }),
+    );
     promoteRecordEgressMock.mockResolvedValue(ws({}));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderDetail();
@@ -289,8 +295,10 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
   // UI-WS-14: requestPromoteEgress used to subtract only ws.approved_egress —
   // session-helpers.ts's newEgressHosts (which drives the button's own
   // count) ALSO subtracts profile.egress_domains, so the confirm could list
-  // an auto-allowed host the button never asked about.
-  it("the confirm lists exactly what the button counted — an auto-allowed (profile) host never sneaks in", async () => {
+  // an auto-allowed host the button never asked about. The bulk list is no
+  // longer read-only either: it checkboxes, and only the CHECKED subset is
+  // posted (the server's own optional {"hosts":[…]} field).
+  it("the confirm lists exactly what the button counted, and promotes only the hosts left checked", async () => {
     const rr: RecordResult = {
       run_id: "r1",
       label: "build & test",
@@ -300,6 +308,7 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
         domains: [
           { host: "proxy.golang.org", allow_count: 1, deny_count: 0, pending_count: 0 },
           { host: "nexus.corp.internal", allow_count: 1, deny_count: 0, pending_count: 0 },
+          { host: "files.pythonhosted.org", allow_count: 1, deny_count: 0, pending_count: 0 },
         ],
         minted_grant_ids: [],
       } as unknown as RecordResult["observations"],
@@ -310,14 +319,22 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
         profile: { egress_domains: ["proxy.golang.org"] } as unknown as Record<string, unknown>,
       }),
     );
+    promoteRecordEgressMock.mockResolvedValue(ws({}));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderDetail();
 
     // The button already excludes the auto-allowed host from its own count.
-    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    await user.click(await screen.findByRole("button", { name: /approve 2 observed hosts/i }));
     const dialog = within(await screen.findByRole("alertdialog"));
     expect(dialog.getByText(/nexus\.corp\.internal/)).toBeInTheDocument();
     expect(dialog.queryByText(/proxy\.golang\.org/)).not.toBeInTheDocument();
+
+    // Everything starts checked; unchecking one must drop it from the POST.
+    await user.click(dialog.getByRole("checkbox", { name: /approve files\.pythonhosted\.org/i }));
+    await user.click(dialog.getByRole("button", { name: /approve 1 host$/i }));
+    await waitFor(() =>
+      expect(promoteRecordEgressMock).toHaveBeenCalledWith("ws-1", "build-test", ["nexus.corp.internal"]),
+    );
   });
 });
 

@@ -84,7 +84,7 @@ function renderPane(
         onReplayConfined={handlers.onReplayConfined ?? noop}
         onDoneRecording={handlers.onDoneRecording ?? noop}
         onPromoteEgress={handlers.onPromoteEgress ?? noop}
-        onApproveHost={handlers.onApproveHost ?? noop}
+        onApproveHosts={handlers.onApproveHosts ?? noop}
         onOpenProfile={handlers.onOpenProfile ?? noop}
       />
     </OperatorProvider>,
@@ -242,10 +242,18 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(onPromoteEgress).toHaveBeenCalledWith("build-test");
   });
 
-  it("shows a Promoted badge (no approve button) once egress is promoted", () => {
-    renderPane({ record_results: { "build-test": recorded({ egress_promoted: true }) }, profile });
+  // egress_promoted is a boolean the server flips on ANY promoted>0, so the
+  // all-done "Promoted" chip is only honest when NOTHING is still approvable —
+  // hence both observed hosts approved here. (A partial promote keeps its list
+  // and its Approve button; that branch is B4's.)
+  it("shows a Promoted badge (no approve button) once every observed host is promoted", () => {
+    renderPane({
+      record_results: { "build-test": recorded({ egress_promoted: true }) },
+      approved_egress: ["registry.npmjs.org", "github.com"],
+      profile,
+    });
     const review = screen.getByTestId("record-review");
-    expect(within(review).getByText(/promoted/i)).toBeInTheDocument();
+    expect(within(review).getByText(/^promoted$/i)).toBeInTheDocument();
     expect(within(review).queryByRole("button", { name: /approve .* observed host/i })).not.toBeInTheDocument();
   });
 
@@ -439,23 +447,26 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
   };
 
   it("shows the containment review once a recording's confined replay settles", async () => {
-    const onApproveHost = vi.fn();
+    const onApproveHosts = vi.fn();
     renderPane(
       {
         record_results: { "build-test": learning, "verify:build-test": confinedRR },
         approved_egress: ["github.com"],
       },
-      { onApproveHost },
+      { onApproveHosts },
     );
     const blocked = screen.getByTestId("verify-session-blocked");
     expect(within(blocked).getByText("evil.example.com")).toBeInTheDocument();
     // github.com is already approved → never shown as blocked/off-policy.
     expect(within(blocked).queryByText("github.com")).not.toBeInTheDocument();
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(within(blocked).getByRole("button", { name: /approve/i }));
-    expect(onApproveHost).toHaveBeenCalledWith("evil.example.com");
-    // Settled replay offers a re-run, in the SAME card.
-    expect(screen.getByRole("button", { name: /replay again/i })).toBeInTheDocument();
+    // The per-host button survives the selectable list — one host, no replay.
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    expect(onApproveHosts).toHaveBeenCalledWith(["evil.example.com"]);
+    // Settled replay offers a re-run, in the SAME card. Exact-matched: the
+    // guided "Approve N selected hosts and replay again" action also ends in
+    // those two words.
+    expect(screen.getByRole("button", { name: /^replay again$/i })).toBeInTheDocument();
   });
 
   // ui-wsDetail-3: same overwrite-with-no-confirm gap, on the settled
@@ -464,11 +475,11 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     const onReplayConfined = vi.fn();
     renderPane({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, approved_egress: ["github.com"] }, { onReplayConfined });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(screen.getByRole("button", { name: /replay again/i }));
+    await user.click(screen.getByRole("button", { name: /^replay again$/i }));
     expect(onReplayConfined).not.toHaveBeenCalled();
     const dialog = screen.getByRole("alertdialog");
     expect(within(dialog).getByText(/replaced once the new replay settles/i)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: /replay again/i }));
+    await user.click(within(dialog).getByRole("button", { name: /^replay again$/i }));
     expect(onReplayConfined).toHaveBeenCalledWith("build & test");
   });
 
@@ -525,7 +536,7 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
         onReplayConfined={noop}
         onDoneRecording={noop}
         onPromoteEgress={noop}
-        onApproveHost={noop}
+        onApproveHosts={noop}
         onOpenProfile={noop}
       />,
     );

@@ -111,6 +111,24 @@ export interface EgressPromotionDiff {
   plumbing: string[];
 }
 
+// approvedEgressSet — the ONE answer to "does this workspace already grant
+// egress to <host>?", mirroring the server's own three-lane union
+// (handlePromoteRecordEgress's `existing`): the legacy ApprovedEgress lane,
+// the scan profile's auto-allowed egress_domains, and the effective
+// egress:<host> requirement rows — the lane promote and the per-host approve
+// now BOTH write. Shared on purpose: egressPromotionDiff's alreadyApproved
+// bucket (below) and ConfinedReviewCard's caught bucket must subtract the SAME
+// set, or a host approved through the requirements lane keeps rendering as
+// off-policy under an Approve button that would fold in zero new rows.
+export function approvedEgressSet(ws: Workspace): Set<string> {
+  const profile = (ws.profile ?? {}) as WorkspaceProfile;
+  const already = new Set([...(ws.approved_egress ?? []), ...(profile.egress_domains ?? [])]);
+  for (const [key, req] of Object.entries(effectiveWorkspaceRequirements(ws))) {
+    if (req.level === "required" && key.startsWith("egress:")) already.add(key.slice("egress:".length));
+  }
+  return already;
+}
+
 // W20-S1-1: this must mirror the server's OWN dedup in
 // handlePromoteRecordEgress (internal/api/record.go) — which skips a host
 // already covered by ApprovedEgress OR an effective egress:required
@@ -120,7 +138,7 @@ export interface EgressPromotionDiff {
 // and the card renders "Promoted" for a click that promoted nothing.
 // approved_egress + profile.egress_domains alone missed the requirements
 // overlay (e.g. a host approved earlier via the workspace wizard, not this
-// legacy lane) — effectiveWorkspaceRequirements closes that gap.
+// legacy lane) — approvedEgressSet above closes that gap.
 //
 // selfHost (the browser's own origin — the console is always same-origin
 // with wardynd, see lib/api/core.ts's relative BASE) mirrors the server's
@@ -132,11 +150,7 @@ export interface EgressPromotionDiff {
 export function egressPromotionDiff(ws: Workspace, taskKey: string, selfHost?: string): EgressPromotionDiff {
   const rr = recordResult(ws, taskKey);
   const observed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
-  const profile = (ws.profile ?? {}) as WorkspaceProfile;
-  const already = new Set([...(ws.approved_egress ?? []), ...(profile.egress_domains ?? [])]);
-  for (const [key, req] of Object.entries(effectiveWorkspaceRequirements(ws))) {
-    if (req.level === "required" && key.startsWith("egress:")) already.add(key.slice("egress:".length));
-  }
+  const already = approvedEgressSet(ws);
   const self = selfHost?.toLowerCase().trim();
   const diff: EgressPromotionDiff = { approvable: [], alreadyApproved: [], plumbing: [] };
   const seen = new Set<string>();

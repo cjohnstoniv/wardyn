@@ -97,6 +97,16 @@ export interface RecordResult {
   started_at?: string;
   finished_at?: string;
   observations?: ProfileObservations;
+  // The server's CleanReplay verdict, stamped ONLY on a CONFINED entry
+  // (internal/api/record.go's RecordTaskResult.Clean). Absent = UNKNOWN, not
+  // "not clean": old rows predate the field, and an open recording never gets
+  // one — render neutral, never red, never green. Clean means clean FOR WHAT
+  // WAS REPLAYED (reconcile finalizes on any terminal state, so a replay ended
+  // early earns the same verdict as a full one) — the chip title says so.
+  clean?: boolean;
+  // How many observed domains were denied or held (CONFINED entries only) —
+  // the "Replayed — caught N" count. Absent/0 on an open recording.
+  caught?: number;
   secret_names_minted?: string[];
   egress_promoted?: boolean;
   kernel_sensor_blind?: boolean;

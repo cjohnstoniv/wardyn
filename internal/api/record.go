@@ -348,13 +348,17 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePromoteRecordEgress merges one recorded task's OBSERVED-ALLOWED hosts
-// into the workspace's operator-owned ApprovedEgress:
+// into the workspace's operator-owned REQUIREMENTS overlay as
+// egress:<host> · required · operator_set rows (MergeWorkspaceRequirements —
+// the legacy ApprovedEgress lane is READ-ONLY from here, deduped against but
+// never written):
 // POST /workspaces/{id}/record/{task}/promote-egress. Promotion follows
 // recordmode.Synthesize's own rule — only hosts with at least one egress.allow
 // decision; a host that was only denied or pending is never promoted (it would
 // widen past what even the open run was permitted). Additive and idempotent;
-// rides the existing scoped ApprovedEgress lane + audit, so the subsequent
-// confined Verify (which unions ApprovedEgress) is widened automatically.
+// rides the same scoped merge + audit the verify approve hook lands, so the
+// subsequent confined Verify (whose confinedEgressDomains unions BOTH lanes)
+// is widened automatically.
 // Nothing is ever auto-applied: this endpoint IS the operator's click.
 //
 // Optional {"hosts": [...]} narrows promotion to a SUBSET the operator picked
@@ -564,11 +568,12 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	}
 
 	// M4: the record-entry CAS runs FIRST — only once it succeeds do we apply
-	// the ApprovedEgress widening. A CAS miss (the recording changed
-	// concurrently) must leave egress untouched, not widen-then-409. Guarded
-	// on `recorded`: if a re-record superseded this capture between the
-	// operator's read and the click, the marker (and the response) must not
-	// resurrect the stale entry.
+	// the requirements widening below (MergeWorkspaceRequirements — NOT the
+	// ApprovedEgress lane, which promotion no longer writes). A CAS miss (the
+	// recording changed concurrently) must leave egress untouched, not
+	// widen-then-409. Guarded on `recorded`: if a re-record superseded this
+	// capture between the operator's read and the click, the marker (and the
+	// response) must not resurrect the stale entry.
 	//
 	// W20-S1-1: this used to be an unconditional `true` — a click whose
 	// entire wantHosts set was already in `existing` (every one deduped away

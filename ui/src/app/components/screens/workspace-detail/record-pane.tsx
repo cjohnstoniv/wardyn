@@ -46,6 +46,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import {
+  approvedEgressSet,
   recordResult,
   recordSessions,
   orphanedVerifySessions,
@@ -65,6 +66,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { C } from "../../../lib/workspace-copy";
 import { useOperator } from "../../wardyn/operator-context";
@@ -81,7 +83,7 @@ export function RecordPane({
   onReplayConfined,
   onDoneRecording,
   onPromoteEgress,
-  onApproveHost,
+  onApproveHosts,
   onOpenProfile,
 }: {
   ws: Workspace;
@@ -118,9 +120,12 @@ export function RecordPane({
   onDoneRecording: (runId: string) => void;
   // Approve an open session's observed hosts (promote-egress).
   onPromoteEgress: (taskKey: string) => void;
-  // Approve a single off-policy host a confined replay hit (widens the
-  // workspace's approved egress).
-  onApproveHost: (host: string) => void;
+  // Approve the off-policy hosts a confined replay caught, as ONE requirements
+  // write (widens the workspace's approved egress for every future replay).
+  // `replayName` is the guided one-step loop: approve the selection, then
+  // immediately replay THAT session confined again — the caller chains them so
+  // the replay only fires once the approval has actually landed.
+  onApproveHosts: (hosts: string[], replayName?: string) => void;
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
@@ -237,7 +242,7 @@ export function RecordPane({
               onReplayConfined={onReplayConfined}
               onDoneRecording={onDoneRecording}
               onPromoteEgress={onPromoteEgress}
-              onApproveHost={onApproveHost}
+              onApproveHosts={onApproveHosts}
               onOpenProfile={onOpenProfile}
             />
           ))}
@@ -257,7 +262,7 @@ export function RecordPane({
               label={s.label}
               busy={busyTask === s.key}
               onDoneRecording={onDoneRecording}
-              onApproveHost={onApproveHost}
+              onApproveHosts={onApproveHosts}
               onOpenProfile={onOpenProfile}
             />
           ))}
@@ -370,7 +375,7 @@ function SessionCard({
   onReplayConfined,
   onDoneRecording,
   onPromoteEgress,
-  onApproveHost,
+  onApproveHosts,
   onOpenProfile,
 }: {
   ws: Workspace;
@@ -383,7 +388,7 @@ function SessionCard({
   onReplayConfined: (name: string) => void;
   onDoneRecording: (runId: string) => void;
   onPromoteEgress: (taskKey: string) => void;
-  onApproveHost: (host: string) => void;
+  onApproveHosts: (hosts: string[], replayName?: string) => void;
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
   const stage = sessionStage(ws, sessionKey);
@@ -400,7 +405,7 @@ function SessionCard({
     <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-foreground">{label}</span>
-        {stageChip(stage)}
+        {stageChip(stage, confinedRR)}
       </div>
 
       {/* recording — embed the attach terminal + copy-paste command hints */}
@@ -459,7 +464,15 @@ function SessionCard({
       {/* replayed / replay_failed — containment review + re-run */}
       {(stage === "replayed" || stage === "replay_failed") && confinedRR && (
         <div className="mt-3 space-y-3">
-          <ConfinedReviewCard ws={ws} rr={confinedRR} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
+          <ConfinedReviewCard
+            ws={ws}
+            rr={confinedRR}
+            onApproveHosts={onApproveHosts}
+            // The guided one-step loop only exists where there IS a session to
+            // replay — an orphaned confined run has no open sibling to name.
+            replayName={label}
+            onOpenProfile={onOpenProfile}
+          />
           <Button size="sm" variant="outline" onClick={() => setConfirmKind("replay")} disabled={busyConfined}>
             {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
             Replay again
@@ -509,7 +522,7 @@ function OrphanedSessionCard({
   label,
   busy,
   onDoneRecording,
-  onApproveHost,
+  onApproveHosts,
   onOpenProfile,
 }: {
   ws: Workspace;
@@ -517,7 +530,7 @@ function OrphanedSessionCard({
   label: string;
   busy: boolean;
   onDoneRecording: (runId: string) => void;
-  onApproveHost: (host: string) => void;
+  onApproveHosts: (hosts: string[], replayName?: string) => void;
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
   const rr = recordResult(ws, sessionKey);
@@ -528,7 +541,7 @@ function OrphanedSessionCard({
     <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-foreground">{label}</span>
-        {stageChip(live ? "replaying" : rr.status === "record_failed" ? "replay_failed" : "replayed")}
+        {stageChip(live ? "replaying" : rr.status === "record_failed" ? "replay_failed" : "replayed", rr)}
       </div>
       {live ? (
         <div className="mt-3 space-y-2">
@@ -549,7 +562,7 @@ function OrphanedSessionCard({
         </div>
       ) : (
         <div className="mt-3">
-          <ConfinedReviewCard ws={ws} rr={rr} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
+          <ConfinedReviewCard ws={ws} rr={rr} onApproveHosts={onApproveHosts} onOpenProfile={onOpenProfile} />
         </div>
       )}
     </div>
@@ -560,20 +573,59 @@ function OrphanedSessionCard({
 // SessionStage instead of a 42-line if-chain of near-identical Chips.
 const STAGE_CHIP_META: Record<
   SessionStage,
-  { tone: "info" | "danger" | "success" | "neutral"; label: string; pulse?: boolean }
+  { tone: "info" | "danger" | "success" | "neutral" | "warning"; label: string; pulse?: boolean }
 > = {
   recording: { tone: "info", label: "Recording…", pulse: true },
   replaying: { tone: "info", label: "Replaying confined…", pulse: true },
   record_failed: { tone: "danger", label: "Record failed" },
   replay_failed: { tone: "danger", label: "Replay failed" },
-  replayed: { tone: "success", label: "Replayed confined" },
+  // Overridden by the settled entry's own verdict below — see replayedChipMeta.
+  // The table row is the LEGACY (verdict-less) case, so its tone is neutral.
+  replayed: { tone: "neutral", label: "Replayed confined" },
   recorded: { tone: "neutral", label: "Recorded" },
 };
 
-function stageChip(stage: SessionStage) {
-  const m = STAGE_CHIP_META[stage];
+// "Replayed clean" means clean FOR WHAT WAS REPLAYED: reconcileRecordRun
+// finalizes on ANY terminal state, so a replay the operator ends 30 seconds in
+// earns the same verdict as a full one. Non-negotiable on the chip that claims
+// the green — same discipline as the kernel-blind caveat below.
+const CLEAN_SCOPE_CAVEAT =
+  "Clean for what was replayed — a replay you ended early earns the same verdict as a full one, so this speaks only for the steps that actually ran.";
+// The CC3 kernel-blind caveat, in the same words RecordReviewCard's HonestyNote
+// uses (a hardware VM the syscall sensor can't see into) — egress is proxy-side
+// and still complete, which is exactly what the verdict is derived from.
+const KERNEL_BLIND_CAVEAT =
+  "This ran inside a hardware VM (Vault/CC3); the syscall sensor can't see into it, so exec, file-write, and connect observations may be incomplete. Egress (proxy-side) is still complete.";
+
+// The settled-CONFINED chip is the loop's verdict, so it's the one stage whose
+// chip reads the record result instead of the stage alone: the server stamps
+// `clean`/`caught` on a confined entry (recordmode.CleanReplay). Absent `clean`
+// is an OLD ROW — unknown, not "not clean" — so it keeps today's wording with
+// the tone dropped to neutral rather than claiming a green nothing proved.
+function replayedChipMeta(rr: RecordResult): { tone: "success" | "warning" | "neutral"; label: string; title: string } {
+  const blind = rr.kernel_sensor_blind ? " " + KERNEL_BLIND_CAVEAT : "";
+  if (rr.clean === true) return { tone: "success", label: "Replayed clean", title: CLEAN_SCOPE_CAVEAT + blind };
+  if (rr.clean === false) {
+    return {
+      tone: "warning",
+      label: `Replayed — caught ${rr.caught ?? 0}`,
+      title:
+        "Hosts were denied, held for approval, or released by a live approval during this replay — approve the ones this workspace legitimately needs and replay again." +
+        blind,
+    };
+  }
+  return {
+    tone: "neutral",
+    label: "Replayed confined",
+    title: "This replay predates the clean/caught verdict — whether it was clean is unknown." + blind,
+  };
+}
+
+function stageChip(stage: SessionStage, rr?: RecordResult) {
+  const m: (typeof STAGE_CHIP_META)[SessionStage] & { title?: string } =
+    stage === "replayed" && rr ? replayedChipMeta(rr) : STAGE_CHIP_META[stage];
   return (
-    <Chip tone={m.tone} dot={!!m.pulse} pulse={m.pulse} className="ml-auto">
+    <Chip tone={m.tone} dot={!!m.pulse} pulse={m.pulse} title={m.title} className="ml-auto">
       {m.label}
     </Chip>
   );
@@ -677,16 +729,29 @@ function RecordReviewCard({
       {/* --- observed egress + one-click promotion --- */}
       <section className="space-y-2">
         <SectionLabel>Observed egress</SectionLabel>
-        {rr.egress_promoted ? (
-          <Chip tone="success" dot>
-            <Check className="size-3.5" /> Promoted
+        {/* egress_promoted is a BOOLEAN the server flips on any promoted>0, and
+            which hosts a promote landed is not persisted — so a partial promote
+            (now reachable: the confirm's checkboxes send a subset) can't be
+            reported as "N of M". The only honest count is what's STILL
+            approvable right now, straight from the buckets; the remainder keeps
+            its listing and its Approve button instead of hiding behind a
+            green all-done chip. */}
+        {rr.egress_promoted && (
+          <Chip tone={newHosts.length === 0 ? "success" : "warning"} dot>
+            <Check className="size-3.5" />
+            {newHosts.length === 0
+              ? "Promoted"
+              : `Promoted — ${newHosts.length} still need${newHosts.length === 1 ? "s" : ""} approval`}
           </Chip>
-        ) : newHosts.length === 0 ? (
-          <p className="text-[0.6875rem] text-muted-foreground">
-            {onlyPlumbingObserved
-              ? "Nothing needed approval — observed hosts were platform plumbing."
-              : "No new hosts to approve — everything this task reached is already allowed."}
-          </p>
+        )}
+        {newHosts.length === 0 ? (
+          !rr.egress_promoted && (
+            <p className="text-[0.6875rem] text-muted-foreground">
+              {onlyPlumbingObserved
+                ? "Nothing needed approval — observed hosts were platform plumbing."
+                : "No new hosts to approve — everything this task reached is already allowed."}
+            </p>
+          )
         ) : (
           <>
             <ul className="space-y-1.5" data-testid="record-new-hosts">
@@ -769,12 +834,17 @@ function RecordReviewCard({
 function ConfinedReviewCard({
   ws,
   rr,
-  onApproveHost,
+  replayName,
+  onApproveHosts,
   onOpenProfile,
 }: {
   ws: Workspace;
   rr: RecordResult;
-  onApproveHost: (host: string) => void;
+  // Present only where a re-replay is possible (a named session, not an
+  // orphaned confined run) — gates the guided "approve selected + replay
+  // again" button; the per-host Approve buttons render either way.
+  replayName?: string;
+  onApproveHosts: (hosts: string[], replayName?: string) => void;
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
   // record_failed is a real failure (couldn't reach the control plane to report) —
@@ -792,10 +862,25 @@ function ConfinedReviewCard({
   }
 
   const domains = rr.observations?.domains ?? [];
-  const approved = new Set(ws.approved_egress ?? []);
+  // Subtract the SAME union egressPromotionDiff subtracts (legacy
+  // ApprovedEgress + profile.egress_domains + egress: requirement rows), not
+  // ws.approved_egress alone — promote and the per-host approve both write the
+  // REQUIREMENTS lane now, so a bucket reading only the legacy lane kept
+  // listing hosts that are already granted, under a button that would fold in
+  // nothing. (Chip vs bucket CAN diverge, by design: the chip is the server's
+  // verdict for the replay as it happened — an immutable fact — while these
+  // buckets are "what is still off-policy RIGHT NOW". Approve a caught host
+  // and the bucket empties while "Replayed — caught 2" stands, because it did.
+  // The loop's answer to a stale verdict is a fresh replay, not a re-render.)
+  const approved = approvedEgressSet(ws);
   const allowed = domains.filter((d) => d.allow_count > 0).map((d) => d.host);
-  const blocked = domains.filter((d) => d.deny_count > 0 && !approved.has(d.host)).map((d) => d.host);
-  const pending = domains.filter((d) => d.pending_count > 0 && !approved.has(d.host)).map((d) => d.host);
+  // ONE row per caught host: a host both denied AND held used to render twice
+  // (two independent filters), and the checkbox list below can't have a host
+  // in two states at once. `denied` wins the label — it's the stronger fact,
+  // and it's what defaults the checkbox OFF.
+  const caught = domains
+    .filter((d) => (d.deny_count > 0 || d.pending_count > 0) && !approved.has(d.host))
+    .map((d) => ({ host: d.host, denied: d.deny_count > 0 }));
 
   return (
     <div className="space-y-4 rounded-lg border border-border p-3" data-testid="verify-session-review">
@@ -815,37 +900,10 @@ function ConfinedReviewCard({
         )}
       </section>
 
-      {/* off-policy attempts caught — the containment proof */}
-      {(blocked.length > 0 || pending.length > 0) && (
-        <section className="space-y-2" data-testid="verify-session-blocked">
-          <SectionLabel>Off-policy attempts caught</SectionLabel>
-          <ul className="space-y-1.5">
-            {blocked.map((h) => (
-              <li key={h} className="flex items-center gap-2">
-                <ShieldAlert className="size-3.5 shrink-0 text-danger" />
-                <Mono className="flex-1 text-foreground">{h}</Mono>
-                <span className="text-[0.6875rem] text-danger">blocked</span>
-                <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHost(h)}>
-                  <Check className="size-3.5" /> Approve
-                </Button>
-              </li>
-            ))}
-            {pending.map((h) => (
-              <li key={h} className="flex items-center gap-2">
-                <Info className="size-3.5 shrink-0 text-warning" />
-                <Mono className="flex-1 text-foreground">{h}</Mono>
-                <span className="text-[0.6875rem] text-warning">pending approval</span>
-                <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHost(h)}>
-                  <Check className="size-3.5" /> Approve
-                </Button>
-              </li>
-            ))}
-          </ul>
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-            These were denied or held for approval because they aren&apos;t in your approved set. Approve
-            one only if this workspace legitimately needs it — otherwise leave it blocked.
-          </p>
-        </section>
+      {/* off-policy attempts caught — the containment proof, and the loop's
+          one-step continuation (approve what was genuinely missed, replay). */}
+      {caught.length > 0 && (
+        <CaughtHosts caught={caught} replayName={replayName} onApproveHosts={onApproveHosts} />
       )}
 
       {/* the raw observations block (same as profile-review / open-record card) */}
@@ -861,6 +919,86 @@ function ConfinedReviewCard({
         </Button>
       </div>
     </div>
+  );
+}
+
+// The off-policy hosts a confined replay caught, each selectable, plus the
+// loop's one-step continuation: approve the selection and replay again.
+//
+// Bulk-approving everything caught is a footgun the moment one of them is a
+// genuine villain — which is the whole reason the replay ran. So a host that
+// was DENIED LIVE (deny_count > 0) starts UNCHECKED and a merely-held one
+// starts checked: the default is "approve the misses, leave the denials out",
+// and changing it is a visible, deliberate click. The per-host Approve buttons
+// stay for the one-off case (and route through the untrusted-content confirm
+// exactly as before).
+function CaughtHosts({
+  caught,
+  replayName,
+  onApproveHosts,
+}: {
+  caught: { host: string; denied: boolean }[];
+  replayName?: string;
+  onApproveHosts: (hosts: string[], replayName?: string) => void;
+}) {
+  // A settled replay's observations are immutable, so seeding once is right —
+  // and it means an operator's un/checking is never stomped by the detail
+  // page's poll. (A re-replay unmounts this card via the "replaying" stage.)
+  const [selected, setSelected] = React.useState<Set<string>>(
+    () => new Set(caught.filter((c) => !c.denied).map((c) => c.host)),
+  );
+  // Intersect with what's STILL caught: approving a host shrinks the list
+  // under us, and a stale selection must never widen the next write.
+  const picked = caught.filter((c) => selected.has(c.host)).map((c) => c.host);
+
+  return (
+    <section className="space-y-2" data-testid="verify-session-blocked">
+      <SectionLabel>Off-policy attempts caught</SectionLabel>
+      <ul className="space-y-1.5">
+        {caught.map(({ host, denied }) => (
+          <li key={host} className="flex items-center gap-2">
+            <Checkbox
+              id={`caught-${host}`}
+              checked={selected.has(host)}
+              onCheckedChange={(v) =>
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  if (v === true) next.add(host);
+                  else next.delete(host);
+                  return next;
+                })
+              }
+              aria-label={`Approve ${host}`}
+            />
+            {denied ? (
+              <ShieldAlert className="size-3.5 shrink-0 text-danger" />
+            ) : (
+              <Info className="size-3.5 shrink-0 text-warning" />
+            )}
+            <label htmlFor={`caught-${host}`} className="flex-1 cursor-pointer">
+              <Mono className="text-foreground">{host}</Mono>
+            </label>
+            <span className={denied ? "text-[0.6875rem] text-danger" : "text-[0.6875rem] text-warning"}>
+              {denied ? "blocked" : "pending approval"}
+            </span>
+            <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHosts([host])}>
+              <Check className="size-3.5" /> Approve
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {replayName && (
+        <Button size="sm" disabled={picked.length === 0} onClick={() => onApproveHosts(picked, replayName)}>
+          <ShieldCheck className="size-3.5" /> Approve {picked.length} selected host
+          {picked.length === 1 ? "" : "s"} and replay again
+        </Button>
+      )}
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+        These were denied or held for approval because they aren&apos;t in your approved set. Approve one
+        only if this workspace legitimately needs it — otherwise leave it blocked. Anything denied live
+        starts unchecked.
+      </p>
+    </section>
   );
 }
 

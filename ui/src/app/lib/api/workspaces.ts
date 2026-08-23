@@ -250,16 +250,22 @@ export const workspaces = {
   },
 
   // POST /api/v1/workspaces/{id}/record/{task}/promote-egress -> the updated
-  // Workspace (record_results[task].egress_promoted flips true + approved_egress
-  // widened server-side). 404-tolerant: on a build whose backend hasn't shipped the
-  // endpoint, fall back to the existing approved-egress PUT with the caller-computed
-  // desired allowlist (full approved ∪ observed) — same end state, one round-trip.
-  async promoteRecordEgress(id: string, task: string, fallbackDomains: string[]): Promise<Workspace> {
+  // Workspace (record_results[task].egress_promoted flips true + egress:<host>
+  // requirement rows folded in server-side). `hosts` is the SUBSET the operator
+  // approved in the confirm dialog: the server validates every entry against
+  // the recording's own promotable set and 422s anything else, so this can
+  // only ever narrow, never widen.
+  //
+  // No 404 fallback. The console ships baked into the server image, so a
+  // backend without this endpoint is not a real deployment — and the fallback
+  // that used to cover it PUT the full observed union onto approved_egress,
+  // re-approving exactly the hosts the operator had just unchecked. A 404 is
+  // now the error it is.
+  async promoteRecordEgress(id: string, task: string, hosts: string[]): Promise<Workspace> {
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/record/${encodeURIComponent(task)}/promote-egress`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify({ hosts }) },
     );
-    if (res.status === 404) return workspaces.setApprovedEgress(id, fallbackDomains);
     return asJson<Workspace>(res);
   },
 

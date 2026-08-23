@@ -143,7 +143,13 @@ export function WorkspaceDetailScreen() {
   const [recordLaunch, setRecordLaunch] = React.useState<{ warnings?: string[]; confinementClass?: string } | null>(null);
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
-  const [pendingConfirm, setPendingConfirm] = React.useState<{ hosts: string[]; run: () => void } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = React.useState<{
+    hosts: string[];
+    selectable?: boolean;
+    // Receives what the dialog actually approved (the checked subset when
+    // selectable), never the full list it was opened with.
+    run: (approved: string[]) => void;
+  } | null>(null);
 
   const doRecord = async (name: string, confined: boolean) => {
     if (!ws) return;
@@ -180,36 +186,60 @@ export function WorkspaceDetailScreen() {
     }
   };
 
-  const promoteEgress = async (taskKey: string) => {
+  // `hosts` is the subset the confirm dialog's checkboxes actually approved —
+  // the server validates every one against the recording's promotable set
+  // (record.go's handlePromoteRecordEgress) and rejects anything else. No 404
+  // fallback: the console ships baked into the server image, so there is no
+  // version-skew window, and the retired fallback re-approved the FULL
+  // observed union — every host the operator just unchecked included.
+  const promoteEgress = async (taskKey: string, hosts: string[]) => {
     if (!ws) return;
-    const rr = ws.record_results?.[taskKey];
-    const observedAllowed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
-    const fallback = Array.from(new Set([...(ws.approved_egress ?? []), ...observedAllowed]));
     try {
-      setWs(await workspacesApi.promoteRecordEgress(ws.id, taskKey, fallback));
+      setWs(await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts));
       toast.success("Approved observed egress");
     } catch (e) {
       toast.error("Failed to promote egress", { description: getErrorMessage(e) });
     }
   };
-  const approveHost = async (host: string) => {
-    if (!ws) return;
+  // ONE write for N hosts, onto the REQUIREMENTS lane — the same lane promote
+  // itself writes (egress:<host> · required · operator_set), retiring the last
+  // ADDITIVE ApprovedEgress writer. Read-modify-write of the workspace's OWN
+  // overlay (the PUT is a full replacement); last-write-wins is accepted, same
+  // as the lane it replaces.
+  const approveHosts = async (hosts: string[]) => {
+    if (!ws || hosts.length === 0) return;
+    const next = { ...(ws.requirements ?? {}) };
+    for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
     try {
-      setWs(await workspacesApi.setApprovedEgress(ws.id, [...(ws.approved_egress ?? []), host]));
-      toast.success(`Approved egress to ${host}`);
+      setWs(await workspacesApi.setRequirements(ws.id, next));
+      toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
+      return true;
     } catch (e) {
       toast.error("Failed to approve host", { description: getErrorMessage(e) });
+      return false;
     }
   };
   // Both routed through the SAME untrusted-content confirm the rest of the
   // app uses for egress approval — the host names came from a session's
-  // observed traffic, not something the operator typed.
-  const requestApproveHost = (host: string) => setPendingConfirm({ hosts: [host], run: () => void approveHost(host) });
+  // observed traffic, not something the operator typed. `replayName` is the
+  // guided loop: once the approval has LANDED, replay that session confined
+  // again, so the fresh verdict is measured against the widened set.
+  const requestApproveHosts = (hosts: string[], replayName?: string) =>
+    setPendingConfirm({
+      hosts,
+      run: (approved) =>
+        void approveHosts(approved).then((ok) => {
+          if (ok && replayName) void doRecord(replayName, true);
+        }),
+    });
   const requestPromoteEgress = (taskKey: string) => {
     if (!ws) return;
     setPendingConfirm({
       hosts: newEgressHosts(ws, taskKey, window.location.hostname),
-      run: () => void promoteEgress(taskKey),
+      // Bulk promote is the one flow where the operator picks a SUBSET of what
+      // a recording observed — the server's own optional {"hosts":[…]} field.
+      selectable: true,
+      run: (approved) => void promoteEgress(taskKey, approved),
     });
   };
 
@@ -337,7 +367,7 @@ export function WorkspaceDetailScreen() {
             onReplayConfined={(name) => void doRecord(name, true)}
             onDoneRecording={(runId) => void doneRecording(runId)}
             onPromoteEgress={requestPromoteEgress}
-            onApproveHost={requestApproveHost}
+            onApproveHosts={requestApproveHosts}
             onOpenProfile={(runId, suggested) => {
               setProfileRunId(runId);
               setProfileName(suggested);
@@ -362,11 +392,12 @@ export function WorkspaceDetailScreen() {
 
       <ConfirmEgressDialog
         hosts={pendingConfirm?.hosts?.length ? pendingConfirm.hosts : null}
+        selectable={pendingConfirm?.selectable}
         onOpenChange={(o) => !o && setPendingConfirm(null)}
-        onConfirm={() => {
+        onConfirm={(approved) => {
           const run = pendingConfirm?.run;
           setPendingConfirm(null);
-          run?.();
+          run?.(approved);
         }}
       />
     </div>
