@@ -73,6 +73,9 @@ services:
     # so the digest freezes the exact image; bump both together on a version move.
     image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
     container_name: ${WARDYN_NS:-wardyn}-postgres
+    # Survive a host reboot (e.g. a MacBook's weekly MDM window) — otherwise only
+    # the registry came back and the stack was down until a manual `up` (D18).
+    restart: unless-stopped
     # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
     # the resident `claude` CLI composer backend) can reach the same database.
     # Host port parameterized (WARDYN_PG_PORT) so concurrent stacks on a shared host
@@ -153,6 +156,10 @@ services:
     # other caller.
     image: ${WARDYN_WARDYND_IMAGE:-wardyn/wardynd:local}
     container_name: ${WARDYN_NS:-wardyn}-api
+    # Survive a host reboot alongside postgres/registry (D18); a per-run proxy
+    # sidecar is launched by the docker runner (not a compose service), so its
+    # restart posture is set container-side, not here.
+    restart: unless-stopped
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).

@@ -474,7 +474,7 @@ func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
 // Node-only by construction => warn naming WARDYN_AGENT_IMAGES; any operator
 // override is assumed provisioned on purpose => info, not a red.
 func TestAgentImageCheck(t *testing.T) {
-	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:latest") {
+	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:") {
 		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr ref", chk.Status, chk.Detail)
 	}
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {

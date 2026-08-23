@@ -33,9 +33,10 @@ import (
 // invariant must be provable without WARDYN_TEST_PG.
 type dispatchTestStore struct {
 	store.Store
-	mu    sync.Mutex
-	run   types.AgentRun
-	state types.RunState
+	mu          sync.Mutex
+	run         types.AgentRun
+	state       types.RunState
+	failureHint string
 }
 
 func (s *dispatchTestStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
@@ -65,6 +66,17 @@ func (s *dispatchTestStore) State() types.RunState {
 func (s *dispatchTestStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
+}
+func (s *dispatchTestStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failureHint = hint
+	return nil
+}
+func (s *dispatchTestStore) FailureHint() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failureHint
 }
 func (s *dispatchTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil

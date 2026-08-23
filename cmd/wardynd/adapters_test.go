@@ -262,3 +262,48 @@ func TestMaskingRecorder_DelegationErrorPropagates(t *testing.T) {
 		t.Fatalf("Record error = %v, want %v", err, wantErr)
 	}
 }
+
+// TestMaskingRecorder_MasksJSONEscapedSecretInData is the D31 regression: ev.Data
+// is JSON, so a registered secret bearing a newline/quote/backslash (an ssh_key
+// PEM is the real case broker.mint mask-registers) appears in Data in its
+// JSON-escaped form (newlines → \n), which the raw-value masker misses. The
+// maskingRecorder now expands the snapshot with JSONEscapedVariants, so the
+// escaped rendering is masked too.
+//
+// RED before the fix (raw snapshot only): the distinctive marker survives in the
+// forwarded Data. GREEN after: it is replaced by the placeholder.
+func TestMaskingRecorder_MasksJSONEscapedSecretInData(t *testing.T) {
+	reg := secretmask.NewRegistry()
+	runID := uuid.New()
+	// A multi-line PEM the way broker.mint registers an ssh key.
+	sshKey := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+		"b3BlbnNzaGtleXYxAAAdistinctivEKEYlineAAAA\n" +
+		"-----END OPENSSH PRIVATE KEY-----")
+	reg.Add(runID, sshKey)
+
+	inner := &fakeAuditRecorder{}
+	rec := maskingRecorder{inner: inner, reg: reg}
+
+	// Build ev.Data exactly as wardyn does (mustJSON == json.Marshal), so the key
+	// lands JSON-escaped inside the "key" field.
+	data, err := json.Marshal(map[string]string{"key": string(sshKey)})
+	if err != nil {
+		t.Fatalf("marshal data: %v", err)
+	}
+	// Sanity: the raw value does NOT appear verbatim in the JSON (it is escaped),
+	// which is exactly why the raw-value masker alone missed it.
+	if strings.Contains(string(data), string(sshKey)) {
+		t.Fatalf("test precondition broken: raw key appears verbatim in JSON")
+	}
+
+	ev := types.AuditEvent{RunID: &runID, Action: "credential.mint", Data: data}
+	if err := rec.Record(context.Background(), ev); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if strings.Contains(string(inner.last.Data), "distinctivEKEYline") {
+		t.Fatalf("JSON-escaped secret survived masking in Data:\n%s", inner.last.Data)
+	}
+	if !strings.Contains(string(inner.last.Data), "<secret-hidden>") {
+		t.Fatalf("expected placeholder in Data, got %s", inner.last.Data)
+	}
+}

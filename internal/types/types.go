@@ -185,6 +185,16 @@ type AgentRun struct {
 	// container liveness != agent liveness, and the exec id otherwise lived only in
 	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
+	// FailureHint is an operator-facing one-line reason a run FAILED, stamped by
+	// the dispatch/create failure paths (failAndRevoke). Precedent:
+	// record.go RecordResult.FailureHint. Without it a run that dies BEFORE the
+	// agent starts (an image that resolves control-plane-side but not on the
+	// daemon, a lost sandbox ref, an opaque-LLM inspection refusal) is just a
+	// reason-less FAILED badge — the real reason lived only in an audit row. Empty
+	// for every run that did not fail this way (a clean FAILED-by-nonzero-exit
+	// carries its exit code instead, and success/terminal-by-kill carry nothing).
+	// Display-only; never interpreted by the control plane.
+	FailureHint string `json:"failure_hint,omitempty"`
 }
 
 // SiteConfig is the operator-wide, admin-authored baseline every run inherits:

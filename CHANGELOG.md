@@ -12,6 +12,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The `wait_for_review` hold window and concurrency are configurable.** A
+  policy may set `first_use_hold_seconds` and `max_holds` instead of living
+  with the built-in 30s/16; absent or zero keeps today's defaults. Note the
+  cap is per held connection, not per distinct host — N concurrent connections
+  to one unknown host consume N slots.
+- **A denied CONNECT is distinguishable from one waiting on approval.** The
+  proxy's 403 now carries `X-Wardyn-Egress: denied|approval-pending` plus
+  `X-Wardyn-Host` (the refused host), so an agent — or a person reading its
+  logs — can tell a hard deny from a first-use hold without grepping the
+  audit log.
+- **Audit list: per-principal `?actor=` filter and an uncapped NDJSON
+  export.** `GET /audit` takes `?actor=` alongside the existing filters, and
+  `GET /audit/export` streams the full filtered result as NDJSON — the "give
+  the auditor everything for this principal" request stops being a pagination
+  exercise.
+- **Per-sink SIEM delivery-drop counter on `/metrics`.** A webhook sink that
+  exhausts its retries now increments `wardyn_audit_sink_drops_total{sink=…}`
+  instead of failing silently — the number a pilot's monitoring should alarm
+  on.
+- **A run that dies before its agent starts carries a `failure_hint`.**
+  Dispatch-side failures (unresolvable image, lost sandbox, inspection
+  refusal) used to land as a reason-less FAILED badge with the cause buried in
+  the audit log; the run row now carries the one-line reason (migration
+  `0044`; console rendering lands with the UI lane).
+- **Enterprise-POC documentation set:** `docs/DATA-FLOW.md` (vendor-
+  questionnaire-ready data-flow and sub-processor statement),
+  `docs/AUDIT-ACTIONS.md` (the audit action vocabulary, curated from every
+  emit site), an honest audit-retention/erasure section in OPERATIONS.md,
+  OFL-1.1 font attribution in NOTICE, and six newly-disclosed residuals in
+  the threat model.
+
 - **UI sandboxes: a governed relay from your browser to one declared port
   inside a run's sandbox** (`docs/UI-SANDBOXES.md`). A run's policy may declare
   `ui_apps` — a name, a loopback port and a path, operator-authored, never a
@@ -231,6 +262,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The default agent image pulls the daemon's own version tag, not a
+  floating `:latest`.** A daemon at vX.Y no longer silently picks up whatever
+  image was pushed last; the fallback resolves to the matching version tag.
+- **A sandbox orphaned by a crash before its ref was recorded is swept.** The
+  boot reconciler only knew sandboxes by their stored ref; a crash in the
+  window before `SetSandboxRef` left a live, credentialed container nothing
+  would ever revisit. The reconciler now also sweeps by the run-ID label the
+  runner stamps on every sandbox it creates.
+- **Agent-CLI telemetry is suppressed inside the sandbox**, so a pilot's
+  first-use egress approval prompt is for the code host — not for the
+  harness's own metrics endpoint.
+- **The compose stack survives a host reboot** — `postgres` and `wardynd`
+  carry `restart: unless-stopped`.
+- **The UI license gate fails closed.** `scripts/check-ui-licenses.sh` was a
+  denylist (an unknown new license passed); it is now an allowlist.
+
 - **Secrets: the Value field masks at entry, with a reveal toggle.** A
   write-only store no longer puts the plaintext on screen while it is typed
   (`-webkit-text-security`, so multiline PEM values keep working; Firefox
@@ -381,6 +428,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   failed poll stops rendering as "all clear".
 
 ### Security
+
+- **A multi-dot host spelling could slip past an explicit egress deny.** The
+  proxy's host normalizer stripped exactly one trailing dot,
+  so under `allow_all_egress` a CONNECT to `evil.com..:443` failed to match an
+  explicit deny key for `evil.com` and sailed through. All trailing dots are
+  now stripped before any policy comparison, and a regression test pins every
+  multi-dot spelling to the same decision as the bare name.
+- **`credential.mint` is written inside the mint transaction.** The audit row
+  for a brokered credential mint committed separately from the mint itself, so
+  a crash between the two could leave a minted credential with no audit trace
+  (or the reverse). The row now commits atomically with the mint; the same
+  pass closed the sibling seams — a decided `always` egress approval whose
+  workspace write-back was lost to a crash is now healed by a boot-time
+  reconcile (the API layer cannot share a transaction across the decision and
+  the workspace write, so the window closes at the next daemon boot rather
+  than shrinking to zero), and the audit spool's crash-recovery keeps the
+  good head of a torn tail instead of discarding it.
+- **Secrets masked in audit `Data` even when JSON-escaped.** The audit masker
+  compared raw secret bytes, so a value containing quotes/backslashes appeared
+  unmasked in event payloads once JSON-encoded. The masker now also matches
+  the JSON-escaped form of every registered secret.
 
 - **`wardyn-ssh-host-key` was listable and overwritable through the generic
   secrets API.** The SSH gateway's ed25519 host key sat in the broker's

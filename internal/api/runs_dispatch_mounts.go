@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sort"
 	"strings"
 
@@ -111,6 +112,17 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	return resolved
 }
 
+// envEnabled reports whether an operator env-toggle string is truthy
+// (1/true/yes/on, case-insensitive). Empty/unset/anything else is false.
+func envEnabled(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // buildBaseSandboxEnv assembles dispatchWithVerify's baseline non-secret sandbox
 // env (invariant 1: the run token never appears here): proxy routing, the
 // toolchain-fidelity env the run's workspaces actually need (needs — Go's
@@ -149,6 +161,17 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"GIT_TERMINAL_PROMPT": "0",
 		"GIT_ASKPASS":         "",
 		"SSH_ASKPASS":         "",
+	}
+	// Agent-CLI telemetry, suppressed by default. Claude Code phones home to a
+	// Datadog host on first run; in a Confined run that host is the FIRST pending
+	// egress approval a pilot sees — before the host their task actually needs —
+	// which reads as if Wardyn itself is exfiltrating. Suppress it at the source so
+	// the approval queue shows only task-relevant egress. An operator who WANTS
+	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
+	// these; default-unset keeps the suppression on.
+	if !envEnabled(os.Getenv("WARDYN_ALLOW_AGENT_TELEMETRY")) {
+		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+		env["DISABLE_TELEMETRY"] = "1"
 	}
 	// Toolchain-fidelity env — REQUIREMENTS-DRIVEN, never platform-wide: a
 	// workspace run gets exactly what its scans detected (needs), and only a

@@ -463,3 +463,69 @@ func TestDecideScope_AlwaysRejectSetsAreNotSymmetric(t *testing.T) {
 		})
 	}
 }
+
+// TestReconcileWorkspaceEgressDecisions is the D28 heal: the post-Decide
+// write-back is not atomic with Decide, so a PG blip there leaves an approval
+// durably decided `always` while its workspace never got the allow/deny row —
+// the operator's permanent decision dropped behind a 200. Reconcile re-applies
+// every decided always-egress decision to its workspace, recreating the dropped
+// row (and idempotently no-op'ing already-persisted ones).
+//
+// The pre-fix state is modelled directly: a decided always approval whose
+// workspace egress lists are empty (the dropped write-back). Before the fix
+// nothing recreated it; after, reconcile does — proven by the row appearing.
+func TestReconcileWorkspaceEgressDecisions(t *testing.T) {
+	f := newScopeFixture(t)
+	// A workspace linked to the fixture's run, with EMPTY egress lists — the
+	// state left behind when the write-back was dropped.
+	wsID := f.seedWorkspace(t, nil, nil)
+
+	seedDecided := func(host string, state types.ApprovalState) {
+		id := uuid.New()
+		f.approval.mu.Lock()
+		f.approval.byID[id] = types.ApprovalRequest{
+			ID: id, RunID: f.runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"` + host + `"}`),
+			State:          state, DecisionScope: types.ScopeAlways,
+		}
+		f.approval.mu.Unlock()
+	}
+	seedDecided("registry.npmjs.org", types.ApprovalApproved) // -> approved_egress
+	seedDecided("evil.example.com", types.ApprovalDenied)     // -> denied_egress
+	// A non-always decision must NOT be persisted by the reconcile.
+	f.approval.mu.Lock()
+	idRun := uuid.New()
+	f.approval.byID[idRun] = types.ApprovalRequest{
+		ID: idRun, RunID: f.runID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(`{"host":"ephemeral.example.com"}`),
+		State:          types.ApprovalApproved, DecisionScope: types.ScopeRun,
+	}
+	f.approval.mu.Unlock()
+
+	n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("reconciled %d decisions, want 2 (the two always ones)", n)
+	}
+	approved, denied := f.egressLists(t, wsID)
+	if !slices.Contains(approved, "registry.npmjs.org") {
+		t.Errorf("approve·always host not healed onto approved_egress: %v", approved)
+	}
+	if !slices.Contains(denied, "evil.example.com") {
+		t.Errorf("deny·always host not healed onto denied_egress: %v", denied)
+	}
+	if slices.Contains(approved, "ephemeral.example.com") {
+		t.Errorf("a run-scoped decision must not be persisted: %v", approved)
+	}
+
+	// Idempotent: a second reconcile re-applies the same rows without duplicating.
+	if _, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	approved, _ = f.egressLists(t, wsID)
+	if got := slices.Contains(approved, "registry.npmjs.org"); !got || len(approved) != 1 {
+		t.Errorf("reconcile not idempotent: approved=%v", approved)
+	}
+}

@@ -92,3 +92,32 @@ func TestMetricsHealthGaugesSeeAnOutage(t *testing.T) {
 		}
 	}
 }
+
+// TestMetricsSinkDrops covers the D2 wiring: when AuditSinkDrops is set (the
+// cmd/wardynd audit Fanout), /metrics exposes wardyn_audit_sink_drops_total per
+// sink, so a SIEM sink silently shedding events is visible on the scrape surface.
+// Nil AuditSinkDrops (no SIEM configured) omits the series — asserted by the
+// suites above, whose bodies never carry it.
+func TestMetricsSinkDrops(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, nil)
+	cfg.AuditSinkDrops = func() map[string]int64 {
+		return map[string]int64{"webhook": 7, "syslog": 0}
+	}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"# TYPE wardyn_audit_sink_drops_total counter",
+		`wardyn_audit_sink_drops_total{sink="webhook"} 7`,
+		`wardyn_audit_sink_drops_total{sink="syslog"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics body missing %q:\n%s", want, body)
+		}
+	}
+}

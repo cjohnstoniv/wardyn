@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -150,4 +151,33 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		"# TYPE wardyn_store_up gauge\nwardyn_store_up %d\n", up)
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_lines Audit events in the durable fallback spool, waiting to drain back into the store.\n"+
 		"# TYPE wardyn_audit_spool_lines gauge\nwardyn_audit_spool_lines %d\n", s.cfg.AuditSpool.Lines())
+	fmt.Fprintf(w, "# HELP wardyn_audit_spool_torn_total Spool lines dropped as unparseable (a torn tail from an ENOSPC/partial write).\n"+
+		"# TYPE wardyn_audit_spool_torn_total counter\nwardyn_audit_spool_torn_total %d\n", s.cfg.AuditSpool.TornDrops())
+	s.writeSinkDrops(w)
+}
+
+// writeSinkDrops emits the per-SIEM-sink delivery-drop counter (D2): events a
+// webhook/syslog sink shed past its buffer or after retry exhaustion, which the
+// audit Fanout counts but nothing exposed to a scrape target. Omitted entirely
+// when no sinks are configured (AuditSinkDrops nil), so a deployment without SIEM
+// carries no dead series. Sink names come from the sink types (webhook/syslog/
+// file) — never operator input — but %q-quoted anyway.
+func (s *Server) writeSinkDrops(w io.Writer) {
+	if s.cfg.AuditSinkDrops == nil {
+		return
+	}
+	drops := s.cfg.AuditSinkDrops()
+	if len(drops) == 0 {
+		return
+	}
+	names := make([]string, 0, len(drops))
+	for name := range drops {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic scrape output
+	fmt.Fprint(w, "# HELP wardyn_audit_sink_drops_total Audit events dropped by a SIEM sink (buffer overflow or retry exhaustion), by sink.\n"+
+		"# TYPE wardyn_audit_sink_drops_total counter\n")
+	for _, name := range names {
+		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
 }

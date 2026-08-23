@@ -100,13 +100,13 @@ jobs:
           # float-latest: "true" on the three agent-* rows below (W30-S1-2).
           # internal/api/runs_policy.go's agentImage() fallback — what a
           # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
-          # actually pulls — is hardcoded to the `:latest` tag
-          # (ghcr.io/cjohnstoniv/agent-<key>:latest), never the release
-          # semver. Without also pushing `:latest` here, a by-the-book Helm
-          # install pulled a tag this workflow never published — pull failure
-          # even after a green, signed release. wardynd/wardyn-proxy don't
-          # need this: the Helm chart pins their tag to .Chart.AppVersion
-          # (the release semver), never a bare `:latest` fallback.
+          # actually pulls — is ghcr.io/cjohnstoniv/agent-<key>:<version>, the
+          # daemon's OWN version.Version (D19), which the semver `:${RELEASE_TAG}`
+          # tag every matrix row pushes below satisfies. The extra `:latest`
+          # here is the fallback for a build with no version string (agentImageTag
+          # returns "latest" only then); pushing it keeps that last-resort tag
+          # pullable too. wardynd/wardyn-proxy don't need it: the Helm chart pins
+          # their tag to .Chart.AppVersion (the release semver).
           - name: agent-claude-code
             dockerfile: deploy/images/claude-code/Dockerfile
             build-args: ""

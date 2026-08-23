@@ -227,6 +227,13 @@ type Broker struct {
 	// maskReg, when non-nil, receives minted token bytes so they are masked
 	// from PTY captures and asciicast uploads. A nil Registry is a safe no-op.
 	maskReg *secretmask.Registry
+	// siem, when non-nil, receives the credential.mint SUCCESS event AFTER its
+	// commit so it still fans out to SIEM sinks. The DURABLE record is written
+	// INSIDE the mint tx (D29), so the primary store must NOT be double-written
+	// here — siem is the fanout ALONE (cmd/wardynd passes the sinks.Fanout).
+	// The mint event's Data is grant id + scope (names) + jti — no secret values —
+	// so bypassing the masking wrapper this path skips is safe. Nil is a no-op.
+	siem audit.Sink
 	// requireRefRuleset gates every github_token mint on GitHub-side ref
 	// confinement (see envRequireRefRuleset). Read once at construction so a
 	// garbage value fails at BOOT rather than mid-mint.
@@ -276,6 +283,15 @@ func New(db TxBeginner, secrets secretstore.Store, rec audit.Recorder, idp ident
 // accepted (no-op). Call before the Broker is used.
 func (b *Broker) WithMaskRegistry(reg *secretmask.Registry) *Broker {
 	b.maskReg = reg
+	return b
+}
+
+// WithSIEM attaches the SIEM fanout sink the broker emits the credential.mint
+// SUCCESS event to AFTER commit (D29): the durable record is written in-tx, and
+// this fans the same event to file/webhook/syslog sinks WITHOUT re-writing the
+// primary store. A nil sink is accepted (no-op). Call before the Broker is used.
+func (b *Broker) WithSIEM(sink audit.Sink) *Broker {
+	b.siem = sink
 	return b
 }
 
@@ -467,12 +483,30 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		}
 	}
 
+	// D29: write the credential.mint SUCCESS row on the SAME tx as the minted_jti
+	// burn, so the audit event and the single-use burn commit atomically. The old
+	// post-commit auditMint (a write on a SEPARATE connection) left a crash window:
+	// minted_jti committed, then a crash before the audit write burned the approval
+	// with NO credential.mint row and nothing delivered — the git helper's retry
+	// then got 409 already_minted forever. Fail CLOSED: if the durable record
+	// cannot be written, roll the whole mint back rather than hand out an
+	// unrecorded credential.
+	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
+		return Minted{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Minted{}, fmt.Errorf("broker: commit mint tx: %w", err)
 	}
 	committed = true
 
-	b.auditMint(ctx, caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	// The durable record is committed above (in-tx). Fan the SAME event out to the
+	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
+	// doc). The Fanout logs any per-child failure itself.
+	if b.siem != nil {
+		_ = b.siem.Emit(ctx, mintEv)
+	}
 
 	// Register the minted token — and, for ssh_key, its known_hosts material —
 	// in the mask registry so PTY/asciicast streams can mask verbatim
@@ -867,8 +901,11 @@ func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// auditMint emits a credential.mint audit event with full attribution.
-func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) {
+// mintEvent builds a credential.mint audit event with full attribution
+// (actor_type=agent, actor=run SPIFFE id). Shared by the DENIED/FAILURE paths
+// (auditMint, via the Recorder chain) and the SUCCESS path (written in-tx, then
+// fanned to SIEM — D29), so both carry the identical shape.
+func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) types.AuditEvent {
 	d := map[string]any{
 		"grant_id": grantID.String(),
 		"scope":    json.RawMessage(scope),
@@ -885,7 +922,7 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 		r := caller.RunID
 		runID = &r
 	}
-	ev := types.AuditEvent{
+	return types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		RunID:     runID,
@@ -896,7 +933,40 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 		Outcome:   outcome,
 		Data:      data,
 	}
+}
+
+// auditMint emits a credential.mint audit event via the Recorder chain. Used for
+// the DENIED and FAILURE outcomes, which all fire on error paths where the mint
+// tx has ALREADY rolled back — so they cannot ride the tx, and the Recorder's own
+// spooling fallback is the durability they get. The SUCCESS outcome does NOT go
+// through here: it rides the mint tx (insertAuditEventTx) so the audit row and the
+// minted_jti burn commit atomically (D29).
+func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) {
+	ev := mintEvent(caller, grantID, approvalID, jti, scope, outcome)
 	if err := b.audit.Record(ctx, ev); err != nil {
 		audit.LogWriteFailure(ctx, ev, err)
 	}
+}
+
+// insertAuditEventTx writes ev into audit_events on the broker's OWN mint tx, so
+// a credential.mint row commits atomically with the minted_jti burn (D29). It
+// mirrors store.InsertAuditEvent's statement exactly — the broker cannot import
+// that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
+// on), the same reason the grant/approval SQL is inlined here.
+func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
+	dataJSON, err := json.Marshal(ev.Data)
+	if err != nil {
+		return fmt.Errorf("broker: marshal mint audit data: %w", err)
+	}
+	const q = `
+		INSERT INTO audit_events
+			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+	if _, err := tx.Exec(ctx, q,
+		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
+		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
+	); err != nil {
+		return fmt.Errorf("broker: insert mint audit: %w", err)
+	}
+	return nil
 }

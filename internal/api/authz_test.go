@@ -138,6 +138,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// handler itself narrows the response — see the classMember doc) ──
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
+	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
@@ -594,6 +595,9 @@ func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) 
 }
 func (s *authzStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.AgentExecID = execID })
+}
+func (s *authzStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.FailureHint = hint })
 }
 func (s *authzStore) TouchRun(context.Context, uuid.UUID) error { return nil }
 

@@ -113,7 +113,7 @@ var _ RunsByCreatorPager = PG{}
 func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
@@ -162,7 +162,7 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs ORDER BY created_at DESC`, nil)
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
 }

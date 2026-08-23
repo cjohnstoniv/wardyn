@@ -62,3 +62,9 @@ cd72049ecaaa91d7d7d3797d6901c2d149e13868:docs/OPERATIONS.md:generic-api-key:1422
 # Reachable only from main, but `gitleaks git` scans every ref, so the gate
 # needs the entry regardless of which branch the commit sits on.
 81c0984168857a706ed2884b7f8cf22bd80df4fd:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556
+
+# D31's masker regression test needs a fixture SHAPED like an OpenSSH private
+# key (JSON-escaping only bites on realistic multi-line PEM values); the body
+# is the literal marker "distinctivEKEYline" padded with base64 alphabet — it
+# was never a key. History-scan flags the introducing commit, so pin it here.
+18607e555faed35c206d9d21e2915e0c76a9adec:cmd/wardynd/adapters_test.go:private-key:279
