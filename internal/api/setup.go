@@ -580,6 +580,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
 			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
 		}
+		// permissions_posture (#19b): non-blocking/informational, so a read
+		// failure here is skipped rather than surfaced as a setup/status 500 —
+		// unlike secrets/site-config above, nothing else on this page depends
+		// on the enforcement map.
+		if enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx); err == nil {
+			checks = append(checks, permissionsPostureCheck(enf))
+		}
 	}
 
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))

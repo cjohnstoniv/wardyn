@@ -33,7 +33,9 @@ import (
 // site_config/artifact_repo rows) and ListRuns (feeds has_runs). Embeds a nil
 // store.Store for everything else — handleSetupStatus calls nothing further
 // when Runner/Secrets/GitHubRulesets are unset, which every fixture below
-// leaves unset.
+// leaves unset. GetCapabilityEnforcement feeds the #19b permissions_posture
+// row — an empty map (every kind fail-open) is the realistic zero-config
+// answer, same as GetSiteConfig/ListRuns returning zero values above.
 type setupCheckIdsStore struct {
 	store.Store
 	sc types.SiteConfig
@@ -43,6 +45,9 @@ func (s setupCheckIdsStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 	return s.sc, nil
 }
 func (s setupCheckIdsStore) ListRuns(context.Context) ([]types.AgentRun, error) {
+	return nil, nil
+}
+func (s setupCheckIdsStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
 }
 

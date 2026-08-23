@@ -576,3 +576,37 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 	}
 	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }
+
+// permissionsPostureCheck (#19b) grades the four capability-enforcement
+// switches (capabilityKinds — egress_host, secret, workspace, image;
+// permissions.go) that gate member-narrowing/widening grants. An absent
+// switch is capEnforced's own documented default: FAIL-OPEN, i.e. that kind
+// behaves exactly as an un-gated pre-0.6 deployment (capAllowed's doc
+// comment). That is a deliberate, upgrade-safe DEFAULT, not a
+// misconfiguration — a single-operator deployment may legitimately never
+// enable any of them — so this row is always "info" and never escalates to
+// warn/fail, and (like ready's own computation) never gates SetupStatus.Ready.
+// It exists purely so an operator can see the posture without opening the
+// Permissions screen.
+func permissionsPostureCheck(enforcement map[string]bool) SetupCheck {
+	var on, off []string
+	for _, k := range capabilityKinds {
+		if enforcement[k] {
+			on = append(on, k)
+		} else {
+			off = append(off, k)
+		}
+	}
+	joined := func(xs []string) string {
+		if len(xs) == 0 {
+			return "none"
+		}
+		return strings.Join(xs, ", ")
+	}
+	return SetupCheck{
+		ID: "permissions_posture", Label: "Permission enforcement posture", Status: "info",
+		Detail: fmt.Sprintf(
+			"%d of %d permission kinds enforced. Enforced: %s. Fail-open (default allow, matching pre-0.6 behavior): %s.",
+			len(on), len(capabilityKinds), joined(on), joined(off)),
+	}
+}
