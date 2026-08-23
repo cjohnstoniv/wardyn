@@ -90,12 +90,6 @@ export const runs = {
     input: (Partial<AgentRun> | CreateRunInput) & {
       interactive?: boolean;
       inline_policy?: RunPolicySpec;
-      // The (retired) AI Run Composer's session id, so `run.create`'s audit row
-      // could be correlated back to the compose conversation that produced it.
-      // No caller sets this any more (stage-1: the composer UI is gone) — kept
-      // as a harmless, still-accepted optional field rather than a breaking
-      // wire-contract change for its own sake.
-      compose_session_id?: string;
       // Per-run half of the requirements contract: which optional requirements
       // this run enables, plus any read-only narrowing, per attached workspace.
       workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
@@ -124,7 +118,6 @@ export const runs = {
     if (cc) body.confinement_class = cc;
     if (input.interactive) body.interactive = true;
     if (input.inline_policy) body.inline_policy = input.inline_policy;
-    if (input.compose_session_id) body.compose_session_id = input.compose_session_id;
     // BYOI + governed-command pass-through — previously dropped on the floor here.
     if (input.image) body.image = input.image;
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
