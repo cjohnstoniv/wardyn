@@ -23,15 +23,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// hashAttachTicket returns hex(sha256(token)) — what's actually stored in
-// attach_tickets.token_sha256 (STORE-3). The raw token never leaves the
-// minting process: MintAttachTicket hashes before INSERT and
-// ConsumeAttachTicket hashes before the DELETE ... RETURNING, so every
-// consume-once/expiry property is unchanged (the hash is just as unique and
-// just as unguessable as the token it's derived from) while a live-DB reader
-// (a reporting role, a hot standby, a pg_dump) can no longer read a usable
-// bearer credential off the row.
-func hashAttachTicket(token string) string {
+// hashToken returns hex(sha256(token)) — what's actually stored in every
+// *_sha256 credential column this package writes: attach_tickets.token_sha256
+// (STORE-3) and api_tokens.token_sha256 (migration 0045). The raw token never
+// reaches SQL: the mint/insert path hashes before writing and the
+// consume/lookup path hashes before reading, so every uniqueness and
+// consume-once property is unchanged (the hash is just as unique and just as
+// unguessable as the token it's derived from) while a live-DB reader (a
+// reporting role, a hot standby, a pg_dump) can no longer read a usable bearer
+// credential off the row.
+func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
@@ -64,7 +65,7 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
 		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
-		hashAttachTicket(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now,
+		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -89,7 +90,7 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
 		RETURNING run_id, actor_type, principal, role`,
-		hashAttachTicket(token), now,
+		hashToken(token), now,
 	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil

@@ -78,7 +78,7 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 29 direct registrations below +
+			// has gone stale before, W7-S1-1): 31 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
 			// DEADCODE-1) = 34. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
@@ -159,6 +159,18 @@ func (s *Server) routes() chi.Router {
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
+			// Per-user API tokens (apitokens.go): the same self-service shape as
+			// the ssh-keys block above — scoped to the caller's OWN principal at
+			// the store, so these sit on r rather than the admin group. A MEMBER minting a
+			// token grants themselves nothing new: the token carries their own
+			// stamped role, so it reaches exactly the routes their session does
+			// (see apiTokenAuth). The admin twins — the deployment-wide inventory
+			// and revoke-ANYONE's — are the two operatorOnly lines below.
+			r.Get("/me/tokens", s.handleListAPITokens)
+			r.Post("/me/tokens", s.handleCreateAPIToken)
+			r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
+			operatorOnly.Get("/tokens", s.handleListAllAPITokens)
+			operatorOnly.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
 			// Run-detail widget layout: per-user, per-preset, server-synced so a
 			// layout survives a new machine (localStorage would not). Scoped to
 			// the caller's OWN principal at the store, exactly like the ssh-keys

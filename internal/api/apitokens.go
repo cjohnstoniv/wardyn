@@ -1,0 +1,291 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Per-user API tokens (migration 0045): the THIRD auth branch of the public
+// API, plus the self-service and admin CRUD around it.
+//
+// The problem it solves: before this, the only non-interactive credential was
+// WARDYN_ADMIN_TOKEN — one shared string, deployment-wide admin, attributable to
+// nobody. Every script and CI job that touched the API shared it, and the audit
+// log recorded "admin-token" for all of them. An api token is the opposite: it
+// belongs to ONE human, carries THEIR role, and is revocable on its own.
+//
+// The load-bearing property is that authenticating with one is indistinguishable
+// downstream from authenticating with that human's SSO session. apiTokenAuth
+// publishes the identity through withHumanIdentity — the same function the
+// session branch calls — so ownership (AgentRun.CreatedBy), the admin gate
+// (isOperator) and capability grants (capabilitySubjects) all bind to the owning
+// human for free, with no per-feature token awareness anywhere. A token is NEVER
+// the admin identity: minting one requires a verified human in the first place
+// (handleCreateAPIToken), so there is no path by which the shared admin token
+// becomes a per-user one.
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// apiTokenPrefix marks a bearer as a per-user api token rather than the shared
+// admin token. It is a routing hint, not a secret and not a security boundary —
+// the 256 bits after it are — but it buys two real things: a leaked token is
+// greppable in a log or a repo scan, and the auth branch can skip a store round
+// trip for every admin-token request.
+const apiTokenPrefix = "wdn_"
+
+// apiTokenMaxPerPrincipal bounds how many LIVE tokens one human may hold — the
+// same generous cap sshMaxKeysPerPrincipal applies to registered keys, against
+// an accidental (or scripted) unbounded mint loop. Revoking one frees a slot.
+const apiTokenMaxPerPrincipal = 20
+
+// apiTokenNameMaxLen bounds the display name. A name is only ever echoed back to
+// its owner and to an admin inventory screen, so this is length hygiene, not a
+// parser.
+const apiTokenNameMaxLen = 200
+
+// apiTokenIDCtxKey carries the id of the api token that authenticated the
+// current request, when one did. It is NOT an identity key — withHumanIdentity
+// already published who the caller is, deliberately indistinguishably from a
+// session — it answers the narrower question "was this request made with a
+// token", which exactly one caller needs: handleCreateAPIToken, to refuse a
+// token minting another token. Without that refusal, revoking a leaked token
+// would not end the compromise, because the leaked token could already have
+// minted a successor with the same powers and a different id.
+type apiTokenIDCtxKey struct{}
+
+func withAPITokenID(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, apiTokenIDCtxKey{}, id)
+}
+
+func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
+	id, _ := ctx.Value(apiTokenIDCtxKey{}).(uuid.UUID)
+	return id
+}
+
+// apiTokenAuth is the third auth branch, mounted by humanOrAdminAuth in front of
+// the admin bearer compare. A bearer carrying apiTokenPrefix is resolved against
+// api_tokens; anything else (and any request with no bearer at all) is handed
+// straight to fallback, which is the pre-existing admin path.
+//
+// An UNRESOLVABLE prefixed token also falls through to fallback rather than
+// answering 401 here, and that is deliberate on two counts. It keeps the branch
+// from becoming an existence oracle (the store already collapses unknown,
+// revoked and hash-mismatch into ErrNotFound; falling through collapses the
+// response too — one 401 from one place). And it removes a footgun: an operator
+// whose WARDYN_ADMIN_TOKEN happens to start with `wdn_` still authenticates,
+// because the admin compare still gets to run.
+//
+// A store FAILURE is not a rejection and must not fall through — falling
+// through would turn a database outage into "your token is invalid", and worse,
+// into an admin-token compare the caller never asked for. It fails closed with a
+// 500 that says the lookup failed, not that the credential did.
+//
+// This branch deliberately does NOT emit an auth.failed audit event; that
+// vocabulary belongs to a separate lane.
+func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok, ok := bearerToken(r)
+		if !ok || !strings.HasPrefix(tok, apiTokenPrefix) || s.cfg.Store == nil {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		t, err := s.cfg.Store.GetAPITokenByRaw(r.Context(), tok)
+		if errors.Is(err, store.ErrNotFound) {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "api token lookup failed")
+			return
+		}
+		// Best effort by contract (see Store.TouchAPIToken): a failed touch must
+		// never fail an otherwise-valid request. "Last used" is an operator
+		// hygiene signal — which tokens are dead and can be revoked — not an
+		// authorization input, so nothing downstream reads it.
+		_ = s.cfg.Store.TouchAPIToken(r.Context(), t.ID, s.cfg.Now().UTC())
+		// The SAME four keys the session branch publishes, through the SAME
+		// function, from the snapshot stamped when this token was minted. This is
+		// what makes ownership, RBAC and capability grants bind to the owning
+		// human with no token-specific code anywhere downstream.
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.Groups)
+		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
+	})
+}
+
+// createAPITokenRequest is the POST /api/v1/me/tokens body.
+type createAPITokenRequest struct {
+	Name string `json:"name"`
+}
+
+// handleCreateAPIToken is POST /api/v1/me/tokens: mint a token for the caller's
+// OWN identity and return the plaintext exactly once.
+//
+// Two refusals guard the identity invariant, and both are 403 rather than a
+// validation error because both are about WHO is asking, not what they sent:
+//
+//  1. No verified human on the context. That is the admin token, or local mode
+//     — neither is a person, so there is no identity for a "per-user" token to
+//     carry. Minting one anyway would produce a second admin-tier credential
+//     attributable to nobody, which is the exact problem this feature exists to
+//     remove.
+//  2. The caller is itself a token. A token minting a successor token would make
+//     revocation meaningless: pull the leaked credential and its child, minted
+//     minutes after the leak, still works under a different id.
+func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	var req createAPITokenRequest
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	ctx := r.Context()
+	sub := oidcHumanFromContext(ctx)
+	if sub == "" {
+		writeError(w, http.StatusForbidden,
+			"an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly")
+		return
+	}
+	if apiTokenIDFromContext(ctx) != uuid.Nil {
+		writeError(w, http.StatusForbidden,
+			"an API token cannot create another API token — sign in to the console to mint one")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
+		writeError(w, http.StatusUnprocessableEntity, "name: invalid")
+		return
+	}
+
+	existing, err := s.cfg.Store.ListAPITokensByPrincipal(ctx, sub)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		return
+	}
+	live := 0
+	for _, t := range existing {
+		if t.RevokedAt == nil {
+			live++
+		}
+	}
+	if live >= apiTokenMaxPerPrincipal {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
+		return
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		writeError(w, http.StatusInternalServerError, "generate api token: "+err.Error())
+		return
+	}
+	plaintext := apiTokenPrefix + hex.EncodeToString(raw)
+
+	// The identity SNAPSHOT. Role is normalized to exactly one of the two
+	// constants through isOperator — the same gate every admin-only route
+	// consults — so a token can never be stamped with a third value that
+	// isOperator would then read as "not admin" by accident rather than by
+	// decision. Email and groups are copied verbatim (groups nil included: nil
+	// and empty differ — see oidcGroupsCtxKey).
+	role := oidc.RoleMember
+	if s.isOperator(ctx) {
+		role = oidc.RoleAdmin
+	}
+	created, err := s.cfg.Store.CreateAPIToken(ctx, types.APIToken{
+		ID:        uuid.New(),
+		Principal: sub,
+		Email:     oidcEmailFromContext(ctx),
+		Role:      role,
+		Groups:    oidcGroupsFromContext(ctx),
+		Name:      name,
+		CreatedAt: s.cfg.Now().UTC(),
+	}, plaintext)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create api token: "+err.Error())
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"token.create", created.ID.String(), "success",
+		mustJSON(map[string]any{"name": created.Name, "role": created.Role})))
+
+	// The ONLY response that carries the plaintext. It is not stored, so this
+	// body is the sole opportunity to read it; a lost token is re-minted, never
+	// recovered.
+	created.Token = plaintext
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// handleListAPITokens is GET /api/v1/me/tokens: the caller's own tokens,
+// revoked ones included (a human has to be able to SEE that the credential they
+// retired is retired). No row anywhere in this response carries the plaintext or
+// the hash.
+func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.cfg.Store.ListAPITokensByPrincipal(r.Context(), principalFromRequest(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+// handleListAllAPITokens is GET /api/v1/tokens: every token in the deployment.
+// operatorOnly (routes.go) — this is the admin inventory that makes revoke-any
+// usable, and it names other humans, so it is not a member surface.
+func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.cfg.Store.ListAPITokens(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+// handleRevokeAPIToken is DELETE /api/v1/me/tokens/{id}: revoke one of the
+// caller's OWN tokens. Scoped to their principal at the store, so another
+// human's id answers the byte-identical 404 a nonexistent id does — no existence
+// leak across principals.
+func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	s.revokeAPIToken(w, r, principalFromRequest(r))
+}
+
+// handleAdminRevokeAPIToken is DELETE /api/v1/tokens/{id}: revoke ANYONE's
+// token. operatorOnly (routes.go). This is the remediation path for the stamp
+// ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
+// the role they were minted under until they are revoked here — and for a token
+// whose owner has left.
+func (s *Server) handleAdminRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	s.revokeAPIToken(w, r, "")
+}
+
+// revokeAPIToken is the shared body of both revoke routes. An EMPTY principal is
+// the admin lane (any token); a non-empty one scopes the update to that human's
+// own rows. Already-revoked is ErrNotFound at the store, so a second call is a
+// 404 and emits no second audit row for an act that did not happen.
+func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principal string) {
+	id, ok := parseIDParam(w, r, "id", "api token")
+	if !ok {
+		return
+	}
+	revoked, err := s.cfg.Store.RevokeAPIToken(r.Context(), id, principal, s.cfg.Now().UTC())
+	if notFoundIf(w, err, "api token") {
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "revoke api token: "+err.Error())
+		return
+	}
+	// principal names the token's OWNER, which is the whole point of the row on
+	// the admin lane: the actor is the admin, the subject is someone else.
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"token.revoke", revoked.ID.String(), "success",
+		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name})))
+	w.WriteHeader(http.StatusNoContent)
+}

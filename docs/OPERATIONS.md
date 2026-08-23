@@ -480,6 +480,44 @@ grant applies immediately. A process-local cache would be the same HA blocker
 named elsewhere in this document, and a stale permission cache is a security
 bug rather than a slow page.
 
+### Per-user API tokens: stop sharing the admin token
+
+`WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to
+nobody. Every script that held it was an admin, and the audit log recorded all
+of them as `admin-token`. A **per-user API token** is the replacement: a human
+mints one for their own automation, it carries *their* identity and *their*
+role, and it is revocable on its own.
+
+| Call | Who | What |
+|---|---|---|
+| `POST /api/v1/me/tokens` | any signed-in human | mint one for yourself — the response is the **only** time the plaintext exists |
+| `GET /api/v1/me/tokens` | any signed-in human | your own tokens, revoked ones included |
+| `DELETE /api/v1/me/tokens/{id}` | any signed-in human | revoke one of your own |
+| `GET /api/v1/tokens` | admin | every token in the deployment |
+| `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
+
+Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
+indistinguishable from that human's console session — run ownership, the
+admin/member gate and capability grants all resolve to the owning human — so a
+member's token reaches exactly the routes their session reaches, and no more. A
+token is **never** the admin identity: minting one requires a verified SSO
+human, so neither the admin token nor local mode can mint one, and a token
+cannot mint a successor (otherwise revoking a leaked one would not end the
+compromise).
+
+Only `hex(sha256(token))` is stored. A lost token is re-minted, never
+recovered, and a database reader — a reporting role, a hot standby, a `pg_dump`
+in a backup bucket — cannot lift a usable credential off a row. `last_used_at`
+is best effort and is the signal for "which of these are dead"; revoke those.
+
+**The role is a stamp, not a live check.** A token carries the role its owner
+held when they minted it, exactly the way a registered SSH key does. Demoting a
+human from admin to member does **not** reach their outstanding tokens — revoke
+them with `DELETE /api/v1/tokens/{id}`, which is also the path for a departed
+owner's credential. Both `token.create` and `token.revoke` are audited (see
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
+owner, so an admin revoking someone else's is legible after the fact.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;
