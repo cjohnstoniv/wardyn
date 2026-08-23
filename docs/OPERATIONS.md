@@ -139,6 +139,47 @@ it can record — Wardyn keeps both. The spool is per-process by design: it is t
 fallback for one pod's failed write, and each `wardynd` drains its own back on
 recovery (see [One replica, by construction](#one-replica-by-construction)).
 
+### Retention, erasure and GDPR — a residual, not a solved problem
+
+The append-only guarantee above is unconditional: there is no time window,
+size cap, or admin-invoked delete path anywhere in `audit_events`. That is a
+deliberate integrity choice (an audit trail an admin can prune is a trail an
+admin can hide behind), but it means **retention is forever by default and
+there is no erasure lever today** — a gap this section states plainly rather
+than leaving implicit.
+
+Concretely:
+
+- `Actor` (`internal/types/types.go`'s `AuditEvent`) is personal data — an
+  OIDC `sub` or email, on every human-attributed row, forever.
+- `Data` (`json.RawMessage`) can carry a human-typed value verbatim. The
+  platform's secret-masking registry only redacts values it minted or that
+  were explicitly registered (`internal/secretmask`); a credential a human
+  *pastes* into a recorded terminal or types into a run's task field is not
+  in that registry and is therefore stored — and replayable — in the clear,
+  with no per-value redaction path (see register finding D17 for the
+  session-recording instance of the same gap).
+- There is no `DELETE`/erasure endpoint for a single audit row, a single
+  actor's rows, or a single run's rows. Migration `0001_init.sql`'s
+  row-level trigger and `0004_audit_truncate_guard.sql`'s statement-level
+  trigger both exist specifically to make this true at the database layer,
+  not just by API convention — so there is no admin-surface workaround
+  either.
+
+**This is asymmetric with session recordings**, which already have exactly
+the retention lever audit lacks: `WARDYN_RECORDING_RETENTION_DAYS`
+(`docs/ENV.md:47`) age-deletes stored PTY casts, defaulting to keep-forever
+but operator-settable, and each sweep that removes anything emits its own
+`recording.retention.sweep` audit event (so the deletion itself stays
+auditable even though the deleted content is gone). Audit has no equivalent
+knob. If your deployment is subject to a "right to erasure" obligation on
+data an audit row could contain (an actor identity, or a pasted secret), the
+honest current answer is: **you cannot selectively erase it, and the fix that
+exists for recordings does not exist here.** A time-partitioned audit table
+with an attested, operator-invoked partition-drop (or crypto-shredding) is
+the shape of a real fix; nothing in that direction is built. Treat this
+paragraph, not silence, as the disclosure until it is.
+
 ## Monitoring
 
 `GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`)
