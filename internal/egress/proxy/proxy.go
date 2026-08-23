@@ -904,7 +904,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), 0, 0)
+	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
+		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	p := newProxy(Options{
 		RunID:           cfg.RunID,
