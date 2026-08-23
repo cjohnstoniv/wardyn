@@ -34,6 +34,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -953,10 +954,22 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 // mirrors store.InsertAuditEvent's statement exactly — the broker cannot import
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.
+//
+// prev_hash/row_hash are NOT written here: migration 0047's BEFORE INSERT
+// trigger fills them for every insert path, including this one. What this path
+// DOES owe the chain is the serializing lock — it must be taken before the
+// INSERT statement, on this same tx, so the seq identity default and the
+// trigger's head read happen under it (db.AuditChainLockKey explains why the
+// trigger cannot take it itself). Taken here, as late in the mint tx as
+// possible, so the chain lock is always acquired AFTER this tx's grant/approval
+// row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("broker: marshal mint audit data: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
+		return fmt.Errorf("broker: lock audit chain: %w", err)
 	}
 	const q = `
 		INSERT INTO audit_events

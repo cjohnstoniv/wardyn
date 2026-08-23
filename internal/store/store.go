@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -478,20 +479,45 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 
 // InsertAuditEvent appends a single audit event. Implements audit.Recorder.
 // The Postgres trigger blocks UPDATE/DELETE; this function only ever INSERTs.
-func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev types.AuditEvent) error {
+//
+// ev is taken by POINTER so the hash chain (migration 0047) can be handed back:
+// on success ev.PrevHash/ev.RowHash carry the values Postgres computed, and
+// ev.RowHash IS the chain head at that instant. cmd/wardynd's fanoutRecorder
+// emits that same value to the audit sinks, which is how an external SIEM ends
+// up holding a head hash Wardyn cannot later disown.
+//
+// It runs in a transaction for ONE reason: pg_advisory_xact_lock must be held
+// across the INSERT so the identity default (seq) and 0047's head read happen
+// under the same lock, keeping seq order and chain order identical. See
+// db.AuditChainLockKey.
+func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)
 	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: begin audit tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on the failure path
+	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+		return fmt.Errorf("store: lock audit chain: %w", err)
+	}
+	// COALESCE: the genesis row's prev_hash is SQL NULL, which will not scan
+	// into a string. Empty string and NULL both mean "nothing before this row".
 	const q = `
 		INSERT INTO audit_events
 			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if _, err := pool.Exec(ctx, q,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	); err != nil {
+	).Scan(&ev.PrevHash, &ev.RowHash); err != nil {
 		return fmt.Errorf("store: insert audit event: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit audit event: %w", err)
 	}
 	return nil
 }
