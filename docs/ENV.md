@@ -93,6 +93,7 @@ log them.
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`) |
 | `WARDYN_AGENT_ANTHROPIC_MODEL` | string | (unset) | pin `ANTHROPIC_MODEL` inside claude-code sandboxes (flag `-agent-anthropic-model`) |
+| `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1` in the sandbox env, `runs_dispatch_mounts.go`): the CLI's first-run phone-home is otherwise the FIRST pending egress approval a Confined pilot sees, before the host their task actually needs |
 | `WARDYN_BEDROCK_MODEL` | string | (unset) | Bedrock inference-profile id (flag `-bedrock-model`) |
 | `WARDYN_BEDROCK_REGION` | string | (unset) | AWS region for the Bedrock transport (flag `-bedrock-region`); falls back to the standard `AWS_REGION` / `AWS_DEFAULT_REGION` when empty |
 | `WARDYN_BEDROCK_AWS_DIR` | string | (unset) | host `~/.aws` mounted read-only into Bedrock runs (flag `-bedrock-aws-dir`) |
