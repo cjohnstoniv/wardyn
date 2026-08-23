@@ -484,11 +484,20 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 func uiStripInbound(out *http.Request) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
-	if cookies := out.Cookies(); len(cookies) > 0 {
-		kept := make([]string, 0, len(cookies))
-		for _, c := range cookies {
-			if !uiIsWardynCookie(c.Name) {
-				kept = append(kept, c.Name+"="+c.Value)
+	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
+	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
+	// space, a comma, a quote), so re-serialising through it ate a sandbox
+	// app's own non-conforming cookies as a side effect of stripping ours.
+	// This relay is supposed to be a pass-through for everything that is not
+	// a wardyn_* credential, so only those segments come off and the rest goes
+	// on to the app as it arrived.
+	if raw := strings.Join(out.Header.Values("Cookie"), "; "); raw != "" {
+		kept := make([]string, 0, strings.Count(raw, ";")+1)
+		for _, seg := range strings.Split(raw, ";") {
+			seg = strings.TrimSpace(seg)
+			name, _, _ := strings.Cut(seg, "=")
+			if seg != "" && !uiIsWardynCookie(name) {
+				kept = append(kept, seg)
 			}
 		}
 		if len(kept) == 0 {

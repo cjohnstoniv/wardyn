@@ -579,6 +579,40 @@ func TestUIGateway_RelayStripsWardynCredentialsInbound(t *testing.T) {
 	}
 }
 
+// TestUIGateway_RelayKeepsNonConformingAppCookies: the inbound strip is a
+// pass-through for everything that is not a wardyn_* credential, INCLUDING a
+// cookie net/http's own parser refuses to read. Rebuilding the header from
+// out.Cookies() silently ate those (a value with a space, a comma, a quote),
+// so an app whose session cookie was not RFC-6265-clean simply stopped working
+// through the gateway — with no error anywhere to say why.
+func TestUIGateway_RelayKeepsNonConformingAppCookies(t *testing.T) {
+	seen := make(chan *http.Request, 1)
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Clone(context.Background())
+		_, _ = io.WriteString(w, "ok")
+	}))
+	cookie := h.openSession()
+
+	// Appended raw (keeping the relay session cookie the harness just added):
+	// AddCookie would sanitize the value before it ever hit the wire.
+	rec := h.relay("/ide", cookie, func(r *http.Request) {
+		r.Header.Set("Cookie", r.Header.Get("Cookie")+`; wardyn_session=console-session; legacy="a b"; app_theme=dark`)
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relay: %d %s", rec.Code, rec.Body.String())
+	}
+	got := (<-seen).Header.Get("Cookie")
+	if !strings.Contains(got, `legacy="a b"`) {
+		t.Fatalf("upstream Cookie = %q, want the app's non-conforming cookie preserved", got)
+	}
+	if !strings.Contains(got, "app_theme=dark") {
+		t.Fatalf("upstream Cookie = %q, want the app's other cookie preserved", got)
+	}
+	if strings.Contains(strings.ToLower(got), uiCookiePrefix) {
+		t.Fatalf("upstream Cookie = %q, want every wardyn_* name stripped", got)
+	}
+}
+
 // TestUIGateway_RelayDropsSandboxWardynCookiesOutbound: cookie tossing. An app
 // in the sandbox that could set (or clear) wardyn_ui_sess — or the console's
 // session cookie on a shared host — would be mounting an authentication
