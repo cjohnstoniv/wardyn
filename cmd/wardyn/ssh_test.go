@@ -178,3 +178,22 @@ func TestShortRunID(t *testing.T) {
 		}
 	}
 }
+
+// TestRunSSH_EnabledButNoAdvertiseAddr: the gateway is on and WARDYN_SSH_ADVERTISE
+// is unset, so /healthz publishes an empty advertise_addr. Before this the CLI
+// built `ssh <run>@ -p` and let ssh(1) fail on the empty hostname — the operator
+// got a resolver error for what is a wardynd misconfiguration.
+func TestRunSSH_EnabledButNoAdvertiseAddr(t *testing.T) {
+	for _, body := range []string{
+		`{"ssh":{"enabled":true,"advertise_addr":"","host_key_fingerprint":"SHA256:abc"}}`,
+		`{"ssh":{"enabled":true,"advertise_addr":":2222","host_key_fingerprint":"SHA256:abc"}}`,
+	} {
+		out, err := runSSHPrint(t, body, "run-1")
+		if err == nil {
+			t.Fatalf("expected a refusal, got output %q", out)
+		}
+		if !strings.Contains(err.Error(), "WARDYN_SSH_ADVERTISE") {
+			t.Errorf("error = %q, want it to name WARDYN_SSH_ADVERTISE", err.Error())
+		}
+	}
+}

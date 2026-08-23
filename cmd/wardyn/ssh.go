@@ -70,6 +70,13 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig b
 	}
 
 	host, port := splitHostPort(health.SSH.AdvertiseAddr)
+	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
+	// unset — /healthz carries it verbatim). Without this the command built
+	// "ssh <run>@ -p" and handed ssh(1) an empty hostname, so the operator got
+	// ssh's own resolver error for a Wardyn misconfiguration.
+	if host == "" {
+		return errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
+	}
 	target := fmt.Sprintf("%s@%s", runID, host)
 	args := []string{target}
 	if port != "" {
