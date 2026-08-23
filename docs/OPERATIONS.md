@@ -1327,8 +1327,10 @@ better — pass `-f your-values.yaml` as above, which is the same idea with the
 overrides somewhere you can review them. None of this is Wardyn-specific: it is
 what `--reuse-values` does to every chart that grows a values block.
 
-The new pod applies nothing, because `schema_migrations` already records every
-file — the forward-only rule at work, visible as an empty count:
+The new pod applies only the migration files `schema_migrations` does not
+already record — the forward-only rule at work. For the `0.5` → `0.6` upgrade
+this recipe serves, that is `0042_capability_grants` and `0043_ssh_key_role`;
+re-running the same version applies nothing and the count is `0`:
 
 ```console
 $ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
@@ -1336,8 +1338,12 @@ NAME                      READY   STATUS    RESTARTS   AGE
 wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
 
 $ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
-0
+2
 ```
+
+A non-zero count here is the expected shape of a version bump, not a warning.
+It is `0` only when the schema was already current — a re-deploy of the same
+version, or a rollout the schema did not move.
 
 **`--wait` (or `--atomic`) is the load-bearing flag, not a courtesy.** Without
 it `helm upgrade` reports on the API objects it wrote, not on whether anything
