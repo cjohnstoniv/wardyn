@@ -567,7 +567,7 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   await spotlight(page, alwaysOption);
   await caption(page, "Or always.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Each one makes the decision last a little longer.");
+  await caption(page, "Each one gives that decision a different lifetime.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 

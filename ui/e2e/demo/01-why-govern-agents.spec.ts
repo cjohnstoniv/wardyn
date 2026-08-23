@@ -353,7 +353,7 @@ test("V01 — why govern agents (the primer)", async () => {
 
   // --- S7 · what's ahead ----------------------------------------------------------
   await show(page, "s7");
-  await caption(page, "That's the idea behind the rest of this series.");
+  await caption(page, "That's the idea behind the rest of this series: build the boundary, prove it works, and then make it repeatable.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We're going to take that simple principle...");
   await beat(page, BEAT_SHORT);
@@ -364,20 +364,17 @@ test("V01 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#oss-line"));
   await caption(page, "It's open source, runs on your own machine, and we're going to prove each part on camera.");
   await beat(page, PACE.read);
+  // Round-2 dialog review (Lane C, applied on plan approval): the old close
+  // counted the episodes and then sent a viewer straight to episode three —
+  // a shortcut past the two episodes that build the machine that episode
+  // three films. The series is ordered for a reason, so the close now says
+  // so. The #ep03 spotlight goes with the line that named it; #roadmap and
+  // #next still carry the two lines that remain.
   await spotlight(page, page.locator("#roadmap"));
-  await caption(page, "There are eleven more episodes.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Each one tackles a piece of the problem.");
-  await beat(page, PACE.read);
-  await spotlight(page, page.locator("#ep03"));
-  await caption(page, "If you're in a hurry, jump to episode three.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "That's where we get into what the system actually stops.");
+  await caption(page, "We'll build that from the ground up, one step at a time.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#next"));
-  await caption(page, "But next, we start at the beginning:");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "setting up the host.");
+  await caption(page, "Next, we start at the beginning: setting up the host.");
   await beat(page, BEAT_SHORT);
   await caption(page, "One command.");
   await beat(page, BEAT_SHORT);

@@ -193,8 +193,15 @@ say "No agent."
 say "No key."
 say "Just a governed task."
 say "And an agent job follows the same model."
-say "The pipeline supplies the secret."
-say "Wardyn injects what the run needs at the boundary."
+# Round-2 dialog review: "The pipeline supplies the secret." was false to the
+# lane — the pipeline passes a NAME/grant and Wardyn's proxy holds the value.
+# The plan's replacement pair lands as a REPLACEMENT of the next line too: its
+# second half ("Wardyn injects it at the boundary") already existed here almost
+# verbatim, so adding it would have said the same thing twice and spent an
+# extra say beat. Three says in, three says out — the typist's budget for this
+# stretch is unchanged, and the trio still reads pipeline → Wardyn → workload.
+say "The pipeline names the secret the run is allowed to use."
+say "Wardyn injects it at the boundary — the pipeline never handles the value."
 say "The workload doesn't have to carry the credential itself."
 
 # SPOKEN IN FRONT OF THE COMMAND, NOT BEHIND IT. type_cmd blocks for the whole

@@ -408,9 +408,9 @@ test("cold open + B1 — the card that learns", async () => {
   // you know what a job needs, you write the policy and you're done — episode 08
   // just filmed exactly that. Recording is the answer to NOT knowing, and saying
   // so is what stops this episode reading as a retraction of the last one.
-  await caption(page, "Episode eight wrote the rules down because we already knew them.");
+  await caption(page, "Episode eight turned rules we already knew into a reusable policy.");
   await beat(page, PACE.read);
-  await caption(page, "Most of the time, you don't.");
+  await caption(page, "Most of the time, you don't know everything the job will need.");
   await beat(page, BEAT_SHORT);
   await caption(page, "So don't guess. Watch.");
   await beat(page, PACE.read);
@@ -555,7 +555,7 @@ test("B3 — honest small work", async () => {
   await caption(page, "A Git identity.");
   await beat(page, BEAT_SHORT);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
-  await caption(page, "Then one ordinary install.");
+  await caption(page, "Then one ordinary package install — something simple that can still reveal more than one host.");
   await beat(page, PACE.read);
 
   // SCREEN-TYPE: THE JOB. One command — and this is the difference between the
@@ -570,7 +570,7 @@ test("B3 — honest small work", async () => {
   // it is CALLED, so firing it alongside the keystrokes is what makes the line
   // land while the command is actually appearing.
   await Promise.all([
-    caption(page, "One command. Watch how many hosts it takes."),
+    caption(page, "One command. Watch how many hosts the job actually reaches."),
     typeInTerminal(page, INSTALL_CMD, card),
   ]);
   await beat(page, PACE.read);
@@ -837,7 +837,7 @@ test("B5 — approve one, not both", async () => {
   // confirm-egress-dialog both use that aria-label shape).
   const downloadHostBox = confirm.getByRole("checkbox", { name: `Approve ${RECORDED_HOSTS[1]}` });
   await expect(confirm.getByRole("button", { name: /^Approve 2 hosts$/ })).toBeVisible({ timeout: 15_000 });
-  await caption(page, "And we don't have to take all of them.");
+  await caption(page, "And we don't have to approve all of them just because we observed them.");
   await beat(page, PACE.read);
   await act(page, downloadHostBox);
   await spotlight(page, downloadHostBox);
@@ -872,7 +872,7 @@ test("B5 — approve one, not both", async () => {
     card.getByText("Promoted — 1 still needs approval", { exact: true }),
     "the promote did not land as a PARTIAL — either both hosts went through or none did",
   ).toBeVisible({ timeout: 60_000 });
-  await caption(page, "One approved. One still waiting.");
+  await caption(page, "One approved. One deliberately left out.");
   await beat(page, PACE.read);
 
   // launchRecordRun's replay does NOT read the saved policy at all (no
@@ -1162,9 +1162,17 @@ test("B7 — approve the miss, run it again", async () => {
       `villain is the exact footgun the selector exists to prevent`,
   ).not.toBeChecked();
   await spotlight(page, caught);
-  await caption(page, "Replayed — caught two: the download host the job actually needed, and the host we never wanted.");
+  await caption(page, "Replayed — caught two: one host the job genuinely needed, and one host we deliberately never want to allow.");
   await beat(page, PACE.read);
-  await caption(page, "Only the first one is offered back to us. That default is deliberate — a denied host never rides along with an approval.");
+  // A′ (dialog review round 2): the selector lists BOTH caught hosts — the
+  // asserts above are exactly that — so "only the first one is offered back"
+  // was false to the screen. What is actually true is the DEFAULT: the held
+  // host arrives checked, the denied one arrives unchecked.
+  await caption(page, "Both come back to us — but only the genuine dependency comes pre-checked.");
+  await beat(page, PACE.read);
+  await caption(page, "The denied host stays unchecked.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That default is deliberate.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -1296,7 +1304,7 @@ test("B7 — approve the miss, run it again", async () => {
   await beat(page, PACE.read + 400);
   // The fifth step, added with the beat that films it: the summary used to list
   // four and the video now shows five.
-  await caption(page, "If it catches something the job genuinely needed, approve just that one, and run it again — until it comes back clean.");
+  await caption(page, "If replay catches something the job genuinely needed, approve only that dependency and replay again — until the run comes back clean.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await caption(page, "You don't have to predict the future.");

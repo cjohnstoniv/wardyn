@@ -423,9 +423,9 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
   // step, and the JSON edit above IS the save, so the line pointed at nothing
   // on screen. Replaced with a drafted pair that names what the edit produced
   // and ties it back to 05's spec beat. See local/light-episodes-dialog-flags.md.
-  await caption(page, "Save it.");
+  await caption(page, "Save the spec.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "That spec is the contract — the same one we read end to end in episode five.");
+  await caption(page, "That spec is the contract — the same kind of spec we read end to end in episode five.");
   await beat(page, BEAT_SHORT);
 
   // --- B6 The rail is the contract ----------------------------------------
@@ -951,7 +951,7 @@ test("V07 beat 10 — borrowed, never held", async () => {
   expect(proofRunId.length > 0, "proof-run create returned no id").toBe(true);
 
   await page.goto(`/runs/${proofRunId}`);
-  await caption(page, "This background run gets access to one credential.");
+  await caption(page, "This autonomous run gets access to one credential.");
   await beat(page, PACE.read);
   await caption(page, "But what it receives is a short-lived value created by the broker.");
   await beat(page, PACE.read + 400);

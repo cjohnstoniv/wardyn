@@ -476,7 +476,7 @@ drive() {
   say "No passwords."
   say "Just registered keys."
   say "My key was registered during setup."
-  say "Remember that fingerprint."
+  say "And that's its fingerprint."
   pane_type "${P_OWNER}" "${cmd}"
   # First connect against an empty known_hosts: the client stops and prints the
   # host key. preflight already proved that key is the one /healthz discloses —
@@ -517,7 +517,7 @@ drive() {
   # --- B2 · two windows, one driver ---------------------------------------
   say "Now I'll attach from another window."
   say "Same person."
-  say "Different key."
+  say "A different registered key."
   # Anchor the holder's frame before the observer arrives. If an arriving
   # observer clamped the shared tmux window (the bug the third line says is
   # fixed), the sandbox redraws and the holder's scrollback is disturbed. The
@@ -540,7 +540,7 @@ drive() {
   pane_wait "${P_OBS}" 'same session' 30 \
     || die "the observer never saw the holder's terminal — these are not one session"
   say "And the first session doesn't have to do anything differently."
-  say "The watcher is just another view."
+  say "The watcher gets another authenticated view of the same run."
   if [[ -n "${anchor}" ]]; then
     pane_text "${P_OWNER}" | grep -qF -- "${anchor}" \
       || die "the holder's frame was rewritten when the observer arrived — the shared terminal was disturbed (see internal/api/attach_holder_test.go)"

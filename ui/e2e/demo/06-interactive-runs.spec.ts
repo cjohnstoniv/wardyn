@@ -249,7 +249,7 @@ test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined.");
   await caption(page, "And the network is still default-deny.");
   await beat(page, PACE.read);
-  await caption(page, "The model needs one destination, so we'll allow one.");
+  await caption(page, "The agent needs one model endpoint, so we'll allow one.");
   await beat(page, PACE.read);
   // DIALOG-STALE(old UI): "Add api.anthropic.com." narrated clicking the
   // deleted "Just the model provider" Network preset radio. The Minimal chip
@@ -343,7 +343,7 @@ test("V06 beat 3 — the decoy", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Anthropic has never seen it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The real credential is still outside the sandbox, at the proxy.");
+  await caption(page, "The real credential stays outside the sandbox — the proxy supplies it at the boundary, per request.");
   await beat(page, PACE.read);
   await caption(page, "That means the proxy is also the point where the credential can be attached to the request.");
   await beat(page, PACE.read);
@@ -486,7 +486,7 @@ test("V06 beat 5 — on the record", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Wardyn injected the credential at the boundary.");
   await beat(page, PACE.read);
-  await caption(page, "The sandbox doesn't appear as the owner of that credential because it never held it.");
+  await caption(page, "The sandbox isn't recorded as holding that credential — the real value never entered it.");
   await beat(page, PACE.read);
   await caption(page, "That's the distinction we're proving.");
   await beat(page, PACE.read + 400);

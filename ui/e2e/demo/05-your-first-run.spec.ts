@@ -278,9 +278,9 @@ test("V05 beat 2 — the envelope", async () => {
   // and 08's beats say it too); the line names its three parts so the JSON on
   // screen reads as an envelope, not a config file. Drafted for the owner's
   // pen; see local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Every rule for this run lives in one small spec — where it can go, what it can touch, how hard the walls are.");
+  await caption(page, "Every rule for this run lives in one small spec — where it can go, what it can touch, and how much isolation it requires.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Short enough to read end to end.");
+  await caption(page, "Short enough to read end to end before we launch.");
   await beat(page, PACE.read);
   await caption(page, "And because this is a confined run, the network starts closed.");
   await beat(page, PACE.read);
@@ -373,7 +373,7 @@ test("V05 beat 2 — the envelope", async () => {
   // DIALOG-NEW-BEAT: the result box is two columns — requested vs effective —
   // and nothing on screen tells the viewer that. Drafted; see
   // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Preflight shows two things side by side: the policy we wrote, and the policy that will actually run.");
+  await caption(page, "Preflight shows two things side by side: the spec we wrote, and the policy that will actually run.");
   await beat(page, PACE.read);
   // The clamp lane's own words: an operator's spec is not clamped, so this
   // reads "No adjustments." Asserted BEFORE it is spoken — a stack that did
@@ -539,7 +539,7 @@ test("V05 beat 4 — the receipts", async () => {
   // it, so the contrast (deny + allow, side by side) is the teaching.
   const egressPanel = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
   await spotlight(page, egressPanel);
-  await caption(page, "There's also one network entry here.");
+  await caption(page, "And there's one internal network entry here.");
   await beat(page, PACE.read);
   await caption(page, "That's Wardyn's own control channel.");
   await beat(page, PACE.read);

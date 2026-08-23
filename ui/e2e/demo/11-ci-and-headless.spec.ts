@@ -278,7 +278,7 @@ test("beat 6 — same trail, no human", async () => {
   // local/light-episodes-dialog-flags.md.
   await caption(
     page,
-    "And if it reaches for something off the list? Nobody's there to say yes, so it fails closed — the pipeline tells you, instead of quietly letting it through.",
+    "And if it reaches for something off the list, there's no approval step to wait for. The policy fails closed, and the pipeline gets that failure as its result.",
   );
   await beat(page, PACE.read);
   await caption(page, "Governance that doesn't require somebody to stay awake.");

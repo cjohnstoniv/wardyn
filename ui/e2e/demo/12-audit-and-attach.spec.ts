@@ -271,7 +271,12 @@ test("beat 5 — name the streams", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await caption(page, "The kernel is the closest thing we have to an independent witness.");
+  // Round-2 dialog review: the plan's first choice here was "a second witness
+  // alongside Wardyn's own record", but P10b's ratified line says almost
+  // exactly that only TWO spoken lines later (below) — under the plan's own
+  // ≥4-line proximity rule this slot therefore takes the alternative, so the
+  // series does not say "second witness" twice inside one beat.
+  await caption(page, "The kernel can watch from outside the sandbox entirely.");
   await beat(page, PACE.read);
   // GroundTruthChip renders `Ground truth · {state}` off /healthz's
   // ebpf_groundtruth. Two states mean "no sensor feeding this stack":

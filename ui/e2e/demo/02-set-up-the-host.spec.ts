@@ -219,7 +219,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, BEAT_SHORT);
   const tiers = page.getByRole("radiogroup", { name: "Barrier tier" });
   await spotlight(page, tiers);
-  await caption(page, "Here, Wardyn gives us three versions of that room.");
+  await caption(page, "Here, Wardyn gives us three levels of confinement for that room.");
   await beat(page, PACE.read);
   // P11a (dialog review, owner-ratified 2026-08-23): "barrier" is spoken six
   // times across later episodes and was never defined anywhere. This is the
@@ -306,15 +306,15 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, PACE.read);
 
   await act(page, page.getByRole("button", { name: "Test connectivity" }), "One click.");
-  await caption(page, "The probe tells us whether the path actually works.");
+  await caption(page, "The probe tells us whether this machine's network path actually works.");
   await beat(page, PACE.read);
 
   const reached = page.getByText(/^Reached · direct/).first();
   await expect(reached).toBeVisible({ timeout: SANDBOX_UP });
   await spotlight(page, reached);
-  await caption(page, "Here, it reached the internet directly.");
+  await caption(page, "Here, the host itself can reach the internet directly.");
   await beat(page, PACE.read);
-  await caption(page, "That's the host's own path being tested — a confined run still doesn't get open internet.");
+  await caption(page, "That's the host's path, not the run's. A confined run still doesn't get open internet.");
   await beat(page, PACE.read);
   await caption(page, "So we know what a run will actually have available.");
   await beat(page, PACE.read);

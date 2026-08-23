@@ -520,7 +520,7 @@ test("B2 — create a policy", async () => {
   const dlg = page.getByRole("dialog");
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
-  await caption(page, "A policy is the same spec, saved with a name.");
+  await caption(page, "A policy is that same kind of spec, saved once with a name so runs can reuse it.");
   await beat(page, PACE.read);
   // Sam: "the modal's own body text is the most interesting thing on screen."
   // VERIFY the inline-floor clause against the server's confinement_floor
@@ -726,9 +726,9 @@ test("B3 — use it", async () => {
   // the rules once") pays off HERE, not at the paste. Anchored to this beat
   // because this is where the driver films it. Drafted; see
   // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Here's the same envelope we built by hand in episode seven — saved once, named, and reusable.");
+  await caption(page, "Here's the same set of rules we built by hand in episode seven — saved once, named, and reusable.");
   await beat(page, PACE.read);
-  await caption(page, "Now a new run just points at it.");
+  await caption(page, "Now a new run just points at that policy.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And here's the important distinction.");
   await beat(page, PACE.read);
