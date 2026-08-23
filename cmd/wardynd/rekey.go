@@ -104,7 +104,7 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	defer release()
 
 	maskReg := secretmask.NewRegistry()
-	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
 	if err != nil {
 		return err
 	}
