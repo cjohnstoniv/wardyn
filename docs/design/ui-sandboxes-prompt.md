@@ -155,6 +155,11 @@ sandbox-authored content on the console origin.
 - `lane.title`, `lane.cta`, `lane.off`, `lane.noapps`, `lane.norecording` and
   `lane.error.launcher` byte-match the mock.
 - Non-owner → nothing rendered. Non-RUNNING → nothing rendered.
+  *(0.6 amendment, after this round: an ADMIN is not a "non-owner" here. The
+  server's three lanes are all owner-or-admin — attach_ticket.go's isOperator,
+  uigateway.go's role check, sshgateway.go's admin arm — so hiding the card
+  from an admin offered less than the API serves. Owner-or-admin → rendered;
+  everyone else → nothing rendered.)*
 - `ui_sandbox` absent from healthz → S1, and the rendered text contains
   `WARDYN_UI_SANDBOX_LISTEN`.
 - `git diff --stat -- ui/` is empty for **this** stage.

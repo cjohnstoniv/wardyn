@@ -19,9 +19,13 @@
 // terminal. So the CLI lane is always shown, and SSH is the second lane: rich
 // when enabled, one honest line about what turns it on when not.
 //
-// Still owner-only, matching the server rather than merely hiding a control it
-// would refuse (sshgateway.go's sshAuth; attach.go's own owner-or-admin gate),
-// and still absent when the run isn't RUNNING — there is nothing to attach to.
+// Shown to the run's OWNER or to an admin, matching the server rather than
+// merely hiding a control it would refuse — all three lanes are owner-or-admin
+// there (attach_ticket.go's isOperator, uigateway.go's ta.role check, and
+// sshgateway.go's sshAuth admin arm since migration 0043). It stays absent for
+// everyone else, and when the run isn't RUNNING — there is nothing to attach
+// to. (The ui-sandboxes mock's "non-owner -> null" predates those admin arms;
+// see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { KeyRound } from "lucide-react";
@@ -32,7 +36,7 @@ import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
-import { usePrincipal } from "../wardyn/operator-context";
+import { useOperator, usePrincipal } from "../wardyn/operator-context";
 import { SectionCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
@@ -40,7 +44,10 @@ import { cn } from "../ui/utils";
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
 export function ConnectSSHCard({ run }: { run: AgentRun }) {
   const principal = usePrincipal();
-  const owned = !!principal && run.created_by === principal;
+  const operator = useOperator();
+  // Owner OR admin: the same two-armed gate every lane's server handler uses.
+  // Both hooks run unconditionally — `||` on a hook CALL would reorder them.
+  const mayAttach = (!!principal && run.created_by === principal) || operator;
   const running = run.state === "RUNNING";
 
   const [ssh, setSSH] = React.useState<{
@@ -66,7 +73,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
 
   React.useEffect(() => {
-    if (!owned || !running) return; // nothing to show either way — skip the fetch
+    if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
     healthApi.health().then((h) => {
       if (!alive) return;
@@ -88,9 +95,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     return () => {
       alive = false;
     };
-  }, [owned, running]);
+  }, [mayAttach, running]);
 
-  if (!owned || !running) return null;
+  if (!mayAttach || !running) return null;
 
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
