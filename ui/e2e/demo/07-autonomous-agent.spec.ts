@@ -354,9 +354,9 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
   // Everything the agent will ever know about the job is in the box below.
   // task.ts's retry loop (the operator-may-be-approving nudge) is settled,
   // load-bearing choreography that keeps the take shootable.
-  await caption(page, "The task itself is the entire briefing.");
+  await caption(page, "The task itself is the entire job we're giving it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "No second set of instructions waiting behind the scenes.");
+  await caption(page, "We're not sitting here feeding it additional instructions while it runs.");
   await beat(page, PACE.read);
   await caption(page, "It gets the workspace.");
   await beat(page, BEAT_SHORT);

@@ -827,7 +827,7 @@ test("B4 — launch, effective policy", async () => {
 
   await caption(page, "One policy.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Every run that uses it gets the same governance.");
+  await caption(page, "Every run that uses it gets those same rules.");
   await beat(page, PACE.read + 600);
 
   // ---- Conclusion ------------------------------------------------------------

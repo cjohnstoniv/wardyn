@@ -351,7 +351,7 @@ test("V05 beat 3 — launch, walk away", async () => {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   await caption(page, "Once it's launched, the envelope is set.");
   await beat(page, PACE.read);
-  await caption(page, "Only a decision at the boundary can change it.");
+  await caption(page, "Only a decision at the boundary can change what this run is allowed to do.");
   await beat(page, PACE.read);
 
   // SCREEN: Run terminal/replay.

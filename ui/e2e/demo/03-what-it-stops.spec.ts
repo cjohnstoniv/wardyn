@@ -241,7 +241,7 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   test.setTimeout(1_200_000);
   const page = stage();
 
-  await chapter(page, "What it stops", "Four sandboxes, refusals proved on camera");
+  await chapter(page, "What it stops", "Four boundary behaviors, proved on camera");
   await caption(page, "Setup is one thing.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Now let's see the boundary actually work.");

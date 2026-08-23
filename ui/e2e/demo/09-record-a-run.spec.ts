@@ -730,7 +730,7 @@ test("B5 — replay confined", async () => {
   await beat(page, PACE.read + 400);
   await caption(page, "That's why we're asked to approve them.");
   await beat(page, PACE.read);
-  await caption(page, "This is the moment evidence becomes permission.");
+  await caption(page, "This is the moment we turn evidence into permission.");
   await beat(page, PACE.read + 600);
   await act(page, confirm.getByRole("button", { name: "Approve hosts" }));
   // The receipt for the click, before the replay that depends on it: without a
