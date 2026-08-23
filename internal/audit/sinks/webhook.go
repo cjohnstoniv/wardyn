@@ -130,6 +130,12 @@ func (w *WebhookSink) Name() string { return "webhook" }
 
 // Emit enqueues ev for delivery. If the buffer is full the event is dropped
 // and the drop counter is incremented. Emit never blocks.
+//
+// ponytail: at-most-once past the 4096 buffer. The loss is now COUNTED and
+// surfaced as wardyn_audit_sink_drops_total{sink} on /metrics (D2), so a SIEM
+// falling behind is visible. A per-sink disk spool (reusing api.AuditSpool) that
+// drains on recovery is the at-least-once upgrade — deferred: it needs its own
+// on-disk lifecycle + backpressure, larger than the metric this POC needs.
 func (w *WebhookSink) Emit(_ context.Context, ev types.AuditEvent) error {
 	select {
 	case w.queue <- ev:

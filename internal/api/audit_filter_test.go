@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -81,6 +82,14 @@ func TestAuditFilter_AppliesOnBothReadPaths(t *testing.T) {
 			if got := getAuditEvents(t, srv, "?actor_type=human"); len(got) != 1 || got[0].Actor != "alice" {
 				t.Errorf("?actor_type=: got %+v, want only the human event", got)
 			}
+			// D6: ?actor= — the per-principal "everything developer X did" filter,
+			// on BOTH read paths.
+			if got := getAuditEvents(t, srv, "?actor=alice"); len(got) != 1 || got[0].Actor != "alice" {
+				t.Errorf("?actor=: got %+v, want only alice's event", got)
+			}
+			if got := getAuditEvents(t, srv, "?actor=nobody"); len(got) != 0 {
+				t.Errorf("?actor= unknown principal: got %d events, want 0", len(got))
+			}
 		})
 	}
 
@@ -90,4 +99,54 @@ func TestAuditFilter_AppliesOnBothReadPaths(t *testing.T) {
 			t.Errorf("GET /audit%s: code = %d, want 400", q, w.Code)
 		}
 	}
+}
+
+// TestAuditExport_NDJSON covers the D6 streaming export: /audit/export streams
+// every matching event as newline-delimited JSON, applies ?actor= like the
+// paginated read, and (on a non-Pager backend) fails with 501 rather than a
+// silently-capped read.
+func TestAuditExport_NDJSON(t *testing.T) {
+	h := newHarness(t)
+	events := auditFilterFixture()
+	srv := New(baseTestConfig(h, &pagerFake{recentAudit: events}))
+
+	// Full export: one JSON object per line, all three events.
+	w := do(t, srv, http.MethodGet, "/api/v1/audit/export", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("export: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson" {
+		t.Errorf("Content-Type = %q, want application/x-ndjson", ct)
+	}
+	lines := ndjsonLines(t, w.Body.Bytes())
+	if len(lines) != 3 {
+		t.Fatalf("export lines = %d, want 3\n%s", len(lines), w.Body.String())
+	}
+
+	// Filtered export: ?actor=alice yields only alice's event.
+	w = do(t, srv, http.MethodGet, "/api/v1/audit/export?actor=alice", adminToken, "")
+	lines = ndjsonLines(t, w.Body.Bytes())
+	if len(lines) != 1 || lines[0].Actor != "alice" {
+		t.Fatalf("actor-filtered export = %+v, want only alice", lines)
+	}
+
+	// A non-Pager backend refuses rather than silently returning a capped read.
+	srv = New(baseTestConfig(h, &nonPagerAuditStore{events: events}))
+	if w := do(t, srv, http.MethodGet, "/api/v1/audit/export", adminToken, ""); w.Code != http.StatusNotImplemented {
+		t.Fatalf("export on non-pager backend: code = %d, want 501", w.Code)
+	}
+}
+
+func ndjsonLines(t *testing.T, body []byte) []types.AuditEvent {
+	t.Helper()
+	var out []types.AuditEvent
+	dec := json.NewDecoder(bytes.NewReader(body))
+	for dec.More() {
+		var ev types.AuditEvent
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatalf("decode ndjson: %v", err)
+		}
+		out = append(out, ev)
+	}
+	return out
 }

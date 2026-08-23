@@ -520,13 +520,8 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// no picker: a documented default beats a new wire field plus a new control
 	// for a case that is rare and reversible via the
 	// denied-egress/approved-egress PUTs.
-	var target uuid.UUID
-	switch {
-	case len(run.WorkspaceIDs) > 0:
-		target = run.WorkspaceIDs[0]
-	case run.WorkspaceID != nil:
-		target = *run.WorkspaceID
-	default:
+	target := primaryWorkspace(run)
+	if target == uuid.Nil {
 		// "no recorded workspace link", not "references no workspace": a run
 		// created before migration 0041 has a NULL workspace_ids even when it
 		// referenced one — the server only knows what was recorded.
@@ -569,6 +564,78 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		return uuid.Nil, false
 	}
 	return target, true
+}
+
+// primaryWorkspace is an `always` decision's target workspace: WorkspaceIDs[0]
+// (the documented PRIMARY — referencedWorkspaces builds it in a stable order,
+// mounts then repos, deduped, and it also drives image selection), else the
+// trusted scan/verify/record WorkspaceID, else uuid.Nil when the run records no
+// workspace link. Shared by resolveAlwaysTarget's live write-back and
+// ReconcileWorkspaceEgressDecisions' boot heal so both resolve the same target.
+func primaryWorkspace(run types.AgentRun) uuid.UUID {
+	switch {
+	case len(run.WorkspaceIDs) > 0:
+		return run.WorkspaceIDs[0]
+	case run.WorkspaceID != nil:
+		return *run.WorkspaceID
+	default:
+		return uuid.Nil
+	}
+}
+
+// ReconcileWorkspaceEgressDecisions re-applies every decided `always`-scoped
+// egress decision to its run's primary workspace, healing D28: the post-Decide
+// write-back (persistWorkspaceEgressDecision) is not atomic with Decide, so a PG
+// blip there dropped a permanent allow/deny behind a 200 with only a failure
+// audit row — future runs then never inherited the operator's decision.
+// AddWorkspaceEgressDecision is idempotent (an upsert that also clears the mirror
+// list), so re-applying an already-persisted decision is a no-op and a dropped one
+// is recreated. Returns the count re-applied, for the boot log.
+//
+// This is the SMALLER of the two options the finding names (a boot/periodic
+// reconcile vs threading one tx through Decide + the workspace write, which spans
+// two service interfaces the api layer does not share a tx across). It runs once
+// at boot (cmd/wardynd). ponytail: boot-only heals on the next restart; a periodic
+// tick would heal sooner on a laptop that rarely reboots — add one if that window
+// proves too wide. The scan reads all decided egress approvals; decided rows are
+// never deleted, so on a very long-lived deployment cap this with a marker-keyed
+// incremental reconcile.
+func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, error) {
+	if s.cfg.Store == nil || s.cfg.Approvals == nil {
+		return 0, nil
+	}
+	reconciled := 0
+	for _, state := range []types.ApprovalState{types.ApprovalApproved, types.ApprovalDenied} {
+		aps, err := s.cfg.Approvals.List(ctx, state)
+		if err != nil {
+			return reconciled, err
+		}
+		allow := state == types.ApprovalApproved
+		for _, ap := range aps {
+			if ap.Kind != types.ApprovalEgressDomain || ap.DecisionScope.Normalize() != types.ScopeAlways {
+				continue
+			}
+			host := approvalHost(ap)
+			if host == "" || !hostrules.ValidApprovedHost(host) {
+				continue
+			}
+			run, err := s.cfg.Store.GetRun(ctx, ap.RunID)
+			if err != nil {
+				continue // run gone; nothing to persist onto
+			}
+			target := primaryWorkspace(run)
+			if target == uuid.Nil {
+				continue
+			}
+			// Best-effort, exactly like the live write-back: a deleted workspace or a
+			// cap-reached list is skipped, not fatal to the rest of the reconcile.
+			if _, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, target, host, allow, maxApprovedEgress); err != nil {
+				continue
+			}
+			reconciled++
+		}
+	}
+	return reconciled, nil
 }
 
 // approvalHost extracts an egress_domain approval's lowercased host from its

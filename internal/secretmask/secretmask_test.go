@@ -6,6 +6,7 @@ package secretmask_test
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"testing"
 
@@ -475,5 +476,39 @@ func TestMaskingWriter_OverlappingSecrets(t *testing.T) {
 	out := buf.Bytes()
 	if bytes.Contains(out, long) || bytes.Contains(out, short) {
 		t.Fatalf("secret leaked: %q", out)
+	}
+}
+
+// TestJSONEscapedVariants covers the D31 helper: a secret bearing JSON-special
+// bytes (newline, quote) gains its escaped rendering so a Masker built from the
+// expanded set catches the secret once it is embedded in JSON output. Both
+// encoder modes are produced: Go-default (audit ev.Data) and SetEscapeHTML(false)
+// (asciinema casts), which diverge only on <>&.
+func TestJSONEscapedVariants(t *testing.T) {
+	secret := []byte("line1\nline2\"q\\b") // >= MinLen, has newline, quote, backslash
+	got := secretmask.JSONEscapedVariants([][]byte{secret})
+
+	// The raw value is preserved, and at least one escaped variant is added.
+	if len(got) < 2 {
+		t.Fatalf("want raw + escaped variant(s), got %d entries", len(got))
+	}
+	// A Masker built from the expansion masks the secret's JSON-embedded form.
+	m := secretmask.NewMasker(got)
+	embedded, err := json.Marshal(map[string]string{"k": string(secret)}) // Go-default escaping
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	masked := m.Mask(embedded)
+	if bytes.Contains(masked, []byte("line2")) {
+		t.Fatalf("JSON-embedded secret not masked: %s", masked)
+	}
+	if !bytes.Contains(masked, []byte("<secret-hidden>")) {
+		t.Fatalf("expected placeholder, got %s", masked)
+	}
+
+	// A secret with no JSON-special bytes contributes no extra variant.
+	plain := secretmask.JSONEscapedVariants([][]byte{[]byte("plainASCIItoken")})
+	if len(plain) != 1 {
+		t.Fatalf("plain ASCII secret should add no variant, got %d entries", len(plain))
 	}
 }

@@ -192,3 +192,31 @@ func TestFanout_CloseClosesChildren(t *testing.T) {
 		t.Error("Fanout.Close did not Close the io.Closer child")
 	}
 }
+
+// TestFanout_DropsByName is the D2 regression: DropsByName is the prod caller
+// Drops() lacked — cmd/wardynd wires it to /metrics as wardyn_audit_sink_drops_total.
+// It must aggregate both loss sources per sink name: a synchronous Emit error
+// (fanout-local counter) and a buffering child's own async Drops().
+func TestFanout_DropsByName(t *testing.T) {
+	t.Parallel()
+
+	web := &asyncDropSink{name: "webhook"}                     // async (background) loss
+	sys := &countSink{name: "syslog", err: errors.New("boom")} // synchronous Emit error
+	f := sinks.NewFanout(web, sys)
+	ctx := context.Background()
+
+	// One event: syslog's Emit errors (fanout counts 1 drop for it); webhook
+	// succeeds synchronously but later sheds 4 events in its background flusher.
+	if err := f.Emit(ctx, makeEvent("d2")); err != nil {
+		t.Fatalf("Emit: %v", err) // webhook succeeded, so no total failure
+	}
+	web.selfDrops.Store(4)
+
+	got := f.DropsByName()
+	if got["webhook"] != 4 {
+		t.Errorf("DropsByName[webhook] = %d, want 4 (async child counter not surfaced)", got["webhook"])
+	}
+	if got["syslog"] != 1 {
+		t.Errorf("DropsByName[syslog] = %d, want 1 (synchronous Emit-error drop not counted)", got["syslog"])
+	}
+}

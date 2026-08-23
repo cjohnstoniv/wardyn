@@ -4,6 +4,8 @@
 package api
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -12,6 +14,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// auditExportPageSize bounds each internal page handleExportAudit walks. The
+// export itself has NO offset cap — it pages until the store is exhausted — but
+// reads in bounded slices so a quarter of history is never buffered whole.
+const auditExportPageSize = 1000
 
 // handleQueryAudit returns audit events. The append-only audit log is the
 // system of record and is never gated. With no run_id it returns the global
@@ -117,9 +124,90 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleExportAudit streams the audit feed as newline-delimited JSON (one event
+// per line, application/x-ndjson), applying the SAME filters (parseAuditFilter,
+// incl. ?actor=) and member scoping as handleQueryAudit but with NO offset cap:
+// it pages the store until exhausted, so a per-principal evidence pull —
+// "everything alice@corp did in Q3", the vendor/compliance question the finding
+// names (D6) — is ONE request no matter how many events it spans. handleQueryAudit
+// stays the capped, paginated, UI-facing read; this is the bulk export beside it.
+//
+// A member is scoped exactly as in handleQueryAudit: only ?run_id= of a run they
+// created, and an unowned/absent run_id yields an empty (200, zero-line) export —
+// the same no-existence-oracle collapse a collection endpoint uses.
+//
+// Requires a Pager backend (store.PG is one); a non-Pager store (test fakes with
+// no pager) gets 501 rather than a silently-capped read. A mid-stream store error
+// after the header is sent can only stop and log — the NDJSON is then a truncated
+// prefix, which a consumer detects by the request not ending cleanly.
+func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
+	pager, ok := s.cfg.Store.(store.Pager)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "audit export requires a paging store backend")
+		return
+	}
+	filter, ok := parseAuditFilter(w, r)
+	if !ok {
+		return
+	}
+	raw := r.URL.Query().Get("run_id")
+	var runID uuid.UUID
+	if raw != "" {
+		var err error
+		if runID, err = uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid run_id")
+			return
+		}
+	}
+	if !s.isOperator(r.Context()) {
+		owned := raw != ""
+		if owned {
+			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
+		}
+		if !owned {
+			// Empty export, no oracle: an unowned/absent run_id is a 200 with no
+			// lines, exactly as handleQueryAudit returns an empty list.
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			return
+		}
+	}
+	var scope *uuid.UUID
+	if raw != "" {
+		scope = &runID
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	enc := json.NewEncoder(w)
+	offset := 0
+	for {
+		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
+			store.Page{Limit: auditExportPageSize, Offset: offset})
+		if err != nil {
+			// Header (200) is already committed; a truncated NDJSON prefix is all we
+			// can leave. Log so the operator can tell a partial export from a whole one.
+			slog.ErrorContext(r.Context(), "wardyn: audit export page failed mid-stream",
+				slog.Int("offset", offset), slog.Any("err", err))
+			return
+		}
+		for i := range page {
+			if err := enc.Encode(page[i]); err != nil {
+				return // client hung up
+			}
+		}
+		if len(page) < auditExportPageSize {
+			return
+		}
+		offset += len(page)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
+}
+
 // parseAuditFilter reads the optional narrowing predicates off the query string
-// (?since=&until=&action=&action_prefix=&actor_type=&outcome=), writing a 400 and
-// returning ok=false on a malformed value. All are additive and optional; none
+// (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=), writing a
+// 400 and returning ok=false on a malformed value. ?actor= (D6) is the exact
+// principal ("everything developer X did"). All are additive and optional; none
 // set is the zero filter, which changes nothing about the query taken.
 // Timestamps are RFC3339, the same encoding the audit rows are served in.
 func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter, bool) {
@@ -127,6 +215,7 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 	f := store.AuditFilter{
 		Action:       q.Get("action"),
 		ActionPrefix: q.Get("action_prefix"),
+		Actor:        q.Get("actor"),
 		ActorType:    types.ActorType(q.Get("actor_type")),
 		Outcome:      q.Get("outcome"),
 	}
