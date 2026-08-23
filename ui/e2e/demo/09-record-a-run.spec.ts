@@ -1203,19 +1203,15 @@ test("B7 — approve the miss, run it again", async () => {
   // sandbox is up.
   await beat(page, 200);
   await ffwdStart(page);
-  const live = await Promise.race([
-    screen.waitFor({ state: "visible", timeout: SANDBOX_UP }).then(
-      () => "replaying" as const,
-      () => "timeout" as const,
-    ),
-    card
-      .getByText(REPLAY_OVER)
-      .waitFor({ state: "visible", timeout: SANDBOX_UP })
-      .then(
-        () => "over" as const,
-        () => "timeout" as const,
-      ),
-  ]);
+  // No race against REPLAY_OVER here: replay #1's settled chip ("Replayed —
+  // caught 2") is STILL on the card while the second sandbox boots, and the
+  // widened regex matches it — an over-arm would win instantly, every time
+  // (it did, in rehearsal). The attach screen appearing IS the proof the
+  // approve→replay chain fired; its absence times out into the same message.
+  const live = await screen.waitFor({ state: "visible", timeout: SANDBOX_UP }).then(
+    () => "replaying" as const,
+    () => "timeout" as const,
+  );
   await ffwdEnd(page);
   expect(
     live,

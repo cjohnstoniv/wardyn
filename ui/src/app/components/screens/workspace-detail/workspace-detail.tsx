@@ -208,13 +208,15 @@ export function WorkspaceDetailScreen() {
   // as the lane it replaces.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
-    // Merge onto the FRESHEST overlay, not the one captured at click time — the
-    // confirm dialog can sit open for minutes, and the PUT is a full
-    // replacement. Shrinks the accepted last-write-wins window to fetch→PUT.
-    const fresh = (await workspacesApi.getWorkspace(ws.id)) ?? ws;
-    const next = { ...(fresh.requirements ?? {}) };
-    for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
     try {
+      // Merge onto the FRESHEST overlay, not the one captured at click time —
+      // the confirm dialog can sit open for minutes, and the PUT is a full
+      // replacement. Inside the try: a rejected fetch here used to reject the
+      // whole call, which the guided approve→replay chain void-discarded — the
+      // replay silently never fired, with no toast to say why.
+      const fresh = (await workspacesApi.getWorkspace(ws.id).catch(() => null)) ?? ws;
+      const next = { ...(fresh.requirements ?? {}) };
+      for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
       setWs(await workspacesApi.setRequirements(ws.id, next));
       toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
       return true;
