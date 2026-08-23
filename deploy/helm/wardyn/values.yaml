@@ -221,8 +221,8 @@ ssh:
 #
 # `port` MUST differ from service.port: what the gateway serves is the
 # SANDBOX's own pages, and the separate browser origin is the only thing
-# keeping that code away from the console's session (wardynd refuses to boot
-# if the two addresses are equal). Terminating both ports on one hostname
+# keeping that code away from the console's session (the chart refuses to
+# render, and wardynd refuses to boot, when the two are equal). Terminating both ports on one hostname
 # defeats the same control — give the gateway its own host, and a certificate
 # that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
 uiSandbox:

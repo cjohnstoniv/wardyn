@@ -14,6 +14,7 @@ routed to a different hostname than the console at your ingress/LoadBalancer —
 it serves the sandbox's own pages, and the separate browser origin is the
 control (README "UI sandbox gateway", docs/UI-SANDBOXES.md).
 */}}
+{{- include "wardyn.assertPorts" . -}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
 this chart's defaults with the PREVIOUS release's values map, so upgrading a
