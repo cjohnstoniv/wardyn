@@ -188,13 +188,18 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 		return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 	}
 	for _, g := range grants {
-		if g.Capability != kind || !capValueMatches(kind, g.Value, value) {
+		if g.Capability != kind {
 			continue
 		}
 		if g.Effect == types.CapabilityDeny {
-			return true, false, nil // scan no further: deny is final
+			if capValueOverlaps(kind, g.Value, value) {
+				return true, false, nil // scan no further: deny is final
+			}
+			continue
 		}
-		allow = true
+		if capValueMatches(kind, g.Value, value) {
+			allow = true
+		}
 	}
 	return false, allow, nil
 }
@@ -258,4 +263,26 @@ func capValueMatches(kind, grantValue, want string) bool {
 		return entryCoversAny(grantValue, map[string]bool{egressEntryHost(want): true})
 	}
 	return grantValue == strings.TrimSpace(want)
+}
+
+// capValueOverlaps is the DENY question, and it is deliberately not
+// capValueMatches: an allow has to COVER the want, but a deny only has to
+// OVERLAP it. For every exact kind the two are the same question, but an
+// egress host is a SET — "*.example.com" is every host under it — and a want
+// that is itself a wildcard can contain a denied host without being covered by
+// it. Asking only "does the deny cover the want" let a member whose allowlist
+// said "*.example.com" keep an entry that includes the denied
+// "secret.example.com": the deny row protected nothing, which is the one thing
+// this file promises it always does ("deny beats everything").
+//
+// So a deny bites when the sets intersect in EITHER direction — deny covers
+// want, or want covers deny. Both directions go through capValueMatches, so
+// there is still exactly one host matcher.
+func capValueOverlaps(kind, grantValue, want string) bool {
+	if capValueMatches(kind, grantValue, want) {
+		return true
+	}
+	// Only egress hosts have set-valued entries; every other kind is an exact
+	// identifier, where "want covers deny" is the same compare reversed.
+	return kind == capEgressHost && capValueMatches(kind, want, grantValue)
 }
