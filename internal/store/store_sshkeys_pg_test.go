@@ -9,6 +9,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,7 +108,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 	// would read as "checked at the Unix epoch", i.e. maximally stale but NOT
 	// the same "never checked" signal sshAuth's freshness check relies on).
 	neverChecked := types.SSHPublicKey{
-		Fingerprint: "SHA256:never-checked-" + t.Name(),
+		Fingerprint: fmt.Sprintf("SHA256:never-checked-%s-%d", t.Name(), time.Now().UnixNano()),
 		Principal:   "alice2@example.com",
 		PublicKey:   "ssh-ed25519 AAAAtest2 alice2@laptop",
 		Role:        "admin",
@@ -117,6 +118,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add (no role_checked_at): %v", err)
 	}
+	t.Cleanup(func() { _ = st.DeleteSSHKey(context.Background(), neverChecked.Fingerprint, neverChecked.Principal) })
 	if addedNever.RoleCheckedAt != nil {
 		t.Errorf("RoleCheckedAt = %v, want nil for a key added with none", addedNever.RoleCheckedAt)
 	}
@@ -132,7 +134,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 	// round-trips, truncated to Postgres's microsecond precision.
 	checkedAt := time.Now().UTC().Truncate(time.Microsecond)
 	stamped := types.SSHPublicKey{
-		Fingerprint:   "SHA256:stamped-" + t.Name(),
+		Fingerprint:   fmt.Sprintf("SHA256:stamped-%s-%d", t.Name(), time.Now().UnixNano()),
 		Principal:     "bob2@example.com",
 		PublicKey:     "ssh-ed25519 AAAAtest3 bob2@laptop",
 		Role:          "member",
@@ -142,6 +144,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 	if _, err := st.AddSSHKey(ctx, stamped); err != nil {
 		t.Fatalf("add (with role_checked_at): %v", err)
 	}
+	t.Cleanup(func() { _ = st.DeleteSSHKey(context.Background(), stamped.Fingerprint, stamped.Principal) })
 	got, err = st.GetSSHKeyByFingerprint(ctx, stamped.Fingerprint)
 	if err != nil {
 		t.Fatalf("get (with role_checked_at): %v", err)
