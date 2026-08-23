@@ -444,12 +444,17 @@ func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 //   - If a valid (non-expired, correctly signed) session cookie is present,
 //     sets the HumanPrincipal on the request context and calls next.
 //   - Otherwise falls through to next without a principal, allowing the
-//     integrator's adminAuth bearer path to handle the request.
+//     integrator's adminAuth bearer path to handle the request. When a
+//     session cookie WAS presented but rejected (tampered/malformed, or
+//     valid-but-expired), the rejection reason rides along on the context —
+//     see SessionRejectedFromContext — so the integrator's eventual 401 can
+//     name it instead of failing silently.
 //
 // This design lets the integrator compose: oidc.Middleware(adminAuth(handler)).
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sess, err := a.decodeSession(r); err == nil {
+		sess, err := a.decodeSession(r)
+		if err == nil {
 			if time.Now().UTC().Before(sess.Expiry) {
 				// Valid session: stash the principal and continue.
 				ctx := contextWithPrincipal(r.Context(), sess)
@@ -459,9 +464,36 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			// Expired session: clear the stale cookie so the browser doesn't
 			// keep sending it, then fall through.
 			clearCookie(w, sessionCookieName)
+			next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "expired_session")))
+			return
+		}
+		if err == ErrInvalidSession {
+			// A cookie WAS presented and failed to decode (bad signature,
+			// corrupt payload) — distinct from ErrNoSession, the ordinary
+			// no-cookie case every non-browser client hits on every call and
+			// which is not itself audit-worthy.
+			r = r.WithContext(withSessionRejected(r.Context(), "invalid_session"))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sessionRejectedCtxKey carries the reason a presented OIDC session cookie
+// was rejected, for the integrator's auth-failure audit emit.
+type sessionRejectedCtxKey struct{}
+
+func withSessionRejected(ctx context.Context, reason string) context.Context {
+	return context.WithValue(ctx, sessionRejectedCtxKey{}, reason)
+}
+
+// SessionRejectedFromContext returns why Middleware rejected a presented
+// session cookie on this request ("invalid_session" for a
+// tampered/malformed cookie, "expired_session" for a valid-but-expired
+// one), or "" when no session cookie was presented at all (the ordinary
+// non-browser-client case) or the session decoded fine.
+func SessionRejectedFromContext(ctx context.Context) string {
+	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
+	return reason
 }
 
 // PrincipalFromContext returns the human principal set by Middleware, or ""

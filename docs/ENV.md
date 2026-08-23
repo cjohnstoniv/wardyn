@@ -56,6 +56,7 @@ log them.
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by `scripts/up.sh` on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** Unset ⇒ the step honestly reports it could not look at the host. See [Four variables that need more than a table cell](#four-variables-that-need-more-than-a-table-cell) |
 | `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`) |
+| `WARDYN_AUDIT_SOURCE` | string | (unset) | #10: optional static string stamped as an extra top-level `"source"` field on every event a configured sink (file/webhook/syslog) serializes — never written to Postgres, sink payloads only (flag `-audit-source`). Lets one SIEM index ingesting from several wardynd instances/environments (staging vs prod, cluster A vs B) tell them apart without per-sink config. Empty (the default) is byte-identical to before this field existed. See [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`) |
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
 | `WARDYN_LOCAL_MODE` | bool | `false` | LOCAL HOST MODE: bypass public-API auth (flag `-local-mode`) |
@@ -81,6 +82,7 @@ log them.
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_SUBSCRIPTION_INJECT` | bool | **binary: ON** (unset); compose: `off` | proxy-side subscription OAuth injection; `off`/`0`/`false`/`no` disable, garbage exits 2. Two layers, and they differ: the compose stack pins it `off` because the distroless `wardynd` image carries no `claude` binary to inject with — see [deploy/compose/README.md](../deploy/compose/README.md). **Scope: the resident-mount subscription path only** — a run with `~/.claude` mounted falls back to its own OAuth creds over the tunnel, unMITMed, when this is `off`. It has NO effect on the separate Wardyn-managed lane (a connected managed setup-token, no resident mount): that path still injects proxy-side and still MITMs `api.anthropic.com` regardless of this flag (`internal/api/runs_dispatch_llm.go`'s `managed` gate) |
 | `WARDYN_SCAN_AI_ADVISOR` | bool | `false` | opt-in advisory AI workspace-scan fallback (flag `-scan-ai-advisor`) |
+| `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | bool | `false` (**off**) | opt in to gating a `egress:<host>` workspace requirement the SAME way a `secret:<name>` one already is (`runs_create.go`'s `applyWorkspaceRequirements`): only `operator_set` provenance auto-adds the host at launch; a `scan_seeded` one (the workspace scanner reading untrusted repo content) is skipped. **Default off** because today every enabled egress requirement is auto-added regardless of provenance, and flipping the default would silently narrow egress for every existing workspace on upgrade (flag `-require-operator-set-egress`) |
 | `WARDYN_GITHUB_REQUIRE_REF_RULESET` | bool | `false` (**off**) | opt in to refusing a `github_token` mint whose repo is not confined by a GitHub repository ruleset. On, for every repo in the grant, the broker reads `GET /repos/{owner}/{repo}/rules/branches/{branch}` for a ref outside `refs/heads/wardyn/**/*` (`creation`, `update` and `deletion` must all be in force) and one inside it (`creation`/`update` may not be, or the run's own pushes would be refused), then `GET /repos/{owner}/{repo}/rulesets/{id}` for each ruleset behind those rules (`current_user_can_bypass` must be `never`) — and fails the mint if any answer is wrong **or cannot be obtained**. Note the `**/*`: a bare `refs/heads/wardyn/**` exclude matches nothing a run pushes, fails this gate, and blocks governed pushes at GitHub too. **Default off** because the ruleset must be created per repo by someone with admin on it, which Wardyn never has, so defaulting on would break every existing deployment; the `github_ref_ruleset` setup-checklist row is what keeps the off state visible rather than silent. Recipe: [docs/POLICIES.md](POLICIES.md) → "Bound the token itself: a GitHub ruleset". Read once at broker construction, so a garbage value exits at boot. No flag |
 | `WARDYN_ENVBUILD` | bool | **binary: `false`**; compose: `true` | enable devcontainer image builds for create-run (`-tags docker`) (flag `-envbuild`). Gates BOTH the BYOI wrap and the devcontainer-build lane — see [OPERATIONS.md](OPERATIONS.md#recommended-builds-on-compose) and `threatmodel/THREAT-MODEL.md` residual #13 |
 | `WARDYN_ENVBUILD_IMAGE` | string | (unset = upstream) | envbuilder OCI image override (flag `-envbuild-image`) |
@@ -141,6 +143,52 @@ Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping
 `max_retries` (`3`) and `retry_base_delay` (`200ms`) — see
 `internal/audit/sinks/webhook.go`. The compose stack ships the `file` sink
 pointed at `/data/audit/audit.log`.
+
+Every event is one JSON object (NDJSON on the webhook sink — one line per
+event per POST batch); `Data` is the per-action payload documented in
+[AUDIT-ACTIONS.md](AUDIT-ACTIONS.md). `WARDYN_AUDIT_SOURCE` above adds a
+`"source"` field to every one of them, for a multi-instance SIEM index.
+
+#### SIEM recipes (`webhook`)
+
+Two concrete `webhook` configs — swap in your real collector URL/token. Both
+are just `WARDYN_AUDIT_SINKS`'s `webhook` block; nothing else changes.
+
+**Splunk HTTP Event Collector (HEC).** HEC wants each line wrapped in an
+`{"event": ...}` envelope, which this sink does not do — point it at a
+lightweight HEC-shaped relay (or Splunk's own NDJSON-to-HEC forwarder) rather
+than `services/collector/event` directly, and pass the HEC token as the
+bearer:
+
+```json
+{
+  "webhook": {
+    "url": "https://splunk-hec-relay.corp.example:8443/ingest",
+    "bearer_token": "<hec-token>",
+    "batch_size": 100
+  }
+}
+```
+
+**Generic JSON webhook** (Datadog, Elastic, Chronicle, an in-house collector
+— anything that accepts a bearer-authed NDJSON POST):
+
+```json
+{
+  "webhook": {
+    "url": "https://siem.example.com/ingest",
+    "bearer_token": "<collector-token>",
+    "batch_size": 50,
+    "flush_interval": "5s"
+  }
+}
+```
+
+Both refuse to boot with a `bearer_token` set on a non-`https://` `url` (the
+credential would replay in cleartext on every POST — see `NewWebhookSink`).
+Watch `wardyn_audit_sink_drops_total{sink="webhook"}` on `/metrics`: a rising
+count means the collector is slow/down and events are being shed after
+`max_retries` — see [Monitoring](OPERATIONS.md#monitoring).
 
 ## `wardyn-proxy` (egress sidecar)
 

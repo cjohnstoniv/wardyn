@@ -114,7 +114,11 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
+	// emitting — see sinks.Source's doc comment. A no-op (empty) is
+	// byte-identical to before this field existed.
+	sinks.Source = strings.TrimSpace(source)
 	storeRec := store.Recorder{Pool: pool}
 	var auditRec audit.Recorder = storeRec
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)

@@ -5,7 +5,6 @@ package sinks
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,7 +68,7 @@ func (s *FileSink) Name() string { return "file" }
 // Emit serialises ev as a JSON line and appends it to the active log file,
 // rotating if necessary.
 func (s *FileSink) Emit(_ context.Context, ev types.AuditEvent) error {
-	b, err := json.Marshal(ev)
+	b, err := marshalEvent(ev)
 	if err != nil {
 		return fmt.Errorf("sinks.file: marshal: %w", err)
 	}
