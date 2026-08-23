@@ -501,11 +501,18 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 		return true // the switch is scoped to egress decisions
 	}
 	if !haveRun {
+		// Fail CLOSED on BOTH ways the run can be unavailable — a read error, and
+		// a backend that has no run store at all (test wiring only; wardynd always
+		// wires PG). Without the run we cannot prove the decider is not its
+		// creator, and this gate exists for deployments that will not accept
+		// "probably a different human". A nil Store must not read as a pass.
 		var err error
-		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-			// Fail CLOSED: without the run we cannot prove the decider is not its
-			// creator, and this gate exists for deployments that will not accept
-			// "probably a different human".
+		if s.cfg.Store == nil {
+			err = errors.New("no run store configured")
+		} else {
+			run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		}
+		if err != nil {
 			writeError(w, http.StatusServiceUnavailable,
 				envEgressSecondHuman+" is set, but this approval's run could not be read to verify a second human decided it")
 			return false

@@ -654,13 +654,16 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
 // substituted, never blank-set) when its scope is unreadable, its secret is
 // reserved, the store is missing or the value is gone.
 //
-// It also refuses to OVERWRITE a variable dispatch already set. Everything in
-// sandboxEnv by this point is platform-authored (the harness's own WARDYN_*, the
-// LLM transport's ANTHROPIC_*, artifact-redirect config, p.ExtraEnv), and a
-// grant that could replace one would be a config override wearing a credential's
-// clothes — the WARDYN_ prefix is already refused at write time, and this closes
-// the rest of the set without having to enumerate it. Runs LAST in dispatch's env
-// composition so "already set" means all of it, not just the part written so far.
+// It also refuses to OVERWRITE a variable dispatch already set to a NON-EMPTY
+// value. Everything in sandboxEnv by this point is platform-authored (the
+// harness's own WARDYN_*, the LLM transport's ANTHROPIC_*, artifact-redirect
+// config, p.ExtraEnv), and a grant that could replace one would be a config
+// override wearing a credential's clothes — the WARDYN_ prefix is already
+// refused at write time, and this closes the rest of the set without having to
+// enumerate it. Runs LAST in dispatch's env composition so "already set" means
+// all of it, not just the part written so far. Non-empty, not merely present:
+// an empty value carries no configuration to protect, and treating it as
+// occupied would make a placeholder key unfillable for no gain.
 func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) {
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
