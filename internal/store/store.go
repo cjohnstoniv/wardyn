@@ -66,7 +66,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint`
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
@@ -81,7 +81,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -181,6 +181,25 @@ func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) 
 	return nil
 }
 
+// SetRunFailureHint scoped-writes ONLY the failure_hint column — the one-line
+// operator reason a run FAILED before its agent started (D9). Mirrors
+// SetRunImage/SetRunAgentExecID: the hint is known only at the failure site
+// (failAndRevoke), after the row exists, so it is a scoped update, not a
+// CreateRun value. Best-effort at the call site; ErrNotFound when no row matched.
+func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`,
+		hint, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set run failure hint: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // TouchRun bumps a run's updated_at to now() without changing any other field.
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
@@ -208,7 +227,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
-		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs,
+		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &r.FailureHint,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound

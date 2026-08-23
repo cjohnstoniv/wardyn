@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // TestAgentImage pins agentImage's behavior across the harness-catalog rewire:
@@ -17,10 +18,13 @@ import (
 // every shipped row's ImageKey equals its ID.
 func TestAgentImage(t *testing.T) {
 	ids := []string{"claude-code", "codex-cli", "none", "oracle", "some-random-string"}
+	// Convention images carry the DAEMON'S OWN version, not a floating :latest a
+	// later release could re-point under a version-pinned fleet (D19).
+	tag := ":" + version.Version
 
 	t.Run("ghcr fallback: no WARDYN_AGENT_IMAGES override", func(t *testing.T) {
 		for _, id := range ids {
-			if got, want := agentImage(id, nil), "ghcr.io/cjohnstoniv/agent-"+id+":latest"; got != want {
+			if got, want := agentImage(id, nil), "ghcr.io/cjohnstoniv/agent-"+id+tag; got != want {
 				t.Errorf("agentImage(%q, nil) = %q, want %q", id, got, want)
 			}
 		}
@@ -34,11 +38,23 @@ func TestAgentImage(t *testing.T) {
 		// Every other id is untouched by an override naming a different agent —
 		// each still falls through to its own ghcr convention.
 		for _, id := range []string{"codex-cli", "none", "oracle", "some-random-string"} {
-			if got, want := agentImage(id, images), "ghcr.io/cjohnstoniv/agent-"+id+":latest"; got != want {
+			if got, want := agentImage(id, images), "ghcr.io/cjohnstoniv/agent-"+id+tag; got != want {
 				t.Errorf("agentImage(%q, override-for-claude-code) = %q, want %q", id, got, want)
 			}
 		}
 	})
+}
+
+// TestAgentImageTag pins the version-tag fallback (D19): a build with a version
+// string tags the convention image with it (per-semver publish); only an empty
+// version string falls back to the floating :latest.
+func TestAgentImageTag(t *testing.T) {
+	if got := agentImageTag("0.6.0"); got != "0.6.0" {
+		t.Errorf("agentImageTag(%q) = %q, want the version tag", "0.6.0", got)
+	}
+	if got := agentImageTag(""); got != "latest" {
+		t.Errorf("agentImageTag(\"\") = %q, want \"latest\" (last resort)", got)
+	}
 }
 
 // TestAgentLLMProvider pins agentLLMProvider's outputs literally as the old

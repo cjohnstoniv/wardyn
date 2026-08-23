@@ -98,7 +98,7 @@ func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter 
 		  AND sandbox_ref <> ''
 		  AND watcher_heartbeat < now() - $2::interval
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint`
 	return collect(ctx, s.Pool, "claim", "stale run watchers", q, []any{owner, staleAfter.String()}, scanRun)
 }
 

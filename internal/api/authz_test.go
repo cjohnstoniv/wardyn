@@ -596,6 +596,9 @@ func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) 
 func (s *authzStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.AgentExecID = execID })
 }
+func (s *authzStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.FailureHint = hint })
+}
 func (s *authzStore) TouchRun(context.Context, uuid.UUID) error { return nil }
 
 func (s *authzStore) CreatePolicy(_ context.Context, p types.RunPolicy) (types.RunPolicy, error) {

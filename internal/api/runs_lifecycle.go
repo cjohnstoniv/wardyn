@@ -354,7 +354,12 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // leaving the create/dispatch FAILED paths leaking a live run token + broker creds
 // (C003). Revoke runs only when THIS transition won, so a concurrent kill that
 // already moved the run is not double-handled.
-func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState) {
+// hint is the operator-facing one-line reason surfaced under the FAILED badge
+// (D9); it is persisted (best-effort, run.FailureHint) only when THIS transition
+// won, so a concurrent kill that legitimately moved the run first is never
+// annotated with a failure reason it did not have. "" leaves the column empty
+// (a clean FAILED-by-nonzero-exit carries its exit code instead).
+func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
 	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
@@ -368,8 +373,28 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return
 	}
 	if applied {
+		if hint != "" {
+			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
+			// the ~30 test doubles that embed store.Store never implement it, so a
+			// core method would nil-panic in every one that reaches this path. The
+			// real PG store implements it; a double that wants to observe the hint
+			// declares the method and is picked up here.
+			if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+				if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
+					slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
+						slog.String("run_id", runID.String()), slog.Any("err", herr))
+				}
+			}
+		}
 		s.revokeRunCascade(ctx, runID)
 	}
+}
+
+// runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
+// persist a run's FailureHint (D9). Kept off the core store.Store interface on
+// purpose — see the assertion site above.
+type runFailureHintSetter interface {
+	SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error
 }
 
 // handleKillRun is the kill-switch: it cascades in a FIXED order — WIN the KILLED

@@ -428,7 +428,10 @@ func agentImageCheck(images map[string]string) SetupCheck {
 // known, by construction, to carry Node only (deploy/images/claude-code/Dockerfile).
 // The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
 func isConventionNodeOnlyImage(ref string) bool {
-	return ref == "ghcr.io/cjohnstoniv/agent-claude-code:latest" ||
+	// Prefix, not an exact tag: the ghcr convention now carries the daemon's
+	// version tag (D19), not a fixed :latest — every published tag is the same
+	// Node-only convention image.
+	return strings.HasPrefix(ref, "ghcr.io/cjohnstoniv/agent-claude-code:") ||
 		ref == "wardyn/agent-claude-code:local" ||
 		ref == "wardyn/agent-claude-code:demo"
 }
