@@ -78,9 +78,9 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 31 direct registrations below +
+			// has gone stale before, W7-S1-1): 32 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) = 34. NOT the whole admin
+			// DEADCODE-1) = 35. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
@@ -145,6 +145,11 @@ func (s *Server) routes() chi.Router {
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —
 			// per-principal evidence ("everything developer X did") in one request (D6).
 			r.Get("/audit/export", s.handleExportAudit)
+			// Tamper-evidence sweep over the audit hash chain (migration 0047).
+			// operatorOnly, unlike the two reads above: it reports whole-deployment
+			// audit volume, which is the same disclosure that keeps /metrics gated.
+			// Operator-INVOKED by design — wardynd never verifies at boot.
+			operatorOnly.Get("/audit/chain/verify", s.handleVerifyAuditChain)
 			r.Get("/me", s.handleMe)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but

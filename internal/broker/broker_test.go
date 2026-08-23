@@ -200,6 +200,12 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 	tx.db.mu.Lock()
 	defer tx.db.mu.Unlock()
 	switch {
+	case strings.Contains(sql, "pg_advisory_xact_lock"):
+		// The audit hash-chain lock insertAuditEventTx takes before its INSERT
+		// (migration 0047). Nothing to model: the fake is single-threaded, so
+		// there is no concurrency for the lock to serialize — it just must not
+		// fall through to the unhandled-exec error below.
+		return 0, nil
 	case strings.Contains(sql, "UPDATE approvals SET minted_jti"):
 		// args[0]=jti, args[1]=approvalID. Mirror the conditional UPDATE's
 		// rows-affected: 1 when this call wins the single-use write, 0 when

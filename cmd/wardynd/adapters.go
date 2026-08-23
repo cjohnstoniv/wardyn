@@ -269,7 +269,16 @@ type fanoutRecorder struct {
 var _ audit.Recorder = fanoutRecorder{}
 
 func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	err := f.primary.Record(ctx, ev)
+	// store.InsertAuditEvent is called directly rather than through
+	// f.primary.Record for ONE reason: it takes ev by POINTER and fills in the
+	// hash chain Postgres computed (migration 0047), so what fans out to the
+	// sinks below carries prev_hash and this row's own row_hash — the CURRENT
+	// CHAIN HEAD at the moment of the write. That is what lets an external SIEM
+	// detect a later truncation: it holds head hashes off-box, and a chain that
+	// no longer contains one it saw has been rewritten. audit.Recorder takes ev
+	// by value, so Recorder.Record structurally cannot hand them back.
+	// A failed store write leaves both empty and the event still fans out.
+	err := store.InsertAuditEvent(ctx, f.primary.Pool, &ev)
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
 		if ferr := f.fanout.Emit(ctx, ev); ferr != nil {

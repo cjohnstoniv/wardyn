@@ -44,7 +44,7 @@ func TestPG_QueryAuditEventsPage_LimitOffset(t *testing.T) {
 			Action:    "test.event",
 			Outcome:   "success",
 		}
-		if err := store.InsertAuditEvent(ctx, pool, ev); err != nil {
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 			t.Fatalf("insert audit event %d: %v", i, err)
 		}
 	}

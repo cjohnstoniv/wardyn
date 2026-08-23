@@ -24,6 +24,17 @@ because that's what the call site happened to write, not because anything
 outside `wardynd` depends on the shape. Nothing here is versioned; an
 internal action can rename across releases without notice.
 
+**Envelope fields added by the hash chain.** Since migration `0047` every event
+also carries `prev_hash` and `row_hash` (hex SHA-256, computed by Postgres —
+see [OPERATIONS.md](OPERATIONS.md#the-hash-chain--what-a-rewritten-row-looks-like)).
+They are action-independent, and they ride the **audit-sink stream**
+(webhook/syslog/file), which is what puts a head hash in your SIEM. `GET /audit`
+and `GET /audit/export` do not select them, so they are absent there, and
+neither is filterable; the chain is checked through
+`GET /api/v1/audit/chain/verify`, not by reading rows back. The sweep emits no
+audit action of its own — writing an integrity finding into the log the finding
+is *about* would record it in the one place already under suspicion.
+
 ## Runs
 
 | Action | When | Data fields | Where | Stable? |
