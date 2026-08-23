@@ -12,3 +12,13 @@ Continuous integration gates Go dependency licenses (`go-licenses check`, which
 fails the build on forbidden or restricted license types); per-dependency
 attribution for Go modules can be regenerated locally with
 `go-licenses report ./...`.
+
+The console UI bundles the Inter and JetBrains Mono typefaces
+(`@fontsource/inter`, `@fontsource/jetbrains-mono`; see
+`ui/src/styles/index.css`), both licensed under the SIL Open Font License,
+Version 1.1 (OFL-1.1). The OFL permits bundling, use, and redistribution as
+part of a larger software distribution; each `@fontsource` package publishes
+its own OFL-1.1 `LICENSE` file alongside the font files it installs.
+Per-dependency attribution for UI (npm) dependencies, including these, can be regenerated
+locally with `pnpm licenses list --prod --long` (CI does not yet publish a
+generated THIRD-PARTY-LICENSES artifact — a follow-up item, not yet built).
