@@ -208,6 +208,13 @@ func run() error {
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
 	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg)
+	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
+	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
+	// double-writing the primary store. Guarded: a typed-nil Fanout would be a
+	// non-nil interface that panics on Emit.
+	if fan != nil {
+		brk = brk.WithSIEM(fan)
+	}
 
 	// Approval FSM service (adapter over internal/approval + internal/store).
 	// FIX #5: wired with maskedRec (masked + SIEM fanout), matching idp/broker —

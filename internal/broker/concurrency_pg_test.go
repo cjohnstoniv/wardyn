@@ -111,6 +111,19 @@ func readMintedJTI(ctx context.Context, t *testing.T, pool *pgxpool.Pool, approv
 	return jti
 }
 
+// countMintAudits counts credential.mint rows for a run with the given outcome in
+// the real audit_events table — the durable target of the D29 in-tx mint audit.
+func countMintAudits(ctx context.Context, t *testing.T, pool *pgxpool.Pool, runID uuid.UUID, outcome string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='credential.mint' AND outcome=$2`,
+		runID, outcome).Scan(&n); err != nil {
+		t.Fatalf("count mint audits: %v", err)
+	}
+	return n
+}
+
 // TestPG_MintRevokeRoundTrip exercises mint -> persist -> revoke against the
 // real PgxStore: a single approved github_token grant mints once (writing
 // minted_jti in the same tx, the provable join), the persisted jti matches the
@@ -151,9 +164,14 @@ func TestPG_MintRevokeRoundTrip(t *testing.T) {
 	if minted.ApprovalID != approvalID {
 		t.Fatalf("minted approval id = %s, want %s", minted.ApprovalID, approvalID)
 	}
-	mints := au.byAction("credential.mint")
-	if len(mints) != 1 || mints[0].Outcome != "success" {
-		t.Fatalf("expected 1 successful credential.mint, got %+v", mints)
+	// D29: the success mint audit now commits IN the mint tx, into the real
+	// audit_events table — read it back from there, not the fanout recorder
+	// (which no longer sees success events). au is still the DENIED/FAILURE sink.
+	if got := countMintAudits(ctx, t, pool, runID, "success"); got != 1 {
+		t.Fatalf("expected 1 successful credential.mint in audit_events, got %d", got)
+	}
+	if len(au.byAction("credential.mint")) != 0 {
+		t.Fatalf("success mint must not double-write through the post-commit recorder")
 	}
 
 	// Revoke through the real PgxStore.MintedJTIs bulk read.
