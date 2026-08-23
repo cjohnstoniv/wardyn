@@ -56,7 +56,7 @@ import {
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
-import { PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
+import { POLICY_TEMPLATES, PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -65,16 +65,9 @@ import { OPERATOR_ONLY_REASON, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 
-// A starter spec used to prefill the "create" editor. Mirrors the shipped
-// default policy shape so an operator sees a valid, editable starting point.
-// (Equivalent to the panel's "Minimal" template — kept as its own const since
-// the create flow prefills it directly, independent of the template gallery.)
-const STARTER_SPEC: RunPolicySpec = {
-  allowed_domains: ["api.anthropic.com"],
-  first_use_approval: "deny_with_review",
-  min_confinement_class: "CC2",
-  eligible_grants: [],
-};
+// The starter spec that prefills the "create" editor IS the panel's Minimal
+// template — one const, no hand-maintained twin to drift.
+const STARTER_SPEC: RunPolicySpec = POLICY_TEMPLATES.find((t) => t.id === "minimal")!.spec;
 
 // egressSummary/lifecycleSummary (used by the table rows below) now live in
 // policy-panel.tsx — one copy, shared with the panel's own derivations.

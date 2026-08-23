@@ -89,9 +89,9 @@ type DomainObservation struct {
 	DenyCount    int `json:"deny_count"`
 	PendingCount int `json:"pending_count"`
 	// ApprovalCount is the subset of AllowCount that was RELEASED by a live
-	// first-use approval (rule_source "approval:<id>" — the exact prefix
-	// proxy.allowLog writes, internal/egress/proxy/proxy.go:515) rather than
-	// the standing policy. A confined replay's CleanReplay verdict treats any
+	// first-use approval (rule_source "approval:<id>" — the exact prefix the
+	// allow path of evaluate writes in internal/egress/proxy/proxy.go) rather
+	// than the standing policy. A confined replay's CleanReplay verdict treats any
 	// of these as caught: approving mid-replay must not earn a green the
 	// standing policy didn't — the honest loop is approve, then replay again.
 	ApprovalCount int `json:"approval_count"`
@@ -223,10 +223,11 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 	switch ev.Action {
 	case actionEgressAllow:
 		agg.allow++
-		// Defensively scoped to exactly this (allow) branch: "approval:denied"/
-		// "approval:pending" (proxy.go:433,436) share the "approval:" prefix
-		// but land on the deny/pending actions above/below, never here, so
-		// this can never miscount a hold or a live deny as a released approval.
+		// Defensively scoped to exactly this (allow) branch: "approval:denied"
+		// and "approval:pending" (evaluate's deny/hold arms in
+		// internal/egress/proxy/proxy.go) share the "approval:" prefix but
+		// land on the deny/pending actions above/below, never here, so this
+		// can never miscount a hold or a live deny as a released approval.
 		if strings.HasPrefix(strings.TrimSpace(d.RuleSource), "approval:") {
 			agg.approval++
 		}

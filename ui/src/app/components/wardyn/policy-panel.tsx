@@ -366,6 +366,9 @@ export interface PolicyPanelProps {
   onPreflight?: () => void;
   /** Run instance: a preflight is in flight — the button parks until it lands. */
   preflightBusy?: boolean;
+  // Extra caller-known reason Preflight can't run (e.g. the run screen's saved
+  // lane with no policy picked — there is no body to dry-run).
+  preflightDisabled?: boolean;
   /**
    * Run instance: the "Reuse a saved policy" half of the mode row. The screen
    * owns the policy list and the selection; this is only where it renders and
@@ -385,6 +388,7 @@ export function PolicyPanel({
   onChange,
   onPreflight,
   preflightBusy,
+  preflightDisabled,
   savedPolicy,
   className,
 }: PolicyPanelProps) {
@@ -545,7 +549,7 @@ export function PolicyPanel({
             variant="outline"
             size="sm"
             onClick={onPreflight}
-            disabled={preflightBusy || (!usingSaved && !parsed.ok)}
+            disabled={preflightBusy || preflightDisabled || (!usingSaved && !parsed.ok)}
           >
             <ShieldCheck className="size-4" />
             Preflight

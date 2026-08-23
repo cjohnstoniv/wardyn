@@ -188,10 +188,11 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			// Defensive: "approval:denied"/"approval:pending" (proxy.go:433,436)
-			// share the "approval:" prefix with a released allow's
-			// "approval:<id>" (proxy.go:515), but land on the deny/pending
-			// audit actions, never allow — must never be miscounted.
+			// Defensive: "approval:denied"/"approval:pending" (evaluate's
+			// deny/hold arms in internal/egress/proxy/proxy.go) share the
+			// "approval:" prefix with a released allow's "approval:<id>" (the
+			// allow path of evaluate), but land on the deny/pending audit
+			// actions, never allow — must never be miscounted.
 			name: "deny/pending rule_source sharing the approval: prefix is never counted as an approval",
 			events: []types.AuditEvent{
 				egressEvent(egress.Deny, "denied.example", "GET", "approval:denied"),

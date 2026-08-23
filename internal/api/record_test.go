@@ -518,8 +518,8 @@ func TestReconcileRecordRun_IgnoresNonRecordAndSupersededRuns(t *testing.T) {
 // TestRecordCrossSession_ApprovalWidensNextConfinedLaunch is Workstream B /
 // B4: the A→B loop through the API/reconcile layer, end to end — not just the
 // pure union function alone (already pinned directly on a hand-built
-// types.Workspace by TestConfinedEgressDomains_HonorsFoldedRequiredRows,
-// verify_loop_test.go:113-133; not duplicated here).
+// types.Workspace by TestConfinedEgressDomains_HonorsFoldedRequiredRows in
+// verify_loop_test.go; not duplicated here).
 //
 // Session A (an OPEN recording) observes a host via the SAME reconcile path
 // TestReconcileRecordRun_CapturesObservationsAndSecretNames drives. The
@@ -527,9 +527,9 @@ func TestReconcileRecordRun_IgnoresNonRecordAndSupersededRuns(t *testing.T) {
 // (PUT /workspaces/{id}/requirements, handleSetWorkspaceRequirements) — the
 // same endpoint B2 wired the guided per-host approve button onto
 // (workspace-detail.tsx's approveHosts -> api.setRequirements). Session B is
-// a LATER, differently-named confined replay: launchRecordRun computes its
-// AllowedDomains as confinedEgressDomains(ws) (workspace_run.go:283) off
-// whatever the workspace row looks like at that moment — so re-deriving that
+// a LATER, differently-named confined replay: launchRecordRun (in
+// workspace_run.go) computes its AllowedDomains as confinedEgressDomains(ws)
+// off whatever the workspace row looks like at that moment — so re-deriving that
 // same union from the workspace the PUT left behind is exactly what session
 // B's launch would see, without needing to fake the sandbox dispatch itself.
 func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
@@ -566,7 +566,7 @@ func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
 
 	// Session B: a LATER confined replay's egress union is exactly
 	// confinedEgressDomains(ws) — what launchRecordRun's AllowedDomains uses
-	// (workspace_run.go:283) — computed off the workspace the approval left
+	// (workspace_run.go) — computed off the workspace the approval left
 	// behind, re-fetched the way a fresh launch would.
 	got, err := fake.GetWorkspace(context.Background(), wsID)
 	if err != nil {

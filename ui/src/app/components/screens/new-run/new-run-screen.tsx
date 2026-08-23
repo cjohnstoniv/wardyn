@@ -50,7 +50,7 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
-import { PolicyPanel, POLICY_TEMPLATES, parseSpec, templateText } from "../../wardyn/policy-panel";
+import { PolicyPanel, POLICY_TEMPLATES, parseSpec } from "../../wardyn/policy-panel";
 import { cn } from "../../ui/utils";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
@@ -135,12 +135,25 @@ export function NewRunScreen() {
   // The policy this run ships, as the operator wrote it. `useSaved` is the mode
   // row: reuse a stored policy by REFERENCE (policy_id) or author one here.
   const [useSaved, setUseSaved] = React.useState(false);
-  const [specText, setSpecText] = React.useState(() => templateText(MINIMAL));
+  // The DEFAULT body floors at the operator's own default barrier (persisted
+  // pick, else CC1) — NOT Minimal's authored CC2. The pre-panel screen was
+  // launchable by construction (its composed floor was the selected tier); a
+  // hardcoded CC2 default would open every fresh /runs/new on a Fence-only
+  // host fail-closed, all tiers dead, before the operator authored anything.
+  // Clicking the Minimal CHIP afterwards is an authored act and still floors
+  // CC2 — that corner stays, with its reason line and preflight naming it.
+  const [specText, setSpecText] = React.useState(() =>
+    JSON.stringify(
+      { ...MINIMAL.spec, min_confinement_class: getDefaultCc() ?? "CC1" },
+      null,
+      2,
+    ),
+  );
   // The floor the LAST SUCCESSFUL parse authored — deliberately sticky across a
   // broken edit: a half-typed document must not momentarily drop the floor and
   // re-open a barrier tier the operator's own policy forbids.
   const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>(
-    () => MINIMAL.spec.min_confinement_class as ConfinementClass,
+    () => getDefaultCc() ?? "CC1",
   );
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
@@ -384,6 +397,11 @@ export function NewRunScreen() {
   // mints/dispatches nothing. Renders the member-clamp warnings, the risk
   // grade, and the confinement class the run will actually be enforced at.
   const preflight = async () => {
+    // The saved lane with nothing picked has NO body to dry-run — falling
+    // through would preflight the leftover Custom document this lane will
+    // never launch, breaking buildRunInput's same-body invariant. (The panel
+    // disables the button in this state too; this guards the race.)
+    if (useSaved && !state.selectedPolicyId) return;
     setPreflightError(null);
     setPreflightResult(null);
     setPreflighting(true);
@@ -665,6 +683,7 @@ export function NewRunScreen() {
                 onChange={onSpecChange}
                 onPreflight={preflight}
                 preflightBusy={preflighting}
+                preflightDisabled={useSaved && !state.selectedPolicyId}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: setUseSaved,

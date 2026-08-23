@@ -7,10 +7,11 @@ package api
 // CONFINED. The pipeline is Source → Scan → Requirements → Record (recommended,
 // skippable): Record LEARNS what a task actually uses (an allow-all-egress run
 // whose audit events are captured server-side via recordmode.Capture), the
-// operator PROMOTES observed needs (egress → the ApprovedEgress lane), and a
-// CONFINED REPLAY of the same session re-runs it under only what was approved,
-// to PROVE least-privilege — confinedEgressDomains already unions
-// ApprovedEgress, so promotion widens the next replay with zero extra wiring.
+// operator PROMOTES observed needs (egress → `egress:` requirement rows; the
+// legacy ApprovedEgress lane is read-only from here), and a CONFINED REPLAY of
+// the same session re-runs it under only what was approved, to PROVE
+// least-privilege — confinedEgressDomains unions the requirement rows with the
+// legacy lane, so promotion widens the next replay with zero extra wiring.
 // The confined replay is what survived the retired verify pipeline: it observes
 // real usage instead of replaying a curated command list.
 //
@@ -111,8 +112,9 @@ type RecordTaskResult struct {
 	// SecretNamesMinted resolves Observations.MintedGrantIDs to the secret /
 	// grant names actually exercised, for the "proven used" checklist render.
 	SecretNamesMinted []string `json:"secret_names_minted,omitempty"`
-	// EgressPromoted marks that this task's observed hosts were merged into the
-	// workspace's ApprovedEgress (operator action, never automatic).
+	// EgressPromoted marks that at least one of this task's observed hosts was
+	// merged into the workspace's `egress:` requirement rows (operator action,
+	// never automatic; possibly a subset — the flag is a boolean, not a count).
 	EgressPromoted bool `json:"egress_promoted,omitempty"`
 	// KernelSensorBlind: the run executed under CC3/Kata where the host eBPF
 	// sensor cannot see — proxy decisions were the sole egress signal.
