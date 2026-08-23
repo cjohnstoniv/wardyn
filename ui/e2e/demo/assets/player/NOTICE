@@ -1,0 +1,2 @@
+asciinema-player 3.16.0 — Apache-2.0 — vendored from ui/node_modules for the file:// demo lane
+(the product already depends on this package; see ui/package.json)

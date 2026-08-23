@@ -67,8 +67,32 @@ _SUBS = [
     ("—", ", "),
     ("–", ", "),
     ("…", ", "),
+    # HETERONYMS, phrase-scoped on purpose: "live" the adjective is /laɪv/
+    # ("a live run") while "lives" the verb is /lɪv/ ("where a yes lives") —
+    # a bare word sub would break the verb, so only known adjective phrases
+    # are respelled. Add phrases here as scripts grow them; the verifier's
+    # pronunciation watch flags unmapped occurrences for review.
+    ("watch it live", "watch it lyve"),
+    ("live run", "lyve run"),
+    ("live decision", "lyve decision"),
+    ("live strip", "lyve strip"),
+    ("held live", "held lyve"),
+    ("caught it live", "caught it lyve"),
+    ("blocked live", "blocked lyve"),
+    # ...and the VERB sense (/lɪv/) where the scripts use it:
+    ("attacks live exactly here", "attacks liv exactly here"),
+    ("no keys live in the room", "no keys liv in the room"),
+    ("keys live inside", "keys liv inside"),
+    ("keys don't live in the room", "keys don't liv in the room"),
+    # "record" the VERB (/rɪˈkɔːɹd/) where espeak would stress it as the noun:
+    ("Only record work you trust", "Only ruh-cord work you trust"),
+    # "PyPI" reads as "pie-pie" bare:
+    ("PyPI", "pie pee eye"),
+    # The owner's script uses three-dot trailing ellipses ("useful...") — read
+    # as a breath, not dots. Must precede nothing (plain literal).
+    ("...", ", "),
     # Specific hosts BEFORE the generic .com/.org rules.
-    ("api.anthropic.com", "the Anthropic A P I"),
+    ("api.anthropic.com", "the Anthropic eh pee eye"),
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),
     ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4"),
     ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1"),
@@ -83,6 +107,17 @@ def speakable(text: str) -> str:
     out = text
     for a, b in _SUBS:
         out = out.replace(a, b)
+    # Initialisms Kokoro reads as words ("CI" came out wrong on camera; CLI/AI
+    # are the same trap). Phonetic respellings, not bare letter-spacing: a
+    # standalone "A" reads as the ARTICLE (uh/eh — "A I" came out "Ehh Eye"),
+    # so each one is spelled the way it is said. Word-bounded and uppercase-
+    # only, so "api.anthropic.com", "deciding" etc. never match.
+    # Respellings VALIDATED against the venv's own phonemizer (the exact G2P
+    # kokoro-onnx uses): "eh"→/eɪ/ is the letter A ("ay" is /aɪ/ — it shipped
+    # as "eye eye" once), "see"→/siː/, "ell"→/ɛl/, "pee"→/piː/. To re-check a
+    # candidate: phonemizer_fork + espeakng_loader, language en-us.
+    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye"}
+    out = re.sub(r"\b(CI|CLI|APIs|API|AI)\b", lambda m: _SAY[m.group(1)], out)
     # Drop anything that is decoration rather than words (the recorder's captions
     # are plain, but chapter subtitles and future copy may not be).
     out = re.sub(r"[*_`#]", "", out)

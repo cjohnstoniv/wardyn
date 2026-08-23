@@ -69,6 +69,7 @@ function renderPane(
   modelReady = true,
   operator = true,
   launch: { warnings?: string[]; confinementClass?: string } | null = null,
+  hostClasses: ("CC1" | "CC2" | "CC3")[] | null = null,
 ) {
   return render(
     <OperatorProvider operator={operator}>
@@ -78,6 +79,7 @@ function renderPane(
         launch={launch}
         busyTask={null}
         modelReady={modelReady}
+        hostClasses={hostClasses}
         onRecord={handlers.onRecord ?? noop}
         onReplayConfined={handlers.onReplayConfined ?? noop}
         onDoneRecording={handlers.onDoneRecording ?? noop}
@@ -90,22 +92,28 @@ function renderPane(
 }
 
 beforeEach(() => {
-  localStorage.clear(); // getDefaultCc() => null => tier CC1 => banner shown
+  localStorage.clear();
 });
 
-describe("RecordPane — header, CC1 banner, model note", () => {
-  it("shows the recommended/skippable chip and the honest CC1 open-egress banner", () => {
+describe("RecordPane — header, open-egress banner, model note", () => {
+  it("shows the recommended/skippable chip and, with no tier data at all, the weakest-barrier wording", () => {
     renderPane();
     expect(screen.getByText(/recommended/i)).toBeInTheDocument();
-    const banner = screen.getByTestId("record-cc1-banner");
+    const banner = screen.getByTestId("record-open-egress-banner");
     expect(banner).toHaveTextContent(/fence/i);
     expect(banner).toHaveTextContent(/egress/i);
   });
 
-  it("hides the CC1 banner when the operator's default tier is stronger", () => {
-    localStorage.setItem("wardyn-default-confinement", "CC3");
-    renderPane();
-    expect(screen.queryByTestId("record-cc1-banner")).not.toBeInTheDocument();
+  // The banner NEVER keys off the operator's New-Run default (localStorage) —
+  // that preference once printed "Fence" under a Vault capture, on camera. The
+  // pre-launch tier comes from the runner's declared classes: a recording
+  // launches under the strongest of them (workspace_run.go's bestClass).
+  it("derives the pre-launch tier from the runner's strongest class, not localStorage", () => {
+    localStorage.setItem("wardyn-default-confinement", "CC1"); // must be ignored
+    renderPane({}, {}, true, true, null, ["CC1", "CC2", "CC3"]);
+    const banner = screen.getByTestId("record-open-egress-banner");
+    expect(banner).toHaveTextContent(/egress unrestricted/i);
+    expect(banner).not.toHaveTextContent(/weakest barrier/i);
   });
 
   it("notes the configured model provider when a model path is ready", () => {
@@ -118,15 +126,18 @@ describe("RecordPane — header, CC1 banner, model note", () => {
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
   });
 
-  // W20-S1-2: the localStorage default is only a pre-launch GUESS — once a
-  // session has actually launched, the server's own confinement_class is the
-  // truth, even when it disagrees with the guess (CC1 default here, but the
-  // launch resolved to CC3 — no shared-kernel exposure, so no banner).
-  it("keys the CC1 banner off the launch's REAL confinement class, not the localStorage default, once a session has launched", () => {
-    // localStorage still says nothing (=> CC1 guess) — unchanged from the
-    // default-banner test above.
+  // W20-S1-2: once a session has actually launched, the server's own
+  // confinement_class is the truth — it beats the runner-derived guess in
+  // BOTH directions (stronger: the weakest-barrier line goes; weaker: it
+  // appears even though the runner offers better).
+  it("keys the tier line off the launch's REAL confinement class once a session has launched", () => {
     renderPane({}, {}, true, true, { confinementClass: "CC3" });
-    expect(screen.queryByTestId("record-cc1-banner")).not.toBeInTheDocument();
+    expect(screen.getByTestId("record-open-egress-banner")).not.toHaveTextContent(/weakest barrier/i);
+  });
+
+  it("shows the weakest-barrier line when the launch really resolved to CC1, even on a stronger host", () => {
+    renderPane({}, {}, true, true, { confinementClass: "CC1" }, ["CC1", "CC2", "CC3"]);
+    expect(screen.getByTestId("record-open-egress-banner")).toHaveTextContent(/weakest barrier/i);
   });
 
   it("renders the launch's own warnings instead of silently dropping them", () => {

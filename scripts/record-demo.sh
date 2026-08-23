@@ -15,18 +15,18 @@
 #   scripts/record-demo.sh --silent      # no narration (captions still render)
 #   scripts/record-demo.sh --video 03    # record ONE video of the 0.5 series
 #                                        # (ui/e2e/demo/03-*.spec.ts)
-#   scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+#   scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 #                                        # film host-shell beats instead of (or
 #                                        # before) the browser ones
 #
 # THE SERIES. --video <nn> records a single video instead of the whole
 # walkthrough: it picks ui/e2e/demo/<nn>-*.spec.ts as the only spec to run and
-# names the output after it (wardyn-<nn>-<slug>-<stamp>.mp4). Only video 01 —
+# names the output after it (wardyn-<nn>-<slug>-<stamp>.mp4). Only video 02 —
 # and the no-flag walkthrough, which starts from nothing by definition — wipes
 # the stack first. Every other video opens on state an earlier video left
 # behind (a workspace, a run, a permanent grant), so a reset there does not
 # just cost minutes of dead air, it films the wrong thing. Pass --reset to
-# override that, --no-reset to opt 01 out. See docs/DEMO-SCRIPT.md.
+# override that, --no-reset to opt 02 out. See docs/DEMO-SCRIPT.md.
 #
 # BY DEFAULT the video is the console only, recorded by the browser ITSELF
 # (Playwright recordVideo) — no screen grab, so nothing you do on this machine
@@ -36,9 +36,9 @@
 # the front. That segment IS a screen grab of a fixed rectangle and has twice
 # captured whatever the operator was doing instead; clear the corner first.
 #
-# THE TERMINAL LANE. Three videos of the series have no page to film: V09 (CI &
+# THE TERMINAL LANE. Three videos of the series have no page to film: V11 (CI &
 # headless) is a policy file, a `scripts/ci-run.sh` invocation, its exit code and
-# its artifacts; V10 (audit & attach) is three terminals holding an ssh session
+# its artifacts; V12 (audit & attach) is three terminals holding an ssh session
 # each; V11 (your terminal, our cluster) is kubectl and ssh against a kind
 # cluster. --terminal-script <path> runs that script under the SAME gdigrab capture
 # Act 0 uses, with scripts/demo-typist.sh giving it say/type_cmd/beat/chapter —
@@ -93,7 +93,7 @@ VIDEO="${WARDYN_DEMO_VIDEO:-}"
 # browser lane alone, which is every video the series has shot so far.
 TERMINAL_SCRIPT="${WARDYN_DEMO_TERMINAL_SCRIPT:-}"
 # Whether a reset was actually ASKED for. DO_RESET's default is per-video (only
-# 01 wipes the stack, see below) and a typed flag has to beat that default in
+# 02 wipes the stack, see below) and a typed flag has to beat that default in
 # both directions — otherwise `--video 05 --reset` would silently not reset.
 RESET_EXPLICIT=0
 # A while/shift loop, not `for arg in "$@"`: --video takes a value, and the for
@@ -111,8 +111,8 @@ while [[ $# -gt 0 ]]; do
     # stack wipe nobody asked for.
     --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
     --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
-    --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
-    --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/09-ci-and-headless.sh" >&2; exit 2; } ;;
+    --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
+    --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
     # Pattern-bounded rather than a line count: this header grows, and a stale
     # `4,39p` silently truncates --help to something that no longer mentions the
     # flag the reader came for.
@@ -122,14 +122,25 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# The clean slate belongs to video 01 alone. Every later video opens on state
-# an earlier one left behind — the workspace it onboarded, the run it launched,
-# the host it permanently granted — so wiping the stack before, say, video 03
-# does not merely cost minutes of dead air: it films a story whose first half
-# never happened. An explicit --reset/--no-reset always wins.
-if [[ -n "${VIDEO}" && "${VIDEO}" != "01" && "${RESET_EXPLICIT}" == 0 ]]; then
+# The clean slate belongs to video 02 alone (Set up the host — the series'
+# from-nothing take). Every later video opens on state an earlier one left
+# behind — the workspace it onboarded, the run it launched, the host it
+# permanently granted — so wiping the stack before, say, video 04 does not
+# merely cost minutes of dead air: it films a story whose first half never
+# happened. An explicit --reset/--no-reset always wins.
+if [[ -n "${VIDEO}" && "${VIDEO}" != "02" && "${RESET_EXPLICIT}" == 0 ]]; then
   DO_RESET=0
 fi
+
+# Video 01 (the primer) is a slides-lane take: a local HTML deck over file://,
+# recorded like any console take but touching NO product surface. It needs no
+# stack, no workspace, no model token — and it must never gate on (or mutate)
+# whatever happens to be answering :8080, which is not necessarily the series
+# stack (a quickstart squatting the port with bearer auth killed a rehearsal
+# at the subscription-connect step for a video that never uses the model).
+STACKLESS=0
+[[ "${VIDEO}" == "01" ]] && STACKLESS=1
+[[ "${STACKLESS}" == 1 ]] && DO_RESET=0
 
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1;35m═══ %s\033[0m\n\n' "$*"; }
@@ -187,11 +198,11 @@ SLUG=""
 # beside it now, so an empty filter would run all eleven back to back into one
 # recording, after a reset-all wiped the state the later ones expect to inherit.
 PW_FILTER=("walkthrough.spec.ts")
-# Whether the browser lane runs at all. A terminal-only video (V09/V10 before
+# Whether the browser lane runs at all. A terminal-only video (V11/V12 before
 # their browser halves exist) has no spec to hand Playwright.
 RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
-  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..11), got: ${VIDEO}"
+  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..12), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.
@@ -284,8 +295,8 @@ fi
 
 # Model access. The token is read from a file and piped, so it is never an
 # argument, never in the environment of a child we do not control, and never
-# rendered on camera.
-if [[ -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
+# rendered on camera. A stackless take uses no model at all.
+if [[ "${STACKLESS}" == 0 && -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
   die "no Claude subscription token. Run:  claude setup-token > ${TOKEN_FILE}   (or export WARDYN_SUBSCRIPTION_TOKEN)"
 fi
 
@@ -319,6 +330,7 @@ log "preflight OK"
 
 # --- workspace --------------------------------------------------------------
 
+if [[ "${STACKLESS}" == 0 ]]; then
 step "Materializing the demo workspace"
 
 # Rebuilt from the fixture every time: a previous recording left the agent's
@@ -335,6 +347,7 @@ rm -f "${WORKSPACE_PATH}/TASK.md"   # director's notes, not part of the project 
   git -c user.email=demo@wardyn.local -c user.name="Wardyn Demo" commit -qm "slugify demo workspace"
 ) || die "could not git init the workspace"
 log "seeded $(find "${WORKSPACE_PATH}" -type f -not -path '*/.git/*' | wc -l) files at ${WORKSPACE_PATH}"
+fi # STACKLESS
 
 # --- capture ----------------------------------------------------------------
 
@@ -406,6 +419,9 @@ if [[ "${DO_RESET}" == 1 ]]; then
   # dead air, and they are not what the video is about.
 fi
 
+if [[ "${STACKLESS}" == 1 ]]; then
+  step "Act 0 · skipped (slides-lane take — no stack involved)"
+else
 # Skip setup entirely when we did not reset and the stack is already answering.
 #
 # `make setup` rebuilds the image and re-ups the compose project. That is
@@ -424,14 +440,29 @@ if [[ "${DO_RESET}" == 1 ]] || ! curl -fsS --max-time 5 "http://localhost:${WARD
   log "workspaces root: ${WORKSPACES_ROOT}"
   # WARDYN_UP_NO_BROWSER: up.sh otherwise fires wslview and an uncontrolled window
   # lands in frame. The driver opens the browser itself, at the moment it wants it.
+  if [[ "${VIDEO}" == "02" ]]; then
+    # Episode 02 opens on THIS install, replayed: capture make setup as a real
+    # shell recording (util-linux script + timing) and convert it to an
+    # asciicast the take's browser lane plays back. The pty gets a fixed
+    # geometry so the player's cols/rows match the converter's.
+    step "Act 0 · make setup (recorded for the take)"
+    rm -f "${DEMO_OUT_DIR}/setup.typescript" "${DEMO_OUT_DIR}/setup.timing" "${DEMO_OUT_DIR}/setup.cast"
+    script -qe --timing="${DEMO_OUT_DIR}/setup.timing" -c \
+      "stty cols 110 rows 30 2>/dev/null; WARDYN_SETUP_MODE=container WARDYN_WORKSPACES_ROOT='${WORKSPACES_ROOT}' WARDYN_UP_NO_BROWSER=1 make setup" \
+      "${DEMO_OUT_DIR}/setup.typescript" || die "make setup failed (recorded)"
+    python3 "${REPO_ROOT}/scripts/cast-convert.py" \
+      "${DEMO_OUT_DIR}/setup.typescript" "${DEMO_OUT_DIR}/setup.timing" \
+      "${DEMO_OUT_DIR}/setup.cast" || die "cast conversion failed — the install replay would film an empty player"
+  else
   WARDYN_SETUP_MODE=container \
   WARDYN_WORKSPACES_ROOT="${WORKSPACES_ROOT}" \
   WARDYN_UP_NO_BROWSER=1 \
     make setup || die "make setup failed"
+  fi
 else
   step "Act 0 · stack already up"
   log "healthz answered on :${WARDYN_UP_PORT:-8080} and no reset was asked for — reusing it"
-  log "(pass --reset to rebuild, which is what video 01 does)"
+  log "(pass --reset to rebuild, which is what video 02 does)"
 fi
 
 step "Act 0 · Model access"
@@ -444,6 +475,7 @@ else
     || die "subscription connect failed"
 fi
 ./wardyn setup status || true
+fi # STACKLESS
 
 # --- the terminal beats -----------------------------------------------------
 

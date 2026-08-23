@@ -52,7 +52,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { act, beat, caption, PACE, spotlight } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
@@ -84,6 +84,9 @@ const CI_ADMIN_TOKEN = process.env.WARDYN_ADMIN_TOKEN || "demo-admin-token";
 /** lib/api/core.ts's TOKEN_KEY. Same string in both storages; ss wins. */
 const TOKEN_KEY = "wardyn_admin_token";
 
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
+
 // A real console boot against a stack that has just finished a run: the app
 // shell, the auth probe, and the board's first poll. A ceiling for waiting on
 // the PRODUCT — the pacing the viewer sees comes from overlay.ts.
@@ -109,7 +112,7 @@ function pipelineRun(): { id: string; state: string; task: string } {
   }
   const run = JSON.parse(fs.readFileSync(RUN_JSON, "utf8")) as { id?: string; state?: string; task?: string };
   if (!run.id || !run.task) throw new Error(`${RUN_JSON} carries no run id/task — the pipeline never finished collecting.`);
-  // Beat 5 narrates a COMPLETED badge and beat 6 an `agent exit 0` chip. On a
+  // Beat 5 narrates a COMPLETED badge and beat 6 an `exit 0` chip. On a
   // FAILED/KILLED run both are false, and asserting them on screen would burn
   // 60s of BOARD_SETTLES waiting for a badge that will never render. record-
   // demo.sh does NOT abort the browser lane when the beat script exits
@@ -117,7 +120,7 @@ function pipelineRun(): { id: string; state: string; task: string } {
   // only thing standing between a bad pipeline run and two filmed minutes of it.
   if (run.state !== "COMPLETED") {
     throw new Error(
-      `${RUN_JSON} says state=${run.state || "(none)"} — beats 5-6 narrate "Completed" and "agent exit zero". ` +
+      `${RUN_JSON} says state=${run.state || "(none)"} — beats 5-6 narrate "Completed" and "exit zero". ` +
         `The pipeline run did not succeed; fix it and re-shoot rather than filming the board over a failure.`,
     );
   }
@@ -175,13 +178,21 @@ test("beat 5 — the pipeline's run, on the board", async () => {
   // would look perfect.
   await expect(headline).toHaveCount(1);
 
-  await caption(page, "Same stack, in a browser. The pipeline's run, on the board like any other.");
+  await caption(page, "Now let's look at that same run in the console.");
   await spotlight(page, headline);
   // The payoff of the whole terminal half, asserted where it is claimed: the
   // badge renders runStateMeta's TITLE-CASE label ("Completed"), not the wire
   // enum the artifacts carry.
   await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: BOARD_SETTLES });
-  await beat(page, PACE.read + 900);
+  await beat(page, PACE.read);
+  await caption(page, "It looks like any other run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's the point.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "CI doesn't get a special security model.");
+  await beat(page, PACE.read);
+  await caption(page, "It gets the same one.");
+  await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 });
 
@@ -190,7 +201,7 @@ test("beat 5 — the pipeline's run, on the board", async () => {
 // ---------------------------------------------------------------------------
 
 test("beat 6 — same trail, no human", async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   const page = stage();
   const run = pipelineRun();
 
@@ -206,14 +217,15 @@ test("beat 6 — same trail, no human", async () => {
   // run.complete's data.exit_code), which is exactly why it is worth filming:
   // the number the pipeline exited with and the number on this chip come from
   // the same event, not from two systems that agree by luck.
-  const exitChip = page.getByText("agent exit 0", { exact: true });
+  const exitChip = page.getByText("exit 0", { exact: true });
   await expect(exitChip).toBeVisible({ timeout: 60_000 });
-  await caption(page, "Agent exit zero — the pipeline's number, on the run's own header.");
+  await caption(page, "The run finished with exit zero.");
   await spotlight(page, exitChip);
-  await beat(page, PACE.read + 700);
+  await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 
-  await act(page, page.getByRole("tab", { name: /Audit/ }));
+  // SAY-ON-CLICK: "Open the audit." — spoken on the click that opens the tab.
+  await act(page, page.getByRole("tab", { name: /Audit/ }), "Open the audit.");
 
   // Assert the trail the narration is about to describe. `run.create` through
   // `run.complete` is the claim; both are real actions on the success path
@@ -228,16 +240,55 @@ test("beat 6 — same trail, no human", async () => {
   const appendOnly = page.getByText(/Append-only · \d+ events? for this run/).first();
   await expect(appendOnly).toBeVisible({ timeout: 30_000 });
   await spotlight(page, appendOnly);
-  await caption(page, "Append-only, create through complete. Nobody watched, and the trail is identical.");
-  await beat(page, PACE.read + 1200);
+  await caption(page, "There's the append-only trail.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Created.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Executed.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Completed.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Nobody watched this one live.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But the record is still there.");
+  await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 
-  // ── outro ────────────────────────────────────────────────────────────────
+  // ── conclusion ───────────────────────────────────────────────────────────
   // The series motif ("Run anything. Keep your keys.") belongs to V10 and is
   // deliberately absent here — V02 through V09 never speak it.
-  await caption(page, "Governance that doesn't need you awake.");
+  await caption(page, "A pipeline doesn't need a human to enforce a policy.");
   await beat(page, PACE.read);
-  await caption(page, "Next: that trail in full, and attaching to a live run.");
-  await beat(page, PACE.chapter);
+  await caption(page, "The policy makes the decision.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The run produces the verdict.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And the pipeline carries that verdict forward.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Governance that doesn't require somebody to stay awake.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Next, we're going to look at the record itself.");
+  await beat(page, PACE.read);
+  await caption(page, "And ask the final question:");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Can we actually prove what happened?");
+  await beat(page, PACE.read + 400);
   await caption(page, "");
+  await silentCard(page, "Next — 12: Audit & attach");
 });
+
+/** The unspoken outro card, per the series convention video 01 set. */
+async function silentCard(page: Page, text: string): Promise<void> {
+  const set = (t: string) =>
+    page
+      .evaluate((s: string) => {
+        const d = (window as unknown as Record<string, Record<string, (...x: unknown[]) => void>>).__demo;
+        d?.chapter?.(s, "");
+      }, t)
+      .catch(() => {
+        /* overlay absent — a card is cosmetic, never fatal */
+      });
+  await set(text);
+  await page.waitForTimeout(PACE.chapter);
+  await set("");
+}

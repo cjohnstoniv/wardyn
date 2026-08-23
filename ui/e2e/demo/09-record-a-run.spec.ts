@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 06 of the 0.5 series — RECORD MODE.
+ * Video 09 of the series — RECORD MODE.
  *
  * The moat feature, filmed end to end: record one open session, let Wardyn
  * synthesize a least-privilege policy from what the kernel and the proxy
@@ -44,8 +44,8 @@
  * ffwdEnd fires the instant the awaited state lands, BEFORE the next caption,
  * so every beat the viewer is meant to watch plays at human speed.
  *
- * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
- * filename and names the take wardyn-06-record-a-run-<stamp>.mp4 (docs/README.md
+ * Driven by `scripts/record-demo.sh --video 09`, which globs this exact
+ * filename and names the take wardyn-09-record-a-run-<stamp>.mp4 (docs/README.md
  * already links that asset). Do not rename the file. It self-skips without
  * WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a headed browser at a
  * developer's live stack and start recording sessions in it.
@@ -62,13 +62,14 @@
  */
 
 import fs from "node:fs";
-import { test, expect } from "@playwright/test";
-import { act, beat, caption, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
+import { test, expect, type Page } from "@playwright/test";
+import { act, beat, caption, centerInFrame, ffwdEnd, ffwdStart, PACE, spotlight, typeInTerminal } from "./overlay";
 // The browser, the recorded context and the shared page live in stage.ts:
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide } from "./funnel";
+import { sweepStaleState } from "./sweep";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -146,6 +147,9 @@ const GIT_IDENTITY_CMD = "git config --global user.email demo@wardyn.dev";
 const SANDBOX_UP = 180_000;
 const CAPTURE_SETTLES = 240_000;
 
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
+
 // ---------------------------------------------------------------------------
 // Staging. Everything here is off camera and everything here has burned a take.
 // ---------------------------------------------------------------------------
@@ -206,6 +210,12 @@ test.beforeAll(async () => {
   // only thing between a developer's stack and that.
   if (!process.env.WARDYN_DEMO) return;
   const page = stage();
+
+  // (0) S6: deny stale pending approvals / kill stale runs first — the
+  // Approvals badge otherwise carries a prior take's number through the whole
+  // video, and a run still holding the OLD record-demo workspace could make
+  // step (2)'s delete race under it.
+  await sweepStaleState([WORKSPACE_NAME]);
 
   // (1) A FRESH DIRECTORY WITH NO ECOSYSTEM MARKERS.
   //
@@ -314,12 +324,26 @@ test("cold open + B1 — the card that learns", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  await caption(page, "Nobody writes a correct allowlist for a task they have never run.");
-  await beat(page, PACE.read + 600);
-  await caption(page, "So don't. Run it once, watched, and let Wardyn write the policy.");
-  await beat(page, PACE.read + 600);
+  await caption(page, "Here's the uncomfortable part about allowlists.");
+  await beat(page, PACE.read);
+  await caption(page, "If you haven't run the job yet, you don't really know what it needs.");
+  await beat(page, PACE.read);
+  await caption(page, "So don't guess.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Watch it once.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And turn what you observe into policy.");
+  await beat(page, PACE.read);
 
-  await act(page, page.getByRole("row", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
+  const workspaceRow = page.getByRole("row", { name: new RegExp(WORKSPACE_NAME, "i") }).first();
+  await spotlight(page, workspaceRow);
+  await caption(page, "We've got a fresh workspace.");
+  await beat(page, PACE.read);
+  await caption(page, "And this time we're going to record what a real job actually reaches.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  await act(page, workspaceRow);
   await expect(page.getByRole("heading", { name: WORKSPACE_NAME, level: 1 })).toBeVisible({ timeout: 30_000 });
 
   // The ring goes on the card HEADER (h2 + its subtitle), not the whole card —
@@ -335,8 +359,12 @@ test("cold open + B1 — the card that learns", async () => {
   // a 503 no-runner), which is what makes a keyless recording legal at all.
   const cardHeader = page.getByRole("heading", { name: "Recorded sessions", level: 2 }).locator("xpath=..");
   await spotlight(page, cardHeader);
-  await caption(page, "Open the workspace. Recorded sessions is where a policy gets learned, not guessed.");
-  await beat(page, PACE.read + 900);
+  await caption(page, "This is where the policy gets learned.");
+  await beat(page, PACE.read);
+  await caption(page, "Not from a developer's memory.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "From the run itself.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -348,7 +376,6 @@ test("B2 — start a recorded session", async () => {
   test.setTimeout(600_000);
   const page = stage();
 
-  await caption(page, "Name the session after the work it does, then Start recording.");
   // NewSessionForm already pre-fills exactly "build & test" for an empty
   // workspace, so this usually types the string that is already there. Set it
   // anyway: an iteration against a workspace that somehow kept a session finds
@@ -357,8 +384,9 @@ test("B2 — start a recorded session", async () => {
   const nameBox = page.getByLabel("Session name");
   await spotlight(page, nameBox);
   await nameBox.fill(SESSION_NAME);
-  await spotlight(page, null);
+  await caption(page, "Give the session a name.");
   await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // A DISABLED button is indistinguishable from a hung app on camera: act()
   // would simply park the ring on it for the full action timeout. The two
@@ -368,8 +396,10 @@ test("B2 — start a recorded session", async () => {
     start,
     "Start recording is disabled — this stack has no runner (-runner none), or another session for this workspace is still running",
   ).toBeEnabled({ timeout: 30_000 });
-  // SPRINT: no line between the click and the wait. Nothing is spoken from here
-  // until the sandbox is up, because everything from here IS the wait.
+  await caption(page, "And start recording.");
+  await beat(page, PACE.read);
+  // SPRINT: no SAY-ON-CLICK line for this click itself. Nothing is spoken from
+  // here until the sandbox is up, because everything from here IS the wait.
   await act(page, start);
 
   // FAST-FORWARD. POST /workspaces/{id}/record dispatches SYNCHRONOUSLY
@@ -390,15 +420,35 @@ test("B2 — start a recorded session", async () => {
   // The sandbox is up: real time resumes here, before a word is spoken.
   await ffwdEnd(page);
 
-  // The Fence banner is the honest half of "nothing is denied while recording":
-  // an open-egress session on a shared kernel is the widest window this product
-  // ever opens, and the card says so. Leave it in frame; point at it if it is
-  // there (a CC2/CC3 host renders no banner and the beat still plays).
-  const cc1 = page.getByTestId("record-cc1-banner");
-  if (await cc1.isVisible().catch(() => false)) await spotlight(page, cc1);
-  await caption(page, "Nothing is denied while recording. Every host and command is written down.");
-  await beat(page, PACE.read + 900);
+  // The open-egress banner is the honest half of "nothing is denied while
+  // recording": every open recording allows ALL egress while it learns, and
+  // the card says so on every tier (the weakest-barrier line is added only
+  // when the session genuinely runs under CC1). Point at it if rendered.
+  const banner = page.getByTestId("record-open-egress-banner");
+  if (await banner.isVisible().catch(() => false)) await spotlight(page, banner);
+  await caption(page, "Recording is intentionally broad.");
+  await beat(page, PACE.read);
+  await caption(page, "We're observing the job before we constrain it.");
+  await beat(page, PACE.read);
+  await caption(page, "That makes this a privileged operation, and the product says so right on the screen.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
+
+  // launch.warnings ALWAYS carries recordMaskingCaveat (record.go: appended
+  // unconditionally, every tier) — a second, separate amber box next to the
+  // banner above, and just as unread on the take.
+  const launchWarnings = page.getByTestId("record-launch-warnings");
+  if (await launchWarnings.isVisible().catch(() => false)) await spotlight(page, launchWarnings);
+  await caption(page, "Only record work you trust.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Because the recording itself can contain sensitive information.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  await caption(page, "While we're recording, nothing gets blocked.");
+  await beat(page, PACE.read);
+  await caption(page, "Every host the job reaches is captured at the proxy.");
+  await beat(page, PACE.read + 600);
 });
 
 // ---------------------------------------------------------------------------
@@ -416,33 +466,63 @@ test("B3 — honest small work", async () => {
   // outright (attach-terminal.tsx only sends on readyState OPEN). B2's own
   // banner beat has already spent that moment — this line is here so a future
   // edit that shortens B2 knows what it is spending.
-  await caption(page, "Real work: a git identity, then the two hosts this build actually needs.");
+  await caption(page, "Let's give it a small piece of real work.");
   await beat(page, PACE.read);
+  await caption(page, "A Git identity.");
+  await beat(page, BEAT_SHORT);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
+  await caption(page, "Then two network destinations.");
   await beat(page, PACE.read);
 
-  await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[0]}`, card);
-  await beat(page, PACE.read + 800);
-  await caption(page, "The second host is the one a hand-written allowlist always forgets.");
+  // SCREEN-TYPE: First curl.
+  await typeInTerminal(page, `curl -sS -o /dev/null -w '%{http_code}\\n' https://${RECORDED_HOSTS[0]}/`, card);
   await beat(page, PACE.read);
-  await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[1]}`, card);
+  await caption(page, "This is one of the hosts the build actually needs.");
+  await beat(page, PACE.read + 400);
 
-  // BOTH hosts must actually answer. Counting status lines rather than matching
-  // "200": what this beat has to prove is that the request reached the host and
-  // came back through the proxy, and files.pythonhosted.org's bare root is
-  // entitled to answer 403/404 — a curl that never resolved prints no status
-  // line at all, records no egress, and B5's "Approve 2 observed hosts" then
-  // never appears at all.
+  // SCREEN-TYPE: Second curl. Concurrent, not sequential: a caption spoken
+  // BEFORE this line typed (the original shape) put the punchline several
+  // seconds ahead of the second host actually existing on screen — Sam/Dana's
+  // "fires before it exists" finding. caption()'s own cue timestamp is
+  // stamped when it is CALLED, so firing it alongside the keystrokes (instead
+  // of awaiting it first) is what makes the line land while the second host
+  // is actually being typed.
+  await Promise.all([
+    caption(page, "And here's the kind of thing a hand-written allowlist gets wrong."),
+    typeInTerminal(page, `curl -sS -o /dev/null -w '%{http_code}\\n' https://${RECORDED_HOSTS[1]}/`, card),
+  ]);
+  await beat(page, PACE.read);
+
+  // BOTH hosts must actually answer. Counting bare status-code lines rather
+  // than matching "200": what this beat has to prove is that the request
+  // reached the host and came back through the proxy, and
+  // files.pythonhosted.org's bare root is entitled to answer 403/404 — a curl
+  // that never resolved prints no code line at all, records no egress, and
+  // B5's "Approve 2 observed hosts" then never appears at all. `-w
+  // '%{http_code}\n'` (not `-I`'s full header dump) so each reply is one
+  // line — the old header wall was long enough to bury the second host's own
+  // line underneath it.
   await expect
-    .poll(async () => ((await screen.innerText()).match(/HTTP\/[0-9.]+ \d{3}/g) ?? []).length, { timeout: 90_000 })
+    .poll(async () => ((await screen.innerText()).match(/^\d{3}$/gm) ?? []).length, { timeout: 90_000 })
     .toBeGreaterThanOrEqual(2);
+
+  // S2: both replies landed at the tail of a scrolling terminal — center it
+  // before speaking over it, or the second host's own line sits under the bar.
+  await centerInFrame(screen);
+  await caption(page, "Python packages don't necessarily come from the host you first think of.");
+  await beat(page, PACE.read);
+  await caption(page, "You might reach PyPI to find the package...");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "and then reach files.pythonhosted.org to download it.");
+  await beat(page, PACE.read);
+  await caption(page, "The recording sees both.");
   await beat(page, PACE.read);
 
-  await act(
-    page,
-    card.getByRole("button", { name: "Done recording" }),
-    "Done recording. Wardyn captures on termination, from the audit trail, not the sandbox.",
-  );
+  await act(page, card.getByRole("button", { name: "Done recording" }), "Done recording.");
+  await caption(page, "When we stop, Wardyn builds the session from the audit trail.");
+  await beat(page, PACE.read);
+  await caption(page, "Not from a guess about what happened inside the sandbox.");
+  await beat(page, PACE.read);
 
   // FAST-FORWARD. The run has to die, and only THEN does the server reconcile
   // its capture out of the audit trail; the page polls for it (workspace-detail
@@ -519,11 +599,7 @@ test("B4 — evidence becomes policy", async () => {
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
 
-  await act(
-    page,
-    card.getByRole("button", { name: "Save session profile" }),
-    "Save session profile. This is the synthesis, and every line is evidence.",
-  );
+  await act(page, card.getByRole("button", { name: "Save session profile" }), "Save session profile.");
 
   // Two locators for one drawer, deliberately. `sheet` scopes content while it
   // is the only dialog on screen; `sheetTitle` is a TEXT locator, and it is the
@@ -535,44 +611,77 @@ test("B4 — evidence becomes policy", async () => {
   await expect(sheetTitle).toBeVisible({ timeout: 60_000 });
   // The body only renders once POST /runs/{id}/profile answers.
   await expect(sheet.getByText("Proposed allowed domains", { exact: true })).toBeVisible({ timeout: 60_000 });
-  await beat(page, PACE.read + 600);
+  await caption(page, "Now we're looking at the evidence.");
+  await beat(page, PACE.read);
 
   // The synthesis is allow-only and it is exactly the two hosts that were
   // reached — the claim the whole video rests on.
   const proposed = sheet.getByText("Proposed allowed domains", { exact: true }).locator("xpath=..");
   await expect(proposed).toContainText(RECORDED_HOSTS[0]);
   await expect(proposed).toContainText(RECORDED_HOSTS[1]);
-
-  const observations = sheet.locator('[aria-label="Observations"]');
-  await spotlight(page, observations);
-  await caption(page, "Egress domains: what it connected to, and how often.");
-  await beat(page, PACE.read + 900);
-
-  // The kernel groups (Executed / File writes / Connects) are deliberately NOT
-  // narrated: this stack does not run the opt-in groundtruth compose profile,
-  // so those boxes read "None observed." — and a beat that calls an empty box
-  // "kernel ground truth" is the exact honesty gap this video must not walk
-  // into. That is a profile-off gap, not the frozen-counter defect the series
-  // used to carry: 0.6 fixed the correlation index (it is fed by docker events
-  // now), so exec/write events reach the control plane once the profile IS up,
-  // though
-  // kernel.network.connect stays environmentally capped on WSL2 + Docker
-  // Desktop regardless (deploy/compose/README.md). The evidence narrated here
-  // is the audit-side kind, which populates regardless: every connection,
-  // counted; every mint, counted. The credential-shaped ~/.gitconfig write
-  // from B3 is already in the session, waiting to be pointed at the day this
-  // take runs against the groundtruth profile.
-  await caption(page, "Every line here is evidence from the run itself — nothing typed, nothing guessed.");
-  await beat(page, PACE.read + 600);
+  await spotlight(page, proposed);
+  await caption(page, "These are the domains the job actually reached.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
-  // "no grants" is a real, asserted fact, not a turn of phrase: the session
-  // minted no credential, so the synthesized spec carries no eligible grant.
+  const observations = sheet.locator('[aria-label="Observations"]');
+  // S3: ring the egress-domains CARD specifically, not the whole Observations
+  // block (which also holds Minted grants / Executed / File writes /
+  // Connects) — anchored on a host row already on screen, since the section's
+  // own heading shares a div with an icon and a count badge, not a stable
+  // text node on its own.
+  const egressSection = observations
+    .getByText(RECORDED_HOSTS[0])
+    .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
+  await spotlight(page, egressSection);
+  await caption(page, "How often it reached them.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And where those observations came from.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+
+  await caption(page, "The network observations come from the proxy.");
+  await beat(page, PACE.read);
+  // The kernel groups (Executed / File writes / Connects) are narrated as
+  // UNRELIABLE, not as evidence: this stack does not run the opt-in
+  // groundtruth compose profile, so those boxes read "None observed." — and a
+  // beat that calls an empty box "kernel ground truth" is the exact honesty
+  // gap this video must not walk into. That is a profile-off gap, not the
+  // frozen-counter defect the series used to carry: 0.6 fixed the correlation
+  // index (it is fed by docker events now), so exec/write events reach the
+  // control plane once the profile IS up, though kernel.network.connect stays
+  // environmentally capped on WSL2 + Docker Desktop regardless
+  // (deploy/compose/README.md). Ring the whole Observations block while the
+  // kernel counters are named — the egress domains above are inside it too.
+  await spotlight(page, observations);
+  await caption(page, "The kernel counters tell us what this particular barrier can see.");
+  await beat(page, PACE.read);
+  await caption(
+    page,
+    "And if the kernel can't observe something, Wardyn doesn't pretend that “none observed” means “none happened.”",
+  );
+  await beat(page, PACE.read + 400);
+  await caption(page, "That's an important distinction.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
+
+  // "Eligible grants: none" in the SUMMARY is real — but not because nothing
+  // was minted. The session DID mint one credential; the WARNINGS bullet is
+  // where the actual reason lives (a dropped grant, not on the operator's
+  // eligible list), and "none eligible" is what survives into the proposed
+  // policy.
   const grants = sheet.getByText("Eligible grants", { exact: true }).locator("xpath=..");
-  await spotlight(page, grants);
   await expect(grants).toContainText("none");
-  await caption(page, "It minted no credentials, so the policy grants none. Zero is evidence too.");
-  await beat(page, PACE.read + 900);
+  const warningsBullet = sheet.getByText("Warnings", { exact: true }).locator("xpath=..").locator("li").first();
+  await expect(warningsBullet).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, grants);
+  await caption(page, "The synthesizer also looks at credentials.");
+  await beat(page, PACE.read);
+  await spotlight(page, warningsBullet);
+  await caption(page, "If a credential was used but isn't eligible for policy, it doesn't simply turn that observation into a new grant.");
+  await beat(page, PACE.read + 400);
+  await caption(page, "The result is a policy that reflects the work without blindly widening access.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
   // Both halves of the next line, before it is spoken: allow-all is off, and an
@@ -581,32 +690,20 @@ test("B4 — evidence becomes policy", async () => {
   await expect(allowedDomains).not.toContainText("Allow all");
   await expect(sheet.getByText("First-use approval", { exact: true }).locator("xpath=..")).toContainText("Ask");
 
-  await act(
-    page,
-    // "Save as with a name…" — the ellipsis is U+2026, so match the prefix.
-    sheet.getByRole("button", { name: /^Save as with a name/ }),
-    "Save as policy. Allow-all is off; an unseen host has to ask.",
-  );
-
-  const saveDialog = page.getByRole("dialog").filter({ hasText: "Save as policy" });
-  await expect(saveDialog).toBeVisible({ timeout: 30_000 });
-  // NOT typed: policyNameFor(workspace, session) already derived it and the
-  // field opens holding it. Asserting the pre-fill is the honest version of the
-  // script's "→ record-demo-build-test".
-  const nameBox = saveDialog.getByLabel("Policy name");
-  await expect(nameBox).toHaveValue(POLICY_NAME);
-  await spotlight(page, nameBox);
+  // "Save as is" skips the name dialog entirely — profile-review.tsx's
+  // saveAsIs() posts straight to POST /policies under suggestedName
+  // (policyNameFor(workspace, session), the same derivation the dialog path
+  // used to only PRE-FILL) and calls onClose() itself. One fewer dialog; the
+  // name is still the honest, derived one — now spoken on the button's own
+  // label instead of behind a second click.
+  const saveAsIsBtn = sheet.getByTestId("profile-save-as-is");
+  await expect(saveAsIsBtn).toContainText(POLICY_NAME);
+  await act(page, saveAsIsBtn, "Save as policy.");
+  await expect(sheetTitle).toBeHidden({ timeout: 30_000 });
+  await caption(page, "And allow-all stays off.");
   await beat(page, PACE.read);
-  await spotlight(page, null);
-  await act(page, saveDialog.getByRole("button", { name: "Save policy" }));
-  await expect(saveDialog).toBeHidden({ timeout: 30_000 });
-
-  // The script ends this beat on Esc, from the days when the dialog-save path
-  // left the drawer standing behind it still claiming "nothing is created until
-  // you save it". profile-review.tsx's onSaved closes both now — so Esc stays
-  // only as a fallback, and the assertion below is what actually holds.
-  if (await sheetTitle.isVisible().catch(() => false)) await page.keyboard.press("Escape");
-  await expect(sheetTitle).toBeHidden({ timeout: 15_000 });
+  await caption(page, "Anything we didn't observe has to ask.");
+  await beat(page, PACE.read);
 
   // "Save as policy" is a claim about a WRITE. Ask the control plane.
   // A bare array, same as beforeAll reads it: servePage writeJSONs the slice
@@ -631,7 +728,7 @@ test("B5 — replay confined", async () => {
   // this stays a literal 2 and never a \d+.
   const approveObserved = card.getByRole("button", { name: /^Approve 2 observed hosts$/ });
   await expect(approveObserved).toBeVisible({ timeout: 30_000 });
-  await act(page, approveObserved, "Approve the observed hosts, then replay the same session confined.");
+  await act(page, approveObserved, "Approve the observed hosts.");
 
   // Host names came from a session's observed traffic, so promotion routes
   // through the shared untrusted-content confirm.
@@ -639,7 +736,12 @@ test("B5 — replay confined", async () => {
   await expect(confirm).toBeVisible({ timeout: 30_000 });
   await expect(confirm).toContainText(RECORDED_HOSTS[0]);
   await expect(confirm).toContainText(RECORDED_HOSTS[1]);
+  await caption(page, "Now we take those observed destinations and promote them into the workspace's standing policy.");
+  await beat(page, PACE.read + 400);
+  await caption(page, "That's why we're asked to approve them.");
   await beat(page, PACE.read);
+  await caption(page, "This is the moment evidence becomes permission.");
+  await beat(page, PACE.read + 600);
   await act(page, confirm.getByRole("button", { name: "Approve hosts" }));
   // The receipt for the click, before the replay that depends on it: without a
   // promoted set, confinedEgressDomains() for a local_dir workspace is EMPTY
@@ -647,9 +749,17 @@ test("B5 — replay confined", async () => {
   await expect(card.getByText("Promoted", { exact: true })).toBeVisible({ timeout: 60_000 });
   await beat(page, PACE.read);
 
-  // SPRINT: nothing spoken between the click and the wait — the click launches
-  // a second real sandbox, and everything from here to the terminal IS the wait.
-  await act(page, card.getByRole("button", { name: "Replay confined" }));
+  // launchRecordRun's replay does NOT read the saved policy at all (no
+  // policy_id lookup) — it builds a fresh RunPolicySpec inline straight off
+  // the WORKSPACE: AllowedDomains = confinedEgressDomains(ws) (clone hosts ∪
+  // profile/approved egress ∪ required-egress rows — workspace_egress.go),
+  // FirstUseApproval hardcoded to wait_for_review when confined
+  // (workspace_run.go's launchRecordRun). So "the policy governs the replay"
+  // is false on this stack; what actually governs it is the workspace's own
+  // approved-hosts list B5 just widened above — which is exactly what the
+  // owner's lines below say ("workspace's standing policy", never "the saved
+  // policy").
+  await act(page, card.getByRole("button", { name: "Replay confined" }), "Replay confined.");
 
   // FAST-FORWARD, for B2's reason: this POST dispatches synchronously too, so
   // the card does not flip to "Replaying confined…" until the confined sandbox
@@ -684,22 +794,35 @@ test("B5 — replay confined", async () => {
       "check the workspace's base image and the runner, then re-run the take",
   ).toBe("replaying");
 
+  await caption(page, "Same workspace.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Same work.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "But now we're back behind default-deny.");
+  await beat(page, PACE.read);
+
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up — typing here eats the first characters and the shell reports
   // "command not found" on camera.
   await beat(page, PACE.read);
 
+  // SCREEN-TYPE: First host.
   await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[0]}`, card);
-  await beat(page, PACE.read + 600);
+  await beat(page, PACE.read);
+  await caption(page, "Allowed.");
+  await beat(page, BEAT_SHORT);
+
+  // SCREEN-TYPE: Second host.
   await typeInTerminal(page, `curl -sSI https://${RECORDED_HOSTS[1]}`, card);
   await expect
     .poll(async () => ((await screen.innerText()).match(/HTTP\/[0-9.]+ \d{3}/g) ?? []).length, { timeout: 90_000 })
     .toBeGreaterThanOrEqual(2);
-
-  await caption(page, "Default-deny now. Same commands, same two hosts, and nothing to approve.");
-  // "nothing to approve" is the whole point of the beat, so prove it: the idle
-  // hint, not a pending row. A held host here would mean the promotion did not
-  // land, and the line would be narrating over a queue.
+  await caption(page, "Also allowed.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Nothing else needed a decision.");
+  // "nothing else needed a decision" is the whole point of the beat, so prove
+  // it: the idle hint, not a pending row. A held host here would mean the
+  // promotion did not land, and the line would be narrating over a queue.
   await expect(card.getByTestId("live-approvals-idle")).toBeVisible();
   await beat(page, PACE.read + 900);
 });
@@ -712,8 +835,9 @@ test("B6 — the unseen host", async () => {
   test.setTimeout(900_000);
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
+  const screen = card.locator(".xterm-screen").first();
 
-  await caption(page, "Now reach for a host the recording never saw.");
+  await caption(page, "Now let's try something the recording never saw.");
   await beat(page, PACE.read);
   await typeInTerminal(page, `curl -sSI --max-time 60 https://${UNSEEN_HOST}`, card);
 
@@ -750,12 +874,34 @@ test("B6 — the unseen host", async () => {
       `The whole video is that decision; re-run the take.`,
   ).toBe("held");
 
+  await caption(page, "This host wasn't part of the recorded work.");
+  await beat(page, PACE.read);
+  await caption(page, "So it isn't part of the policy.");
+  await beat(page, PACE.read);
+
   // Decide it on camera and QUICKLY. The hold expires after 30s
   // (defaultHoldTimeout); decide() speaks one line and clicks inside ~6s, which
   // is the point — a demo that waits out a clock is a bad demo, and an expired
   // hold films as a timeout nobody decided.
-  await decide(card, "Deny", "Held at the proxy, waiting on a person. Deny, refused.", UNSEEN_HOST);
+  await decide(card, "Deny", "Deny.", UNSEEN_HOST);
   await beat(page, PACE.read);
+
+  // The refusal has to be VISIBLE, not just true: the deny lands at the proxy,
+  // then the parked curl itself has to resolve as a failure on screen — a 403
+  // body, curl's own connection error, or (if the hold's teardown races the
+  // request) a bare timeout. REHEARSAL-VERIFY: confirm which of the three this
+  // stack actually prints before the take; if the sandbox genuinely sees
+  // nothing at all (a silent deny), say THAT instead of promising a receipt
+  // that never renders (Priya: "that's a better fact than an error message").
+  await expect(screen).toContainText(/403|curl: \(\d+\)|timed out/, { timeout: 45_000 });
+  await spotlight(page, screen);
+  await caption(page, "Held.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Denied.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And the command fails with that decision.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
 
   await act(page, card.getByRole("button", { name: "Done", exact: true }));
 
@@ -795,13 +941,50 @@ test("B6 — the unseen host", async () => {
   await expect(blocked).toContainText("blocked");
 
   await spotlight(page, review);
-  await caption(page, "The policy wrote itself, and it is exactly as wide as the work.");
-  await beat(page, PACE.read + 1200);
+  await caption(page, "That's the whole loop.");
+  await beat(page, PACE.read);
+  await caption(page, "Watch the job.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Capture what it actually uses.");
+  await beat(page, PACE.read);
+  await caption(page, "Turn that evidence into policy.");
+  await beat(page, PACE.read);
+  await caption(page, "Then run it confined.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
-
-  await caption(page, "Watch it once. Enforce it forever.");
+  await caption(page, "You don't have to predict the future.");
+  await beat(page, PACE.read);
+  await caption(page, "You have to observe the work and make the boundary explicit.");
   await beat(page, PACE.read + 600);
-  await caption(page, "Next: approvals — every scope a yes can carry, from one connection to for good.");
-  await beat(page, PACE.chapter);
-  await caption(page, "");
+
+  await caption(page, "Watch it once.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Enforce it from then on.");
+  await beat(page, PACE.read);
+  await caption(page, "Next, we tackle the question that comes after every approval:");
+  await beat(page, PACE.read);
+  await caption(page, "How long should that yes last?");
+  await beat(page, PACE.read + 400);
+  await silentCard(page, "Next — 10: Approval scopes");
 });
+
+/**
+ * A chapter card that is NOT spoken — the outro card convention episode 01
+ * set (and episode 03 copies). overlay.ts's chapter() always speaks what it
+ * renders; this drives the same overlay primitive directly for the one card
+ * that must stay silent.
+ */
+async function silentCard(page: Page, text: string): Promise<void> {
+  const set = (t: string) =>
+    page
+      .evaluate((s: string) => {
+        const d = (window as unknown as Record<string, Record<string, (...x: unknown[]) => void>>).__demo;
+        d?.chapter?.(s, "");
+      }, t)
+      .catch(() => {
+        /* overlay absent — a card is cosmetic, never fatal */
+      });
+  await set(text);
+  await page.waitForTimeout(PACE.chapter);
+  await set("");
+}

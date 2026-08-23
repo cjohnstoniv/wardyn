@@ -53,6 +53,19 @@ export function exitCodeFromAudit(events: AuditEvent[]): number | undefined {
   return code;
 }
 
+// Whether the run executed a plain shell command with no agent harness. Like
+// the exit code, task_mode is request-scoped and never lands on AgentRun — the
+// run.create audit event is its only durable record (runs.go stamps it there
+// for exactly this reason). undefined = a harness run, or an older trail.
+export function taskModeFromAudit(events: AuditEvent[]): string | undefined {
+  for (const e of events) {
+    if (e.action !== "run.create") continue;
+    const m = e.data?.task_mode;
+    if (typeof m === "string" && m) return m;
+  }
+  return undefined;
+}
+
 export const audit = {
   // GET /api/v1/audit?run_id=&action=   (both optional; server-side filter —
   // see parseAuditFilter, internal/api/audit.go). `action` narrows the

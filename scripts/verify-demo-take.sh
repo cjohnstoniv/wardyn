@@ -14,13 +14,13 @@
 #
 # WHICH take is on the bench comes from WARDYN_DEMO_VIDEO (record-demo.sh
 # --video exports it). Unset means the legacy end-to-end walkthrough, whose
-# checks ARE video 02's — so the default path is byte-for-byte what this script
+# checks ARE the autonomous episode's (07) — so the default path is byte-for-byte what this script
 # always did. The narration and artifact checks at the bottom are SHARED: they
 # run for every take of every video, because "it recorded" and "it has a voice"
 # are claims no video gets to skip.
 #
 #   scripts/verify-demo-take.sh [video.mp4]
-#   WARDYN_DEMO_VIDEO=05 scripts/verify-demo-take.sh video.mp4
+#   WARDYN_DEMO_VIDEO=07 scripts/verify-demo-take.sh video.mp4
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +35,7 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
 
-# Video 02's own checks — the act-5 governance beats, exactly as this script has
+# The autonomous episode's checks (new 07 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
 #
 # A FUNCTION, and deliberately not a subshell or a pipeline: ok()/bad() increment
@@ -50,7 +50,7 @@ head_ "The real run (act 5)"
 # permanent grant holds, and that one is newer — so "newest" picks the run that
 # deliberately does no work and raises no approval, and every check below would
 # fail against it.
-DEMO_TITLE="${WARDYN_DEMO_TITLE:-Slugify + reach two hosts}"
+DEMO_TITLE="${WARDYN_DEMO_TITLE:-Add slugify — one off-list host}"
 RUN=$(./wardyn runs list --json 2>/dev/null | DEMO_TITLE="${DEMO_TITLE}" python3 -c '
 import sys, json, os
 want = os.environ["DEMO_TITLE"]
@@ -349,8 +349,8 @@ fi
 }
 
 # --- video 07: approvals & egress scopes ----------------------------------------
-# The take decides FOUR things on camera: crates.io approved at the default
-# scope inside a demo sandbox, ingest.sentry.io denied there, crates.io approved
+# The take decides FOUR things on camera: example.org approved at the default
+# scope inside a demo sandbox, ingest.sentry.io denied there, example.org approved
 # with `always` on the real `egress-lab` workspace, and then a fresh run that
 # reaches the same host with nothing to click. The two hosts are this video's
 # alone (DA5), so a stack-wide approval.decide query is unambiguous.
@@ -358,7 +358,7 @@ check_video_07_approvals() {
 head_ "Video 07 · the decisions"
 V07_API="http://localhost:${WARDYN_UP_PORT:-8080}"
 V07_WS="${WARDYN_DEMO_EGRESS_WS_NAME:-egress-lab}"
-V07_HELD="crates.io"
+V07_HELD="example.org"
 V07_TELE="ingest.sentry.io"
 V07_PROOF_TITLE="${WARDYN_DEMO_V07_PROOF_TITLE:-Same host, no approval}"
 V07_DEC=$(curl -fsS "${V07_API}/api/v1/audit?action=approval.decide&limit=1000" 2>/dev/null || echo '[]')
@@ -506,8 +506,11 @@ spec = (p or {}).get("spec") or {}
 # them. allowed_domains is compared as a SET: the server is free to sort it.
 print("V08_POL_HOSTS", sorted(spec.get("allowed_domains") or []) == ["github.com", "npmjs.org"])
 print("V08_POL_HOLD", (spec.get("first_use_approval") or "") == "wait_for_review")
-# The STARTER_SPEC trap (policies.tsx): its floor is CC2 and it allows exactly
-# one host. A CC2 here means the paste never replaced the prefilled editor.
+# The STARTER_SPEC trap (policies.tsx): its floor is ALSO CC2 now (the spec's
+# own floor moved CC1->CC2 so B4 can film a real floor refusal), so this field
+# alone can no longer catch a failed paste — V08_POL_HOSTS (two domains vs the
+# starter's one) is what still would. CC2 here just confirms the saved floor
+# matches what B2 pasted.
 print("V08_POL_FLOOR", (spec.get("min_confinement_class") or ""))
 # -1, not 0, when there is no policy at all: an absent row must never read as
 # "no grants" and score a PASS on a take that never created anything.
@@ -520,7 +523,7 @@ while read -r k v; do
     V08_POL_ID)     V08_POL_ID="$v" ;;
     V08_POL_HOSTS)  [[ "$v" == True ]] && ok "two allowed hosts (github.com, npmjs.org)" || bad "allowed_domains is not the pasted pair — the spec on camera is not the spec that saved" ;;
     V08_POL_HOLD)   [[ "$v" == True ]] && ok "first_use_approval=wait_for_review (unlisted hosts are HELD)" || bad "first_use_approval is not wait_for_review — 'held for your approval' is false" ;;
-    V08_POL_FLOOR)  [[ "$v" == CC1 ]] && ok "barrier floor CC1 (Fence) — the pasted spec, not the CC2 starter" || bad "min_confinement_class=${v}, want CC1 — the CC2 STARTER_SPEC was saved instead of the paste" ;;
+    V08_POL_FLOOR)  [[ "$v" == CC2 ]] && ok "barrier floor CC2 (Wall) — the pasted spec's own floor" || bad "min_confinement_class=${v}, want CC2 — the saved policy does not match what B2 pasted" ;;
     V08_POL_GRANTS) case "$v" in
                       0)  ok "no credential grants" ;;
                       -1) bad "no policy to read grants from" ;;
@@ -684,7 +687,7 @@ rm -f /tmp/_demo_v09.$$
 # below, which only knows the browser lane's narration.json: V09 is a hybrid, and
 # a missing terminal timeline ships beats 1-4 SILENT under a fully narrated
 # browser half with every step of the recorder still exiting 0.
-V09_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-09}/narration-terminal.json"
+V09_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-11}/narration-terminal.json"
 [[ -s "${V09_TL}" ]] && ok "terminal narration timeline present" \
   || bad "no ${V09_TL} — beats 1-4 are silent (demo-typist.sh's default path vs record-demo.sh's per-video dir)"
 
@@ -818,7 +821,7 @@ fi
 # narration block below only knows narration.json (the browser lane), and a
 # missing terminal timeline ships beats 1-3 SILENT under a fully narrated
 # browser half with every step of the recorder still exiting 0.
-V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-10}/narration-terminal.json"
+V10_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-12}/narration-terminal.json"
 [[ -s "${V10_TL}" ]] && ok "terminal narration timeline present" \
   || bad "no ${V10_TL} — beats 1-3 are silent (the driver runs inside tmux; WARDYN_DEMO_WORK_DIR has to reach it)"
 }
@@ -884,21 +887,40 @@ fi
 }
 
 case "${WARDYN_DEMO_VIDEO:-}" in
-  ""|05) check_video_02 ;;
-  02) check_video_02_workspace ;;
-  03) check_video_03_first_run ;;
-  06) check_video_06_record ;;
-  07) check_video_07_approvals ;;
+  01)
+    head_ "Video 01 · the primer (slides lane)"
+    # No product state to check — the take is a slide deck plus narration; the
+    # spec itself asserts the deck rendered and the exhibit image decoded. What
+    # can still break silently is the take dying mid-deck, which the cue floor
+    # catches (a full read is ~28 lines; a died-early take leaves a fraction).
+    TL00="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-01}/narration.json"
+    if [[ -s "${TL00}" ]]; then
+      N00=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cues",[])))' "${TL00}" 2>/dev/null || echo 0)
+      [[ "${N00}" -ge 20 ]] && ok "the deck spoke ${N00} lines (floor 20)" \
+        || bad "only ${N00} narration cues — the deck died early (floor 20)"
+    else
+      bad "no narration timeline at ${TL00}"
+    fi
+    ;;
+  # Final 12-episode numbering (owner-approved renumber): 02 setup (old 01),
+  # 03 workspaces (old 02), 04 first run (old 03), 05 what-it-stops (new),
+  # 06 interactive (old 04), 07 autonomous (old 05), 08 policies, 09 record
+  # (old 06), 10 scopes (old 07), 11 CI (old 09), 12 audit+attach (old 10).
+  ""|07) check_video_02 ;;
+  04) check_video_02_workspace ;;
+  05) check_video_03_first_run ;;
+  09) check_video_06_record ;;
+  10) check_video_07_approvals ;;
   08) check_video_08_policies ;;
-  09) check_video_09 ;;
-  10) check_video_10 ;;
+  11) check_video_09 ;;
+  12) check_video_10 ;;
   11) check_video_11 ;;
-  01|04)
+  02|03|06)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..11, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..12, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
@@ -926,6 +948,37 @@ d = json.load(open(sys.argv[1])); c = d.get("cues", [])
 ov = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"] - 1500)
 slid = sum(1 for i, x in enumerate(c) if i and x["tMs"] < c[i-1]["tMs"] + c[i-1]["durMs"])
 print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard overlaps: {ov}   (mux-slid: {slid - ov})")
+
+# Pronunciation watch (owner directive 2026-08-20): warn-only. The TTS reads
+# captions verbatim, and two trap classes have shipped wrong on camera —
+# initialisms spoken as words ("CI"), and heteronyms picked wrong ("live").
+# narrate-server.py's speakable() carries the fixes; this flags anything a
+# caption speaks that has NO mapping there yet, so the gap is seen before a
+# viewer hears it. Warnings, not failures: a human decides the pronunciation.
+import re
+KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
+# Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
+EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
+MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
+               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside",
+               "keys don't live in the room",
+               # verb after a modal — G2P-verified /lɪv/ by default (2026-08-21), no _SUBS pin needed:
+               "credentials can live")
+warns = set()
+for x in c:
+    t = x["text"]
+    for m in re.findall(r"\b[A-Z]{2,5}s?\b", t):
+        base = m.rstrip("s").upper()
+        if base not in KNOWN and base not in EMPHASIS:
+            warns.add(f"unmapped initialism {m!r}")
+    for lw in re.finditer(r"\blive\b", t, re.I):
+        lo = t.lower()
+        if not any(p in lo for p in MAPPED_LIVE):
+            warns.add(f"heteronym 'live' outside mapped phrases: ...{t[max(0,lw.start()-24):lw.end()+16]!r}")
+    # 'record' noun/verb: Kokoro handles post-article nouns so far; add a
+    # mapped-phrase check here the first time it is heard wrong.
+for w in sorted(warns):
+    print(f"  pronunciation-watch: {w}")
 sys.exit(0 if (c and ov == 0) else 1)
 PY
   [[ $? -eq 0 ]] && ok "timeline complete, no overlapping lines" || bad "narration timeline has overlaps or is empty"

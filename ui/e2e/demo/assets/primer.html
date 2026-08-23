@@ -1,0 +1,308 @@
+<!doctype html>
+<!-- Copyright 2025 The Wardyn Authors
+     SPDX-License-Identifier: Apache-2.0
+
+     The slide deck video 00 ("Why govern agents") films. Driven by
+     ui/e2e/demo/00-why-govern-agents.spec.ts over file://, recorded by the demo
+     Playwright project like any console take; overlay.ts injects the same ring
+     and caption bar on top of it. Self-contained on purpose: no network, no
+     fonts to fetch, one local image — a take must never stall on an asset.
+
+     Layout contract with the overlay: the caption pill sits in the bottom
+     ~160px, so every slide keeps its content above that band (padding-bottom).
+     Slides are switched by the spec via window.__slide(id). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Why govern agents</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: #0b0d12; color: #fafafa;
+    font: 400 24px/1.5 ui-sans-serif, system-ui, sans-serif;
+  }
+  section {
+    position: absolute; inset: 0;
+    padding: 96px 130px 210px; /* bottom band belongs to the caption bar */
+    display: none; flex-direction: column; justify-content: center; gap: 44px;
+    opacity: 0; transition: opacity .28s ease;
+  }
+  section.on { display: flex; opacity: 1; }
+  .kicker {
+    font-size: 17px; font-weight: 650; letter-spacing: .18em;
+    text-transform: uppercase; color: #f59e0b;
+  }
+  h1 { font-size: 58px; font-weight: 650; letter-spacing: -.02em; line-height: 1.12; max-width: 1350px; }
+  .muted { color: #a1a1aa; }
+  .row { display: flex; gap: 28px; }
+  .card {
+    background: #11141b; border: 1px solid rgba(255,255,255,.09);
+    border-radius: 16px; padding: 30px 34px; flex: 1;
+  }
+  .card b { display: block; font-size: 27px; font-weight: 650; margin-bottom: 10px; }
+  .card .muted { font-size: 21px; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .card code { color: #f59e0b; font-size: 24px; }
+
+  /* Deck-only override of the overlay's ring: fade, never fly. On slides the
+     targets are single text lines, and a ring in flight reads as a
+     strikethrough across whatever it crosses — three personas flagged 17
+     mid-flight sites in one round. Console takes keep the flight (big
+     targets, motion = "look here now"); slides don't need it. */
+  #__wardyn_demo_overlay .ring { transition: opacity .3s ease !important; }
+
+  /* S2 — what an agent can do */
+  #agent-caps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 28px; max-width: 1100px; }
+  #agent-caps div {
+    background: #11141b; border: 1px solid rgba(255,255,255,.09); border-radius: 12px;
+    padding: 18px 24px; font-size: 25px;
+  }
+  #agent-caps code { color: #f59e0b; margin-right: 14px; }
+
+  /* S3 — the exhibit */
+  #s3 .row { align-items: flex-start; }
+  #exhibit-wrap { flex: 0 0 auto; }
+  /* The one receipt in the episode earns the biggest thing on screen (Sam r3,
+     Dana r3: "blow the panel up"). */
+  #exhibit {
+    width: 1080px; display: block; border-radius: 14px;
+    border: 1px solid rgba(255,255,255,.14); box-shadow: 0 18px 60px rgba(0,0,0,.55);
+  }
+  #exhibit-note { font-size: 22px; margin-top: 12px; }
+  #exhibit-quote {
+    align-self: center; flex: 1;
+    background: rgba(245,158,11,.09); border: 1px solid rgba(245,158,11,.45);
+    border-radius: 14px; padding: 26px 30px;
+  }
+  #exhibit-quote .mono { font-size: 23px; color: #f59e0b; letter-spacing: .04em; }
+  #exhibit-quote .host { font-size: 26px; color: #fafafa; margin-top: 8px; word-break: break-all; }
+  #exhibit-quote .muted { font-size: 19px; margin-top: 14px; }
+
+  /* S4 — the two bad answers */
+  #card-trust b, #card-block b { font-size: 30px; }
+  #s4 .card .muted { font-size: 23px; }
+
+  /* S5 — the vocabulary diagram */
+  #diagram { display: flex; align-items: center; gap: 0; }
+  #d-room {
+    width: 560px; background: #11141b; border: 2px solid rgba(255,255,255,.22);
+    border-radius: 18px; padding: 26px 30px; position: relative;
+  }
+  #d-room .label, #d-proxy .label, #d-out .label {
+    font-size: 16px; font-weight: 650; letter-spacing: .16em; color: #f59e0b; margin-bottom: 12px;
+  }
+  #d-room .inner { background: #0b0d12; border: 1px dashed rgba(255,255,255,.18); border-radius: 12px;
+    padding: 18px 22px; font-size: 24px; }
+  #d-room .inner div { padding: 4px 0; }
+  #d-room .nokeys { margin-top: 12px; font-size: 19px; color: #a1a1aa; }
+  .arrow { width: 90px; height: 2px; background: rgba(255,255,255,.35); position: relative; flex: 0 0 auto; }
+  .arrow::after {
+    content: ""; position: absolute; right: -1px; top: -6px;
+    border: 7px solid transparent; border-left-color: rgba(255,255,255,.35);
+  }
+  #d-door {
+    flex: 0 0 auto; font-size: 19px; font-weight: 650; letter-spacing: .14em; color: #f59e0b;
+    text-transform: uppercase; text-align: center; padding: 0 6px;
+  }
+  /* Same neutral border as the room — the amber accent belonged to the ring
+     alone, and a permanently-orange box read as a highlight before the word
+     "proxy" was ever spoken (persona round 1, ×2). */
+  #d-proxy {
+    width: 380px; background: #11141b; border: 2px solid rgba(255,255,255,.22);
+    border-radius: 18px; padding: 26px 30px;
+  }
+  #d-proxy .what { font-size: 25px; }
+  #d-proxy .keys { margin-top: 14px; font-size: 21px; color: #f59e0b; }
+  #d-out { width: 340px; padding: 26px 30px; border: 2px dashed rgba(255,255,255,.16); border-radius: 18px; }
+  #d-out .what { font-size: 24px; color: #d4d4d8; }
+  #d-rule { font-size: 27px; margin-top: 6px; }
+  #d-rule b { color: #f59e0b; font-weight: 650; }
+
+  /* S6 — observe then decide */
+  #steps { display: flex; gap: 28px; }
+  #steps .card b { color: #f59e0b; font-size: 22px; letter-spacing: .12em; }
+  #steps .card .big { font-size: 27px; font-weight: 650; margin-bottom: 8px; }
+
+  /* S7 — the series map */
+  #roadmap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 40px; max-width: 1240px; }
+  #roadmap div {
+    display: flex; gap: 18px; align-items: baseline;
+    background: #11141b; border: 1px solid rgba(255,255,255,.09);
+    border-radius: 10px; padding: 13px 20px; font-size: 23px;
+  }
+  #roadmap .n { font-family: ui-monospace, Menlo, monospace; color: #a1a1aa; font-size: 19px; }
+  #roadmap #next { border-color: rgba(245,158,11,.65); }
+  #roadmap #next .n { color: #f59e0b; }
+</style>
+</head>
+<body>
+
+<section id="s1">
+  <div class="kicker">The floor we all stand on</div>
+  <h1>Your machines already run strangers&rsquo; code, every day.</h1>
+  <div class="row">
+    <div class="card" id="t-dep"><b><code>npm install</code></b>
+      <span class="muted">Every dependency install executes code you never read &mdash; running alongside your documents, credentials, and data.</span></div>
+    <div class="card" id="t-script"><b>Build &amp; install scripts</b>
+      <span class="muted">Postinstall hooks and Makefiles run with everything your shell can reach.</span></div>
+    <div class="card" id="t-ci"><b>CI jobs</b>
+      <span class="muted">All of the above, unattended, with the deploy keys nearby.</span></div>
+  </div>
+  <!-- Punchlines land WITH their spoken beat (spec calls __unhide), not at
+       slide-open: three personas across two rounds read every payoff ~30s
+       before it was said and waited for the voice to catch up. visibility
+       (not display) so layout and ring boxes are stable. -->
+  <div class="muted" id="s1-supply" style="font-size:25px;visibility:hidden">Supply-chain attacks have been exploiting this for
+    years. <span class="mono" style="color:#f59e0b">event-stream &middot; ua-parser-js &middot; Codecov</span></div>
+  <div id="s1-predates" style="font-size:27px;visibility:hidden"><b style="color:#f59e0b">It didn&rsquo;t start with AI.</b>
+    <span class="muted">AI just gives it a new set of hands.</span></div>
+</section>
+
+<section id="s2">
+  <div class="kicker">Now add hands</div>
+  <h1>An AI coding agent is that same exposure &mdash; with hands.</h1>
+  <div id="agent-caps">
+    <div><code>$</code>runs commands</div>
+    <div><code>~</code>edits files</div>
+    <div><code>+</code>installs packages</div>
+    <div><code>&#8599;</code>calls APIs</div>
+  </div>
+  <div id="s2-access" style="font-size:26px;visibility:hidden">It often does those things as <b style="color:#f59e0b">you</b>
+    <span class="muted">&mdash; every file you can read, every credential your environment can reach, it may reach too.</span></div>
+  <div id="s2-pi" style="font-size:23px;visibility:hidden"><span class="mono" style="color:#f59e0b">prompt injection</span>
+    <span class="muted">&mdash; a dependency, a web page, or a file the agent reads can carry someone else&rsquo;s instructions.</span></div>
+</section>
+
+<section id="s3">
+  <div class="kicker">A real frame from this series</div>
+  <h1>Even the honest tools phone home.</h1>
+  <div class="row">
+    <div id="exhibit-wrap">
+      <!-- The hitbox's percentages must track the IMAGE alone. In round 4 they
+           were relative to the whole wrap; adding the truth band below grew
+           the wrap and silently shifted the ring one row down — every persona
+           watched the wrong row get ringed during the episode's key beat. -->
+      <div id="exhibit-imgbox" style="position:relative">
+        <img id="exhibit" src="primer-datadog.png" alt="Egress panel: allow rows for api.anthropic.com and one pending row for http-intake.logs.us5.datadoghq.com">
+        <!-- Row 3 of the crop (the pending datadoghq row): tighter than the row
+             so ring pad + glow stay off the rows beside it. Recompute if the
+             exhibit is ever recropped. -->
+        <div id="exhibit-pending" style="position:absolute;left:1.5%;right:1.5%;top:46%;height:10.5%"></div>
+      </div>
+      <div id="exhibit-note" class="muted">A coding agent, mid ordinary job &mdash; unedited. <span style="color:#f59e0b">Egress:</span> traffic trying to leave the box.</div>
+      <div id="s3-truth" style="font-size:26px;margin-top:14px;visibility:hidden"><b style="color:#f59e0b">You can&rsquo;t always know what a tool is going to need</b>
+        <span class="muted">&mdash; or everything it&rsquo;s going to do.</span></div>
+    </div>
+    <div id="exhibit-quote">
+      <div class="mono">APPROVAL NEEDED &mdash; OFF-POLICY EGRESS</div>
+      <!-- <wbr> after each dot: the box is narrow enough to wrap, and a
+           mid-token break (datadogh/q.com) landed on the one frame meant to
+           be read closely (Sam r4). -->
+      <div class="host mono" style="word-break:keep-all;overflow-wrap:normal">http-intake.<wbr>logs.<wbr>us5.<wbr>datadoghq.com</div>
+      <div class="muted">The agent&rsquo;s own tooling, reaching for a telemetry endpoint nobody asked for &mdash; caught at the door and held for a human.</div>
+      <div id="exhibit-refs" class="mono" style="margin-top:14px;font-size:24px;color:#f59e0b;visibility:hidden">who decides &rarr; ep 10 &nbsp;&middot;&nbsp; the record &rarr; ep 12</div>
+    </div>
+  </div>
+</section>
+
+<section id="s4">
+  <div class="kicker">The usual answers</div>
+  <h1>Trust it all, or block it all.</h1>
+  <div class="row">
+    <!-- Staged (owner script): each card appears WITH its narration. -->
+    <div class="card" id="card-trust" style="visibility:hidden"><b>Trust it</b>
+      <span class="muted">Give the agent access to everything &mdash; and hope it behaves.</span></div>
+    <div class="card" id="card-block" style="visibility:hidden"><b>Block it</b>
+      <span class="muted">Lock everything down so tightly the agent can&rsquo;t do anything useful.</span></div>
+  </div>
+</section>
+
+<section id="s5">
+  <div class="kicker">The vocabulary</div>
+  <h1>Three old words fix the frame.</h1>
+  <div id="diagram">
+    <div id="d-room">
+      <div class="label">Sandbox &mdash; a locked room</div>
+      <div class="inner">
+        <div>the work happens here</div>
+        <div class="mono muted">code &middot; tools &middot; the agent</div>
+      </div>
+      <div class="nokeys">no keys live inside &mdash; nothing for a thief to reuse</div>
+    </div>
+    <div class="arrow"></div>
+    <div id="d-door">egress<br>&mdash; the one door &mdash;</div>
+    <div class="arrow"></div>
+    <div id="d-proxy">
+      <div class="label">Proxy &mdash; the checkpoint</div>
+      <div class="what">Stands outside the room. Decides what passes.</div>
+      <div class="keys">holds the keys &mdash; attaches them on the way out</div>
+      <div class="muted" id="d-thief" style="margin-top:10px;font-size:19px">nothing inside can read or take the key &mdash; what a run may <em>do</em> with it is the policy&rsquo;s job (ep 8)</div>
+    </div>
+    <div class="arrow"></div>
+    <div id="d-out">
+      <div class="label" style="color:#a1a1aa">The internet</div>
+      <div class="what">only what was allowed &mdash; carrying what the checkpoint attached</div>
+    </div>
+  </div>
+  <div id="d-rule" style="visibility:hidden"><b>Deny by default.</b> Allow what we understand. Keep a record of what happened.</div>
+</section>
+
+<section id="s6">
+  <div class="kicker">Govern without guessing</div>
+  <h1>Nobody can predict a tool&rsquo;s needs. So don&rsquo;t guess &mdash; observe.</h1>
+  <div id="steps">
+    <div class="card"><b>1 &middot; RUN</b><div class="big">Run the job once, watched</div>
+      <span class="muted">One watched run, in a controlled environment, everything logged.</span></div>
+    <div class="card"><b>2 &middot; SEE</b><div class="big">See what it actually reached</div>
+      <span class="muted">Which hosts, which services, which destinations &mdash; evidence, not a guess.</span></div>
+    <div class="card"><b>3 &middot; DECIDE</b><div class="big">Turn that evidence into policy</div>
+      <span class="muted">Allow, deny, or ask for approval &mdash; and keep the decision on the record.</span></div>
+  </div>
+  <div id="s6-ep9" class="mono" style="font-size:22px;color:#f59e0b;visibility:hidden">one safe, watched run &rarr; a policy you can keep &mdash; ep 9</div>
+</section>
+
+<section id="s7">
+  <div class="kicker">What&rsquo;s ahead</div>
+  <h1>This series stands that answer up: Wardyn, proved on camera.</h1>
+  <div id="roadmap">
+    <div id="next"><span class="n">02</span><span>Set up the host</span></div>
+    <div id="ep03"><span class="n">03</span><span>What it stops</span></div>
+    <div><span class="n">04</span><span>Add a workspace</span></div>
+    <div><span class="n">05</span><span>Your first run</span></div>
+    <div><span class="n">06</span><span>Interactive runs</span></div>
+    <div><span class="n">07</span><span>The autonomous agent</span></div>
+    <div><span class="n">08</span><span>Policies &amp; confinement</span></div>
+    <div><span class="n">09</span><span>Record a run into a policy</span></div>
+    <div><span class="n">10</span><span>Approval scopes</span></div>
+    <div><span class="n">11</span><span>CI &amp; headless</span></div>
+    <div><span class="n">12</span><span>Audit &amp; attach</span></div>
+  </div>
+  <div class="muted mono" id="oss-line" style="font-size:22px">Open source &middot; Apache-2.0 &middot; one command &mdash; <span style="color:#f59e0b">make setup</span> &mdash; on your own machine</div>
+</section>
+
+<script>
+  // The spec's one control: show slide N, hide the rest. Fade is CSS; callers
+  // wait ~400ms after switching so a caption never lands mid-transition.
+  // Reveal a staged punchline at its spoken beat. visibility (not display) so
+  // the element held its layout slot all along and ring geometry is stable.
+  window.__unhide = function (id) {
+    var el = document.getElementById(id);
+    if (el) el.style.visibility = "visible";
+  };
+  window.__slide = function (id) {
+    document.querySelectorAll("section").forEach(function (s) {
+      s.classList.remove("on");
+      if (s.id !== id) s.style.display = "none";
+    });
+    var on = document.getElementById(id);
+    if (on) {
+      on.style.display = "flex";
+      // Force a reflow so the opacity transition actually plays.
+      void on.offsetHeight;
+      on.classList.add("on");
+    }
+  };
+</script>
+</body>
+</html>

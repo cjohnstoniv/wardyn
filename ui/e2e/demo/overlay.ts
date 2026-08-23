@@ -97,12 +97,25 @@ export async function installOverlay(page: Page): Promise<void> {
             r.style.opacity = "0";
             return;
           }
+          // Appearing from hidden: JUMP to the target and only fade in. The
+          // default all-property transition would fly the invisible ring in
+          // from wherever the last one died — sampled mid-flight it straddles
+          // two unrelated elements and reads as pointing at both (persona
+          // round 1 caught it twice). Moves between two VISIBLE targets keep
+          // the flight; that motion is the "look here now" cue.
+          const hidden = r.style.opacity !== "1";
+          if (hidden) r.style.transition = "opacity .42s ease";
           const pad = 6;
           r.style.left = `${box.x - pad}px`;
           r.style.top = `${box.y - pad}px`;
           r.style.width = `${box.width + pad * 2}px`;
           r.style.height = `${box.height + pad * 2}px`;
           r.style.opacity = "1";
+          if (hidden) {
+            requestAnimationFrame(() => {
+              r.style.transition = "";
+            });
+          }
         },
         chapter(title: string, sub: string) {
           const c = q(".chap");
@@ -209,6 +222,21 @@ export async function chapter(page: Page, title: string, sub: string): Promise<v
   await page.waitForTimeout(Math.max(PACE.chapter, durMs + 300));
   await call(page, "chapter", "", "");
   await page.waitForTimeout(400);
+}
+
+/**
+ * Scroll the target to viewport CENTER before pointing at it. The caption bar
+ * owns the bottom ~160px, so a bottom-third target "in view" is exactly under
+ * the bar while being talked about — series ruling S2 (persona round 1: four
+ * of V01's five payoffs were covered). spotlight()'s own scrollIntoViewIfNeeded
+ * is NOT enough: it leaves bottom-edge targets at the bottom edge.
+ */
+export async function centerInFrame(target: Locator): Promise<void> {
+  await target
+    .evaluate((el) => el.scrollIntoView({ block: "center", behavior: "smooth" }))
+    .catch(() => {});
+  // Let the glide settle before a ring measures the bounding box.
+  await target.page().waitForTimeout(550);
 }
 
 /** Park the ring on a target (or clear it). */

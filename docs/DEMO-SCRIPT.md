@@ -9,8 +9,8 @@ it.
 make record-demo                          # the works
 make record-demo ARGS=--no-reset          # keep the current stack (iterating on the driver)
 make record-demo ARGS=--no-record         # drive the UI, capture nothing (preflight)
-make record-demo ARGS="--video 03"        # one video of the 0.5 series (see below)
-make record-demo ARGS="--video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh"
+make record-demo ARGS="--video 03"        # one video of the series (see below)
+make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh"
                                           # a terminal-first video (see below)
 ```
 
@@ -26,7 +26,7 @@ make record-demo ARGS="--video 09 --terminal-script scripts/demo-beats/09-ci-and
 | The workspace the run attaches | [`examples/workspaces/demo-node/`](../examples/workspaces/demo-node/) |
 | Playwright `demo` project (headed, 1920×1080, `:8080`) | [`ui/playwright.config.ts`](../ui/playwright.config.ts) |
 
-## The series harness (0.5)
+## The series harness
 
 The 0.5 story is not one video, it is ten. Same rig throughout — same driver,
 same overlay, same narration, same verifier — with one spec per video. 0.6 adds
@@ -60,10 +60,10 @@ that imports `stage.ts` keeps its own `test.skip(!process.env.WARDYN_DEMO, …)`
 guard** — without it, a bare `pnpm exec playwright test --project=demo` points a
 headed browser at a developer's live stack and starts clicking Launch.
 
-### The clean slate belongs to video 01
+### The clean slate belongs to video 02
 
 `reset-all` runs for **video 01 and the no-flag walkthrough only**. Every other
-`--video` implies `--no-reset`; `--reset` overrides that, `--no-reset` opts 01
+`--video` implies `--no-reset`; `--reset` overrides that, `--no-reset` opts 02
 out.
 
 This is not a speed optimisation. The series is shot in an order where each
@@ -86,7 +86,7 @@ script's `make setup` inherits the environment:
 ```sh
 export WARDYN_SSH_LISTEN=:2222
 export WARDYN_SSH_ADVERTISE=127.0.0.1:2222   # advisory copy: it is what the pane's ssh command shows
-scripts/record-demo.sh --video 07
+scripts/record-demo.sh --video 12
 ```
 
 Then **preflight the fingerprint before rolling**, not on camera:
@@ -112,10 +112,12 @@ ssh-keygen -R '[127.0.0.1]:2222'
 
 `verify-demo-take.sh` reads `WARDYN_DEMO_VIDEO` and picks its checks from it.
 Unset means the legacy walkthrough, which films act 5 — so it gets act 5's
-checks, byte for byte what this script always ran, and that is also `--video 02`.
-The other nine are stubs (`video-specific checks TBD by spec`): **each video's
-assertions ship with the spec that films them**, because a check written before
-the beat exists is a guess, and a guess that passes is worse than no check.
+checks, byte for byte what this script always ran, and that is also
+`--video 07` (the autonomous episode inherits the walkthrough's beats). Most
+episodes carry their own check functions; the remaining stubs
+(`video-specific checks TBD by spec`) ship their assertions with the spec
+that films them, because a check written before the beat exists is a guess,
+and a guess that passes is worse than no check.
 
 What every take gets regardless is the **shared** half — a narration timeline
 with cues and zero overlaps, and an mp4 that is 1920×1080 and actually carries
@@ -132,7 +134,7 @@ our cluster)** is `kubectl`, `wardyn ssh` and one `ssh` session against a
 Kubernetes sandbox. Playwright cannot drive any of them.
 
 ```sh
-scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 ```
 
 runs that beat script under the **same** gdigrab capture Act 0 uses — same

@@ -8,7 +8,7 @@
  *
  * This video is a HYBRID: beats 1-3 are three real ssh terminals and live in
  * scripts/demo-beats/10-audit-and-attach.sh; beats 4-6 are this file. Both
- * lanes run under one `scripts/record-demo.sh --video 10 --terminal-script
+ * lanes run under one `scripts/record-demo.sh --video 12 --terminal-script
  * scripts/demo-beats/10-audit-and-attach.sh` invocation, and record-demo.sh
  * concatenates them TERMINAL FIRST, then the console. So this file opens on
  * state the beat script left behind and must never re-stage it:
@@ -69,6 +69,9 @@ test.describe.configure({ mode: "serial" });
 // from overlay.ts.
 const AUDIT_SETTLES = 60_000;
 const RECORDING_LOADS = 120_000;
+
+/** The owner's staccato lines read fast; PACE.read after one is dead air. */
+const BEAT_SHORT = 1400;
 
 // Where the terminal lane leaves the run id it just attacked (written by
 // scripts/demo-beats/10-audit-and-attach.sh, beside the lane's own narration
@@ -141,7 +144,7 @@ async function demoRunId(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------
 
 test("beat 4 — the trail", async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   const page = stage();
 
   // Act 6's card, verbatim: the browser half of this video is the receipts half.
@@ -153,17 +156,32 @@ test("beat 4 — the trail", async () => {
   // below filters a window that has actually loaded.
   await expect(page.getByText(/^\d+ events?$/)).toBeVisible({ timeout: AUDIT_SETTLES });
 
-  await caption(page, "Every attempt is written down, grouped by day.");
-  // The claim is "grouped by day", so prove a day header is on screen rather
-  // than trusting that groupByDay ran.
+  await caption(page, "Now let's look at the other half of the system.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The record.");
+  await beat(page, BEAT_SHORT);
+  // The claim the dialog no longer states outright ("grouped by day"), kept as
+  // a "the window actually loaded real, grouped content" guard.
   await expect(page.locator("main").getByText("Today").first()).toBeVisible({ timeout: AUDIT_SETTLES });
-  await beat(page, PACE.read + 800);
+  await caption(page, "Every important action is written down.");
+  await beat(page, PACE.read);
+  await caption(page, "And each event tells us who or what caused it.");
+  await beat(page, PACE.read);
 
   // The Actor facet. Options are the three ActorTypes; ssh.auth is written as
   // types.ActorHuman on BOTH the success and the failure path (sshgateway.go),
   // which is the whole reason this facet is the one the beat opens with.
-  await act(page, page.getByRole("combobox", { name: "Actor" }), "Human, agent or system — every row is stamped.");
-  await act(page, page.getByRole("option", { name: "Human", exact: true }));
+  // SAY-ON-CLICK "Human." rides the OPTION click, not the combobox opener —
+  // it names the choice being made, not the act of opening the list.
+  await act(page, page.getByRole("combobox", { name: "Actor" }));
+  await act(page, page.getByRole("option", { name: "Human", exact: true }), "Human.");
+  await caption(page, "Human.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Agent.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "System.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The actor is part of the record.");
   await beat(page, PACE.read);
 
   // Search reads the raw dotted action, not the rendered verb (audit.tsx's
@@ -194,18 +212,36 @@ test("beat 4 — the trail", async () => {
     "fewer than three ssh.auth rows — beats 1-3 did not produce two successes and a refusal",
   ).toBeGreaterThanOrEqual(3);
 
-  await caption(page, "There it is: the refused key, by fingerprint.");
   // THE MONEY ROW. OutcomeBadge renders outcome "failure" as the red "failure"
   // label (primitives.tsx), so this both finds the refusal and proves it is
   // rendered as one — a green take narrating "refused" over a screen of
   // successes is the exact failure this assert exists to prevent.
   const refused = sshRows.filter({ hasText: "failure" }).first();
   await expect(refused).toBeVisible({ timeout: AUDIT_SETTLES });
-  // The fingerprint IS the row's target, so the narration's "by fingerprint"
-  // has to be visible in that row and not merely true in the database.
+  // The fingerprint IS the row's target, so "we can see the fingerprint" has
+  // to be visible in that row and not merely true in the database.
   await expect(refused).toContainText("SHA256:");
+  // FLAGGED (see report): "Open the human event." is a SAY-ON-CLICK in the
+  // owner's script, but today's Audit UI has no per-event open/expand
+  // affordance — a row's only click target is its run-id chip, which re-scopes
+  // the whole list to that run rather than opening this one event. Spoken here
+  // as narration over the spotlight rather than an invented click.
+  await caption(page, "Open the human event.");
   await spotlight(page, refused);
-  await beat(page, PACE.read + 1400);
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And here is the refused key.");
+  await beat(page, BEAT_SHORT);
+  // FLAGGED (see report): "the identity it belongs to" — event.actor (the
+  // principal string) is read by the search box's filter predicate but is
+  // never rendered in the row; only the fingerprint (target) is genuinely on
+  // screen, so this line is true of the data but not independently provable
+  // from the picture the way the fingerprint half is.
+  await caption(page, "We can see the fingerprint and the identity it belongs to.");
+  await beat(page, PACE.read);
+  await caption(page, "The credential itself isn't exposed.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The decision is.");
+  await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 });
 
@@ -217,34 +253,57 @@ test("beat 5 — name the streams", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  await caption(page, "Two streams here: Wardyn's own log, and the terminal replay.");
+  await caption(page, "There are really three kinds of evidence here.");
+  await beat(page, PACE.read);
+  await caption(page, "Wardyn's audit log.");
+  await beat(page, BEAT_SHORT);
   const live = page.getByText("Live · appending");
   await expect(live).toBeVisible({ timeout: AUDIT_SETTLES });
   await spotlight(page, live);
-  await beat(page, PACE.read + 600);
+  await caption(page, "The terminal recording.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And, where supported, the kernel's own view of what happened.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
-  await caption(page, "Kernel ground truth is the third — dark here, because that sensor is opt-in.");
+  await caption(page, "The kernel is the closest thing we have to an independent witness.");
+  await beat(page, PACE.read);
   // GroundTruthChip renders `Ground truth · {state}` off /healthz's
   // ebpf_groundtruth. Two states mean "no sensor feeding this stack":
   // "unavailable" (never opted into the compose profile) and "degraded" (it
   // ran once and went quiet — the heartbeat is PERSISTED, so a host that ever
   // ran the sensor keeps saying degraded even after a wardynd bounce; this
-  // box ran it earlier today). The narration says "dark", true for both;
-  // "healthy"/"partial" under that line would be false on camera, so those
-  // still fail the take.
+  // box ran it earlier today). FLAGGED (see report): the new line says the
+  // sensor "isn't enabled for this barrier", which reads as the never-opted-in
+  // case; on a "degraded" take (it WAS enabled and went stale) that phrasing is
+  // less precise than the old "dark" wording babe5355 deliberately chose to
+  // cover both states. The assert below still accepts either state — that is
+  // mechanics, not dialog, and is left as-is. "healthy"/"partial" under this
+  // line would be false on camera either way, so those still fail the take.
   const groundTruth = page.getByText(/Ground truth · (unavailable|degraded)/);
   await expect(
     groundTruth,
-    "the ground-truth chip reads neither 'unavailable' nor 'degraded' — this take is on a stack with the eBPF sensor LIVE, and the line about an opt-in sensor gone dark is false on camera",
+    "the ground-truth chip reads neither 'unavailable' nor 'degraded' — this take is on a stack with the eBPF sensor LIVE, and the line about the sensor being dark is false on camera",
   ).toBeVisible({ timeout: AUDIT_SETTLES });
   await spotlight(page, groundTruth);
+  await caption(page, "On this machine, that sensor isn't enabled for this barrier.");
   // The "opt-in sensor" hint lives in the chip's native `title` tooltip, which
   // the browser draws as BROWSER chrome — Playwright's recordVideo captures page
   // content only, so the tooltip never lands in the file no matter how long we
   // hover. The hover is kept because it is what a presenter does and costs
-  // nothing; the caption above is what actually carries the point.
+  // nothing; the caption is what actually carries the point.
   await groundTruth.hover();
-  await beat(page, PACE.read + 1200);
+  await beat(page, PACE.read);
+  await caption(page, "And Wardyn tells us that instead of pretending otherwise.");
+  await beat(page, PACE.read);
+  // KEEP-VERIFY: "another source of evidence alongside the application-level
+  // record" — re-check against the sensor docs before the take. Support today:
+  // internal/groundtruth/groundtruth.go frames this stream as "the tamper-
+  // proof 'ground-truth' counterpart to the agent's own self-report (the
+  // Postgres event log) and the human-watchable PTY replay" — drop this line
+  // if a sharper read of the docs contradicts it.
+  await caption(page, "Where the sensor is available, it gives us another source of evidence alongside the application-level record.");
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -280,8 +339,8 @@ test("beat 6 — the tape", async () => {
   const recordingTab = page.getByRole("tab", { name: /Recording/ });
   await expect(recordingTab).toBeVisible({ timeout: 60_000 });
 
-  await act(page, recordingTab, "Pick the session. Play it, or download the cast.");
-  await beat(page, PACE.read);
+  await act(page, recordingTab, "Open the session.");
+  await beat(page, BEAT_SHORT);
 
   // The picker only renders when the run HAS attach sessions, which the index
   // read above already proved — so its absence here is a UI regression, not a
@@ -294,7 +353,10 @@ test("beat 6 — the tape", async () => {
   // Options read "Attached <clock> · <principal>" — proof the click landed on a
   // terminal session and not back on the agent's own cast.
   await expect(picker).toContainText("Attached");
-  await beat(page, PACE.read);
+  await caption(page, "And finally, the tape.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "You can watch it again.");
+  await beat(page, BEAT_SHORT);
 
   // The real asciinema player, mounted with autoPlay:false — so the start
   // overlay is on screen until something clicks it.
@@ -314,28 +376,66 @@ test("beat 6 — the tape", async () => {
   const download = page.getByRole("button", { name: "Download recording (.cast)" });
   await expect(download).toBeVisible();
   await spotlight(page, download);
+  await caption(page, "Or take the recording with you.");
   await beat(page, PACE.read + 500);
   await spotlight(page, null);
 
   const start = page.locator(".ap-overlay-start");
-  await act(page, start, "This is the tape, not a summary. Secrets are masked.");
+  await act(page, start, "Play.");
   // PLAYBACK ACTUALLY STARTED. The start overlay is removed the moment the
   // player leaves its idle state, so this is the difference between filming a
   // replay and filming a still frame with a play button on it.
   await expect(start, "the recording never started playing — the tape beat is a still frame").toHaveCount(0, {
     timeout: 30_000,
   });
-  // Long enough for beat 1's keystrokes to actually play back on screen.
-  await beat(page, PACE.read + 4000);
+  // Long enough for beat 1's keystrokes to actually play back on screen — the
+  // dwell is now the sum of the beats below, not one long silent hold.
+  await caption(page, "This isn't a summary.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It's the session itself.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Secrets are masked.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And the record ties everything together:");
+  await beat(page, PACE.read);
+  await caption(page, "the policy that governed the run,");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "the network decisions,");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "the approvals and their scope,");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "the work that happened,");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "and the people or systems involved.");
+  await beat(page, PACE.read + 400);
 
   // ----- outro (series finale) -----
-  await caption(page, "Ten videos, one idea: agents get power, never your credentials.");
-  await beat(page, PACE.read + 700);
-  await caption(page, "Everything they did stays on the record — yours.");
-  await beat(page, PACE.read + 700);
+  // DROPPED (see report): the old "one run, the whole record" detour — a
+  // second /audit visit, searched by this run's id, narrating "leaves as a
+  // file" — has no line left in the owner's script. The tape section now runs
+  // straight into the closing motif, so the navigate/search/assert for that
+  // detour is cut along with its captions rather than left to play silently.
+  await caption(page, "That's the whole series.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Ten episodes.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "One idea.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Give agents the power they need to do useful work...");
+  await beat(page, PACE.read);
+  await caption(page, "without giving them your credentials.");
+  await beat(page, PACE.read);
+  await caption(page, "Let them work.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Keep the boundary explicit.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "And keep the receipts.");
+  await beat(page, PACE.read);
   // The motif closes the series (SV6). walkthrough.spec.ts act 6's last three
   // lines, verbatim.
-  await caption(page, "Run anything. Keep your keys.");
+  await caption(page, "Run anything.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Keep your keys.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

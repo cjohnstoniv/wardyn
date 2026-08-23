@@ -118,6 +118,13 @@ CI_TASK="${WARDYN_CI_TASK:-echo hello from a governed sandbox}"
 CI_IMAGE="${WARDYN_CI_IMAGE:-ubuntu:24.04}"
 ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 ART_DIR="${WARDYN_CI_OUT:-ci-artifacts}"
+# The red-build beat (B3b): a SECOND, throwaway control plane — never B2's
+# project/port/out-dir, or ci-run.sh's own unconditional `down --volumes` at
+# start would tear down the stack beats 5-6 are about to film.
+CI_RED_TASK="${WARDYN_CI_RED_TASK:-curl -sS --max-time 10 https://example.com/ || exit 7}"
+CI_RED_PROJECT="${WARDYN_CI_RED_PROJECT:-${CI_PROJECT}-red}"
+CI_RED_PORT="${WARDYN_CI_RED_PORT:-$((CI_PORT + 1))}"
+CI_RED_OUT="${WARDYN_CI_RED_OUT:-${ART_DIR}-red}"
 
 fail() { printf '\n\033[1;31m[09] %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -130,29 +137,42 @@ narration_zero
 chapter "CI and headless" "The same governance, unattended"
 
 # ── COLD OPEN ───────────────────────────────────────────────────────────────
-say "Every approval so far, a human clicked. A pipeline has no hands."
-say "CI keeps the governance. Policy replaces the human; the exit code replaces the click."
+say "So far, a human has been available to make the decision."
+say "CI doesn't have that luxury."
+say "A pipeline has no hands."
+say "So the policy has to make the decision for it."
+say "And instead of a human clicking a button, the pipeline gets a result."
+say "That result becomes the build's verdict."
 
-# ── B1 · The policy is eight fields ─────────────────────────────────────────
-# The narration counts the FIELDS, not the lines: the file renders as 10 visual
-# lines carrying exactly 8 JSON keys (allowed_domains, denied_domains,
-# allow_all_egress, first_use_approval, allowed_methods, min_confinement_class,
-# eligible_grants, auto_stop_after_sec). RE-COUNTED 2026-08-18: 10 lines, 8
-# fields — the fixture has not changed since 6cd63f2d, so the plan's (and this
-# comment's) "11 visual lines" was simply miscounted. Only the FIELD count is
-# ever spoken, and that one was right. If the fixture ever changes, re-count
-# before the take.
+# ── B1 · The policy ──────────────────────────────────────────────────────────
+# The dialog no longer counts the fields out loud (it lists the categories:
+# allow, deny, unexpected, TTL, confinement) — but the fixture is still exactly
+# 8 JSON keys (allowed_domains, denied_domains, allow_all_egress,
+# first_use_approval, allowed_methods, min_confinement_class, eligible_grants,
+# auto_stop_after_sec) and the check below stays as a drift guard: if a ninth
+# key ever lands, the beat's "same basic things we've already seen" claim is
+# the thing that goes stale, silently, on camera.
 type_cmd "cat examples/policies/ci.json"
 beat 600
-say "Eight fields. Empty allowlist means this sandbox can reach nothing."
-say "First use approval, always deny. Off-list traffic dies instantly, never parks for a reviewer."
+say "This is the CI policy."
+say "It defines the same basic things we've already seen:"
+say "what is allowed,"
+say "what gets denied,"
+say "what happens to anything unexpected,"
+say "how long the run can live,"
+say "and what level of confinement is required."
+say "The floor is Fence."
+say "That's common for CI runners because they don't always have the virtualization support needed for stronger isolation."
+say "And for unattended work, an unexpected request can't sit around waiting for somebody who isn't there."
+say "It fails."
 
 # The claim above is checked, not assumed: a fixture edit that adds a ninth key
-# would otherwise be narrated as "eight" on camera and nobody would notice.
+# means the fixture no longer matches "the same basic things we've already
+# seen" and nobody would notice from the picture alone.
 if command -v jq >/dev/null 2>&1; then
   _fields="$(jq 'keys | length' examples/policies/ci.json 2>/dev/null || echo 0)"
   [[ "${_fields}" == "8" ]] \
-    || fail "examples/policies/ci.json has ${_fields} fields; beat 1 says eight out loud. Re-cut the line or the fixture."
+    || fail "examples/policies/ci.json has ${_fields} fields, not the 8 this beat's policy fixture was written against. Re-cut the beat or the fixture."
 fi
 
 # ── B2 · One command, no human ──────────────────────────────────────────────
@@ -162,8 +182,18 @@ fi
 # WARDYN_UP_PORT, not WARDYN_CI_UP_PORT: ci-run.sh defaults it to 0 (an
 # OS-assigned ephemeral port, right for a real CI host, useless for a browser
 # beat) and compose binds 127.0.0.1:${WARDYN_UP_PORT}:8080.
-say "One script builds its own control plane, launches one governed run, tears it down."
-say "Task mode exec: a plain shell command in your image. No agent, no key."
+say "A pipeline also needs to be able to start from scratch."
+say "So one job can stand up a temporary Wardyn environment just for the build."
+say "When the job is done, it goes away."
+say "If you already have Wardyn running somewhere, the CLI can talk to that instance instead."
+say "This is a normal shell command."
+say "No agent."
+say "No key."
+say "Just a governed task."
+say "And an agent job follows the same model."
+say "The pipeline supplies the secret."
+say "Wardyn injects what the run needs at the boundary."
+say "The workload doesn't have to carry the credential itself."
 
 # SPOKEN IN FRONT OF THE COMMAND, NOT BEHIND IT. type_cmd blocks for the whole
 # invocation, so nothing can be narrated while it runs, and this lane has no
@@ -172,12 +202,13 @@ say "Task mode exec: a plain shell command in your image. No agent, no key."
 # stretches on camera are genuinely silent: ci-run.sh's health poll prints
 # NOTHING while it waits for wardynd (up to 90s), and waitForRun prints once
 # when the wait opens and once when it closes (cmd/wardyn/commands.go:410,434)
-# with nothing in between. The line that warns a blocking wait is coming
-# therefore belongs in FRONT of it, setting expectation — behind it, it explains
+# with nothing in between. The lines that warn a blocking wait is coming
+# therefore belong in FRONT of it, setting expectation — behind it, they explain
 # in the past tense a silence the viewer already sat through. The task stays the
 # fastest thing that can still prove the point (one `echo`) for the same reason:
 # everything after "Launching governed run" is dead air that ships as-is.
-say "Wait blocks until terminal. That verdict becomes the script's exit."
+say "The CI command waits for the run to reach a final state."
+say "Then that state becomes the pipeline's result."
 
 type_cmd "WARDYN_CI_TASK='${CI_TASK}' WARDYN_CI_TASK_MODE=exec WARDYN_CI_IMAGE=${CI_IMAGE} WARDYN_CI_SKIP_BUILD=1 WARDYN_CI_KEEP=1 WARDYN_CI_PROJECT=${CI_PROJECT} WARDYN_UP_PORT=${CI_PORT} scripts/ci-run.sh"
 # Captured BEFORE anything else touches TYPIST_RC, because beat 3 films this
@@ -189,14 +220,42 @@ CI_RC="${TYPIST_RC}"
 # not the status of the typing loop. Single-quoted: `$?` must reach the shell
 # being filmed, not be expanded by this one.
 type_cmd 'echo $?'
-say "Zero, completed. A failed run hands back the command's own exit code."
-say "Killed or stopped is two. A timeout is one twenty-four."
+say "This one completed successfully."
+say "Zero."
+
+# ── B3b · The red build ──────────────────────────────────────────────────────
+# The proof-of-thesis beat: nothing bad has been stopped on camera yet. A
+# second, THROWAWAY control plane — ci-run.sh always tears down and rebuilds
+# its OWN stack at start (`"${COMPOSE[@]}" down --volumes` runs unconditionally,
+# before any KEEP check), so reusing B2's project by name would destroy the
+# very stack beats 5-6 are about to film. Distinct project/port/out-dir: this
+# run's artifacts must never land in ${ART_DIR}, which beat 4 and the browser
+# half both read as B2's run.
+say "Now let's give it a destination the policy doesn't allow."
+type_cmd "WARDYN_CI_TASK='${CI_RED_TASK}' WARDYN_CI_TASK_MODE=exec WARDYN_CI_IMAGE=${CI_IMAGE} WARDYN_CI_SKIP_BUILD=1 WARDYN_CI_PROJECT=${CI_RED_PROJECT} WARDYN_UP_PORT=${CI_RED_PORT} WARDYN_CI_OUT=${CI_RED_OUT} scripts/ci-run.sh"
+type_cmd 'echo $?'
+CI_RED_RC="${TYPIST_RC}"
+say "No reviewer."
+say "No approval screen."
+say "No waiting."
+say "The policy makes the decision immediately."
+say "The build goes red."
 
 # ── B4 · Receipts ───────────────────────────────────────────────────────────
 type_cmd "ls ${ART_DIR}/"
-say "Three files: the run, its log, the whole audit trail."
+say "And the pipeline gets artifacts back."
+say "The run."
+say "The log."
+say "And the audit trail."
 type_cmd "jq .state ${ART_DIR}/run.json"
-say "State, completed. These are the receipts the pipeline uploads."
+say "The run says completed."
+type_cmd "jq '.[-3:]' ${ART_DIR}/audit.json"
+say "And the final audit entries show the same lifecycle we've seen in the browser:"
+say "execution,"
+say "network decision,"
+say "completion."
+say "The same governance."
+say "Just without a person sitting in front of it."
 
 narration_end
 
@@ -241,6 +300,16 @@ if command -v jq >/dev/null 2>&1; then
     "http://127.0.0.1:${CI_PORT}/api/v1/runs" 2>/dev/null)"
   [[ "${_listed}" == *"${_id}"* ]] \
     || fail "run ${_id} is not listed at http://127.0.0.1:${CI_PORT} with this admin token — WARDYN_CI_KEEP did not hold the stack, or the token differs from the one the spec seeds."
+fi
+
+# The red build (B3b) must actually have gone red: the opposite of the checks
+# above, kept separate so a broken take names WHICH run it is unhappy about.
+[[ "${CI_RED_RC}" -ne 0 ]] \
+  || fail "beat 3b says 'the build goes red' but the second ci-run.sh (WARDYN_CI_OUT=${CI_RED_OUT}) exited 0."
+if command -v jq >/dev/null 2>&1 && [[ -s "${CI_RED_OUT}/run.json" ]]; then
+  _red_state="$(jq -r '.state // ""' "${CI_RED_OUT}/run.json")"
+  [[ "${_red_state}" == "FAILED" ]] \
+    || fail "${CI_RED_OUT}/run.json state is '${_red_state}', not FAILED — beat 3b narrates a refused run."
 fi
 
 exit 0
