@@ -66,6 +66,24 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // other key in this file.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
+// AuditChainLockKey serializes appends to the audit_events hash chain
+// (migration 0047). Unlike every key above it is taken with the TRANSACTION
+// -scoped pg_advisory_xact_lock, never the session-scoped form: it is released
+// by the commit that makes the new row visible, so the next writer's head read
+// cannot miss it, and no code path can leak it by forgetting a release.
+//
+// It must be taken BEFORE the INSERT statement, on the inserting transaction —
+// not inside 0047's BEFORE INSERT trigger, where the identity default has
+// already assigned seq and two racing writers could invert chain order against
+// seq order. Both in-tree insert paths do this: store.InsertAuditEvent and the
+// broker's insertAuditEventTx.
+//
+// ponytail: ONE lock for the whole chain, so audit appends are globally
+// serialized. That IS the feature (a chain has exactly one head), and audit
+// write volume is nowhere near a contention regime. If it ever is, the upgrade
+// is per-partition chains with a key per partition, not a finer lock over one.
+const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
 // from pool WITHOUT waiting, reporting ok=false when another session already
 // holds it. Call the returned release (deferred) to unlock and hand the

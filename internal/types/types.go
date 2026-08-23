@@ -647,6 +647,20 @@ type AuditEvent struct {
 	Outcome   string          `json:"outcome"` // "success" | "failure" | "denied"
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
+
+	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
+	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
+	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT
+	// trigger — never by the caller, who therefore cannot choose them.
+	//
+	// They are populated on the WRITE path only (InsertAuditEvent fills them
+	// from RETURNING), which is what carries the current head hash out to the
+	// audit sinks so a SIEM can detect a later truncation. The paginated READ
+	// paths deliberately do not select them, so both are empty on anything
+	// served by GET /audit — hence omitempty. The chain is verified through
+	// GET /api/v1/audit/chain/verify, not by reading rows back.
+	PrevHash string `json:"prev_hash,omitempty"`
+	RowHash  string `json:"row_hash,omitempty"`
 }
 
 // SSHPublicKey is a human's registered public key for the SSH gateway
