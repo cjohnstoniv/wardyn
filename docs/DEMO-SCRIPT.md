@@ -205,6 +205,7 @@ Two things to know before rolling:
 | **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
 | **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V12's subject, not this one's |
 | **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.auth` success attributed to the run's owner |
+| **Knobs** | four, all with a default that is what the table above describes — set one only when your cluster is not the quickstart's. `WARDYN_V13_CONTEXT` (default `kind-wardyn-quickstart`) and `WARDYN_V13_NAMESPACE` (default `wardyn`) name the kube context and namespace both the beat script and the verifier read the admin token from; `WARDYN_V13_DIR` (default `/tmp/wardyn-v13`) is where preflight writes its log; `WARDYN_V13_PUBKEY` (default `~/.ssh/id_ed25519.pub`) is the key beat 3 registers and authenticates with. `WARDYN_URL` (default `http://127.0.0.1:8080`) and `WARDYN_DEMO_RUN_ID` are the shared knobs, not V13's own |
 
 Staging, once, before rolling — `preflight` checks every item and films nothing:
 
