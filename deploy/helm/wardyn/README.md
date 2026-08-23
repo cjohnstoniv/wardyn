@@ -408,7 +408,7 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction"). Full detail, including the exact code each
 claim above is checked against: `docs/OPERATIONS.md`'s "Kubernetes: known
-gaps (v0.5)" section.
+gaps (v0.6)" section.
 
 What *is* proven, and what the gaps above are measured against: Wardyn ships
 exactly two deployment paths — `deploy/compose` and this chart — and both run
