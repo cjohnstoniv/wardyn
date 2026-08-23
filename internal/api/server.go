@@ -175,6 +175,11 @@ type Config struct {
 	// spooling chain) the spool drain replays into. It must bypass the spool to
 	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
 	AuditDrainRecorder audit.Recorder
+	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
+	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
+	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
+	// sinks configured has nothing to report. See D2.
+	AuditSinkDrops func() map[string]int64
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// AdminToken gates the public API (constant-time bearer compare). Empty

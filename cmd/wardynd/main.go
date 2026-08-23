@@ -256,6 +256,7 @@ func run() error {
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
 		AuditSpool:                auditSpool,
 		AuditDrainRecorder:        auditDrainRec,
+		AuditSinkDrops:            sinkDropsReporter(fan),
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,

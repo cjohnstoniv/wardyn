@@ -168,6 +168,16 @@ func buildAuditFanout(ctx context.Context, cfgJSON string) (*sinks.Fanout, error
 	return sinks.NewFanout(children...), nil
 }
 
+// sinkDropsReporter adapts a Fanout to the api.Config.AuditSinkDrops callback
+// (D2). Returns nil when no fanout is configured so the metric is omitted rather
+// than reporting an empty map on every scrape.
+func sinkDropsReporter(fan *sinks.Fanout) func() map[string]int64 {
+	if fan == nil {
+		return nil
+	}
+	return fan.DropsByName
+}
+
 // fanoutRecorder writes every event to the primary store recorder (source of
 // truth, append-only) and ALSO emits it to the sink fanout. The store write is
 // authoritative: a fanout failure is logged but never returned, so audit
