@@ -154,7 +154,7 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
 	if err != nil {
 		return err
 	}
@@ -292,6 +292,7 @@ func run() error {
 		DisableSubscriptionInject: feats.disableSubInject,
 		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
+		RequireOperatorSetEgress:  *f.requireOpSetEgress,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
 		LocalLoopback:         lm.loopback,
