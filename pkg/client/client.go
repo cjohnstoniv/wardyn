@@ -555,6 +555,7 @@ type AuditFilter struct {
 	Since        string // RFC3339, e.g. time.Now().UTC().Format(time.RFC3339)
 	Until        string // RFC3339
 	ActionPrefix string
+	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
 }
@@ -571,6 +572,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.ActionPrefix != "" {
 		q.Set("action_prefix", f.ActionPrefix)
+	}
+	if f.Actor != "" {
+		q.Set("actor", f.Actor)
 	}
 	if f.ActorType != "" {
 		q.Set("actor_type", f.ActorType)

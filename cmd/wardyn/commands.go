@@ -956,6 +956,7 @@ func auditCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&filter.Since, "since", "", "only events at/after this RFC3339 timestamp")
 	cmd.Flags().StringVar(&filter.Until, "until", "", "only events before this RFC3339 timestamp")
 	cmd.Flags().StringVar(&filter.ActionPrefix, "action-prefix", "", "only events whose action has this prefix (e.g. egress.)")
+	cmd.Flags().StringVar(&filter.Actor, "actor", "", "only events by this principal (e.g. alice@corp.example)")
 	cmd.Flags().StringVar(&filter.ActorType, "actor-type", "", "only events from this actor type (human|agent|system)")
 	cmd.Flags().StringVar(&filter.Outcome, "outcome", "", "only events with this outcome (success|denied|failure)")
 	return cmd

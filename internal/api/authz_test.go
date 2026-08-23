@@ -138,6 +138,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// handler itself narrows the response — see the classMember doc) ──
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
+	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},

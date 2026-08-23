@@ -142,6 +142,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
 
 			r.Get("/audit", s.handleQueryAudit)
+			// Uncapped NDJSON bulk export beside the capped, paginated read above —
+			// per-principal evidence ("everything developer X did") in one request (D6).
+			r.Get("/audit/export", s.handleExportAudit)
 			r.Get("/me", s.handleMe)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
