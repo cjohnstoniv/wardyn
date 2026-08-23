@@ -88,6 +88,13 @@ type DomainObservation struct {
 	AllowCount   int `json:"allow_count"`
 	DenyCount    int `json:"deny_count"`
 	PendingCount int `json:"pending_count"`
+	// ApprovalCount is the subset of AllowCount that was RELEASED by a live
+	// first-use approval (rule_source "approval:<id>" — the exact prefix
+	// proxy.allowLog writes, internal/egress/proxy/proxy.go:515) rather than
+	// the standing policy. A confined replay's CleanReplay verdict treats any
+	// of these as caught: approving mid-replay must not earn a green the
+	// standing policy didn't — the honest loop is approve, then replay again.
+	ApprovalCount int `json:"approval_count"`
 }
 
 // Observations is the deterministic aggregate of what a run actually used,
@@ -119,8 +126,8 @@ type Observations struct {
 
 // domainAgg is the mutable per-host accumulator used while capturing.
 type domainAgg struct {
-	methods              map[string]bool
-	allow, deny, pending int
+	methods                        map[string]bool
+	allow, deny, pending, approval int
 }
 
 // egressData is the JSON shape of an egress.* audit event's Data (the map
@@ -216,6 +223,13 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 	switch ev.Action {
 	case actionEgressAllow:
 		agg.allow++
+		// Defensively scoped to exactly this (allow) branch: "approval:denied"/
+		// "approval:pending" (proxy.go:433,436) share the "approval:" prefix
+		// but land on the deny/pending actions above/below, never here, so
+		// this can never miscount a hold or a live deny as a released approval.
+		if strings.HasPrefix(strings.TrimSpace(d.RuleSource), "approval:") {
+			agg.approval++
+		}
 	case actionEgressPending:
 		agg.pending++
 	case actionEgressDeny:
@@ -296,6 +310,37 @@ func captureFileWrite(ev types.AuditEvent, files map[string]bool) {
 	if p := strings.TrimSpace(d.Path); p != "" {
 		files[p] = true
 	}
+}
+
+// CleanReplay is the server-side verdict for a CONFINED replay (Workstream B):
+// true iff the capture is clean FOR WHAT WAS REPLAYED. It is pure and takes
+// exactly the evidence the verdict is defined over — the caller (only ever
+// meaningful for a settled `recorded` capture; the caller gates on that) is
+// responsible for calling this only once a replay has finalized.
+//
+// clean iff, across every observed domain: zero DenyCount, zero PendingCount,
+// and zero ApprovalCount (no allow was released by a live first-use approval
+// — approving mid-replay must not earn a green the standing policy didn't;
+// the honest loop is approve, then replay again) — AND the capture itself was
+// not truncated (maxCaptureAuditEvents, workspace_run.go). Hard-walled denies
+// count as caught like any other DenyCount; CleanReplay has no way to (and
+// does not try to) distinguish them.
+//
+// Empty obs (nothing was observed) with truncated=false is clean: there is
+// nothing that disqualifies it. "Clean" does NOT mean "nothing could go
+// wrong" — a replay the operator ends early earns the same verdict as a full
+// one if nothing else caught it; the caller names that caveat, this function
+// only reports what the evidence shows.
+func CleanReplay(obs []DomainObservation, truncated bool) bool {
+	if truncated {
+		return false
+	}
+	for _, d := range obs {
+		if d.DenyCount > 0 || d.PendingCount > 0 || d.ApprovalCount > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Synthesize derives a tightened, least-privilege RunPolicySpec from the
@@ -453,11 +498,12 @@ func buildDomains(m map[string]*domainAgg) []DomainObservation {
 	for _, h := range hosts {
 		a := m[h]
 		out = append(out, DomainObservation{
-			Host:         h,
-			Methods:      sortedStrings(a.methods),
-			AllowCount:   a.allow,
-			DenyCount:    a.deny,
-			PendingCount: a.pending,
+			Host:          h,
+			Methods:       sortedStrings(a.methods),
+			AllowCount:    a.allow,
+			DenyCount:     a.deny,
+			PendingCount:  a.pending,
+			ApprovalCount: a.approval,
 		})
 	}
 	return out

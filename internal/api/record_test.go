@@ -347,6 +347,104 @@ func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	}
 }
 
+// TestReconcileRecordRun_StampsCleanForConfinedEntry is Workstream B / B1: a
+// CONFINED replay's recorded branch gets the server-side clean verdict
+// (recordmode.CleanReplay) stamped onto Clean/Caught — nothing was caught, so
+// clean=true, caught=0.
+func TestReconcileRecordRun_StampsCleanForConfinedEntry(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	ws := recordingWorkspace(wsID, runID, "verify")
+	ws.RecordResults = mustJSON(map[string]RecordTaskResult{
+		"verify": {RunID: runID, Mode: "auto", Confined: true, Status: recordStatusRecording},
+	})
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
+		importStateFake: importStateFake{ws: ws},
+		events:          []types.AuditEvent{egressAllowEvent(runID, "registry.npmjs.org")},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "verify")
+	if res.Status != recordStatusRecorded {
+		t.Fatalf("status = %q, want recorded (hint=%s)", res.Status, res.FailureHint)
+	}
+	if res.Clean == nil || !*res.Clean {
+		t.Fatalf("clean = %v, want a stamped true (nothing caught)", res.Clean)
+	}
+	if res.Caught != 0 {
+		t.Errorf("caught = %d, want 0", res.Caught)
+	}
+}
+
+// TestReconcileRecordRun_CaughtCountsDenyAndPending pins Caught's definition
+// (observed domains with DenyCount>0 or PendingCount>0) for a confined entry,
+// and that a caught host flips Clean to false.
+func TestReconcileRecordRun_CaughtCountsDenyAndPending(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	ws := recordingWorkspace(wsID, runID, "verify")
+	ws.RecordResults = mustJSON(map[string]RecordTaskResult{
+		"verify": {RunID: runID, Mode: "auto", Confined: true, Status: recordStatusRecording},
+	})
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
+		importStateFake: importStateFake{ws: ws},
+		events: []types.AuditEvent{
+			egressAllowEvent(runID, "pypi.org"),
+			{RunID: &runID, Action: "egress.deny", Outcome: "denied", Target: "example.com",
+				Data: mustJSON(map[string]any{"host": "example.com", "method": "GET", "rule_source": "approval:denied"})},
+			{RunID: &runID, Action: "egress.pending", Outcome: "success", Target: "files.pythonhosted.org",
+				Data: mustJSON(map[string]any{"host": "files.pythonhosted.org", "method": "GET", "rule_source": "approval:pending"})},
+		},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "verify")
+	if res.Caught != 2 {
+		t.Fatalf("caught = %d, want 2 (one denied + one pending host)", res.Caught)
+	}
+	if res.Clean == nil || *res.Clean {
+		t.Fatalf("clean = %v, want a stamped false (2 caught)", res.Clean)
+	}
+}
+
+// TestReconcileRecordRun_OpenEntryGetsNoCleanStamp: an OPEN (non-confined)
+// recording's recorded branch leaves Clean nil and Caught 0 even in the
+// presence of a caught host — the verdict only means something under
+// confinement, so the open lane never computes it at all.
+func TestReconcileRecordRun_OpenEntryGetsNoCleanStamp(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &recordStore{
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")}, // Confined defaults false
+		events: []types.AuditEvent{
+			egressAllowEvent(runID, "registry.npmjs.org"),
+			{RunID: &runID, Action: "egress.deny", Outcome: "denied", Target: "blocked.example",
+				Data: mustJSON(map[string]any{"host": "blocked.example", "method": "GET", "rule_source": "builtin:private-ip"})},
+		},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	srv.reconcileRecordRun(context.Background(), runID)
+
+	res := fake.savedResult(t, "build")
+	if res.Status != recordStatusRecorded {
+		t.Fatalf("status = %q, want recorded (hint=%s)", res.Status, res.FailureHint)
+	}
+	if res.Clean != nil {
+		t.Errorf("clean = %v, want nil — an OPEN recording's verdict is confined-only, even with a caught host present", res.Clean)
+	}
+	if res.Caught != 0 {
+		t.Errorf("caught = %d, want 0 — an OPEN recording's verdict is confined-only", res.Caught)
+	}
+}
+
 // TestReconcileRecordRun_StampsEbpfGroundtruthCaveat is
 // W20-W20-groundtruth-mapper-4: before this, a capture's Caveats never said
 // anything about the host eBPF sensor's own coverage — that state lived only

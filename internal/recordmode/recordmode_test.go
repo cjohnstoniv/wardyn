@@ -177,6 +177,35 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
+			name: "allow released by a live approval increments approval_count alongside allow_count",
+			events: []types.AuditEvent{
+				egressEvent(egress.Allow, "held.example", "GET", "approval:"+uuid.New().String()),
+			},
+			check: func(t *testing.T, obs Observations) {
+				if len(obs.Domains) != 1 || obs.Domains[0].AllowCount != 1 || obs.Domains[0].ApprovalCount != 1 {
+					t.Fatalf("domain agg wrong: %+v", obs.Domains)
+				}
+			},
+		},
+		{
+			// Defensive: "approval:denied"/"approval:pending" (proxy.go:433,436)
+			// share the "approval:" prefix with a released allow's
+			// "approval:<id>" (proxy.go:515), but land on the deny/pending
+			// audit actions, never allow — must never be miscounted.
+			name: "deny/pending rule_source sharing the approval: prefix is never counted as an approval",
+			events: []types.AuditEvent{
+				egressEvent(egress.Deny, "denied.example", "GET", "approval:denied"),
+				egressEvent(egress.Pending, "pending.example", "GET", "approval:pending"),
+			},
+			check: func(t *testing.T, obs Observations) {
+				for _, d := range obs.Domains {
+					if d.ApprovalCount != 0 {
+						t.Errorf("domain %s: approval_count = %d, want 0 (deny/pending, not a released allow)", d.Host, d.ApprovalCount)
+					}
+				}
+			},
+		},
+		{
 			name: "successful mint captured, denied/failed mint ignored",
 			events: []types.AuditEvent{
 				mintEvent(fixedGrantA, outcomeSuccess),
@@ -301,6 +330,70 @@ func TestCaptureOrderIndependent(t *testing.T) {
 
 	if !reflect.DeepEqual(forward, backward) {
 		t.Fatalf("Capture is order-dependent:\n forward=%+v\nbackward=%+v", forward, backward)
+	}
+}
+
+// ── TestCleanReplay ──
+
+func TestCleanReplay(t *testing.T) {
+	tests := []struct {
+		name      string
+		obs       []DomainObservation
+		truncated bool
+		want      bool
+	}{
+		{
+			name: "clean: allow-only observations, not truncated",
+			obs: []DomainObservation{
+				{Host: "pypi.org", AllowCount: 3},
+				{Host: "api.github.com", AllowCount: 1},
+			},
+			want: true,
+		},
+		{
+			name: "empty observations, not truncated is clean",
+			obs:  nil,
+			want: true,
+		},
+		{
+			name: "a deny anywhere is caught",
+			obs: []DomainObservation{
+				{Host: "pypi.org", AllowCount: 3},
+				{Host: "evil.example", DenyCount: 1},
+			},
+			want: false,
+		},
+		{
+			name: "a pending anywhere is caught",
+			obs: []DomainObservation{
+				{Host: "pypi.org", AllowCount: 3},
+				{Host: "files.pythonhosted.org", PendingCount: 1},
+			},
+			want: false,
+		},
+		{
+			name: "an allow released by a live approval must not earn a green",
+			obs: []DomainObservation{
+				{Host: "pypi.org", AllowCount: 1, ApprovalCount: 1},
+			},
+			want: false,
+		},
+		{
+			name: "truncated capture is never clean, even with all-allow observations",
+			obs: []DomainObservation{
+				{Host: "pypi.org", AllowCount: 3},
+			},
+			truncated: true,
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CleanReplay(tt.obs, tt.truncated); got != tt.want {
+				t.Errorf("CleanReplay(%+v, truncated=%v) = %v, want %v", tt.obs, tt.truncated, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -830,7 +830,8 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	res.Observations = &obs
 	res.KernelSensorBlind = run.ConfinementClass == types.CC3
 	res.Caveats = []string{recordMaskingCaveat}
-	if len(events) >= maxCaptureAuditEvents {
+	truncated := len(events) >= maxCaptureAuditEvents
+	if truncated {
 		res.Caveats = append(res.Caveats, captureAuditTruncatedNote)
 	}
 	// W20-W20-groundtruth-mapper-4: surface the eBPF sensor's own coverage
@@ -861,6 +862,20 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	} else {
 		res.Status = recordStatusRecorded
 		res.SecretNamesMinted = s.mintedSecretNames(ctx, runID, obs.MintedGrantIDs)
+		// Clean/Caught are a CONFINED-replay verdict only (Workstream B): an
+		// open recording has nothing to be "clean" against, so it gets neither
+		// stamp — Clean stays nil (unknown/not-applicable), Caught stays 0.
+		if res.Confined {
+			caught := 0
+			for _, d := range obs.Domains {
+				if d.DenyCount > 0 || d.PendingCount > 0 {
+					caught++
+				}
+			}
+			res.Caught = caught
+			clean := recordmode.CleanReplay(obs.Domains, truncated)
+			res.Clean = &clean
+		}
 	}
 	// Compare-and-set on `recording`: idempotent across the watcher/kill/boot/
 	// read-repair triggers, and a capture that lost to a concurrent finalizer

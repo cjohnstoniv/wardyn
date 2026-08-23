@@ -96,6 +96,18 @@ type RecordTaskResult struct {
 	// run ACTUALLY used, computed server-side from its audit events at
 	// termination — never from a sandbox upload.
 	Observations *recordmode.Observations `json:"observations,omitempty"`
+	// Clean is the server-side recordmode.CleanReplay verdict, stamped ONLY for
+	// a CONFINED entry (nil for an open recording — the verdict only means
+	// something under confinement). Absent (nil) also covers old rows written
+	// before this field existed: unknown, not "not clean" — render neutral,
+	// never red. Clean means clean FOR WHAT WAS REPLAYED: reconcile finalizes
+	// on any terminal state, so a replay the operator ends early earns the
+	// same verdict as a full one.
+	Clean *bool `json:"clean,omitempty"`
+	// Caught is the number of observed domains with DenyCount>0 or
+	// PendingCount>0, stamped alongside Clean — CONFINED entries only (0/unset
+	// for an open recording).
+	Caught int `json:"caught,omitempty"`
 	// SecretNamesMinted resolves Observations.MintedGrantIDs to the secret /
 	// grant names actually exercised, for the "proven used" checklist render.
 	SecretNamesMinted []string `json:"secret_names_minted,omitempty"`
