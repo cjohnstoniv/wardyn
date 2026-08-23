@@ -542,13 +542,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 //     in-container prefixes errors the whole CreateSandbox (rollback runs).
 //   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
 //     ReadOnly=false, so a workspace bind cannot grant host write by default.
-//   - MEMBER MOUNTS (memberRoots non-nil): a run whose mounts a MEMBER authored
-//     (a member-owned workspace's local_dir) additionally runs
-//     runner.ValidateMemberMountSource against the operator/MDM-set roots
-//     resolved for that member. It runs HERE, immediately after ValidateMount
-//     and immediately before the bind is appended, for the same reason
-//     ValidateMount is re-run here at all: a symlink that was benign at
-//     onboarding can be repointed before the run, so the resolved-real-path
+//   - MEMBER MOUNTS (memberRoots non-nil): a run against a member-owned
+//     workspace additionally runs runner.ValidateMemberMountSource against the
+//     operator/MDM-set roots resolved for that member — over the binds the
+//     MEMBER authored (runner.Mount.MemberAuthored: that workspace's local_dir),
+//     and only those. The same spec also carries operator/Wardyn-authored binds
+//     (the subscription ~/.claude staging, the Bedrock ~/.aws dir), which live
+//     under no member root by construction; gating those on the roots too broke
+//     every model run against a member-owned workspace. It runs HERE, immediately
+//     after ValidateMount and immediately before the bind is appended, for the
+//     same reason ValidateMount is re-run here at all: a symlink that was benign
+//     at onboarding can be repointed before the run, so the resolved-real-path
 //     within-root assertion has to be the LAST thing before ContainerCreate.
 //     nil memberRoots (every operator run) skips it entirely — the gate is
 //     additive and never narrows an operator mount.
@@ -583,7 +587,7 @@ func (d *Driver) agentMounts(specMounts []runner.Mount, memberRoots []string) ([
 		if err := runner.ValidateMount(m); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
-		if memberRoots != nil {
+		if memberRoots != nil && m.MemberAuthored {
 			if err := runner.ValidateMemberMountSource(m.Source, memberRoots); err != nil {
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}

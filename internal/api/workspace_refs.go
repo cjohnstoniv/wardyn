@@ -153,29 +153,58 @@ func memberMountAllowed(policy runner.MemberMountPolicy, owner string, wm types.
 	return nil
 }
 
-// memberMountRoots returns the roots a run's mounts must resolve inside, or nil
+// memberMountPosture is ONE run's member-mount posture, resolved once at
+// create-run and carried to the driver: the roots the run's member-authored
+// binds must resolve inside, plus WHICH mount sources those are. The two are one
+// value because they are only ever correct together — roots without sources
+// gates operator/Wardyn-authored binds (the subscription creds, the Bedrock
+// ~/.aws dir) that live under no member root, and sources without roots gates
+// nothing.
+type memberMountPosture struct {
+	// Roots is runner.SandboxSpec.MemberMountRoots: nil for an operator run,
+	// empty-but-non-nil for a member run on a deployment with no roots.
+	Roots []string
+	// Sources are the member-owned workspaces' local_dir paths — the exact
+	// strings a WorkspaceMount.Source carries for them, so buildRunMounts can
+	// stamp runner.Mount.MemberAuthored by lookup. Nil for an operator run.
+	Sources map[string]bool
+}
+
+// memberMountPosture resolves a run's member-mount posture, or the zero value
 // when the run has NO member-owned workspace — which is every operator run, and
 // which the driver reads as "do exactly what you do today"
 // (runner.SandboxSpec.MemberMountRoots).
 //
 // wsRefs is the already-resolved referencedWorkspaces list, so this costs no
-// extra store read. The FIRST member-owned workspace decides: a run cannot mix
-// two members' workspaces (each member only ever sees their own), so there is no
-// second owner to reconcile with — and if there somehow were, the first owner's
-// roots are the narrower answer, never a union.
-func (s *Server) memberMountRoots(wsRefs []types.Workspace) []string {
+// extra store read. The FIRST member-owned workspace decides the ROOTS: a run
+// cannot mix two members' workspaces (each member only ever sees their own), so
+// there is no second owner to reconcile with — and if there somehow were, the
+// first owner's roots are the narrower answer, never a union. The SOURCES still
+// cover EVERY member-owned workspace in the list: if an admin ever did compose
+// two members' workspaces into one run, the second member's dir is gated against
+// the first's roots — refused, which is the fail-closed answer — rather than
+// binding unchecked because it belonged to nobody the roots came from.
+func (s *Server) memberMountPosture(wsRefs []types.Workspace) memberMountPosture {
+	var p memberMountPosture
 	for _, ws := range wsRefs {
 		if ws.OwnedBy == "" {
 			continue
 		}
-		roots := s.cfg.MemberMounts.RootsFor(ws.OwnedBy)
-		if roots == nil {
-			// Non-nil, empty: "member run, no roots" must still reach the driver
-			// as a member run so every mount fails closed there, rather than
-			// silently degrading to the operator path.
-			roots = []string{}
+		if p.Sources == nil {
+			p.Sources = map[string]bool{}
+			p.Roots = s.cfg.MemberMounts.RootsFor(ws.OwnedBy)
+			if p.Roots == nil {
+				// Non-nil, empty: "member run, no roots" must still reach the driver
+				// as a member run so every member bind fails closed there, rather
+				// than silently degrading to the operator path.
+				p.Roots = []string{}
+			}
 		}
-		return roots
+		for _, src := range ws.Sources {
+			if src.Type == types.WorkspaceSourceTypeLocalDir {
+				p.Sources[src.Path] = true
+			}
+		}
 	}
-	return nil
+	return p
 }

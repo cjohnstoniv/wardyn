@@ -458,8 +458,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// A member-owned workspace's local_dir stays inside that member's roots
 		// even on an ADMIN-launched record/verify session: the SOURCE was
 		// member-authored, so the bind-time gate follows the source rather than
-		// the launcher. nil for an operator-owned workspace (today's path).
-		MemberMountRoots: s.memberMountRoots([]types.Workspace{ws}),
+		// the launcher. The zero posture for an operator-owned workspace (today's
+		// path) — and even for a member's, it gates that workspace's OWN binds
+		// only, never the session's operator-staged credential mounts.
+		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
 		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.

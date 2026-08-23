@@ -63,7 +63,7 @@ func createMemberSandbox(t *testing.T, mounts []runner.Mount, memberRoots []stri
 func TestCreateSandbox_MemberMountWithinRootApplied(t *testing.T) {
 	root, project := memberSandboxRoot(t)
 	created, err := createMemberSandbox(t,
-		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true}},
+		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true, MemberAuthored: true}},
 		[]string{root})
 	if err != nil {
 		t.Fatalf("member mount inside its root failed: %v", err)
@@ -93,7 +93,7 @@ func TestCreateSandbox_MemberMountRepointedBeforeBind(t *testing.T) {
 	}
 
 	created, err := createMemberSandbox(t,
-		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true}},
+		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true, MemberAuthored: true}},
 		[]string{root})
 	if err == nil {
 		t.Fatal("a member mount repointed OUT of its roots was bound; the within-root check must re-resolve at bind time")
@@ -113,13 +113,36 @@ func TestCreateSandbox_MemberMountRepointedBeforeBind(t *testing.T) {
 func TestCreateSandbox_MemberMountNoRootsFailsClosed(t *testing.T) {
 	_, project := memberSandboxRoot(t)
 	created, err := createMemberSandbox(t,
-		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true}},
+		[]runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: true, MemberAuthored: true}},
 		[]string{})
 	if err == nil {
 		t.Fatal("a member run with an empty (non-nil) root list bound its mount; it must fail closed")
 	}
 	if created {
 		t.Error("the agent container was created despite the refusal")
+	}
+}
+
+// TestCreateSandbox_SystemMountOnMemberRunApplied is the other half of "the
+// gate is additive": a MEMBER run's spec also carries binds WARDYN authored —
+// the operator's staged ~/.claude subscription creds and the Bedrock ~/.aws dir
+// — whose sources are outside every member root by construction. Gating those
+// on the roots too refused them at ContainerCreate, so on a subscription or
+// Bedrock deployment NO run against a member-owned workspace could start, an
+// admin's own record/verify session included. Only the member-authored bind is
+// re-checked.
+func TestCreateSandbox_SystemMountOnMemberRunApplied(t *testing.T) {
+	root, project := memberSandboxRoot(t)
+	created, err := createMemberSandbox(t, []runner.Mount{
+		{Source: "/var/lib/wardyn/claude-creds", Target: "/home/agent/.claude", ReadOnly: true},
+		{Source: "/home/operator/.aws", Target: "/home/agent/.aws", ReadOnly: true},
+		{Source: project, Target: "/home/agent/work", ReadOnly: true, MemberAuthored: true},
+	}, []string{root})
+	if err != nil {
+		t.Fatalf("member run with operator-authored credential mounts failed: %v — the roots bound the MEMBER's binds, not Wardyn's own", err)
+	}
+	if !created {
+		t.Fatal("agent container was not created for a member run carrying the blessed credential mounts")
 	}
 }
 

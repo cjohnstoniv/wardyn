@@ -390,32 +390,51 @@ func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	}
 }
 
-// TestMemberMountRoots_ThreadedToDispatch pins the seam that carries the roots
-// to the driver: a run against a MEMBER-OWNED workspace resolves that member's
-// roots (so the driver re-checks every bind), an operator-owned one resolves
-// nil (so the driver takes exactly today's path), and a member-owned workspace
-// on a deployment with NO roots resolves EMPTY-but-non-nil, which fails the
-// bind closed rather than silently degrading to the operator path.
-func TestMemberMountRoots_ThreadedToDispatch(t *testing.T) {
-	root, _ := memberProjectRoot(t)
+// TestMemberMountPosture_Resolve pins what the roots seam RESOLVES (the
+// end-to-end threading of it is TestMemberMountPosture_DispatchedToDriver, in
+// member_mount_dispatch_test.go): a run against a MEMBER-OWNED workspace
+// resolves that member's roots AND that workspace's local_dir sources, an
+// operator-owned one resolves the zero posture (so the driver takes exactly
+// today's path), and a member-owned workspace on a deployment with NO roots
+// resolves EMPTY-but-non-nil roots, which fails the bind closed rather than
+// silently degrading to the operator path.
+func TestMemberMountPosture_Resolve(t *testing.T) {
+	root, project := memberProjectRoot(t)
 	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
 
-	opOwned := types.Workspace{ID: uuid.New()}
-	memberOwned := types.Workspace{ID: uuid.New(), OwnedBy: ownerMemberSub}
+	opOwned := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/operator/repo"},
+	}}
+	memberOwned := types.Workspace{ID: uuid.New(), OwnedBy: ownerMemberSub, Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeLocalDir, Path: project},
+		{Type: types.WorkspaceSourceTypeRepo, Source: "acme/widgets"},
+	}}
 
-	if got := srv.memberMountRoots(nil); got != nil {
-		t.Errorf("no workspaces: roots = %v, want nil (operator path)", got)
+	if got := srv.memberMountPosture(nil); got.Roots != nil || got.Sources != nil {
+		t.Errorf("no workspaces: posture = %+v, want the zero value (operator path)", got)
 	}
-	if got := srv.memberMountRoots([]types.Workspace{opOwned}); got != nil {
-		t.Errorf("operator-owned workspace: roots = %v, want nil (operator path)", got)
+	if got := srv.memberMountPosture([]types.Workspace{opOwned}); got.Roots != nil || got.Sources != nil {
+		t.Errorf("operator-owned workspace: posture = %+v, want the zero value (operator path)", got)
 	}
-	got := srv.memberMountRoots([]types.Workspace{opOwned, memberOwned})
-	if len(got) != 1 || got[0] != root {
-		t.Errorf("member-owned workspace: roots = %v, want %v", got, []string{root})
+	p := srv.memberMountPosture([]types.Workspace{opOwned, memberOwned})
+	if len(p.Roots) != 1 || p.Roots[0] != root {
+		t.Errorf("member-owned workspace: roots = %v, want %v", p.Roots, []string{root})
+	}
+	// ONLY the member's own local_dir is member-authored: the operator-owned
+	// workspace's dir shares the run but not the ownership, and a repo source is
+	// cloned, never bound.
+	if !p.Sources[project] {
+		t.Errorf("sources = %v, want the member workspace's local_dir %q stamped", p.Sources, project)
+	}
+	if p.Sources["/srv/operator/repo"] {
+		t.Errorf("sources = %v, must NOT stamp the operator-owned workspace's dir — the roots bound the MEMBER's binds only", p.Sources)
+	}
+	if len(p.Sources) != 1 {
+		t.Errorf("sources = %v, want exactly one entry", p.Sources)
 	}
 
 	unconfigured, _, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	got = unconfigured.memberMountRoots([]types.Workspace{memberOwned})
+	got := unconfigured.memberMountPosture([]types.Workspace{memberOwned}).Roots
 	if got == nil {
 		t.Fatal("member-owned workspace with NO configured roots: roots = nil, which the driver reads as an OPERATOR run — must be empty-but-non-nil so every bind fails closed")
 	}

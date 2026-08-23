@@ -240,8 +240,16 @@ func ValidateMemberMountSource(src string, roots []string) error
 `ContainerCreate`. A member run threads its roots through a new
 `SandboxSpec.MemberMountRoots []string` (nil for operator/non-member runs — the driver
 then does *exactly* today's behavior, so the change is additive and cannot widen an
-operator mount). When non-nil, each mount is additionally run through
-`ValidateMemberMountSource(m.Source, roots)` at that same site, fail-closed. This is the
+operator mount). When non-nil, each **member-authored** mount is additionally run through
+`ValidateMemberMountSource(m.Source, roots)` at that same site, fail-closed. Member-authored
+means `runner.Mount.MemberAuthored`: the member-owned workspace's own `local_dir`, stamped
+by dispatch (`buildRunMounts`, from `memberMountPosture`). The *other* binds riding the same
+spec are authored by Wardyn or the operator — the staged `~/.claude` subscription creds, the
+Bedrock `~/.aws` dir, an operator-owned workspace's dir — and live under no member root by
+construction; gating those on the roots too refused the credential mounts every model run
+needs, so no run against a member-owned workspace could start on a subscription or Bedrock
+deployment (an admin's own record/verify session included). The roots bound what a *member*
+may name, nothing else. This is the
 canonical-just-before-bind re-check the residual argument turns on: `EvalSymlinks` here
 resolves what the daemon is about to bind, and the within-root assertion sits as close to
 the `ContainerCreate` call as the existing deny-list does.
@@ -379,6 +387,17 @@ existing `mount_test.go` shows the pattern, including the remote-daemon note at
    unaffected (nil `MemberMountRoots`, existing path only).
 7. **additivity** — an operator run (nil `MemberMountRoots`) binds a legitimate mount
    *outside* the member roots successfully — the member gate never narrows operator mounts.
+8. **system mounts on a member run** — the other half of row 7, and the one that decides
+   whether the feature works at all: a *member* run (non-nil `MemberMountRoots`) carrying
+   the operator's blessed `~/.claude` creds bind and the Bedrock `~/.aws` bind — both
+   outside every member root — still boots, while the member's own `local_dir` bind on the
+   same spec is still re-checked. RED if the driver gates on `MemberMountRoots` alone
+   instead of on `Mount.MemberAuthored`.
+9. **posture threading** — the three production wires that carry the posture from
+   create-run to the driver (`handleCreateRun`, the `SandboxSpec` literal in `dispatchRun`,
+   `launchRecordRun`) plus the run-create re-check are asserted on a *dispatched* run, not
+   only on `memberMountPosture` in isolation: cutting any one of them must turn a test RED,
+   or a refactor deletes the bind-time defense silently.
 
 ---
 

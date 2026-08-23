@@ -93,6 +93,19 @@ type Mount struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only"`
+	// MemberAuthored marks a bind whose SOURCE a MEMBER chose — a member-owned
+	// workspace's local_dir. ONLY these are re-checked against
+	// SandboxSpec.MemberMountRoots at bind time, because the roots bound what a
+	// MEMBER may name and nothing else: the same spec also carries binds WARDYN
+	// ITSELF authored (the subscription ~/.claude credential staging, the Bedrock
+	// ~/.aws dir) and an operator-owned workspace's dirs, none of which live
+	// under any member root. Checking those too refused the credential mounts
+	// EVERY model run needs, so no member-owned workspace could run at all on a
+	// subscription or Bedrock deployment.
+	//
+	// Set by internal/api dispatch from the run's member-owned workspaces
+	// (memberMountPosture); false — the operator default — everywhere else.
+	MemberAuthored bool `json:"member_authored,omitempty"`
 }
 
 type ProxyConfig struct {
