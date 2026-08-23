@@ -139,6 +139,79 @@ it can record — Wardyn keeps both. The spool is per-process by design: it is t
 fallback for one pod's failed write, and each `wardynd` drains its own back on
 recovery (see [One replica, by construction](#one-replica-by-construction)).
 
+### The hash chain — what a rewritten row looks like
+
+The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
+and the role split hardens that against the app role. Neither binds a **table
+owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row
+— the residual `0007_audit_least_privilege.sql` states plainly. Migration
+`0047_audit_hash_chain.sql` does not close that hole; it makes a single use of
+it **visible**.
+
+Every row written from `0047` onward carries two hex columns:
+
+```
+row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
+                                           actor, action, target, outcome,
+                                           source_ip, data) )
+```
+
+`prev_hash` is the previous row's `row_hash`, so the log is a linked list where
+each row commits to everything before it. Both values are computed **inside
+Postgres**, in the `audit_events` `BEFORE INSERT` trigger — not by the writer —
+so no caller (including the sandbox-facing paths) can choose them, and both
+in-tree insert paths inherit the chain without knowing it exists.
+
+**What it gives you.** Edit one row and its stored `row_hash` no longer matches
+its contents. Delete one and its neighbours' links no longer meet. Either shows
+up as an exact `seq` and a reason.
+
+**What it does not give you.** This is tamper-**evidence**, not
+tamper-proofness. Someone who can rewrite one row can usually rewrite every row
+after it and re-chain the lot; a re-chained tail verifies perfectly clean.
+Truncating the newest rows is likewise invisible to the chain alone — what is
+left is a shorter, valid chain. The defence against both is **off-box**: every
+event on an audit sink stream (`WARDYN_AUDIT_SINKS`) now carries its
+`prev_hash`/`row_hash`, so a SIEM holds head hashes Wardyn cannot later disown.
+A chain that no longer contains a head your SIEM recorded has been rewritten or
+truncated, and that comparison — not the sweep — is the control. Signed receipts
+(a key the database role cannot reach) are the next rung and are **not built**.
+
+**Verifying.** Operator-invoked, never automatic:
+
+```bash
+curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+     https://wardyn.example.com/api/v1/audit/chain/verify
+```
+
+```json
+{"ok": true, "checked": 41233, "legacy": 902, "first_seq": 903,
+ "head_seq": 42135, "head_hash": "9f2c…"}
+```
+
+`wardynd` deliberately does **not** verify at boot: the sweep re-hashes every
+chained row, and paying that on every restart taxes the common case for an
+answer nobody is reading at that moment. Run it from cron and alert on
+`ok: false` — a broken chain answers **200** with `ok: false`, `broken_seq` and
+`reason` (the sweep succeeded; it found something), while `5xx` means the sweep
+could not run. `head_hash` is the value to diff against your SIEM's copy.
+
+One consequence worth knowing before the first alert: **a break is permanent.**
+The sweep stops at the first broken row and the log is append-only, so once a
+row has been rewritten every later sweep reports that same `broken_seq` forever
+— there is no repair, and no "acknowledge" cursor to move the baseline past a
+break you have already investigated. That is the append-only guarantee doing its
+job, not a bug, but it means `ok: false` is a one-way latch: treat the first
+occurrence as the incident and preserve the row range, because the alert will
+not clear.
+
+**Rows written before the upgrade** keep `NULL` hashes and are reported as
+`legacy`. They are outside the chain and are never a failure. There is no
+backfill, on purpose: hashes computed after the fact by the same process that
+could have altered the rows prove nothing, and writing them would mean
+`UPDATE`-ing the append-only table. The chain starts at the first row inserted
+after the migration.
+
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
 The append-only guarantee above is unconditional: there is no time window,
