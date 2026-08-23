@@ -156,14 +156,22 @@ type WorkspaceSource struct {
 type WorkspaceBaseImage struct {
 	// Kind is "recommended" (Wardyn's own convention image for the detected
 	// stack), "registry" (an operator-picked published image, named by Image),
-	// "custom" (Image is a base, Steps layers Dockerfile lines on top), or
-	// "byo" (Image is used verbatim, no layering).
+	// "custom" (Image is a base; see Steps below for what actually happens to
+	// it), or "byo" (Image is used verbatim).
 	Kind string `json:"kind"`
 	// Image is the base image reference. Meaning depends on Kind: the FROM for
 	// "custom", the image itself for "registry"/"byo", unused for "recommended".
 	Image string `json:"image,omitempty"`
-	// Steps are additional Dockerfile RUN/ENV/ARG lines layered on Image.
-	// "custom" only.
+	// Steps are additional Dockerfile RUN/ENV/ARG lines an operator can attach
+	// to a "custom" base image. NOT CURRENTLY APPLIED: no build path layers
+	// them onto Image (resolveWorkspaceImage, internal/api/workspace_run_image.go
+	// wraps Image verbatim, same as "byo") — running operator-authored RUN
+	// lines would execute on the HOST Docker daemon during that wrap, outside
+	// every confinement tier, the same host-RCE class assertWrapSafeBase
+	// (internal/envbuild/builder.go) refuses a hostile ONBUILD trigger for.
+	// Steps is accepted and persisted on the base-image catalog row so it
+	// round-trips, but today a "custom" image builds and runs identically to
+	// "byo": Image verbatim, Steps silently inert.
 	Steps []string `json:"steps,omitempty"`
 }
 
