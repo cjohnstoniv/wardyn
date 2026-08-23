@@ -129,6 +129,12 @@ export const PERM = {
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",
+  // ADDITION to §7.2 (0.6 implementation): the canon table froze one title and
+  // an off-BODY, so the off-dialog asked "Enforce Egress hosts?" over a body
+  // saying members go back and a button saying Stop enforcing. Same shape as
+  // ENFORCE_ON_TITLE, same verb as ENFORCE_STOP — noted as an addition in
+  // docs/design/permissioning-prompt.md §7.2.
+  ENFORCE_OFF_TITLE: (kind: string) => `Stop enforcing ${kind}?`,
   ENFORCE_OFF_BODY: "Members go back to the powers they had before this capability was enforced. Denies still apply.",
   ENFORCE_CONFIRM: "Enforce",
   ENFORCE_STOP: "Stop enforcing",
@@ -199,12 +205,13 @@ export const DENIED = {
   // New Run: base image.
   IMAGE_BODY: "You can't name your own base image. Ask an admin to grant the exact image ref.",
 
-  // Preflight / Review warnings — the run still launches; the dropped rows are
-  // named so the later failure isn't a mystery.
-  SECRET_DROPPED: (n: number) =>
-    `${n} secret${n === 1 ? " isn't" : "s aren't"} granted to you and won't be attached. Whatever needs ${n === 1 ? "it" : "them"} will fail at that point.`,
-  EGRESS_DROPPED: (n: number) =>
-    `${n} host${n === 1 ? "" : "s"} you added ${n === 1 ? "isn't" : "aren't"} granted to you and ${n === 1 ? "was" : "were"} removed from this run. Hosts this workspace already carries are unaffected.`,
+  // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
+  // are count-shaped copy for a preflight/Review surface, and 0.6 ships none:
+  // the drop is surfaced at launch instead, as one toast per dropped value
+  // carrying the SERVER's text, which names the kind and the exact value
+  // (internal/api/runs.go -> new-run/run-warnings.ts). A string defined here
+  // and rendered nowhere is not canon, it is a claim — so it waits for the
+  // surface that draws it.)
 
   // Secrets page, member view, `secret` enforced.
   SECRETS_NARROWED: "Only secrets granted to you are listed.",

@@ -123,8 +123,11 @@ if ! docker image inspect wardyn/agent-vscode:local >/dev/null 2>&1; then
   log "wardyn/agent-vscode:local absent; building it (make agent-image-vscode, +~300MB)"
   make agent-image-vscode || die "make agent-image-vscode failed"
 fi
-docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
-  docker tag wardyn/agent-vscode:local "${AGENT_IMAGE}" || die "could not tag ${AGENT_IMAGE}"
+# Re-tag EVERY run, not just when the tag is missing: the tag is a pointer, and
+# a `make agent-image-vscode` rebuild moves :local to a new image id while the
+# old :pinned tag keeps this stack on the code-server image from the first run
+# that ever created it.
+docker tag wardyn/agent-vscode:local "${AGENT_IMAGE}" || die "could not tag ${AGENT_IMAGE}"
 
 # ── bring up the dedicated stack ─────────────────────────────────────────────
 log "bringing up ${PROJECT} (api :${API_PORT}, ui :${UI_PORT}, pg :${PG_PORT})"

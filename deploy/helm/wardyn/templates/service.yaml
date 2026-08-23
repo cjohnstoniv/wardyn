@@ -14,6 +14,16 @@ routed to a different hostname than the console at your ingress/LoadBalancer —
 it serves the sandbox's own pages, and the separate browser origin is the
 control (README "UI sandbox gateway", docs/UI-SANDBOXES.md).
 */}}
+{{- include "wardyn.assertPorts" . -}}
+{{- /*
+`default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
+this chart's defaults with the PREVIOUS release's values map, so upgrading a
+0.5 release hands these templates a map with no uiSandbox/readinessProbe at
+all. Unguarded, that upgrade dies at render on a nil pointer instead of rolling
+out; guarded, the 0.5 defaults simply carry forward.
+*/ -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,15 +37,15 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
-    {{- if .Values.ssh.enabled }}
+    {{- if $ssh.enabled }}
     - name: ssh
-      port: {{ .Values.ssh.port }}
+      port: {{ $ssh.port | default 2222 }}
       targetPort: ssh
       protocol: TCP
     {{- end }}
-    {{- if .Values.uiSandbox.enabled }}
+    {{- if $ui.enabled }}
     - name: ui
-      port: {{ .Values.uiSandbox.port }}
+      port: {{ $ui.port | default 8081 }}
       targetPort: ui
       protocol: TCP
     {{- end }}

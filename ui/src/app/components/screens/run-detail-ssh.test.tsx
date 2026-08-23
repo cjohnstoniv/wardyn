@@ -48,10 +48,10 @@ const baseRun: AgentRun = {
   interactive: false,
 };
 
-function renderCard(run: Partial<AgentRun> = {}, principal = OWNER) {
+function renderCard(run: Partial<AgentRun> = {}, principal = OWNER, operator = true) {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator principal={principal}>
+      <OperatorProvider operator={operator} principal={principal}>
         <ConnectSSHCard run={{ ...baseRun, ...run }} />
       </OperatorProvider>
     </MemoryRouter>,
@@ -65,14 +65,25 @@ beforeEach(() => {
 });
 
 describe("ConnectSSHCard — visibility", () => {
-  it("renders nothing for a run the caller does not own", async () => {
+  it("renders nothing for a MEMBER on a run they do not own", async () => {
     healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
-    const { container } = renderCard({}, "mallory@example.com");
+    const { container } = renderCard({}, "mallory@example.com", false);
     // Give any (unexpected) fetch a tick to resolve before asserting absence.
     await new Promise((r) => setTimeout(r, 0));
     expect(container.querySelector("section")).toBeNull();
     expect(healthMock).not.toHaveBeenCalled();
+  });
+
+  // The server's three lanes are owner-OR-admin (attach_ticket.go's isOperator,
+  // uigateway.go's role check, sshgateway.go's admin arm). Hiding the card from
+  // an admin offered less than the API already serves them.
+  it("renders for an ADMIN on a run they do not own", async () => {
+    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: "admin@example.com", name: "k", public_key: "", created_at: "" }]);
+    const { container } = renderCard({}, "admin@example.com", true);
+    await waitFor(() => expect(container.querySelector("section")).not.toBeNull());
+    expect(healthMock).toHaveBeenCalled();
   });
 
   it("renders nothing for a stopped run, even when owned", async () => {
@@ -197,10 +208,10 @@ describe("ConnectSSHCard — content", () => {
 // UI apps lane (docs/design/ui-sandboxes-prompt.md) — a third, independent
 // sub-affordance under the SAME owner+running gate as SSH/CLI above.
 describe("ConnectSSHCard — UI apps lane", () => {
-  it("is hidden along with the whole card for a non-owner or a stopped run", async () => {
+  it("is hidden along with the whole card for a non-owner member or a stopped run", async () => {
     healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
-    const nonOwner = renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] }, "mallory@example.com");
+    const nonOwner = renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] }, "mallory@example.com", false);
     await new Promise((r) => setTimeout(r, 0));
     expect(nonOwner.container.querySelector("section")).toBeNull();
 

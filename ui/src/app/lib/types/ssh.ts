@@ -12,5 +12,12 @@ export interface SSHPublicKey {
   principal: string;
   name: string;
   public_key: string;
+  // Stamped from the registering session's role and NEVER re-stamped
+  // (migration 0043): "admin" here means the key carries the SSH gateway's
+  // admin override — it reaches runs its holder does not own — and it keeps
+  // carrying it after a demotion, until the key is deleted and registered
+  // again. Keys registered before 0.6 are backfilled "member". docs/SSH.md
+  // §Bounds; the console shows it because otherwise nobody can see it.
+  role: string;
   created_at: string;
 }

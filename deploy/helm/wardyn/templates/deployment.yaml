@@ -25,6 +25,15 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
     /readyz, which additionally pings Postgres so a dead DB actually takes
     the pod out of the Service's endpoints
 */}}
+{{- /*
+`default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
+this chart's defaults with the PREVIOUS release's values map, so upgrading a
+0.5 release hands these templates a map with no uiSandbox/readinessProbe at
+all. Unguarded, that upgrade dies at render on a nil pointer instead of rolling
+out; guarded, the 0.5 defaults simply carry forward.
+*/ -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
 {{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
 {{- end -}}
@@ -194,18 +203,18 @@ spec:
             - name: WARDYN_CONTROL_PLANE_URL
               value: {{ printf "http://%s.%s.svc.cluster.local:%d" (include "wardyn.fullname" .) .Release.Namespace (int .Values.service.port) | quote }}
             {{- end }}
-            {{- if .Values.ssh.enabled }}
+            {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN
-              value: {{ printf ":%d" (int .Values.ssh.port) | quote }}
+              value: {{ printf ":%d" (int ($ssh.port | default 2222)) | quote }}
             - name: WARDYN_SSH_ADVERTISE
-              value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" .Values.ssh.advertiseHost) (int .Values.ssh.port) | quote }}
+              value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" $ssh.advertiseHost) (int ($ssh.port | default 2222)) | quote }}
             {{- end }}
-            {{- if .Values.uiSandbox.enabled }}
+            {{- if $ui.enabled }}
             - name: WARDYN_UI_SANDBOX_LISTEN
-              value: {{ printf ":%d" (int .Values.uiSandbox.port) | quote }}
+              value: {{ printf ":%d" (int ($ui.port | default 8081)) | quote }}
             - name: WARDYN_UI_SANDBOX_ADVERTISE
-              value: {{ required "wardyn: uiSandbox.advertiseURL is required when uiSandbox.enabled=true (the externally-reachable base URL of the gateway — the console's Open button opens it, and it must be a DIFFERENT host than the console)" .Values.uiSandbox.advertiseURL | quote }}
-            {{- with .Values.uiSandbox.originTemplate }}
+              value: {{ required "wardyn: uiSandbox.advertiseURL is required when uiSandbox.enabled=true (the externally-reachable base URL of the gateway — the console's Open button opens it, and it must be a DIFFERENT host than the console)" $ui.advertiseURL | quote }}
+            {{- with $ui.originTemplate }}
             - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
               value: {{ . | quote }}
             {{- end }}
@@ -214,14 +223,14 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            {{- if .Values.ssh.enabled }}
+            {{- if $ssh.enabled }}
             - name: ssh
-              containerPort: {{ .Values.ssh.port }}
+              containerPort: {{ $ssh.port | default 2222 }}
               protocol: TCP
             {{- end }}
-            {{- if .Values.uiSandbox.enabled }}
+            {{- if $ui.enabled }}
             - name: ui
-              containerPort: {{ .Values.uiSandbox.port }}
+              containerPort: {{ $ui.port | default 8081 }}
               protocol: TCP
             {{- end }}
           livenessProbe:
@@ -245,7 +254,7 @@ spec:
             # pod never becomes Ready and a rollout to it stalls forever
             # (readinessProbe.path=/healthz pins it back — see values.yaml).
             httpGet:
-              path: {{ .Values.readinessProbe.path | quote }}
+              path: {{ (.Values.readinessProbe | default dict).path | default "/readyz" | quote }}
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10

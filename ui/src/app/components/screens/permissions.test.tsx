@@ -184,6 +184,10 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
+    // The TITLE has to ask the same question as the body and the button — it
+    // used to ask the opposite one ("Enforce Egress hosts?").
+    expect(within(dialog).getByText(PERM.ENFORCE_OFF_TITLE(KIND.egress_host.label))).toBeInTheDocument();
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_TITLE(KIND.egress_host.label))).toBeNull();
     expect(within(dialog).getByText(PERM.ENFORCE_OFF_BODY)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: PERM.ENFORCE_STOP })).toBeInTheDocument();
   });
