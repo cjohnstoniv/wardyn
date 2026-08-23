@@ -93,9 +93,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// the configured default. resolveRunPolicy writes its own HTTP error and
 	// returns ok=false when it has already responded (XOR violation, invalid
 	// inline spec, missing/reserved inline secret ref, …) so we just stop.
-	// Clamp warnings (L6) are discarded here — launch stays silent about a
-	// clamp exactly as it always has; handlePreflightRun is what surfaces them.
-	spec, policyID, _, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
+	// Its clamp/capability warnings ride the 201 (see policyWarns below): a
+	// member whose egress host, secret grant or workspace repo was narrowed
+	// away has to hear about it from the thing they actually called.
+	spec, policyID, policyWarns, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
 	if !ok {
 		return
 	}
@@ -191,7 +192,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	warnings := s.warnWorkspaceCollision(ctx, runID, workspacePath)
+	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
+	// run is narrower than what the caller asked for. Launch used to drop them
+	// on the floor, leaving only preflight (which the console never calls) to
+	// tell a member their egress host or secret grant had been dropped — so
+	// three shipped claims about drops "surfacing as a warning before launch"
+	// were true of nothing a member ever saw. The strings are
+	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
+	// and the dropped VALUE (a host, a secret NAME), never a secret value.
+	warnings := append(policyWarns, s.warnWorkspaceCollision(ctx, runID, workspacePath)...)
 	if taskWarning != "" {
 		warnings = append(warnings, taskWarning)
 	}

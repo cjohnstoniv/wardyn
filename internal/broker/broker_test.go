@@ -138,13 +138,23 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		return &loadGrantRow{g: g}
 
 	case strings.Contains(sql, "FROM approvals") && strings.Contains(sql, "grant_id = $1"):
-		// ensureApproval select: args[0]=grantID. Mirrors the query's
-		// `state <> 'EXPIRED'` filter — a swept row must not be re-found.
+		// ensureApproval select: args[0]=grantID. The `state <> 'EXPIRED'`
+		// filter is read OFF THE QUERY TEXT, never hardcoded: a fake that
+		// applies a predicate the real statement does not carry passes either
+		// way, which is exactly how this lane went hollow —
+		// TestMintForGrant_ExpiredApproval_ReRaisesPending stayed green with
+		// the predicate deleted from sql.go, leaving only the
+		// WARDYN_TEST_PG-gated twin to catch it.
+		skipExpired := strings.Contains(sql, "state <> 'EXPIRED'")
 		grantID := args[0].(uuid.UUID)
 		for _, a := range tx.db.approvals {
-			if a.grantID == grantID && a.kind == "credential" && a.state != types.ApprovalExpired {
-				return &ensureApprovalRow{a: a}
+			if a.grantID != grantID || a.kind != "credential" {
+				continue
 			}
+			if skipExpired && a.state == types.ApprovalExpired {
+				continue
+			}
+			return &ensureApprovalRow{a: a}
 		}
 		return errRow{errNoRow}
 

@@ -432,3 +432,77 @@ func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
 		}
 	}
 }
+
+// TestCapDenyOverlapsWildcardWant pins the DENY-vs-ALLOW asymmetry
+// capValueOverlaps exists for: a deny only has to OVERLAP the requested value,
+// while an allow still has to COVER it. Before this, a member whose allowlist
+// entry was itself a wildcard ("*.example.com") kept it under a deny for a host
+// underneath it ("secret.example.com") — the deny row protected nothing.
+func TestCapDenyOverlapsWildcardWant(t *testing.T) {
+	tests := []struct {
+		name            string
+		denyValue, want string
+		wantDeny        bool
+	}{
+		{"want wildcard swallows the denied host", "secret.example.com", "*.example.com", true},
+		{"deny wildcard covers the wanted host", "*.corp", "evil.corp", true},
+		{"want wildcard swallows the denied subdomain", "a.b", "*.b", true},
+		{"exact host, exact deny", "example.com", "example.com", true},
+		{"want * asks for everything, so every deny bites", "secret.example.com", "*", true},
+		// "*.example.com" is every host UNDER example.com, never example.com
+		// itself (the proxy matcher's own label-boundary rule), so these two
+		// sets do not intersect and the deny must not fire.
+		{"deny on the bare apex, want only its subdomains", "example.com", "*.example.com", false},
+		{"unrelated hosts", "secret.example.com", "pypi.org", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := capValueOverlaps(capEgressHost, tc.denyValue, tc.want); got != tc.wantDeny {
+				t.Fatalf("capValueOverlaps(deny %q, want %q) = %v, want %v", tc.denyValue, tc.want, got, tc.wantDeny)
+			}
+			// End to end through the resolver: a matching deny is final,
+			// with or without the kind's enforcement switch on — and a
+			// non-matching one leaves the unenforced default (allowed) alone.
+			enfs := []map[string]bool{nil, {capEgressHost: true}}
+			if !tc.wantDeny {
+				enfs = enfs[:1] // no covering allow for every want, so only the unenforced lane is decidable
+			}
+			for _, enf := range enfs {
+				st := &capStore{
+					grants: []types.CapabilityGrant{
+						grant(types.CapabilitySubjectAll, "", capEgressHost, tc.denyValue, types.CapabilityDeny),
+						grant(types.CapabilitySubjectAll, "", capEgressHost, "*.example.com", types.CapabilityAllow),
+						grant(types.CapabilitySubjectAll, "", capEgressHost, "*.corp", types.CapabilityAllow),
+					},
+					enf: enf,
+				}
+				ok, err := capServer(st).capAllowed(memberCtx(nil), capEgressHost, tc.want)
+				if err != nil {
+					t.Fatalf("capAllowed: %v", err)
+				}
+				if ok == tc.wantDeny {
+					t.Fatalf("capAllowed(%q) = %v with enforcement %v; deny row %q", tc.want, ok, enf, tc.denyValue)
+				}
+			}
+		})
+	}
+}
+
+// TestCapAllowStillHasToCoverTheWant is the other half: widening the DENY
+// direction must not widen the ALLOW one. An allow for one host under a
+// wildcard does NOT authorize the whole wildcard.
+func TestCapAllowStillHasToCoverTheWant(t *testing.T) {
+	st := &capStore{
+		grants: []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capEgressHost, "a.example.com", types.CapabilityAllow),
+		},
+		enf: map[string]bool{capEgressHost: true},
+	}
+	srv := capServer(st)
+	if ok, err := srv.capAllowed(memberCtx(nil), capEgressHost, "*.example.com"); err != nil || ok {
+		t.Fatalf("capAllowed(*.example.com) = %v, %v; an allow for one host must not cover the wildcard", ok, err)
+	}
+	if ok, err := srv.capAllowed(memberCtx(nil), capEgressHost, "a.example.com"); err != nil || !ok {
+		t.Fatalf("capAllowed(a.example.com) = %v, %v; the exact allow must still hold", ok, err)
+	}
+}

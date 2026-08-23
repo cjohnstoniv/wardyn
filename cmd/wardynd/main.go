@@ -440,11 +440,21 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 	return nil
 }
 
-// sameListenAddress reports whether two listen addresses name the same bind.
-// Ports must match; hosts match when they are literally equal or when both are
-// the "everything" bind (empty, 0.0.0.0, ::) — ":8080" and "0.0.0.0:8080" are
-// one address, and either collides with a specific host on the same port too,
-// which is why an unspecified host on a matching port counts as the same.
+// sameListenAddress reports whether two listen addresses land on the same
+// browser ORIGIN, which is the question the refusal above actually asks — not
+// whether the two binds would collide at the socket layer.
+//
+// Ports must match. Given that, the hosts are the same origin when they are
+// literally equal, when either is the "everything" bind (empty, 0.0.0.0, ::),
+// or when either is a LOOPBACK form. That last one is the whole point: a
+// one-box daemon is reached as "localhost:8080", and localhost resolves to
+// 127.0.0.1 or [::1] depending on what the resolver answers first — so
+// `-listen 127.0.0.1:8080 -ui-sandbox-listen [::1]:8080` is two binds that
+// both succeed and ONE origin the browser cannot tell apart, which is exactly
+// the same-origin collapse this rule exists to prevent.
+//
+// Only two SPECIFIC, non-loopback hosts on one port are genuinely two origins
+// (two NICs, two names), and those still pass.
 func sameListenAddress(a, b string) bool {
 	ah, ap := listenHost(a), listenPort(a)
 	bh, bp := listenHost(b), listenPort(b)
@@ -454,7 +464,8 @@ func sameListenAddress(a, b string) bool {
 	if strings.EqualFold(ah, bh) {
 		return true
 	}
-	return listenHostIsUnspecified(ah) || listenHostIsUnspecified(bh)
+	return listenHostIsUnspecified(ah) || listenHostIsUnspecified(bh) ||
+		listenIsLoopback(a) || listenIsLoopback(b)
 }
 
 // listenPort is listenHost's twin: the port half of a listen address, or "".

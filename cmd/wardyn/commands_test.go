@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1692,5 +1693,162 @@ func TestWorkspaceCreateCmd(t *testing.T) {
 	}
 	if body["name"] != "/home/you/svc" {
 		t.Errorf("name = %v, want it defaulted to --source", body["name"])
+	}
+}
+
+// TestApprovalsGetCmd_PagesPastTheFirstPage: `approvals get` has no
+// server-side get-by-id, so it scans --run's approvals — and an unparameterised
+// list is ONE server-default page (200). An approval past that read as "not
+// found on run", which a long-running run with a busy egress lane reaches
+// easily. The scan pages until it finds the row or the page comes back short.
+func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
+	runID := uuid.New()
+	wantID := uuid.New()
+	// 201 approvals: a full first page, then the one we are looking for.
+	all := make([]types.ApprovalRequest, 0, 201)
+	for range 200 {
+		all = append(all, types.ApprovalRequest{ID: uuid.New(), RunID: runID, State: types.ApprovalPending})
+	}
+	all = append(all, types.ApprovalRequest{
+		ID: wantID, RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"host":"api.example.com"}`),
+	})
+
+	var offsets []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		offsets = append(offsets, q.Get("offset"))
+		off, _ := strconv.Atoi(q.Get("offset"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		if limit == 0 {
+			limit = 200
+		}
+		page := []types.ApprovalRequest{}
+		if off < len(all) {
+			page = all[off:min(off+limit, len(all))]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals get returned error: %v (offsets requested: %v)", err, offsets)
+	}
+	if !strings.Contains(out.String(), wantID.String()) {
+		t.Errorf("output = %q, want it to name %s", out.String(), wantID)
+	}
+	if len(offsets) < 2 {
+		t.Errorf("requested offsets = %v, want a second page to have been fetched", offsets)
+	}
+}
+
+// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` used to skip
+// GetRun entirely, so a typo'd run id printed nothing and exited 0 — the audit
+// endpoint answers 200 [] for an id that does not exist. Both modes now check
+// the run first, so an unknown or unauthorized id is an error in both.
+func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "run not found"})
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+	}); err == nil {
+		t.Fatal("logs --follow=false returned nil for an unknown run id, want the GetRun 404 propagated")
+	}
+}
+
+// TestLogsCmd_NonFollowFollowsTruncatedPages: the per-run audit page caps at
+// 1000 events server-side. --follow recovers from that for free on its next
+// poll (`since` has advanced); one-shot mode returned after the first page and
+// printed a silently cut-off log.
+func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var pollN int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			n := pollN
+			pollN++
+			if n == 0 {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+					{ID: uuid.New(), Time: t0, Action: "run.dispatch", Outcome: "success"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+				{ID: uuid.New(), Time: t0.Add(time.Second), Action: "run.complete", Outcome: "success"},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
+	if !strings.Contains(out, "run.dispatch") || !strings.Contains(out, "run.complete") {
+		t.Errorf("logs output = %q, want both the truncated page and the one after it", out)
+	}
+}
+
+// TestLogsCmd_FollowDrainsAuditsAfterTerminal: the completion watcher flips the
+// run terminal BEFORE run.complete is written, and the revoke/teardown audits
+// land after that again. Returning on the first terminal read dropped exactly
+// the completion line the command's help promises.
+func TestLogsCmd_FollowDrainsAuditsAfterTerminal(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var mu sync.Mutex
+	var pollN int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			mu.Lock()
+			n := pollN
+			pollN++
+			mu.Unlock()
+			if n == 1 { // lands only AFTER the state has already flipped
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+					{ID: uuid.New(), Time: t0.Add(time.Second), Action: "run.complete", Outcome: "success"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+		default:
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
+	if !strings.Contains(out, "run.complete") {
+		t.Errorf("logs output = %q, want the completion line written after the state flip", out)
 	}
 }

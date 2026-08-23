@@ -54,13 +54,13 @@ import (
 // from real authorizations.
 //
 // The 4th return is L6's clamp-warning list (composer.Clamp's own "what did I
-// change" notes) — non-nil only on the member inline-policy branch, since
-// that is the ONLY resolution path that ever clamps. handleCreateRun (launch)
-// discards it: a launch may stay silent about a clamp exactly as it always
-// has (the resolved/attached spec is already the clamped one regardless — the
-// clamp itself is never skipped). handlePreflightRun surfaces it in Review so
-// a member sees WHY their inline_policy differs from what they typed, before
-// they launch.
+// change" notes, plus the capability/grant drops) — non-nil only on the member
+// inline-policy branch, since that is the ONLY resolution path that ever
+// clamps. BOTH callers surface it: handlePreflightRun in Review, so a member
+// sees WHY their inline_policy differs from what they typed before they
+// launch, and handleCreateRun on the 201, because the console launches without
+// preflighting and a silent narrowing is a run that quietly is not the run the
+// member asked for.
 func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {

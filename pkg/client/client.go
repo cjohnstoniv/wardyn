@@ -312,10 +312,12 @@ type WorkspaceSelection struct {
 type CreateRunResult struct {
 	types.AgentRun
 	// Warnings are ADVISORY notices the server raised while resolving the run —
-	// discouraged, never blocking: a workspace-directory collision with another
-	// active run, or an ssh_key grant dropped because the agent has no SSH clone
-	// lane. Surface them: the run is live either way, so a dropped warning is a
-	// silently degraded run.
+	// discouraged, never blocking: a member's inline policy narrowed to what
+	// they are granted (an egress host, a secret-referencing grant, a workspace
+	// repo), a workspace-directory collision with another active run, or an
+	// ssh_key grant dropped because the agent has no SSH clone lane. Surface
+	// them: the run is live either way, so a dropped warning is a silently
+	// degraded run.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -349,9 +351,9 @@ type PreflightResult struct {
 	SetupItems               []PreflightItem        `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
 	// Warnings carries resolveRunPolicy's clamp notes — a member's silently
-	// narrowed inline policy, a filtered grant. The dry run is the ONLY place
-	// these surface (launch never returns them), so dropping them here left a
-	// member with no way to learn their policy was clamped at all.
+	// narrowed inline policy, a filtered grant. The same list rides
+	// CreateRunResult.Warnings at launch, so a preview and the real thing say
+	// the same words about the same drop.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
