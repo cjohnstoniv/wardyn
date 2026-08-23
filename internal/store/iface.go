@@ -158,9 +158,9 @@ type Store interface {
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
 	// reason the capability methods below are: GetAPITokenByRaw runs on the
 	// REQUEST PATH of every route in the authenticated group (it is the third
-	// auth branch — see patAuth in internal/api/http.go), so a store that
-	// cannot answer it must be a COMPILE error, never a degrade-to-allow
-	// type-assert hiding in a test double.
+	// auth branch — see apiTokenAuth in internal/api/apitokens.go), so a
+	// store that cannot answer it must be a COMPILE error, never a
+	// degrade-to-allow type-assert hiding in a test double.
 	//
 	// CreateAPIToken and GetAPITokenByRaw take the PLAINTEXT token and hash it
 	// internally — the raw value never reaches SQL. GetAPITokenByRaw is the

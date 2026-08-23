@@ -6,7 +6,8 @@
 -- deployment-wide WARDYN_ADMIN_TOKEN. The whole point is that a token carries
 -- the identity of the human who minted it — grants, RBAC and run ownership then
 -- bind to that human for free, because the auth branch republishes exactly the
--- context a verified SSO session publishes (see patAuth in internal/api/http.go).
+-- context a verified SSO session publishes (see apiTokenAuth in
+-- internal/api/apitokens.go).
 --
 -- token_sha256 holds hex(sha256(raw token)) and NEVER the raw value, the same
 -- rule 0032 imposed on attach_tickets: a live-DB reader (a read-only reporting

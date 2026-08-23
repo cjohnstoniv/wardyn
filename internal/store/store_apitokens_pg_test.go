@@ -10,11 +10,14 @@
 // revoked_at filter that makes a revoked token indistinguishable from an unknown
 // one, the empty-principal-means-any scoping that separates the self-service
 // revoke from the admin one, and the JSONB round trip that has to preserve nil
-// versus empty groups.
+// versus empty groups. They also pin the one property no round trip can see:
+// what the stored bytes ACTUALLY are (hash at rest, below).
 package store_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -51,6 +54,19 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 	created := seedToken(t, st, "alice-"+uuid.NewString(), raw, []string{"eng", "oncall"})
 	if created.LastUsedAt != nil || created.RevokedAt != nil {
 		t.Errorf("created = %+v, want last_used_at and revoked_at NULL", created)
+	}
+
+	// HASH AT REST. Read the column back raw, because a Create/Get round trip
+	// stays green even if hashToken (store_ephemeral.go) becomes the identity
+	// function and the table starts holding usable bearer credentials. This is
+	// the only assertion that looks at the stored bytes, and it pins the helper
+	// BOTH credential tables share (attach_tickets.token_sha256 too).
+	var atRest string
+	if err := pool.QueryRow(ctx, `SELECT token_sha256 FROM api_tokens WHERE id = $1`, created.ID).Scan(&atRest); err != nil {
+		t.Fatalf("read token_sha256: %v", err)
+	}
+	if sum := sha256.Sum256([]byte(raw)); atRest != hex.EncodeToString(sum[:]) {
+		t.Errorf("token_sha256 = %q, want hex(sha256(raw)) — the raw token must never be at rest", atRest)
 	}
 
 	// The auth-time lookup takes the PLAINTEXT and hashes internally; the raw

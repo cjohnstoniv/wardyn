@@ -681,9 +681,9 @@ type SSHPublicKey struct {
 // APIToken is one per-user API token (migration 0045): a long-lived bearer
 // credential a HUMAN mints for their own scripts/CI so automation stops sharing
 // the single deployment-wide admin token. The auth branch that accepts one
-// (patAuth in internal/api/http.go) republishes exactly the context a verified
-// SSO session publishes, so grants, RBAC and run ownership bind to the OWNING
-// HUMAN — never to the admin identity.
+// (apiTokenAuth in internal/api/apitokens.go) republishes exactly the context
+// a verified SSO session publishes, so grants, RBAC and run ownership bind to
+// the OWNING HUMAN — never to the admin identity.
 //
 // Email/Role/Groups are a SNAPSHOT of the creating session, stamped at create
 // time the way SSHPublicKey.Role is stamped at registration: a bearer token
