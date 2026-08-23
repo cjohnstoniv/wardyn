@@ -408,11 +408,11 @@ test("cold open + B1 — the card that learns", async () => {
   // you know what a job needs, you write the policy and you're done — episode 08
   // just filmed exactly that. Recording is the answer to NOT knowing, and saying
   // so is what stops this episode reading as a retraction of the last one.
-  await caption(page, "Sometimes you know exactly what a job needs — write the policy, done.");
+  await caption(page, "Episode eight wrote the rules down because we already knew them.");
   await beat(page, PACE.read);
-  await caption(page, "But sometimes you don't.");
+  await caption(page, "Most of the time, you don't.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "That's where recording comes in.");
+  await caption(page, "So don't guess. Watch.");
   await beat(page, PACE.read);
   await caption(page, "Watch it first.");
   await beat(page, BEAT_SHORT);
@@ -555,7 +555,7 @@ test("B3 — honest small work", async () => {
   await caption(page, "A Git identity.");
   await beat(page, BEAT_SHORT);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
-  await caption(page, "Then one honest install.");
+  await caption(page, "Then one ordinary install.");
   await beat(page, PACE.read);
 
   // SCREEN-TYPE: THE JOB. One command — and this is the difference between the
@@ -837,9 +837,9 @@ test("B5 — approve one, not both", async () => {
   await beat(page, PACE.read);
   await act(page, downloadHostBox);
   await spotlight(page, downloadHostBox);
-  await caption(page, "PyPI we recognise.");
+  await caption(page, "PyPI, we recognize.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The other one we've never heard of, so we leave it out.");
+  await caption(page, "The other one we'll leave out on purpose — because we want to see what a confined replay does when the allowlist is wrong.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -1143,7 +1143,7 @@ test("B7 — approve the miss, run it again", async () => {
   const screen = card.locator(".xterm-screen").first();
   const caught = card.getByTestId("verify-session-blocked");
 
-  await caption(page, "Something was missed.");
+  await caption(page, "So we missed one.");
   await beat(page, PACE.read);
 
   // THE DEFAULTS ARE THE BEAT. Asserted before they are narrated, because the
@@ -1158,9 +1158,9 @@ test("B7 — approve the miss, run it again", async () => {
       `villain is the exact footgun the selector exists to prevent`,
   ).not.toBeChecked();
   await spotlight(page, caught);
-  await caption(page, "Two things were caught. Only one of them belongs here.");
+  await caption(page, "Replayed — caught two: the download host the job actually needed, and the host we never wanted.");
   await beat(page, PACE.read);
-  await caption(page, "The one we denied stays unchecked. That default is deliberate.");
+  await caption(page, "Only the first one is offered back to us. That default is deliberate — a denied host never rides along with an approval.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -1292,7 +1292,7 @@ test("B7 — approve the miss, run it again", async () => {
   await beat(page, PACE.read + 400);
   // The fifth step, added with the beat that films it: the summary used to list
   // four and the video now shows five.
-  await caption(page, "And when it catches something you actually needed, approve that, and run it again.");
+  await caption(page, "If it catches something the job genuinely needed, approve just that one, and run it again — until it comes back clean.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await caption(page, "You don't have to predict the future.");

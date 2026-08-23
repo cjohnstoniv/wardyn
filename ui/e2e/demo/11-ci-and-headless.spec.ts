@@ -265,6 +265,17 @@ test("beat 6 — same trail, no human", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And the pipeline carries that verdict forward.");
   await beat(page, BEAT_SHORT);
+  // DIALOG-NEW-BEAT (dialog review, A17): the conclusion states what a
+  // pipeline GETS but never what happens when it reaches off-list — the beat
+  // the terminal half films (scripts/demo-beats/11-ci-and-headless.sh, "No
+  // reviewer. / No approval screen. / The build goes red."), restated here
+  // where the episode sums itself up. Drafted; see
+  // local/light-episodes-dialog-flags.md.
+  await caption(
+    page,
+    "And if it reaches for something off the list? Nobody's there to say yes, so it fails closed — the pipeline tells you, instead of quietly letting it through.",
+  );
+  await beat(page, PACE.read);
   await caption(page, "Governance that doesn't require somebody to stay awake.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Next, we're going to look at the record itself.");

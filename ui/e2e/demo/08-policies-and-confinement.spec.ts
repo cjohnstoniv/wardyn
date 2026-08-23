@@ -547,6 +547,21 @@ test("B2 — create a policy", async () => {
   // local/heavy-episodes-dialog-proposals.md.
   await caption(page, "Start from a template.");
   await beat(page, BEAT_SHORT);
+  // DIALOG-NEW-BEAT (dialog review, A7): the chips are the episode's own
+  // answer to "how do I start" and the line names all five. Asserted, because
+  // narration that enumerates a UI list must not outlive it. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  for (const label of ["Minimal", "Model provider only", "Package registries", "CI baseline", "Allow-all — observe first"]) {
+    await expect(
+      dlg.getByRole("button", { name: label }),
+      `no "${label}" template chip — the chips line names five, and this take would speak one that is gone`,
+    ).toBeVisible();
+  }
+  await caption(
+    page,
+    "And you don't start from a blank page. Minimal. Model provider only. Package registries. A CI baseline. Or allow-all, if you'd rather observe first and tighten later.",
+  );
+  await beat(page, PACE.read);
   await act(page, dlg.getByRole("button", { name: "Package registries" }));
 
   // PASTE, never keystroke over the template — friction (3) in the file
@@ -698,6 +713,15 @@ test("B3 — use it", async () => {
   await expect(railPolicy).toContainText("It launches by reference, so nothing on this page is merged into it.");
 
   await spotlight(page, rail);
+  // DIALOG-NEW-BEAT (dialog review, A5): the reuse-by-reference the rail is
+  // already proving above has no line on it — the episode's premise ("write
+  // the rules once") pays off HERE, not at the paste. Anchored to this beat
+  // because this is where the driver films it. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "Here's the same envelope we built by hand in episode seven — saved once, named, and reusable.");
+  await beat(page, PACE.read);
+  await caption(page, "Now a new run just points at it.");
+  await beat(page, BEAT_SHORT);
   await caption(page, "And here's the important distinction.");
   await beat(page, PACE.read);
   // The left column now shows the PICKER in place of the spec textarea — the

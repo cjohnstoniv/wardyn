@@ -417,7 +417,12 @@ test("beat 6 — the tape", async () => {
   // detour is cut along with its captions rather than left to play silently.
   await caption(page, "That's the whole series.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Ten episodes.");
+  // FACTUAL FIX (dialog review, A18): the owner's line said "Ten episodes."
+  // and the series reorder made it twelve. Corrected in place under the one
+  // exception the review allows on an approved line — a claim the reorder made
+  // false — and flagged for ratification in
+  // local/dialog-review-adjudication.md. NOT a rewording.
+  await caption(page, "Twelve episodes.");
   await beat(page, BEAT_SHORT);
   await caption(page, "One idea.");
   await beat(page, BEAT_SHORT);

@@ -418,10 +418,14 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
   await spotlight(page, specBox);
   await specBox.fill(heldSpec);
   await spotlight(page, null);
-  // DIALOG-STALE(old UI): "Save hosts." narrated clicking the deleted Network
-  // dialog's own Save button — the panel has no separate save step; the JSON
-  // edit above IS the save. See local/light-episodes-dialog-flags.md.
-  await caption(page, "Save hosts.");
+  // DIALOG-NEW-BEAT (dialog review, A4): the owner's "Save hosts." named the
+  // deleted Network dialog's own Save button — the panel has no separate save
+  // step, and the JSON edit above IS the save, so the line pointed at nothing
+  // on screen. Replaced with a drafted pair that names what the edit produced
+  // and ties it back to 05's spec beat. See local/light-episodes-dialog-flags.md.
+  await caption(page, "Save it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That spec is the contract — the same one we read end to end in episode five.");
   await beat(page, BEAT_SHORT);
 
   // --- B6 The rail is the contract ----------------------------------------

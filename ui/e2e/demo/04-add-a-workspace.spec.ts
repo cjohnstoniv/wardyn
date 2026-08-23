@@ -509,6 +509,11 @@ test("V04 conclusion", async () => {
   await caption(page, "Now we have somewhere for a run to work.");
   await beat(page, PACE.read);
   await caption(page, "And something real for it to work on.");
+  await beat(page, BEAT_SHORT);
+  // DIALOG-NEW-BEAT (dialog review, A19): 04 ends on what we built and never
+  // says what it is FOR — every sibling conclusion hands off to the next
+  // episode by name. Drafted; see local/light-episodes-dialog-flags.md.
+  await caption(page, "Next, we spend it. Our first run.");
   await beat(page, BEAT_SHORT + 400);
   await caption(page, "");
   await silentCard(page, "Next — 05: Your first run");

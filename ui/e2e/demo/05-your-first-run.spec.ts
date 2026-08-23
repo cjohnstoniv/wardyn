@@ -273,12 +273,14 @@ test("V05 beat 2 — the envelope", async () => {
   await centerInFrame(specBox);
   await spotlight(page, specBox);
   // DIALOG-NEW-BEAT: the re-choreography's whole reason for existing — the
-  // policy is one small readable document, and this is the first episode
-  // that puts it on screen. Drafted for the owner's pen; see
-  // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "The rules for this run are one small document.");
+  // policy is one small readable SPEC, and this is the first episode that
+  // puts it on screen. "spec" is the series' one name for this object (07's
+  // and 08's beats say it too); the line names its three parts so the JSON on
+  // screen reads as an envelope, not a config file. Drafted for the owner's
+  // pen; see local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "Every rule for this run lives in one small spec — where it can go, what it can touch, how hard the walls are.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "You can read the whole thing at a glance.");
+  await caption(page, "Short enough to read end to end.");
   await beat(page, PACE.read);
   await caption(page, "And because this is a confined run, the network starts closed.");
   await beat(page, PACE.read);
@@ -347,6 +349,44 @@ test("V05 beat 2 — the envelope", async () => {
   await caption(page, "Or we can deny it silently.");
   await beat(page, BEAT_SHORT);
 
+  // PREFLIGHT — the server's own answer to the owner's next lines, and the
+  // one control on this screen that can give it. Clicked SILENTLY: the owner
+  // lines below are what narrate the result, which renders in the rail beside
+  // Launch (new-run-screen.tsx). A dry run of the exact body Launch will send,
+  // so what it shows is what will run.
+  //
+  // CHOREOGRAPHY (dialog review, A1): this act runs BEFORE the launch-fail
+  // beat, not after it. "Before launch, we can see what this run is allowed to
+  // do." is only true while nothing has been launched — and the owner's
+  // "Launch the command…" beat below is the launch it is talking about.
+  await act(page, page.getByRole("button", { name: "Preflight" }));
+  const preflight = page.getByTestId("preflight-result");
+  await expect(
+    preflight,
+    "preflight returned nothing — the control plane refused the dry run, so the policy on screen is not launchable",
+  ).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, preflight);
+  await caption(page, "That's the important part of this screen.");
+  await beat(page, PACE.read);
+  await caption(page, "Before launch, we can see what this run is allowed to do.");
+  await beat(page, PACE.read);
+  // DIALOG-NEW-BEAT: the result box is two columns — requested vs effective —
+  // and nothing on screen tells the viewer that. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "Preflight shows two things side by side: the policy we wrote, and the policy that will actually run.");
+  await beat(page, PACE.read);
+  // The clamp lane's own words: an operator's spec is not clamped, so this
+  // reads "No adjustments." Asserted BEFORE it is spoken — a stack that did
+  // clamp something must not be narrated as if it hadn't.
+  await expect(
+    preflight.getByText("No adjustments."),
+    "preflight came back with adjustments — the policy that runs is not the policy on screen",
+  ).toBeVisible();
+  // DIALOG-NEW-BEAT: names what the result box says. Drafted; see
+  // local/heavy-episodes-dialog-proposals.md.
+  await caption(page, "They match. Nothing was widened on our behalf.");
+  await beat(page, PACE.read);
+
   // Owner's "Launch the command…" line never had a launch click (Launch
   // itself is beat 3) — it rode the "Deny silently" pick, and that radio is
   // gone. It rides the document that now says the same thing instead; the
@@ -365,34 +405,6 @@ test("V05 beat 2 — the envelope", async () => {
   await caption(page, "This one is designed to fail.");
   await beat(page, PACE.read);
   await caption(page, "The request is outside the contract, so it gets denied.");
-  await beat(page, PACE.read);
-
-  // PREFLIGHT — the server's own answer to the owner's next line, and the
-  // one control on this screen that can give it. Clicked SILENTLY: the two
-  // owner lines below are what narrate the result, which renders in the rail
-  // beside Launch (new-run-screen.tsx). A dry run of the exact body Launch
-  // will send, so what it shows is what will run.
-  await act(page, page.getByRole("button", { name: "Preflight" }));
-  const preflight = page.getByTestId("preflight-result");
-  await expect(
-    preflight,
-    "preflight returned nothing — the control plane refused the dry run, so the policy on screen is not launchable",
-  ).toBeVisible({ timeout: 30_000 });
-  await spotlight(page, preflight);
-  await caption(page, "That's the important part of this screen.");
-  await beat(page, PACE.read);
-  await caption(page, "Before launch, we can see what this run is allowed to do.");
-  await beat(page, PACE.read);
-  // The clamp lane's own words: an operator's spec is not clamped, so this
-  // reads "No adjustments." Asserted BEFORE it is spoken — a stack that did
-  // clamp something must not be narrated as if it hadn't.
-  await expect(
-    preflight.getByText("No adjustments."),
-    "preflight came back with adjustments — the policy that runs is not the policy on screen",
-  ).toBeVisible();
-  // DIALOG-NEW-BEAT: names what the result box says. Drafted; see
-  // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Nothing gets adjusted — what we wrote is what runs.");
   await beat(page, PACE.read);
 
   // NOT wsPicker: its hasText filter matched the pre-selection placeholder,
