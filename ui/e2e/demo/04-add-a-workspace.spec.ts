@@ -113,8 +113,14 @@ async function resetFixtures(page: Page): Promise<void> {
   const wsItems: { id?: string; name?: string }[] = Array.isArray(wsBody)
     ? wsBody
     : (wsBody?.items ?? wsBody?.workspaces ?? []);
+  // ALL rows, not just slugify: Beat 1's entire premise is the EMPTY list
+  // ("Right now, that list is empty."), and later episodes' workspaces
+  // (record-demo, egress-lab) survive their own takes — a take of THIS
+  // episode after theirs found two leftover rows and no empty-state card
+  // (2026-08-23). Deleting them here is safe: those episodes recreate their
+  // own nouns in their own beforeAll every take.
   for (const w of wsItems) {
-    if (w?.id && w.name === WORKSPACE_NAME) {
+    if (w?.id) {
       await page.request.delete(`/api/v1/workspaces/${w.id}`, { headers });
     }
   }
