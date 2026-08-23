@@ -8,7 +8,7 @@
 // the machine running the suite has a logged-in Claude CLI, which setupProviders
 // detects — so the same assertion passes on a laptop and fails on CI.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -22,7 +22,14 @@ vi.mock("../../../lib/api/health", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
-vi.mock("../../../lib/api/runs", () => ({ runs: { createRun: vi.fn(), listRuns: () => Promise.resolve([]) } }));
+const preflightRunMock = vi.fn();
+vi.mock("../../../lib/api/runs", () => ({
+  runs: {
+    createRun: vi.fn(),
+    listRuns: () => Promise.resolve([]),
+    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
+  },
+}));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
@@ -44,6 +51,7 @@ function renderScreen() {
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listWorkspacesMock.mockReset().mockResolvedValue([]);
+  preflightRunMock.mockReset();
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -173,5 +181,71 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
 
     await user.type(screen.getByLabelText("Task"), "fix the flaky test");
     expect(launch).toBeEnabled();
+  });
+});
+
+// Phase 3: preflightRun wired into a real caller. Same request payload as
+// Launch (buildRunInput), rendered inline next to the actions instead of
+// blocking them.
+describe("NewRunScreen — Preflight", () => {
+  async function readyScreen() {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    return screen.getByRole("button", { name: /^Preflight$/ });
+  }
+
+  it("renders the warnings, risk grade, and enforced confinement class on success", async () => {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC2",
+      overall_risk: "medium",
+      warnings: ["Egress narrowed to api.anthropic.com by member policy."],
+    });
+    const button = await readyScreen();
+    await user.click(button);
+
+    const result = await screen.findByTestId("preflight-result");
+    expect(within(result).getByText("Egress narrowed to api.anthropic.com by member policy.")).toBeInTheDocument();
+    expect(within(result).getByText("Medium")).toBeInTheDocument();
+    expect(within(result).getByText("Wall")).toBeInTheDocument();
+  });
+
+  it("collapses to a quiet line when there are no warnings", async () => {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC1",
+      overall_risk: "low",
+      warnings: [],
+    });
+    const button = await readyScreen();
+    await user.click(button);
+
+    const result = await screen.findByTestId("preflight-result");
+    expect(within(result).getByText("No adjustments.")).toBeInTheDocument();
+    expect(within(result).getByText("Low")).toBeInTheDocument();
+    expect(within(result).getByText("Fence")).toBeInTheDocument();
+  });
+
+  it("renders the server's field-path error verbatim on a 4xx", async () => {
+    preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
+    const button = await readyScreen();
+    await user.click(button);
+
+    expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+  });
+
+  it("disables the button and shows a loading spinner while in flight", async () => {
+    let resolve: (v: unknown) => void = () => {};
+    preflightRunMock.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+    const button = await readyScreen();
+    await user.click(button);
+
+    expect(button).toBeDisabled();
+    resolve({ setup_items: [], enforced_confinement_class: "CC1", warnings: [] });
+    await waitFor(() => expect(button).toBeEnabled());
   });
 });

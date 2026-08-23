@@ -20,7 +20,7 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentRun, ConfinementClass, RunPolicySpec, Workspace } from "../../../lib/types";
+import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
 import type { WizardAgent } from "./wizard-types";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
@@ -37,7 +37,7 @@ import { Textarea } from "../../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
@@ -172,6 +172,12 @@ export function NewRunScreen() {
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
+  // below. Independent loading/result/error state from Launch's: the two
+  // actions can be in flight or have failed independently of one another.
+  const [preflighting, setPreflighting] = React.useState(false);
+  const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
+  const [preflightError, setPreflightError] = React.useState<string | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<
     { id: string; name: string; spec: RunPolicySpec }[]
   >([]);
@@ -351,26 +357,31 @@ export function NewRunScreen() {
     firstUseApproval: state.firstUseApproval,
   };
 
+  // The ONE request-payload builder — Launch and Preflight must send EXACTLY
+  // the same body, since preflight's verdict is only true if it is a dry-run
+  // of what Launch actually does. A second builder here is how the two drift.
+  const buildRunInput = () => {
+    const { run, inline_policy } = buildSpec(state, workspaces);
+    // The RADIO is the discriminator, belt to the patch-funnel's braces: a
+    // policy id that somehow survives a switch back to Confined still must
+    // not launch by reference. And the workspace_id override must never
+    // OVERWRITE buildSpec's deliberate ephemeral-workspace fallback with
+    // undefined — that silently launched a workspace-less run.
+    const usePolicy = confinement === "saved" && state.selectedPolicyId;
+    return usePolicy
+      ? {
+          ...run,
+          policy_id: state.selectedPolicyId,
+          workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
+        }
+      : { ...run, inline_policy };
+  };
+
   const launch = async () => {
     setError(null);
     setLaunching(true);
     try {
-      const { run, inline_policy } = buildSpec(state, workspaces);
-      // The RADIO is the discriminator, belt to the patch-funnel's braces: a
-      // policy id that somehow survives a switch back to Confined still must
-      // not launch by reference. And the workspace_id override must never
-      // OVERWRITE buildSpec's deliberate ephemeral-workspace fallback with
-      // undefined — that silently launched a workspace-less run.
-      const usePolicy = confinement === "saved" && state.selectedPolicyId;
-      const created: AgentRun = await runsApi.createRun(
-        usePolicy
-          ? {
-              ...run,
-              policy_id: state.selectedPolicyId,
-              workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
-            }
-          : { ...run, inline_policy },
-      );
+      const created: AgentRun = await runsApi.createRun(buildRunInput());
       // (A best-effort "save this as a policy" write used to live here, gated on
       // state.saveAsProfile — a flag no control on this screen has ever set. It
       // was unreachable from the moment the five-step wizard was replaced.)
@@ -379,6 +390,22 @@ export function NewRunScreen() {
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
       setLaunching(false);
+    }
+  };
+
+  // A dry-run of launch's own resolution: same body, same 4xx surface, but
+  // mints/dispatches nothing. Renders the member-clamp warnings, the risk
+  // grade, and the confinement class the run will actually be enforced at.
+  const preflight = async () => {
+    setPreflightError(null);
+    setPreflightResult(null);
+    setPreflighting(true);
+    try {
+      setPreflightResult(await runsApi.preflightRun(buildRunInput()));
+    } catch (e) {
+      setPreflightError(getErrorMessage(e) || "Preflight failed.");
+    } finally {
+      setPreflighting(false);
     }
   };
 
@@ -936,15 +963,55 @@ export function NewRunScreen() {
             </p>
           )}
 
-          <Button className="mt-4 w-full" disabled={launching || !!problem} onClick={launch}>
-            {launching && <Loader2 className="size-4 animate-spin" />}
-            Launch run
-          </Button>
+          <div className="mt-4 flex gap-2">
+            <Button
+              variant="secondary"
+              className="flex-1"
+              disabled={preflighting || !!problem}
+              onClick={preflight}
+            >
+              {preflighting && <Loader2 className="size-4 animate-spin" />}
+              Preflight
+            </Button>
+            <Button className="flex-1" disabled={launching || !!problem} onClick={launch}>
+              {launching && <Loader2 className="size-4 animate-spin" />}
+              Launch run
+            </Button>
+          </div>
           {/* A disabled button that doesn't say why is a dead end. This screen
               had NO client-side validation at all before — an empty form
               launched, and the server's rejection arrived after the fact. */}
           {problem && !launching && (
             <p className="mt-2 text-center text-[0.75rem] text-muted-foreground">{problem}</p>
+          )}
+
+          {/* Preflight's own result, rendered right next to the actions that
+              produced it. 4xx is the server's field-path message, verbatim;
+              success shows the member-clamp warnings (the point of the
+              feature) plus the risk grade and the confinement class the run
+              will actually be enforced at. */}
+          {preflightError && (
+            <p className="mt-3 flex items-start gap-1.5 text-[0.75rem] text-danger">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              {preflightError}
+            </p>
+          )}
+          {preflightResult && (
+            <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3" data-testid="preflight-result">
+              <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                {preflightResult.overall_risk && <RiskBadge level={preflightResult.overall_risk} />}
+                <ConfinementChip value={preflightResult.enforced_confinement_class} />
+              </div>
+              {preflightResult.warnings && preflightResult.warnings.length > 0 ? (
+                <ul className="list-disc space-y-0.5 pl-4 text-[0.75rem] text-warning">
+                  {preflightResult.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[0.75rem] text-muted-foreground">No adjustments.</p>
+              )}
+            </div>
           )}
         </aside>
       </div>
