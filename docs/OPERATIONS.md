@@ -1601,6 +1601,22 @@ refused, never a silently different host key — a strictly better failure than
 the man-in-the-middle warning a re-minted key would produce, and the reason
 `loadOrCreateSecret`'s fail-closed branch matters here specifically.
 
+### The UI-sandbox gateway: a per-run origin is the production default
+
+If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
+set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — this
+is the documented enterprise default, not an optional extra. Leaving it unset
+puts every run's relayed app on the SAME browser origin, separated only by a
+path-scoped cookie; that shared-origin mode is a published residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18), tolerable for a
+single-tenant demo cluster but not the shape a multi-tenant or production
+install should run in. Setting the template needs wildcard DNS and a wildcard
+certificate for the gateway's hostname (e.g. `*.ui.example.com`) — the one-time
+cost that buys every run its own origin, with an enter on any other host
+refused outright. Full recipe, including the wildcard Ingress, in
+[docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the Helm chart
+section linked above.
+
 ## One replica, by construction
 
 `replicas` is not a scaling knob, and it is not modesty either — **the pin is a
