@@ -362,6 +362,16 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, default
+	// false), when true, makes applyWorkspaceRequirements apply the SAME
+	// provenance gate to a scan_seeded EGRESS requirement that it already
+	// applies to a scan_seeded SECRET requirement (runs_create.go): only an
+	// operator_set requirement is auto-added at launch, and a scan_seeded one
+	// (the workspace scanner reading untrusted repo content) is skipped.
+	// Default off preserves today's behavior — every enabled egress
+	// requirement is auto-added regardless of provenance — so flipping the
+	// default would silently narrow egress for existing workspaces on upgrade.
+	RequireOperatorSetEgress bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -509,6 +519,10 @@ type Server struct {
 	uiReady     map[string]time.Time
 	uiProxyOnce sync.Once
 	uiProxy     *httputil.ReverseProxy
+	// authFailedLimiter rate-bounds the auth.failed audit emit (see
+	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
+	// append-only log. Zero value is ready to use.
+	authFailedLimiter authFailedLimiter
 }
 
 // New constructs a Server and builds its router. It does not start listening.

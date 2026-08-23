@@ -752,6 +752,12 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 		if p := writoidc.PrincipalFromContext(r.Context()); p != "" {
 			t.Errorf("unexpected principal %q on context without session", p)
 		}
+		// No cookie was presented at all — the ordinary non-browser-client
+		// case — so this must NOT be flagged as a rejected session (that
+		// would make auth.failed fire on every plain bearer-token request).
+		if reason := writoidc.SessionRejectedFromContext(r.Context()); reason != "" {
+			t.Errorf("SessionRejectedFromContext = %q, want \"\" (no cookie presented)", reason)
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -774,10 +780,12 @@ func TestExpiredSessionRejected(t *testing.T) {
 	expired := buildSession(t, auth, "sub-bob", "bob@example.com", writoidc.RoleAdmin, time.Now().Add(-time.Second))
 
 	var principalSet bool
+	var rejectedReason string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if writoidc.PrincipalFromContext(r.Context()) != "" {
 			principalSet = true
 		}
+		rejectedReason = writoidc.SessionRejectedFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -788,6 +796,11 @@ func TestExpiredSessionRejected(t *testing.T) {
 
 	if principalSet {
 		t.Error("expired session should not set a principal")
+	}
+	// #19a: an expired session must surface as an audit-visible reason (the
+	// "dropped" cookie case) rather than falling through silently.
+	if rejectedReason != "expired_session" {
+		t.Errorf("SessionRejectedFromContext = %q, want %q", rejectedReason, "expired_session")
 	}
 	// The stale cookie should be cleared (MaxAge=-1).
 	resp := w.Result()
@@ -816,10 +829,12 @@ func TestTamperedCookieRejected(t *testing.T) {
 	valid.Value = parts[0] + "." + string(sig)
 
 	var principalSet bool
+	var rejectedReason string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if writoidc.PrincipalFromContext(r.Context()) != "" {
 			principalSet = true
 		}
+		rejectedReason = writoidc.SessionRejectedFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -830,6 +845,10 @@ func TestTamperedCookieRejected(t *testing.T) {
 
 	if principalSet {
 		t.Error("tampered cookie should not set a principal")
+	}
+	// #19a: a tampered cookie must surface as an audit-visible reason.
+	if rejectedReason != "invalid_session" {
+		t.Errorf("SessionRejectedFromContext = %q, want %q", rejectedReason, "invalid_session")
 	}
 }
 

@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // claimsCtxKey carries the verified run claims through the internal handlers.
@@ -395,26 +397,101 @@ func (s *Server) isOperator(ctx context.Context) bool {
 	return oidcRoleFromContext(ctx) == oidc.RoleAdmin
 }
 
+// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
+// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
+// handful of genuine failures in the same second are not silently dropped,
+// while a scanner's rapid-fire 401s past the burst are.
+const (
+	authFailedRatePerSec = 1.0
+	authFailedBurst      = 5.0
+)
+
+// authFailedLimiter is a process-local token bucket gating auth.failed
+// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
+// first call).
+type authFailedLimiter struct {
+	mu     sync.Mutex
+	last   time.Time
+	tokens float64
+}
+
+func (l *authFailedLimiter) allow(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last.IsZero() {
+		l.tokens = authFailedBurst
+	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
+		l.tokens += elapsed * authFailedRatePerSec
+		if l.tokens > authFailedBurst {
+			l.tokens = authFailedBurst
+		}
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
+}
+
 // adminAuth gates the public API behind a constant-time bearer compare. An
 // empty configured AdminToken denies everything (fail closed): the public API
 // must not be unauthenticated. SSO/Dex replaces this in a later milestone.
+//
+// Every 401 here is audited as auth.failed (#19a) — this is the ONE chokepoint
+// every public-API auth failure funnels through (humanOrAdminAuth composes
+// oidc.Middleware(adminAuth(...)), and a rejected session cookie still falls
+// through to here), so one emit call covers both "adminAuth 401s" and
+// "dropped/invalid OIDC session cookies" without a second call site per caller.
 func (s *Server) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AdminToken == "" {
+			s.auditAuthFailed(r, "admin_token_not_configured")
 			writeError(w, http.StatusUnauthorized, "admin token not configured; public API disabled")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
+			s.auditAuthFailed(r, "missing_bearer_token")
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
+			s.auditAuthFailed(r, "invalid_admin_token")
 			writeError(w, http.StatusUnauthorized, "invalid admin token")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// auditAuthFailed emits auth.failed (actor system) for an authentication
+// failure on the public API. reason is the adminAuth-local bounded enum
+// ("admin_token_not_configured", "missing_bearer_token",
+// "invalid_admin_token"); it is overridden by a more specific
+// oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session")
+// when a session cookie was ALSO presented and rejected on this same
+// request — that is the more actionable signal of the two. Data is
+// content-free by construction: a closed reason enum, the request path, and
+// the TCP peer — never a user-supplied string.
+//
+// Rate-bound so a scanner throwing 401s cannot flood the append-only log:
+// ponytail: one process-global token bucket, not per-IP — per-IP needs its
+// own eviction policy (an unbounded map keyed by attacker-controlled IPs is
+// itself a memory-DoS vector) and a global cap already starves a flood from
+// any single source; add per-IP if a shared IP (corp NAT) needs to be
+// distinguished from an attacker sharing it.
+func (s *Server) auditAuthFailed(r *http.Request, reason string) {
+	if !s.authFailedLimiter.allow(s.cfg.Now()) {
+		return
+	}
+	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {
+		reason = sr
+	}
+	ev := s.auditEvent(nil, types.ActorSystem, "wardyn/adminAuth", "auth.failed", r.URL.Path,
+		"failure", mustJSON(map[string]any{"reason": reason}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
 }
 
 // internalAuth verifies a per-run token via identity.Provider.Verify with the
