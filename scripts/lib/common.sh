@@ -58,8 +58,10 @@ clone_present() { docker exec "$1" test -d "$2/.git" >/dev/null 2>&1; }
 # license_scope_files — the SINGLE source of truth for which tracked files must
 # carry the SPDX/copyright header, used by scripts/license-headers.sh in both
 # its gate and its --fix mode. Excludes generated
-# (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist), and the
-# MIT-origin shadcn primitives (ui/src/app/components/ui/). Run from the repo
+# (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist, and the
+# asciinema-player copy under ui/e2e/demo/assets/player/ whose sibling NOTICE
+# carries its upstream attribution), and the MIT-origin shadcn primitives
+# (ui/src/app/components/ui/). Run from the repo
 # root (both callers `cd` there first). Emits one path per line.
 #
 # `*.sh` is in scope: shell is where the setup/gate/e2e logic lives, so an
@@ -69,7 +71,8 @@ license_scope_files() {
   git ls-files '*.go' '*.ts' '*.tsx' '*.css' '*.sh' \
     | grep -vE '^ui/(node_modules|dist)/' \
     | grep -vE '\.gen\.go$|_gen\.go$|zz_generated' \
-    | grep -vE '^ui/src/app/components/ui/'
+    | grep -vE '^ui/src/app/components/ui/' \
+    | grep -vE '^ui/e2e/demo/assets/player/'
 }
 
 # os_kind -> windows | wsl | linux | darwin | unknown. The single source of
