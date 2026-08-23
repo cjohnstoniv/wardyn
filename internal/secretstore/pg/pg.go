@@ -141,6 +141,101 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// Rekey re-encrypts every row of the secrets table from oldID to newID and
+// returns how many rows it re-encrypted. It is the body of wardynd's
+// `-rotate-age-key` maintenance mode (cmd/wardynd's rotateAgeKeyMode) and is NOT
+// part of the secretstore.Store seam: the Store contract is per-name late-bound
+// access, while this is a whole-table administrative operation that only a
+// column-encrypting backend has (an OpenBao/KMS store rotates in its own
+// system, not here).
+//
+// ALL-OR-NOTHING. One transaction, and every row is taken FOR UPDATE, so a
+// concurrent Put cannot slip a row in under the old key mid-rotation. Any row
+// that fails to decrypt aborts the whole transaction — the returned error names
+// how many of how many rows had been re-encrypted when it gave up, and nothing
+// is committed, so every secret is still readable with the OLD key. There is no
+// partial-rekey state to reason about, by construction.
+//
+// The caller supplies BOTH identities: the daemon must be offline (its in-memory
+// Store still holds the old one), and the caller is responsible for persisting
+// newID before a restart and for emitting the secret.rekey audit event.
+func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (int, error) {
+	// Two throwaway Stores purely for their encrypt/decrypt halves — the age
+	// framing lives there and nothing here wants a second copy of it. Neither
+	// one's pool methods are used: every statement below runs on tx.
+	from, err := New(pool, oldID)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey old identity: %w", err)
+	}
+	to, err := New(pool, newID)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey new identity: %w", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey begin: %w", err)
+	}
+	// A Rollback after a successful Commit is a documented no-op; on every error
+	// path below it is the thing that makes this all-or-nothing.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	type row struct {
+		name string
+		ct   []byte
+	}
+	rows, err := tx.Query(ctx, `SELECT name, ciphertext FROM secrets ORDER BY name FOR UPDATE`)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey select: %w", err)
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.name, &r.ct); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("pg secretstore: rekey scan: %w", err)
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey iterate: %w", err)
+	}
+
+	// Row at a time (rather than decrypting everything up front) so at most ONE
+	// plaintext is resident at any moment, whatever the store holds.
+	for i, r := range all {
+		plain, derr := from.decrypt(r.ct)
+		if derr != nil {
+			return 0, rekeyAbort(i, len(all), r.name, "decrypt with the old key", derr)
+		}
+		ct, eerr := to.encrypt(plain)
+		if eerr != nil {
+			return 0, rekeyAbort(i, len(all), r.name, "encrypt with the new key", eerr)
+		}
+		if _, uerr := tx.Exec(ctx,
+			`UPDATE secrets SET ciphertext=$2, updated_at=now() WHERE name=$1`, r.name, ct,
+		); uerr != nil {
+			return 0, rekeyAbort(i, len(all), r.name, "update", uerr)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("pg secretstore: rekey commit (%d rows, NOTHING committed — the old key still reads every secret): %w", len(all), err)
+	}
+	return len(all), nil
+}
+
+// rekeyAbort formats the one error Rekey fails with: what broke, on which
+// secret, and how far it had got — plus the load-bearing fact that the abort
+// left the store untouched, which is what tells an operator to fix the row and
+// retry rather than hunt for a half-rotated store. The name is included for the
+// same reason Get's decrypt error includes it: without it the operator cannot
+// find the row.
+func rekeyAbort(done, total int, name, what string, err error) error {
+	return fmt.Errorf("pg secretstore: rekey ABORTED after %d of %d rows (nothing committed — every secret is still readable with the OLD key): %s %q: %w",
+		done, total, what, name, err)
+}
+
 // encrypt encodes plaintext with the age recipient.
 func (s *Store) encrypt(plaintext []byte) ([]byte, error) {
 	var buf bytes.Buffer
