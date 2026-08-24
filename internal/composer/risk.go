@@ -232,7 +232,8 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 			"Resident, agent-readable SSH private key for the clone window (git's SSH transport has no broker seam) — Wardyn can neither scope nor expire it. Prefer a single-repo read-only deploy key over a personal identity.", "2")
 	case types.GrantEnvSecret:
 		add(field, "env_secret", RiskHigh,
-			"Stored secret placed in the sandbox environment for the WHOLE run — no mint, no TTL, no revocation, and anything running as the agent uid can read it from /proc/self/environ. Masked in output, but a value already disclosed to a process cannot be taken back. Prefer api_key (proxy-injected, never resident) whenever the tool can be pointed at a host header instead.", "2")
+			"Stored secret placed in the sandbox environment for the WHOLE run — no mint, no TTL, no revocation, and anything running as the agent uid can read it from /proc/self/environ. "+
+				"Masked in output, but a value already disclosed to a process cannot be taken back. Prefer api_key (proxy-injected, never resident) whenever the tool can be pointed at a host header instead.", "2")
 	default:
 		add(field, string(g.Kind), RiskMedium, "Unrecognized grant kind; treated as medium.", "")
 	}

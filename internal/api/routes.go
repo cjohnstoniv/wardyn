@@ -78,9 +78,9 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 27 direct registrations below +
+			// has gone stale before, W7-S1-1): 25 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) = 32. Five workspace routes (create/update/delete/scan/
+			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 32. Five workspace routes (create/update/delete/scan/
 			// build) LEFT this group in 0048 for the owner-or-admin tier — the
 			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
@@ -166,24 +166,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
-			// Per-user API tokens (apitokens.go): the same self-service shape as
-			// the ssh-keys block above — scoped to the caller's OWN principal at
-			// the store, so these sit on r rather than the admin group. A MEMBER minting a
-			// token grants themselves nothing new: the token carries their own
-			// stamped role, so it reaches exactly the routes their session does
-			// (see apiTokenAuth). The admin twins — the deployment-wide inventory
-			// and revoke-ANYONE's — are the two operatorOnly lines below.
-			r.Get("/me/tokens", s.handleListAPITokens)
-			r.Post("/me/tokens", s.handleCreateAPIToken)
-			r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
-			operatorOnly.Get("/tokens", s.handleListAllAPITokens)
-			operatorOnly.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
-			// Run-detail widget layout: per-user, per-preset, server-synced so a
-			// layout survives a new machine (localStorage would not). Scoped to
-			// the caller's OWN principal at the store, exactly like the ssh-keys
-			// block above — never a principal taken from the body.
-			r.Get("/me/run-layout", s.handleGetRunLayout)
-			r.Put("/me/run-layout", s.handlePutRunLayout)
+			s.mountAccountRoutes(r, operatorOnly)
 			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
 			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
 			// no route (404), the HttpOnly session cookie survived, and the next
@@ -466,4 +449,29 @@ func (s *Server) routes() chi.Router {
 
 	s.mountUI(r)
 	return r
+}
+
+// mountAccountRoutes registers the caller's own account surfaces — per-user
+// API tokens (self-service on r; the two admin twins on operatorOnly) and the
+// run-detail layout — carved out of routes() purely for funlen; the routes()
+// maintenance-count comment counts the two operatorOnly lines here.
+func (s *Server) mountAccountRoutes(r chi.Router, operatorOnly chi.Router) {
+	// Per-user API tokens (apitokens.go): the same self-service shape as
+	// the ssh-keys block above — scoped to the caller's OWN principal at
+	// the store, so these sit on r rather than the admin group. A MEMBER minting a
+	// token grants themselves nothing new: the token carries their own
+	// stamped role, so it reaches exactly the routes their session does
+	// (see apiTokenAuth). The admin twins — the deployment-wide inventory
+	// and revoke-ANYONE's — are the two operatorOnly lines below.
+	r.Get("/me/tokens", s.handleListAPITokens)
+	r.Post("/me/tokens", s.handleCreateAPIToken)
+	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
+	operatorOnly.Get("/tokens", s.handleListAllAPITokens)
+	operatorOnly.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	// Run-detail widget layout: per-user, per-preset, server-synced so a
+	// layout survives a new machine (localStorage would not). Scoped to
+	// the caller's OWN principal at the store, exactly like the ssh-keys
+	// block above — never a principal taken from the body.
+	r.Get("/me/run-layout", s.handleGetRunLayout)
+	r.Put("/me/run-layout", s.handlePutRunLayout)
 }
