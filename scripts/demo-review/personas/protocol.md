@@ -21,6 +21,8 @@ persona is the audience, not an auditor.
   when a later title plainly owns X is out of scope for this episode; judge
   instead whether THIS episode hands off to it properly (does it say where X
   lives, and does the promise match the title?).
+- A persona who did not watch an episode reports NOT-WATCHED for its lane
+  rather than nothing — silence is indistinguishable from a pass.
 - Optional sub-episodes (lettered — 03b, 03c, 03d today; a syllabus title
   marks them "(optional)", "(desktop)", "(cloud)", "(members)" or "(admin)")
   are watched right after their parent episode, with the core path through the
@@ -57,7 +59,8 @@ persona is the audience, not an auditor.
 2. The video's quiz (below), answered ONLY from what you saw — "I don't know"
    is a valid and valuable answer.
 3. The three changes that would most improve this video for someone like you.
-4. Your verdict, in your persona's own terms (each persona file defines it).
+4. Your verdict, in your persona's own terms (each persona file defines it),
+   ending with your lane's PASS / FAIL (see "Verdict lanes").
 
 ## Per-video quiz
 
@@ -79,6 +82,26 @@ persona is the audience, not an auditor.
 | 11 | What replaces the human approver in CI? What does the pipeline's exit code mean? What receipts does a pipeline run leave? |
 | 12 | Who may SSH into a run? What does the second person see? What proof exists afterward of who did what? |
 | 13 (cloud) | What is different about where the sandbox runs? What did `exit 37` prove? Which audit rows name the person? |
+
+## Verdict lanes
+
+The six personas are six INDEPENDENT acceptance conditions, not six votes.
+Each report ends with its lane's verdict — PASS, FAIL, or NOT-WATCHED — and the
+round's ADJUDICATION records all six per episode. Lanes are never averaged: an
+episode can pass comprehension and fail security, and it is reported that way.
+A FAIL in any lane blocks the take unless the owner rules it standing (the
+ruling, with its reason, goes in the ADJUDICATION so later rounds can cite it).
+The adjudicator discounts each lane's known blind spot explicitly; the persona
+is never told its flaw.
+
+| Lane | Persona | Passes when | Known blind spot |
+|---|---|---|---|
+| Understandable | Morgan (`morgan-citizen-dev.md`) | could retell the story from the screen, and knows why what was stopped was bad | underweights technical correctness — a convincing analogy can carry a weak mechanism |
+| Learnable / adoptable | Priya (`priya-junior-dev.md`) | could repeat the steps, and knows where she'd need help | equates understandable with correct |
+| Technically credible | Sam (`sam-senior-dev.md`) | mechanism, failure case and evidence shown, not staged away | over-indexes on implementation detail; a viewer, not a code reviewer |
+| Operable | Riley (`riley-platform-engineer.md`) | the setup path is complete and failure behaviour visible; the team could run, upgrade and debug it | may demand operational depth a demo episode cannot carry — route to the desktop/cloud/admin episodes |
+| Security-defensible | Alex (`alex-security-reviewer.md`) | the security claim is proved at the enforcement point and the system's limits are stated | may fail an episode for a claim a later episode owns — the titles-only syllabus rule applies |
+| Organizationally fundable | Dana (`dana-eng-leader.md`) | receipts — who decided what, when — that would survive security review, procurement and audit | over-credits a polished audit UI; does not validate the evidence herself |
 
 ## Series review (after the final video of a round)
 
@@ -103,6 +126,22 @@ Inputs for this pass: every core transcript in order (01–12), the optional
 sub-episodes this persona watched, plus your OWN viewing reports as your
 notes. Answer as the persona, in their terms.
 
+## Special passes
+
+- **Red-team pass** — not a persona. An adversarial reviewer is handed ONE
+  episode (transcript or frames) plus the list of security claims it makes, and
+  tries to break each claim: what would an attacker do, what does the episode not
+  show, what test would settle it. Output: the claims that fail and the test for
+  each. Run it when a security claim changes or before a security-lane episode
+  ships; Alex's lane is the standing review, the red-team pass is the drill.
+- **Accessibility, jargon, pacing, pronunciation** are every viewer's job (see
+  "Say it aloud" and the think-aloud rules above), not a persona's — a dedicated
+  persona would make them one lane's responsibility instead of everyone's.
+- **Parked personas.** Jordan (staff architect, evaluating the system boundary):
+  not created — revisit only if Dana, Alex and Riley leave architecture questions
+  unowned across a whole round. Procurement/legal, AI-platform lead, OSS
+  maintainer and PM were considered and rejected as viewing lanes.
+
 ## Report format
 
 Timestamped think-aloud (bullet per moment worth a note), then the four
@@ -122,3 +161,7 @@ reaction — say it like a person, not like a linter.
 - 2026-08-24: quiz re-keyed to the restructured series (01–12 + 13); episode
   03 split into 03a + optional 03b/03c/03d; optional-sub-episode rule added
   (owner directive).
+- 2026-08-24 (b): six lanes — Alex (security) and Riley (platform) added; verdict
+  lanes are independent acceptance conditions (PASS / FAIL / NOT-WATCHED, never
+  averaged); red-team as a pass, not a persona; Jordan parked — external
+  persona-library review, owner directive.
