@@ -100,6 +100,10 @@ describe("RunsScreen — first-run empty state", () => {
     );
     // The guided funnel is one unobtrusive link, not a competing button.
     expect(screen.getByRole("link", { name: /guided tour/i })).toHaveAttribute("href", "/setup");
+    // The grid is React.lazy'd (runs-first-run-demos.tsx) so the demo catalog's
+    // prose stays out of the eager /runs entry chunk — so it arrives a tick
+    // after the hero, not with it. Await the first card, then the loop is sync.
+    await screen.findByTestId(`runs-empty-demo-${DEMOS[0].id}`);
     for (const d of DEMOS) {
       const card = within(screen.getByTestId(`runs-empty-demo-${d.id}`));
       expect(card.getByText(d.title)).toBeInTheDocument();
