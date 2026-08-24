@@ -143,8 +143,13 @@ test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
 # scripts/test-report.sh.
 test-report: ## Go unit suite with per-suite JSON + coverage artifacts
+# WARDYN_TEST_PG stripped: pg-gated tests belong to test-report-pg (which
+# serializes packages — see its -p 1 note). Inheriting the DSN here (e.g. from
+# `WARDYN_TEST_PG=… make release-check`) re-runs them in PARALLEL packages
+# against the one shared DB, resurrecting the site_config race. CI matches:
+# only the pg job sets the DSN (ci.yml).
 	@echo "Running Go unit suite with detailed reports..."
-	./scripts/test-report.sh unit ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh unit ./...
 
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
