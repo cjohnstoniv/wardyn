@@ -334,12 +334,13 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   // [OWNER SLOT — drafted] Re-framed for the restructure: this episode now
   // films EVERY guardrail across both groups (egress + secrets), not just the
   // four-test quartet — the old "Four small tests / Four real sandboxes" opener
-  // undercounted the whole episode. The network opener now names its own split
-  // up front — four run in full (act 2), three more named (act 3) — so "four"
-  // never reads as the network's total the way the bare quartet line did.
+  // undercounted the whole episode. The network group is SEVEN demos, every one
+  // run on camera: four in depth (act 2), three more in full (acts 3/3b/3c —
+  // agent-in-the-box, record-a-policy, once-or-for-good). The opener states the
+  // seven up front so "four" never reads as the network's total.
   await caption(page, "We'll walk every guardrail Wardyn puts around a run — where it can reach, and what it can hold.");
   await beat(page, PACE.read);
-  await caption(page, "Start with the network. We'll run four in full, each in its own sandbox — then name three more.");
+  await caption(page, "Start with the network. Seven demos, each in its own sandbox — four in depth, then three more.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And every decision is visible on screen.");
   await beat(page, PACE.read);
@@ -541,46 +542,190 @@ test("V03 act 2 — four ways the boundary holds", async () => {
 // none it is dropped from the walk and the corrector bounces the deep link, so
 // its naming is best-effort — the card is cosmetic, never fatal.
 // ---------------------------------------------------------------------------
-async function walkPast(page: Page, id: string, title: string, lines: string[]): Promise<void> {
-  await seedOnboardingSeen(page);
-  await page.goto(`/setup?step=${id}`);
-  const heading = page.getByRole("heading", { name: title, level: 2 });
-  const shown = await heading
-    .waitFor({ state: "visible", timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!shown) return; // gated away (e.g. no model) — skip the naming, keep the take honest
-  const card = page.getByTestId(`demo-card-${id}`);
-  await centerInFrame(card);
-  await spotlight(page, card);
-  for (const l of lines) {
-    await caption(page, l);
-    await beat(page, PACE.read);
-  }
-  await spotlight(page, null);
-}
+// ---------------------------------------------------------------------------
+// Act 3 — the rest of the egress group, RUN, not just named. The owner's law is
+// every demo is demonstrated on camera; these three each also headline a later
+// episode (agent → 08, record → 09, scope caret → 10), but v3 is the complete
+// showcase, so each runs in full here. agent-in-the-box needs a live model:
+// probe quota before the take (WEEKLY-LIMIT risk — an out-of-quota `claude`
+// still logs egress.allow api.anthropic.com while doing nothing, so the honest
+// proof is the FILE it writes, asserted via a WROTE_HELLO marker, not the audit).
+// ---------------------------------------------------------------------------
 
-test("V03 act 3 — the rest of the egress group", async () => {
-  test.setTimeout(180_000);
+test("V03 act 3 — the agent in the box", async () => {
+  test.setTimeout(900_000);
   const page = stage();
 
-  await caption(page, "Those four were the deep cut.");
+  const card = await openDemo(page, "agent-in-the-box", "The agent in the box");
+
+  await caption(page, "Those four were the deep cut, against a human at a terminal.");
+  await beat(page, PACE.read);
+  await caption(page, "The same group holds three more — and we run them, not just name them.");
+  await beat(page, PACE.read);
+  await spotlight(page, page.getByTestId("demo-policy-agent-in-the-box"));
+  await caption(page, "First, the flagship: the same box, now running a real coding agent.");
+  await beat(page, PACE.read);
+  await caption(page, "It reaches Anthropic to think — and nothing else.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The same group holds three more, and they're worth knowing by name.");
+  await spotlight(page, null);
+
+  const screen = await startAndBoot(page, card, "agent-in-the-box");
+
+  // Step 1 — the agent task. In -p mode Claude Code writes the file and exits.
+  const agentCmd = await pillCmd(card, 0);
+  await caption(page, "Attach the terminal and hand it a one-shot task.");
+  await beat(page, BEAT_SHORT);
+  await typeInTerminal(page, agentCmd, card);
+  await caption(page, "It authenticates through the model you connected — injected proxy-side, never resident in the box.");
+  await beat(page, PACE.read);
+  // The agent's thinking is dead air on camera; compress it. The span ends when
+  // the honest proof lands: the FILE, not the audit (an out-of-quota agent still
+  // logs egress.allow to Anthropic — see the act header).
+  await ffwdStart(page);
+  await typeInTerminal(page, "test -s HELLO.md && echo WROTE_HELLO || echo NO_HELLO", card);
+  await pollScreen(screen, /WROTE_HELLO/, "the agent never wrote HELLO.md — model quota exhausted, or the run did no work");
+  await ffwdEnd(page);
+  await caption(page, "It did the work, inside the box, and wrote its file.");
   await beat(page, PACE.read);
 
-  await walkPast(page, "agent-in-the-box", "The agent in the box", [
-    "The agent in the box: the same confinement, now running a real coding agent.",
-    "It reaches the model to think, and nothing else — the job Wardyn actually exists for.",
-  ]);
-  await walkPast(page, "record-a-policy", "Record a policy", [
-    "Record a policy: run wide open once, and let Wardyn read back exactly what it touched.",
-    "Then it proposes the least-privilege policy that would have let it through.",
-  ]);
-  await walkPast(page, "once-or-for-good", "Once, or for good", [
-    "Once, or for good: the difference between granting one connection and opening a host for the whole run.",
-    "Episode ten drives that scope caret in full.",
-  ]);
+  // Step 2 — the same policy still holds against the agent's box.
+  const offlist = await pillCmd(card, 1);
+  await typeInTerminal(page, offlist, card);
+  await pollScreen(screen, /\b(403|refused|Could not resolve|Failed to connect)\b/i, "example.com was not refused inside the agent box");
+  await caption(page, "Any host off the allowlist is refused, exactly as it was for the human.");
+  await beat(page, PACE.read);
+
+  // Step 3 — the record.
+  const auditRows = card.getByTestId("demo-audit-rows");
+  await expect(auditRows, "no egress decisions recorded for the agent run").toContainText("api.anthropic.com", {
+    timeout: 60_000,
+  });
+  await centerInFrame(auditRows);
+  await spotlight(page, auditRows);
+  await caption(page, "Every decision on the record — allowed to Anthropic, denied elsewhere, attributed to the run.");
+  await beat(page, PACE.read);
+  await caption(page, "The same confinement as the four tests. This is the job Wardyn exists for.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  await act(page, card.getByRole("button", { name: "End demo" }));
+});
+
+test("V03 act 3b — record a policy", async () => {
+  test.setTimeout(900_000);
+  const page = stage();
+
+  const card = await openDemo(page, "record-a-policy", "Record a policy");
+
+  await spotlight(page, page.getByTestId("demo-policy-record-a-policy"));
+  await caption(page, "The second flips the usual order.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Instead of guessing an allowlist upfront, run wide open once and let Wardyn watch.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  // Boots the sandbox; the record-a-policy proof reads the audit panel, not the
+  // terminal, so the screen locator is not needed here.
+  await startAndBoot(page, card, "record-a-policy");
+
+  // Three real hosts, all recorded (allow_all_egress) — nothing is denied while
+  // recording; every host reached becomes a candidate line. The PROOF is the
+  // record, not the terminal status line: a HEAD's headers scroll out of the
+  // xterm viewport in a blink (the run's audit confirms egress.allow landed),
+  // so assert the AUDIT PANEL — which is exactly what this demo is teaching:
+  // what gets recorded is what becomes the policy.
+  const auditRows = card.getByTestId("demo-audit-rows");
+  const recorded = [
+    { i: 0, host: "pypi.org", line: "Reach out to a package registry — recorded, not blocked." },
+    { i: 1, host: "registry.npmjs.org", line: "A second registry. Every host it touches becomes a candidate line." },
+    { i: 2, host: "example.com", line: "A third, unrelated host — recorded the same way." },
+  ];
+  for (const { i, host, line } of recorded) {
+    const cmd = await pillCmd(card, i);
+    await typeInTerminal(page, cmd, card);
+    await caption(page, line);
+    await beat(page, PACE.read);
+    await expect(auditRows, `${host} never landed in the audit panel — the recording missed it`).toContainText(host, {
+      timeout: 30_000,
+    });
+  }
+  await centerInFrame(auditRows);
+  await spotlight(page, auditRows);
+  await caption(page, "Every host it reached is on the record — the raw material for the policy.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  await act(page, card.getByRole("button", { name: "End demo" }));
+
+  // The payoff: synthesize the least-privilege policy from what it actually did.
+  await act(page, card.getByTestId("demo-turn-into-policy-record-a-policy"), "Now turn what it did into a policy.");
+  const sheet = page.getByRole("dialog").filter({ hasText: "Proposed allowed domains" });
+  const proposed = sheet.getByText("Proposed allowed domains", { exact: true }).locator("xpath=..");
+  await expect(proposed, "the synthesis never proposed the recorded hosts").toContainText("pypi.org", {
+    timeout: 60_000,
+  });
+  await centerInFrame(proposed);
+  await spotlight(page, proposed);
+  await caption(page, "Wardyn read back exactly what it reached, and proposes the allowlist that would have let it through.");
+  await beat(page, PACE.read);
+  await caption(page, "Approve it, and the next run is confined to only that. Episode nine drives this on a real workspace.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+  // Close the sheet — saving the policy is episode nine's beat, not this showcase's.
+  await page.keyboard.press("Escape");
+});
+
+test("V03 act 3c — once, or for good", async () => {
+  test.setTimeout(900_000);
+  const page = stage();
+
+  const card = await openDemo(page, "once-or-for-good", "Once, or for good");
+
+  await spotlight(page, page.getByTestId("demo-policy-once-or-for-good"));
+  await caption(page, "The last one is about how long an approval lasts.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Every approval so far stuck around for the rest of the run. Once is narrower.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  const screen = await startAndBoot(page, card, "once-or-for-good");
+
+  // First attempt — refused, raises an approval.
+  const first = await pillCmd(card, 0);
+  await typeInTerminal(page, first, card);
+  await pollScreen(screen, /\b(403|refused)\b/i, "the first request was not refused — deny_with_review should hold it");
+  await caption(page, "Refused — and an approval appears below the terminal.");
+  await beat(page, PACE.read);
+
+  // Grant it ONCE — via the split button's caret, not a plain Approve.
+  await decide(
+    page,
+    "Approve",
+    "Approve it — but only this one connection.",
+    "example.com",
+    "once",
+    "Once spends itself on the single connection it was raised for.",
+  );
+
+  // Same command — now it gets through.
+  const second = await pillCmd(card, 1);
+  await typeInTerminal(page, second, card);
+  await pollScreen(screen, /HTTP\/[\d.]+ 200/, "the Once-approved retry never returned a 200");
+  await caption(page, "Same command — this time it's through.");
+  await beat(page, PACE.read);
+
+  // Run it a third time — the Once grant already spent itself, so it asks again.
+  await typeInTerminal(page, second, card);
+  await expect(
+    page.getByTestId("live-approval-row").filter({ hasText: "example.com" }),
+    "the third attempt did not raise a fresh approval — Once should have spent itself",
+  ).toBeVisible({ timeout: 60_000 });
+  await caption(page, "Run it again and it's refused all over again — a brand-new approval.");
+  await beat(page, PACE.read);
+  await caption(page, "Nothing lingered by accident. One connection, not the run. Episode ten drives the full scope ladder.");
+  await beat(page, PACE.read);
+
+  await act(page, card.getByRole("button", { name: "End demo" }));
 });
 
 // ===========================================================================
