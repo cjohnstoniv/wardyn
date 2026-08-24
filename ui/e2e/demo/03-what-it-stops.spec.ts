@@ -334,10 +334,12 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   // [OWNER SLOT — drafted] Re-framed for the restructure: this episode now
   // films EVERY guardrail across both groups (egress + secrets), not just the
   // four-test quartet — the old "Four small tests / Four real sandboxes" opener
-  // undercounted the whole episode. The four stay, scoped to the egress start.
+  // undercounted the whole episode. The network opener now names its own split
+  // up front — four run in full (act 2), three more named (act 3) — so "four"
+  // never reads as the network's total the way the bare quartet line did.
   await caption(page, "We'll walk every guardrail Wardyn puts around a run — where it can reach, and what it can hold.");
   await beat(page, PACE.read);
-  await caption(page, "Start with the network. Four small tests, each in its own sandbox.");
+  await caption(page, "Start with the network. We'll run four in full, each in its own sandbox — then name three more.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And every decision is visible on screen.");
   await beat(page, PACE.read);
