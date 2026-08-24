@@ -9,7 +9,7 @@ it.
 make record-demo                          # the works
 make record-demo ARGS=--no-reset          # keep the current stack (iterating on the driver)
 make record-demo ARGS=--no-record         # drive the UI, capture nothing (preflight)
-make record-demo ARGS="--video 03"        # one video of the series (see below)
+make record-demo ARGS="--video 03a"       # one video of the series (see below)
 make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh"
                                           # a terminal-first video (see below)
 ```
@@ -28,11 +28,11 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 
 ## The series harness
 
-The 0.5 story is not one video, it is twelve. Same rig throughout — same driver,
+The story is not one video, it is twelve core episodes plus lettered optional sub-episodes (03b–03d today) that hang off the episode they extend. Same rig throughout — same driver,
 same overlay, same narration, same verifier — with one spec per video:
 
 ```sh
-scripts/record-demo.sh --video 03    # records ui/e2e/demo/03-*.spec.ts, and only that
+scripts/record-demo.sh --video 03a   # records ui/e2e/demo/03a-*.spec.ts, and only that
 scripts/record-demo.sh               # no --video: the end-to-end walkthrough, unchanged
 ```
 
@@ -45,10 +45,12 @@ scripts/record-demo.sh               # no --video: the end-to-end walkthrough, u
 | **Decides the reset** | see below |
 | **Exports `WARDYN_DEMO_VIDEO`** | which is how `verify-demo-take.sh` knows which take it is looking at |
 
+`<nn>` is two digits with an optional letter. A split episode's parts letter from `a` (03a is the core "what it stops"; 03b–03d are its optional detours); an appendix to an intact episode letters from `b` (a planned `02b`, `12b`). A lettered take sorts beside its number, and the grader gets one arm per lettered id.
+
 With no `--video` nothing is filtered at all: the `demo` project's own
 `testMatch` decides, exactly as it did before the series existed.
 
-The shared code the ten specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
+The shared code the series specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
 (the browser, the recorded context, the one page — importing it registers a
 spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`)
 and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`,
@@ -59,14 +61,14 @@ headed browser at a developer's live stack and starts clicking Launch.
 
 ### The clean slate belongs to video 02
 
-`reset-all` runs for **video 01 and the no-flag walkthrough only**. Every other
-`--video` implies `--no-reset`; `--reset` overrides that, `--no-reset` opts 02
-out.
+`reset-all` runs for **video 02 and the no-flag walkthrough only** (video 01 is
+stackless — it never touches the stack, not even under `--reset`). Every other `--video` implies
+`--no-reset`; `--reset` overrides that, `--no-reset` opts 02 out.
 
 This is not a speed optimisation. The series is shot in an order where each
 video opens on state an earlier one left behind — a workspace that was
 onboarded, a run that was launched, a host that was permanently granted
-(**DA14/SV20**). Inside the **V8 → V2 → V3** window in particular, *every* take
+(**DA14/SV20**). After video 02's reset, *every* later take
 runs with `--no-reset`: a wipe between them does not merely cost minutes of dead
 air, it films a story whose first half never happened — and the take stays green
 the whole time, which is exactly why the rule lives in the script rather than
@@ -97,7 +99,7 @@ the gateway) — fix that before the take, because the run-detail card simply do
 not render and there is nothing to film.
 
 The host key is minted and persisted on first boot with the gateway on, so
-**video 01's `reset-all` mints a new one**. Any `known_hosts` entry from an
+**video 02's `reset-all` mints a new one**. Any `known_hosts` entry from an
 earlier stack then makes the client refuse with the full REMOTE HOST
 IDENTIFICATION HAS CHANGED banner — mid-take, in a governance demo, on camera:
 

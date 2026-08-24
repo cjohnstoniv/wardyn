@@ -22,6 +22,11 @@ scope and blast-radius language, an answer to "who approved that and when."
   one sentence you'd use?
 - What question must the NEXT video answer before you'd commit?
 
+## Your optionals
+
+You also watch, after their parent episode: 02b (desktop), 02c (cloud), 04c
+(admin), 12b (admin) — as they exist.
+
 ## Revisions
 
 - 2026-08-20: initial (persona library round 1).

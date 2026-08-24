@@ -21,6 +21,12 @@ persona is the audience, not an auditor.
   when a later title plainly owns X is out of scope for this episode; judge
   instead whether THIS episode hands off to it properly (does it say where X
   lives, and does the promise match the title?).
+- Optional sub-episodes (lettered — 03b, 03c, 03d today; a syllabus title
+  marks them "(optional)", "(desktop)", "(cloud)", "(members)" or "(admin)")
+  are watched right after their parent episode, with the core path through the
+  parent as prior knowledge. A later CORE episode's prior knowledge is the
+  core path only — the core must stand without its detours, and a core line
+  that depends on a detour is a finding.
 
 ## Think aloud as you watch, with timestamps
 
@@ -57,17 +63,22 @@ persona is the audience, not an auditor.
 
 | Video | Questions (answer from the viewing only) |
 |---|---|
-| 00 (primer) | Why would a team without AI agents still want a sandbox? What are a sandbox, egress, and a proxy, in your own words? What was the real caught-on-camera example, and what happened to it? What does "observe, then decide" replace? |
-| 01 | What is a "barrier"? What happens when a run reaches a host that isn't allowed? Where does the model key live? What did the setup actually require of you? |
-| 02 | What is a workspace? What can a run touch outside it? What happens when you try to read a secret back? |
-| 03 | What ran, and where? How did you know it finished? What happened to the host that wasn't on the list? |
-| 04 | Who was driving the terminal? What credential did the agent hold, and why didn't it matter? What's the difference from video 3's run? |
-| 05 | What is the ONLY prompt an autonomous agent gets? What can interrupt it mid-run? Who approved example.com and with what scope? |
-| 06 | Where did the policy come from? What does "replay confined" mean? What happened to the host the recording never saw? |
-| 07 | Name the four approval scopes. Which one outlives the run, and where is its receipt? |
-| 08 | What does a policy carry that a single run's settings don't? What does the "floor" do? How do you know which policy a run ACTUALLY ran under? |
-| 09 | What replaces the human approver in CI? What does the pipeline's exit code mean? What receipts does a pipeline run leave? |
-| 10 | Who may SSH into a run? What does the second person see? What proof exists afterward of who did what? |
+| 01 (primer) | Why would a team without AI agents still want a sandbox? What are a sandbox, egress, and a proxy, in your own words? What was the real caught-on-camera example, and what happened to it? What does "observe, then decide" replace? |
+| 02 | What is a "barrier"? What happens when a run reaches a host that isn't allowed? Where does the model key live? What did the setup actually require of you? |
+| 03a | Name the four things that can happen to a host a run dials, and which policy line decides each. What happens when you try to read a secret back? Where did the key live while the run used it? |
+| 03b (optional) | Which host did the agent reach, and how did you know it was the only one? What did the recording propose, and from what? What happened on the third `curl` after an approval scoped Once? |
+| 03c (optional) | What did the second mint return, and why is that the point? Why is a PAT minted into a pipe and not a header? What did the audit panel show for the approval-gated grant, in order? |
+| 03d (optional) | Which credential kind touches disk, and for how long? Which two demos never started a sandbox, and why is that the lesson rather than a failure? |
+| 04 | What is a workspace? What can a run touch outside it? |
+| 05 | What does a policy carry that a single run's settings don't? What does the "floor" do? What did the safety meter read, and why? |
+| 06 | What ran, and where? How did you know it finished? How do you know which policy the run ACTUALLY ran under? |
+| 07 | Who was driving the terminal? What credential did the agent hold, and why didn't it matter? What's the difference from the first run in 06? |
+| 08 | What is the ONLY prompt an autonomous agent gets? What can interrupt it mid-run? Who approved example.com and with what scope? |
+| 09 | Where did the policy come from? What does "replay confined" mean? What happened to the host the recording never saw? |
+| 10 | Name the four approval scopes. Which one outlives the run, and where is its receipt? |
+| 11 | What replaces the human approver in CI? What does the pipeline's exit code mean? What receipts does a pipeline run leave? |
+| 12 | Who may SSH into a run? What does the second person see? What proof exists afterward of who did what? |
+| 13 (cloud) | What is different about where the sandbox runs? What did `exit 37` prove? Which audit rows name the person? |
 
 ## Series review (after the final video of a round)
 
@@ -88,8 +99,9 @@ with one series-level pass per persona, judging the whole as a course:
 - **Length & split**: any video that should be two, or two that should be one?
 - **The one restructure** you'd make if you could only change one thing.
 
-Inputs for this pass: all ten transcripts in order, plus your OWN ten viewing
-reports as your notes. Answer as the persona, in their terms.
+Inputs for this pass: every core transcript in order (01–12), the optional
+sub-episodes this persona watched, plus your OWN viewing reports as your
+notes. Answer as the persona, in their terms.
 
 ## Report format
 
@@ -107,3 +119,6 @@ reaction — say it like a person, not like a linter.
   round-1 feedback repeatedly demanded content a scheduled later episode
   already owned, which reads as a gap when it is actually a handoff; owner
   directive.
+- 2026-08-24: quiz re-keyed to the restructured series (01–12 + 13); episode
+  03 split into 03a + optional 03b/03c/03d; optional-sub-episode rule added
+  (owner directive).

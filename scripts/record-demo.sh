@@ -13,8 +13,9 @@
 #   scripts/record-demo.sh --with-terminal  # ALSO film `make setup` off the screen
 #                                          # (clear the top-left corner first!)
 #   scripts/record-demo.sh --silent      # no narration (captions still render)
-#   scripts/record-demo.sh --video 03    # record ONE video of the 0.5 series
-#                                        # (ui/e2e/demo/03-*.spec.ts)
+#   scripts/record-demo.sh --video 03a   # record ONE video of the series
+#                                        # (ui/e2e/demo/03a-*.spec.ts; a letter
+#                                        # marks a sub-episode of that number)
 #   scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 #                                        # film host-shell beats instead of (or
 #                                        # before) the browser ones
@@ -108,8 +109,8 @@ while [[ $# -gt 0 ]]; do
     # preflight because an empty VIDEO is indistinguishable from no --video at
     # all — and that path means the whole walkthrough, i.e. reset-all, i.e. a
     # stack wipe nobody asked for.
-    --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
-    --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03" >&2; exit 2; } ;;
+    --video)         VIDEO="${2:-}"; shift; [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03a" >&2; exit 2; } ;;
+    --video=*)       VIDEO="${1#*=}";        [[ -n "${VIDEO}" ]] || { echo "--video needs a number, e.g. --video 03a" >&2; exit 2; } ;;
     --terminal-script)   TERMINAL_SCRIPT="${2:-}"; shift; [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
     --terminal-script=*) TERMINAL_SCRIPT="${1#*=}";        [[ -n "${TERMINAL_SCRIPT}" ]] || { echo "--terminal-script needs a path, e.g. --terminal-script scripts/demo-beats/11-ci-and-headless.sh" >&2; exit 2; } ;;
     # Pattern-bounded rather than a line count: this header grows, and a stale
@@ -193,15 +194,16 @@ SLUG=""
 # With no --video this is the legacy end-to-end walkthrough, and it is named
 # EXPLICITLY rather than left empty. An empty filter means "every spec the demo
 # project matches", which was the same thing back when walkthrough.spec.ts was
-# the only file in ui/e2e/demo — it is not any more. The ten series specs live
-# beside it now, so an empty filter would run all eleven back to back into one
-# recording, after a reset-all wiped the state the later ones expect to inherit.
+# the only file in ui/e2e/demo — it is not any more. The series specs live
+# beside it now, so an empty filter would run every one of them back to back
+# into one recording, after a reset-all wiped the state the later ones expect
+# to inherit.
 PW_FILTER=("walkthrough.spec.ts")
 # Whether the browser lane runs at all. A terminal-only video (V11/V12 before
 # their browser halves exist) has no spec to hand Playwright.
 RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
-  [[ "${VIDEO}" =~ ^[0-9]{2}$ ]] || die "--video takes a two-digit number (01..12), got: ${VIDEO}"
+  [[ "${VIDEO}" =~ ^[0-9]{2}[a-z]?$ ]] || die "--video takes a two-digit number with an optional sub-episode letter (01..13, 03a, 12b), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.
@@ -551,7 +553,7 @@ fi
   # PW_FILTER is always exactly one spec filename: the --video one, or
   # walkthrough.spec.ts when no video was asked for. Never empty — see where it
   # is set for why letting the demo project's testMatch decide stopped being
-  # safe once the ten series specs landed beside the walkthrough.
+  # safe once the series specs landed beside the walkthrough.
   WARDYN_DEMO=1 \
   WARDYN_DEMO_WORKSPACE="${WORKSPACE_PATH}" \
   WARDYN_DEMO_CAPTURE="${CAPTURE}" \

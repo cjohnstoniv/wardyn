@@ -485,7 +485,7 @@ test("V02 act 3 — what you just saw", async () => {
   await caption(page, "We're going to see what the boundary actually stops.");
   await beat(page, PACE.read);
 
-  await silentChapter(page, "Next — 03: What it stops", "");
+  await silentChapter(page, "Next — 03a: What it stops", "");
   await caption(page, "");
   await clearChapter(page);
 });

@@ -882,8 +882,8 @@ case "${WARDYN_DEMO_VIDEO:-}" in
     fi
     ;;
   # THE SERIES RESTRUCTURE (merry-snacking-harbor.md Workstream C, 2026-08-24):
-  # 01 problem/solution · 02 set up the host · 03 the demos (was what-it-stops,
-  # content rework pending) · 04 your work/workspaces · 05 your first policy
+  # 01 problem/solution · 02 set up the host · 03a what it stops (+ 03b/03c/03d
+  # optional detours) · 04 your work/workspaces · 05 your first policy
   # (NEW — the panel/templates/meter episode; not filmed yet, no checks below)
   # · 06 your first run (was 05) · 07 interactive runs (was 06) · 08 an
   # autonomous agent (was 07) · 09 record a run (unchanged) · 10 approvals &
@@ -891,6 +891,9 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # (unchanged). The check_video_NN_* function NAMES below still carry their
   # OWN older numbering (accumulated across earlier renumbers) — only the case
   # KEYS re-key to the table above; trust the case label, not the callee name.
+  # 03 is SPLIT (2026-08-24): 03a is the core "what it stops" take; 03b/03c/03d
+  # are optional sub-episodes. A lettered id is a sub-episode of its number and
+  # gets its own arm.
   ""|08) check_video_02 ;;             # unset legacy walkthrough == the autonomous episode's own checks
   04) check_video_02_workspace ;;
   06) check_video_03_first_run ;;
@@ -903,12 +906,12 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the
   # meantime). Left defined, unused, for whoever writes 05's real checks to
   # borrow from.
-  02|03|05|07)
+  02|03a|03b|03c|03d|05|07)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..12, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------

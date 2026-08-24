@@ -10,10 +10,10 @@ asciicast v2 file for asciinema-player.
 Why script(1) and not asciinema: the capture happens inside record-demo.sh's
 Act 0 on whatever host runs the take, and util-linux is always there. The
 classic timing format is `<delay> <bytecount>` per line against the raw
-typescript byte stream (whose first "Script started" header line and trailing
-"Script done" line are outside the timed stream's interesting content but
-inside the byte accounting — the first header line IS consumed by the byte
-offsets, so it is kept in the stream and simply renders for one frame).
+typescript byte stream (script(1) writes its "Script started" header line BEFORE timing begins, so the
+timing offsets start after it — the converter drops that first line from the
+byte stream before applying offsets; the trailing "Script done" line lies past
+the last timed chunk and is never emitted).
 """
 
 from __future__ import annotations

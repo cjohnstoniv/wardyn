@@ -20,6 +20,11 @@ exact thing a stolen credential would get an attacker.
 - Install tonight?
 - Take it to your security team, and with what one-line pitch?
 
+## Your optionals
+
+You also watch, after their parent episode: 03b, 03c, 03d, 12b (admin), 13
+(cloud) — as they exist.
+
 ## Revisions
 
 - 2026-08-20: initial (persona library round 1).

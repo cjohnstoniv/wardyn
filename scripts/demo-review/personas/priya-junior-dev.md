@@ -20,6 +20,11 @@ and seeing the whole flow end to end without magic jumps.
 - Could you set this up yourself, honestly? Which step scares you?
 - Would you show it to your tech lead?
 
+## Your optionals
+
+You also watch, after their parent episode: 03b, 04b (members) — as they
+exist.
+
 ## Revisions
 
 - 2026-08-20: initial (persona library round 1).

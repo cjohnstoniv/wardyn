@@ -21,6 +21,10 @@ seeing something bad get stopped and understanding that it was bad.
 - Did you ever feel the video was talking to you? Where did it lose you first?
 - What would you reply to your manager?
 
+## Your optionals
+
+You watch the core path only — no optional sub-episodes.
+
 ## Revisions
 
 - 2026-08-20: initial (persona library round 1).
