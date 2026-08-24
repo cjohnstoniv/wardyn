@@ -15,15 +15,12 @@
  * itself an inert sentinel, and a real `claude -p` call still gets a real
  * answer — because the proxy strips what the sandbox sent and attaches the
  * live token at the boundary, outside the box. The injection lands in the
- * run's own audit trail, where the take reads it. Then it turns the same
- * claim around onto a key the OPERATOR owns: beat 6 stores one, masked, on
- * camera, and beats 7-8 drive Getting Started's two granted secrets demos
- * with it — `key-never-in-the-box` (the header is stitched on outbound at the
- * proxy; printenv is empty and the AUDIT panel is the proof) and
- * `authorized-not-issued` (a mint from inside the sandbox: 409 pending →
- * approve on the strip under the terminal → 200 returning the injection RULE
- * with no value in it → 409 already_minted). One video, both stories: driving
- * an agent by hand, and the keys it never holds — Wardyn's, and yours.
+ * run's own audit trail, where the take reads it — the one credential claim
+ * this episode makes, about the key WARDYN owns. The matching story for a key
+ * the OPERATOR owns (a masked write, then Getting Started's granted secrets
+ * demos `key-never-in-the-box` and `authorized-not-issued`) MOVED to episode
+ * 03, which now films the whole demos surface — both groups, every card. This
+ * episode stays on driving an agent by hand.
  *
  * WHERE THE CODE CAME FROM. Beats 2-4 are the retired model-access spec's
  * proven choreography (git history: 08-model-access.spec.ts), moved beat for
@@ -57,15 +54,14 @@
  * (asserted, not assumed), slugify workspace onboarded writable. No reset.
  *
  * OWNERSHIP OF NOUNS. One run titled RUN_TITLE; no files written; no series
- * noun touched beyond attaching the shared slugify workspace — plus the
- * secret `wardyn-demo-key` (written on camera in beat 6, deleted off camera
- * in beforeAll so every take films a real creation) and the two demo
- * sandboxes beats 7-8 start and end. Episode 04's secret is a DIFFERENT name
- * (deploy-webhook-token) and is never touched here.
+ * noun touched beyond attaching the shared slugify workspace. The demo secret
+ * `wardyn-demo-key` and the granted secrets demos it fed moved to episode 03;
+ * this episode now touches no secret at all.
  *
- * WHAT SURVIVES THE QUOTA. Beats 6-8 are keyless: no model call, no
- * subscription. A take parked on the weekly limit still dies at beat 4, but
- * nothing in this act depends on the model answering.
+ * WHAT SURVIVES THE QUOTA. This episode is now entirely the managed-
+ * subscription story: a take parked on the weekly limit dies at beat 4 with no
+ * keyless tail to salvage — the keyless secrets act that used to follow (old
+ * beats 6-8) moved to episode 03. Record this one against live quota.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to
  * know when to advance. It runs against the REAL compose stack on :8080.
@@ -84,8 +80,6 @@ import {
   caption,
   centerInFrame,
   chapter,
-  ffwdEnd,
-  ffwdStart,
   PACE,
   spotlight,
   typeInTerminal,
@@ -114,18 +108,6 @@ const SENTINEL = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-toke
 
 /** The injection event beat 5 reads (audit.tsx gives it a verb now). */
 const INJECT_ACTION = "run.llm.subscription_inject";
-
-/**
- * The secret beats 6-8 write once and both granted demos borrow by NAME
- * (demo-catalog.ts's `needsSecret`). Episode 04 stores a different secret
- * (deploy-webhook-token), and the catalog's name is not negotiable — a
- * granted demo whose secret is missing is dropped from the walk entirely
- * (steps.ts's stepOrder), so beat 6 writes THIS name on camera before beat 7
- * deep-links either demo. One masked write, then two demos that borrow it.
- */
-const DEMO_SECRET = "wardyn-demo-key";
-/** Never a real credential — a string this file can grep the screen for. */
-const DEMO_SECRET_VALUE = "WARDYN-V07-CANARY-4T7RM";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;
@@ -212,14 +194,6 @@ test.beforeAll(async () => {
   // take — the source of the "workspace already in use by 1 active run(s) —
   // proceeding anyway" toast firing mid-take.
   await sweepStaleState(["slugify"]);
-
-  // (6) Beat 6 WRITES the demo secret on camera, so delete whatever a prior
-  // take of this episode left: the Add-secret dialog must film a real
-  // creation, and the two granted demo steps must genuinely be absent from
-  // the walk until that write lands.
-  await page.request
-    .delete(`/api/v1/secrets/${encodeURIComponent(DEMO_SECRET)}`, { headers: apiHeaders() })
-    .catch(() => {});
 });
 
 // ---------------------------------------------------------------------------
@@ -540,343 +514,6 @@ test("V07 beat 5 — on the record", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Beats 6-8 — the OTHER key: one the operator stores, and two demos that
-// borrow it without ever holding it.
-//
-// Beats 1-5 proved the credential WARDYN owns (the managed subscription:
-// decoy in the box, live token attached at the proxy, injection on the
-// record). This act does the same for a credential YOU own, using the
-// funnel's own secrets demos — so the claim is the product's, not this
-// spec's, and the viewer can re-run every command themselves.
-//
-// SECRET-BEAT ORDER (plan L5, load-bearing): beat 6 stores `wardyn-demo-key`
-// BEFORE beats 7-8 deep-link either granted demo. Both carry
-// `needsSecret: "wardyn-demo-key"` (demo-catalog.ts) and stepOrder(status)
-// drops a step whose secret is missing — a deep link to one before the write
-// lands does not open a broken demo, it silently re-corrects to
-// write-only-by-design and films the wrong card.
-//
-// KEYLESS: nothing in this act touches the model, so it survives the weekly
-// subscription limit that parks beat 4.
-// ---------------------------------------------------------------------------
-
-test("V07 beat 6 — one masked write", async () => {
-  test.setTimeout(180_000);
-  const page = stage();
-
-  await chapter(page, "A key of your own", "One masked write, two demos");
-  await caption(page, "That key was Wardyn's own, and Wardyn kept it outside the box.");
-  await beat(page, PACE.read);
-  await caption(page, "But most runs need a key that's yours.");
-  await beat(page, BEAT_SHORT);
-
-  await page.goto("/secrets");
-  await expect(page.getByRole("heading", { name: "Secrets", level: 1 })).toBeVisible({ timeout: 30_000 });
-
-  await act(page, page.getByRole("button", { name: "Add secret", exact: true }), "Store one now.");
-  const dlg = page.getByRole("dialog");
-  await expect(dlg.getByRole("heading", { name: "Add secret" })).toBeVisible();
-  await dlg.getByLabel("Name").fill(DEMO_SECRET);
-  await caption(page, "The name is the handle.");
-  await beat(page, BEAT_SHORT);
-  // The Value field masks at entry (secrets.tsx's -webkit-text-security), so
-  // the canary's glyphs are never on screen — episode 04 owns that teaching in
-  // full; here it is one beat, not a lesson.
-  await dlg.getByLabel("Value", { exact: true }).fill(DEMO_SECRET_VALUE);
-  await caption(page, "The value is masked the moment it's typed.");
-  await beat(page, PACE.read);
-  await act(page, dlg.getByRole("button", { name: "Save secret" }), "Save it.");
-  await expect(dlg).toBeHidden({ timeout: 30_000 });
-
-  const row = page.getByRole("row", { name: new RegExp(DEMO_SECRET) });
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  // The negative IS the claim, and it holds for the rest of the take.
-  await expect(page.locator("body"), "the demo key's VALUE rendered on screen after save").not.toContainText(
-    DEMO_SECRET_VALUE,
-  );
-  await spotlight(page, row);
-  await caption(page, "That's the last time anyone sees that value.");
-  await beat(page, PACE.read);
-  await caption(page, "Two demos borrow this key by name.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Neither of them can read it. Both of them can use it.");
-  await beat(page, BEAT_SHORT + 400);
-  await spotlight(page, null);
-});
-
-test("V07 beat 7 — the key that never enters the box", async () => {
-  test.setTimeout(900_000);
-  const page = stage();
-
-  // Off-camera staging, not a claim: /setup renders the welcome hero until
-  // wardyn-onboarding-seen is set (onboarding-screen.tsx's GettingStarted) and
-  // stage.ts hands every take a fresh browser profile, so without this the
-  // `?step=` deep links below land on the hero instead of the demo. The flag is
-  // per-BROWSER; this host's operator walked that welcome in episode 02.
-  await page.evaluate(() => {
-    try {
-      localStorage.setItem("wardyn-onboarding-seen", "1");
-    } catch {
-      /* private mode — ignore */
-    }
-  });
-  // Demos live on ONE surface now: Getting Started. Demo steps are exempt from
-  // the deep-link corrector (setup-screen.tsx), so this opens the demo itself
-  // rather than bouncing to the corp-network step. The heading landing at all
-  // is ALSO the receipt for beat 6: without the stored secret this step is not
-  // in stepOrder(status) and the screen would re-correct to
-  // write-only-by-design instead.
-  await page.goto("/setup?step=key-never-in-the-box");
-  await expect(
-    page.getByRole("heading", { name: "The key that never enters the box", level: 2 }),
-    "the granted demo step never opened — is `wardyn-demo-key` stored? (beat 6 writes it)",
-  ).toBeVisible({ timeout: 30_000 });
-  const card = page.getByTestId("demo-card-key-never-in-the-box");
-
-  await spotlight(page, page.getByTestId("demo-policy-key-never-in-the-box"));
-  await caption(page, "This demo gives the run permission to use one secret by name.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "One host, one header to attach, and the name of the secret.");
-  await beat(page, PACE.read);
-  await caption(page, "Not the secret itself.");
-  await beat(page, BEAT_SHORT + 400);
-  await spotlight(page, null);
-
-  const start = card.getByTestId("demo-start-key-never-in-the-box");
-  // The barrier gate, named: without a ready barrier this button is disabled
-  // and act() parks on it for the full action timeout, which on camera is
-  // indistinguishable from the app hanging.
-  await expect(start, "the demo Start button is disabled — this stack has no ready barrier").toBeEnabled({
-    timeout: 60_000,
-  });
-  await act(page, start, "Start it.");
-
-  // FAST-FORWARD the boot. beat(200) first: opening a span over a still-
-  // speaking caption puts that speech inside compressed footage and lands
-  // every later cue early.
-  await beat(page, 200);
-  await ffwdStart(page);
-  try {
-    await expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
-  } finally {
-    // Real time resumes the instant the terminal is on screen — even on a
-    // failed take, so the encoder gets a span this run actually spent.
-    await ffwdEnd(page);
-  }
-  // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
-  // is up; typing here eats the first characters.
-  await beat(page, PACE.read);
-
-  // THE AUDIT PANEL FIRST — before a single command. The injected header is
-  // invisible from inside the box by construction (the proxy mutates only the
-  // outbound clone), so this demo's proof is the record, never the response.
-  const auditRows = card.getByTestId("demo-audit-rows");
-  await expect(
-    auditRows,
-    "no credential.mint row in the demo's audit panel — the inline grant never minted (member role clamps it away, or the secret is missing)",
-  ).toContainText("credential.mint", { timeout: 60_000 });
-  await expect(auditRows).toContainText("secret.read");
-  await centerInFrame(auditRows);
-  await spotlight(page, auditRows);
-  await caption(page, "Before we type anything, look at the record.");
-  await beat(page, PACE.read);
-  await caption(page, "Wardyn has already authorized the proxy to use the secret; the secret value still isn't in the box.");
-  await beat(page, PACE.read);
-  await caption(page, "That happened outside the box, before the request crossed the boundary.");
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
-
-  const screen = card.locator(".xterm-screen").first();
-  await typeInTerminal(page, "printenv | sort", card);
-  // expect.poll over innerText, NEVER toContainText: the xterm locator starves
-  // inside a take while the same text is demonstrably on screen (episodes
-  // 09/10 both burned rehearsals on it). innerText is the signal the viewer
-  // sees. WARDYN_PROXY_URL doubles as the "output landed" marker.
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: "printenv never echoed inside the demo sandbox",
-    })
-    .toMatch(/WARDYN_PROXY_URL=/);
-  // The ABSENCE is the claim — asserted only after output demonstrably landed,
-  // or an empty screen satisfies it trivially (beat 2's rule).
-  const envText = await screen.innerText();
-  expect(envText.includes(DEMO_SECRET_VALUE), "the granted key's VALUE printed inside the sandbox").toBe(false);
-  expect(
-    envText.includes(DEMO_SECRET),
-    "the granted key's NAME reached the sandbox environment — injection is proxy-side, nothing should carry it in",
-  ).toBe(false);
-  await caption(page, "The key isn't in the environment.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Its name isn't either.");
-  await beat(page, BEAT_SHORT);
-
-  await typeInTerminal(page, "curl -sSI http://example.com", card);
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: "the allowed host never answered — expected a 200 through the proxy",
-    })
-    .toMatch(/HTTP\/[\d.]+ 200/);
-  await caption(page, "And yet the request left with the credential attached.");
-  await beat(page, PACE.read);
-  await caption(page, "The sandbox sent the request without the secret. The proxy attached the header before forwarding it.");
-  await beat(page, PACE.read);
-  await caption(page, "The response can't prove where the credential came from. The audit record shows the proxy attached it.");
-  await beat(page, PACE.read + 400);
-
-  await typeInTerminal(page, "curl -sSI http://wikipedia.org", card);
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: "the unlisted host was not refused — always_deny should 403 it instantly",
-    })
-    .toMatch(/403/);
-  await caption(page, "One more thing.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Authorizing a run to use a credential never widens where it can go.");
-  await beat(page, PACE.read);
-  await caption(page, "This host was never on the list.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Refused instantly.");
-  await beat(page, BEAT_SHORT + 400);
-  // Silent: nothing to teach in the teardown, and a demo left running carries
-  // a live sandbox into the next beat's chrome.
-  await act(page, card.getByRole("button", { name: "End demo" }));
-});
-
-test("V07 beat 8 — authorized, not issued", async () => {
-  test.setTimeout(900_000);
-  const page = stage();
-
-  await page.goto("/setup?step=authorized-not-issued");
-  await expect(
-    page.getByRole("heading", { name: "Authorized, not issued", level: 2 }),
-    "the approval-gated demo step never opened — is `wardyn-demo-key` stored? (beat 6 writes it)",
-  ).toBeVisible({ timeout: 30_000 });
-  const card = page.getByTestId("demo-card-authorized-not-issued");
-
-  await caption(page, "Same permission, one field different.");
-  await beat(page, BEAT_SHORT);
-  await spotlight(page, page.getByTestId("demo-policy-authorized-not-issued"));
-  await caption(page, "This one requires approval before that one-time use can be authorized.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
-
-  const start = card.getByTestId("demo-start-authorized-not-issued");
-  await expect(start, "the demo Start button is disabled — this stack has no ready barrier").toBeEnabled({
-    timeout: 60_000,
-  });
-  await act(page, start, "Start it.");
-
-  await beat(page, 200);
-  await ffwdStart(page);
-  try {
-    await expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
-  } finally {
-    await ffwdEnd(page);
-  }
-  await beat(page, PACE.read);
-
-  // The command comes off the card's own copy pill, not a literal in this
-  // file: the catalog authors it with a `{grant_id}` placeholder that StepList
-  // substitutes from the LIVE run's grants (demo-runner.tsx). Typing the
-  // unsubstituted token would 400 on camera, so assert the substitution landed
-  // before spending a take on it.
-  const mintPill = card.getByTestId("demo-steps").getByRole("button", { name: "Copy command" }).first();
-  // POLLED, not read once: StepList fetches the run's grants after the run
-  // goes live, so the pill renders the literal placeholder for a beat first.
-  await expect
-    .poll(async () => (await mintPill.innerText().catch(() => "{grant_id}")).trim(), {
-      timeout: 60_000,
-      message: "the step's mint command still carries the literal {grant_id} token — the run's grants never loaded",
-    })
-    .not.toContain("{grant_id}");
-  const mintCmd = (await mintPill.innerText()).trim();
-
-  const screen = card.locator(".xterm-screen").first();
-  await caption(page, "The sandbox asks to use the credential.");
-  await beat(page, PACE.read);
-  await typeInTerminal(page, mintCmd, card);
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: 'the first mint never came back pending — expected 409 {"code":"pending"}',
-    })
-    .toMatch(/pending/);
-  await caption(page, "Refused — but an approval is now waiting.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "That ask didn't fail. It raised a decision.");
-  await beat(page, PACE.read);
-
-  // The credential card renders on the strip UNDER this terminal (LiveApprovals
-  // admits api_key credential approvals — the mint is raised from inside the
-  // sandbox, mid-run, which is exactly where the human is already looking).
-  // decide() decides a NAMED host, never .first(), and its bounded window is
-  // the whole point of driving the approval here rather than through the
-  // funnel: no 45s wait, no separate screen.
-  await caption(page, "And here it is, right under the terminal we're watching.");
-  await beat(page, PACE.read);
-  await decide(card, "Approve", "Approve it.", "example.com");
-
-  await typeInTerminal(page, mintCmd, card);
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: "the approved mint never returned an injection rule",
-    })
-    .toMatch(/X-Wardyn-Demo/);
-  // The load-bearing negative of the whole beat: an approved mint returns the
-  // RULE, never the value (broker.go leaves Minted.Token empty for api_key).
-  const mintText = await screen.innerText();
-  expect(
-    mintText.includes(DEMO_SECRET_VALUE),
-    "the approved mint returned the secret VALUE — the demo's entire claim is that it never does",
-  ).toBe(false);
-  await caption(page, "Now the same ask is authorized.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And look at what came back.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "A host, a header, and the name of a secret — the information the proxy needs to inject it at the boundary.");
-  await beat(page, PACE.read);
-  await caption(page, "An instruction for the proxy — not a credential for the box.");
-  await beat(page, PACE.read);
-  await caption(page, "Authorized, not handed to the sandbox.");
-  await beat(page, BEAT_SHORT + 400);
-
-  await typeInTerminal(page, mintCmd, card);
-  await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
-      timeout: COMMAND_ECHOES,
-      message: "the third mint was not refused — this grant is single-use",
-    })
-    .toMatch(/already_minted/);
-  await caption(page, "Ask again, and it's spent.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "One approval, one use.");
-  await beat(page, BEAT_SHORT + 400);
-
-  // deny -> allow -> deny in the panel: decisionForStatus maps every non-2xx
-  // forwarded status to a deny (local_routes.go), so both 409s are deny chips
-  // against the control-plane host and only the approved mint is an allow.
-  // Narrated as mechanism, because a viewer reading two denies as failures is
-  // exactly the wrong takeaway.
-  const auditRows = card.getByTestId("demo-audit-rows");
-  await expect(
-    auditRows,
-    "the approved mint never landed as an allow in the demo's audit panel",
-  ).toContainText("allow", { timeout: 60_000 });
-  await centerInFrame(auditRows);
-  await spotlight(page, auditRows);
-  await caption(page, "Three asks, three audit rows: refused pending approval, authorized once, then spent.");
-  await beat(page, PACE.read);
-  await caption(page, "The first row is the approval gate. The last is the single-use boundary working.");
-  await beat(page, PACE.read + 400);
-  await spotlight(page, null);
-  await act(page, card.getByRole("button", { name: "End demo" }));
-});
-
-// ---------------------------------------------------------------------------
 // Conclusion
 // ---------------------------------------------------------------------------
 
@@ -896,11 +533,6 @@ test("V07 conclusion", async () => {
   await caption(page, "The real credential stays outside.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And everything important leaves a record.");
-  await beat(page, PACE.read);
-  // DIALOG-NEW-BEAT: the recap covered the credential Wardyn owns and said
-  // nothing about the one WE stored — half the episode after beats 6-8.
-  // Drafted; see local/secrets-episodes-dialog-proposals.md.
-  await caption(page, "And the key we stored ourselves never entered the box either — the run was authorized to use it, while the proxy kept the value outside.");
   await beat(page, PACE.read);
   await caption(page, "Next, we'll take our hands off the keyboard.");
   await beat(page, PACE.read);
