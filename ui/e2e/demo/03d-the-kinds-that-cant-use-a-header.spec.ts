@@ -63,6 +63,7 @@ import {
   SSH_VALUE,
   startAndBoot,
   walkPolicyKey,
+  frameRun,
 } from "./demos";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
@@ -143,6 +144,9 @@ test("V03d act 1 — the one that touches disk", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
+  // Cockpit re-pin: the audit beat above centered the record and pushed the
+  // policy off the top; put policy + terminal + audit back in one frame before typing.
+  await frameRun(page, "ssh-briefly-resident");
   // Step 2 (pill index 1): the node re-mint → 0400 file.
   await typeInTerminal(page, await pillCmd(card, 1), card);
   await beat(page, PACE.read);

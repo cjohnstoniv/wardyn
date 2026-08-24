@@ -618,6 +618,9 @@ test("V03a act 5 — the key that never enters the box", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
+  // Cockpit re-pin: the audit beat above centered the record and pushed the
+  // policy off the top; put policy + terminal + audit back in one frame before typing.
+  await frameRun(page, "key-never-in-the-box");
   await typeInTerminal(page, "printenv | sort", card);
   await pollScreen(screen, /WARDYN_PROXY_URL=/, "printenv never echoed inside the demo sandbox");
   const envText = await screen.innerText();

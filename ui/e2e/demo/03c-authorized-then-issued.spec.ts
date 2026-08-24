@@ -63,6 +63,7 @@ import {
   silentCard,
   startAndBoot,
   walkPolicyKey,
+  frameRun,
 } from "./demos";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
@@ -217,6 +218,9 @@ test("V03c act 2 — a bearer token for a real API", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
+  // Cockpit re-pin: the audit beat above centered the record and pushed the
+  // policy off the top; put policy + terminal + audit back in one frame before typing.
+  await frameRun(page, "rest-api-token");
   await typeInTerminal(page, await pillCmd(card, 0), card);
   await pollScreen(screen, /HTTP\/[\d.]+ \d\d\d/, "the third-party call never got a response line");
   await caption(page, "The request left this box without an Authorization header. The proxy added one before forwarding it.");

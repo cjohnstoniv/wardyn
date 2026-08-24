@@ -529,20 +529,18 @@ assumes the obvious thing:
   surface); each demo step wraps in `demo-card-<id>`, so card-scoped locators
   work on the funnel path too. `demo-start-<id>` *is* inside
   `DemoRunControls` and works on both.
-- **"Lines that can't be crossed" produces NO audit rows for its two headline
-  denials** — and that is the block being *stronger* than the card claims, not
-  weaker. `https://example.com` leaves via CONNECT through the egress proxy, so
-  the proxy decides it and logs `egress.allow`. The `http://169.254.169.254` and
-  `http://192.168.1.1` probes have no proxy in their path and the sandbox
-  carries **no default route**, so they die at the network layer in ~0 ms with
-  `curl: (7) Failed to connect` — never reaching the proxy that would have
-  recorded a decision. The demo card's own step text
-  (`demo-catalog.ts:188`) says *"you'll see a 403 (or a curl error), **and a deny
-  row in the Audit panel**"*; the deny row does not exist and cannot. The driver
-  therefore proves this demo from the terminal, and its narration says "these two
-  never even got a connection" rather than claiming the audit trail shows a
-  denial. **Worth fixing in the product copy** — see the note in
-  `walkthrough.spec.ts`.
+- **"Lines that can't be crossed" logs its two headline denials as `egress.deny`
+  rows with `rule_source=builtin:private-ip`** — the sandboxes carry the lowercase
+  `http_proxy` too now, so the plain-http probes to `169.254.169.254` and
+  `192.168.1.1` reach the proxy and are refused by the built-in private-address
+  rule, beneath the policy (`allow_all_egress` cannot open them). `https://example.com`
+  leaves via CONNECT and logs `egress.allow`. An earlier build had no proxy in the
+  plain-http path and the probes died at the network layer with no row at all —
+  `scripts/lib/verify-demo-take-03.sh` accepts either shape and fails only on an
+  *allow* of a link-local/private address or a *policy*-sourced decision. The demo
+  card's overview (`demo-catalog.ts`, "nothing reaches the proxy… no approval to
+  raise or deny") still describes the old shape — a product-copy fix owed to the
+  catalog, not to this doc.
 - **Two components look identical and carry different roles.** The Add-workspace
   dialog's source/image cards are `OptionCard` (`form-primitives.tsx`) — an
   `aria-pressed` `<button>`. New Run's Confinement and Network cards are a
@@ -663,12 +661,11 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
    `wardyn audit --run <id> --json` should carry `egress.allow` for
    `api.anthropic.com`, and `approval.decide outcome=approved
    decision_scope=always` → `egress.allow` for `example.com` on the Act 5 run.
-   **There is deliberately NO row for `169.254.169.254`** — that probe never
-   reaches the proxy (uppercase-only `HTTP_PROXY` vs libcurl's lowercase-only
-   `http_proxy` for plain http, then no default route), so nothing decides it
-   and nothing logs it. Its absence IS the expected result; a demo that claims
-   an audited denial there is overclaiming. `scripts/verify-demo-take.sh`
-   encodes all of this.
+   The `169.254.169.254` probe logs `egress.deny` with `rule_source=builtin:private-ip`
+   (the sandbox carries the lowercase `http_proxy` now, so plain http reaches the
+   proxy); an older build logged nothing because the probe died at the network layer.
+   Either way it must never be *allowed* — `scripts/lib/verify-demo-take-03.sh`
+   encodes exactly that.
 3. Confirm the two new scope beats, the same way — exit 0 is the least
    reliable signal here too:
    - On the Act 3 once-or-for-good run's audit, a SECOND `egress.pending` for
