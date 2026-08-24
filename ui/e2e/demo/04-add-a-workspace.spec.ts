@@ -521,13 +521,12 @@ test("V04 conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "And something real for it to work on.");
   await beat(page, BEAT_SHORT);
-  // DIALOG-NEW-BEAT (dialog review, A19): 04 ends on what we built and never
-  // says what it is FOR — every sibling conclusion hands off to the next
-  // episode by name. Drafted; see local/light-episodes-dialog-flags.md.
-  await caption(page, "Next, we put this workspace to work. Our first run.");
+  // DIALOG-NEW-BEAT (A19; re-pointed for the restructure — after the workspace
+  // comes the POLICY episode, not the run). Drafted; see the seam flags.
+  await caption(page, "Next, we write the rules this workspace runs under. Your first policy.");
   await beat(page, BEAT_SHORT + 400);
   await caption(page, "");
-  await silentCard(page, "Next — 05: Your first run");
+  await silentCard(page, "Next — 05: Your first policy");
 });
 
 /**

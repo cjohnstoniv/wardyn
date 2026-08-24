@@ -576,6 +576,9 @@ drive() {
   # live token), so this proof can only run from the driver's own host shell —
   # never from inside one of the three panes above. VERIFIED LIVE: this
   # endpoint answers a bad bearer with 401.
+  # DIALOG-STALE(ordinal: now episode seven) — the decoy/SENTINEL beat this
+  # closes the loop on is filmed in 07-interactive-runs.spec.ts (SENTINEL =
+  # sk-ant-oat01-wardyn-inert-sentinel-...), not episode six.
   say "And now let's finish the loop from episode six."
   say "We stole the decoy credential from inside the sandbox."
   say "Let's try using it from outside."
