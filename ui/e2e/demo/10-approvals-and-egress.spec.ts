@@ -336,7 +336,12 @@ test.beforeAll(async () => {
 test("beats 0-5 — held at the door, and the scope ladder", async () => {
   test.setTimeout(900_000);
   const page = stage();
-  await page.goto("/demos");
+  // /demos redirects to the held-at-the-door step directly (App.tsx) — go
+  // straight there. See the file header's "WHY /demos AND NOT THE FUNNEL" for
+  // the now-stale premise this retarget doesn't resolve (episode re-anchoring
+  // is a separate phase); the assertions below hold either way, since
+  // `demo-card-held-at-the-door` (H4) is the only demo card on this step.
+  await page.goto("/setup?step=held-at-the-door");
   await page.bringToFront();
 
   // Fail here rather than several minutes into a silent, caption-less take:

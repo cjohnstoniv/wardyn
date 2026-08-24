@@ -87,7 +87,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight, typeInTerm
 // importing it is what registers this file's beforeAll/afterAll, and each act
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { decide } from "./funnel";
+import { advance, decide } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -182,11 +182,12 @@ test("V03 act 1 — open on the demos", async () => {
   test.setTimeout(120_000);
   const page = stage();
   // Owner call (2026-08-23, superseding the same-day ffwd version): the film
-  // OPENS on the demos — no funnel re-entry, no fast-forward blur. /demos is
-  // the catalog page that hosts the same four cards as the funnel's embedded
-  // steps (same DemoRunControls, same testids/headings — episode 10 films
-  // here for exactly this reason: it needs no wizard state to reach).
-  await page.goto("/demos");
+  // OPENS on the demos — no funnel re-entry, no fast-forward blur. /demos
+  // redirects straight into the funnel's first demo step (App.tsx), which
+  // renders the identical DemoDetail markup the old catalog card did — same
+  // DemoRunControls, same testids/headings — episode 10 films here for
+  // exactly this reason: it needs no wizard state to reach.
+  await page.goto("/setup?step=sealed-box");
   await page.bringToFront();
 
   // Fail here rather than minutes into a silent, caption-less take — the same
@@ -447,9 +448,12 @@ test("V03 act 2 — four ways the boundary holds", async () => {
 
     const endDemo = page.getByRole("button", { name: "End demo" });
     if (await endDemo.isVisible().catch(() => false)) await act(page, endDemo);
-    // No advance(): on /demos all four cards share the page — the next
-    // iteration's own heading assert + policy spotlight scrolls the camera
-    // to the next card.
+    // Each demo is its own funnel STEP now (the redirect lands inside Getting
+    // Started, not a one-page catalog) — the next iteration's heading only
+    // appears after Next carries the rail forward. The quartet is consecutive
+    // in catalog order (demo-catalog.ts), so this never has to skip past an
+    // interleaved agent-in-the-box/record-a-policy step.
+    await advance();
   }
 });
 

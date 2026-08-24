@@ -138,13 +138,29 @@ test("act 2 — barrier, network, model", async () => {
 // Act 3 — the guardrails (funnel steps 4-8)
 // ---------------------------------------------------------------------------
 
-test("act 3 — the five guardrail demos", async () => {
+test("act 3 — the guardrail demos", async () => {
   test.setTimeout(1_500_000);
   const page = stage();
-  await chapter(page, "The guardrails", "Five sandboxes, five ways the boundary holds");
+  await chapter(page, "The guardrails", "Every sandbox, every way the boundary holds");
 
-  for (const demo of FUNNEL_DEMOS) {
-    await expect(page.getByRole("heading", { name: demo.label, level: 2 })).toBeVisible({ timeout: 60_000 });
+  // The rail now walks the WHOLE catalog (steps.ts), not a fixed five: on this
+  // driver's session (a model IS connected in Act 2, no demo secret ever is)
+  // stepOrder(status) keeps agent-in-the-box and record-a-policy interleaved
+  // among the FUNNEL_DEMOS quartet + once-or-for-good, and trails with
+  // write-only-by-design (the one secrets demo that needs no stored secret).
+  // Anything FUNNEL_DEMOS doesn't stage in detail just advances past —
+  // `advance()` alone is honest because every demo step is OPTIONAL (steps.ts),
+  // so Next never waits on a run that was never started.
+  const nextAct = page.getByRole("heading", { name: "Onboard a workspace", level: 2 });
+  while (true) {
+    await page.getByRole("heading", { level: 2 }).first().waitFor({ state: "visible", timeout: 60_000 });
+    if (await nextAct.isVisible().catch(() => false)) break;
+    const heading = (await page.getByRole("heading", { level: 2 }).first().textContent())?.trim();
+    const demo = FUNNEL_DEMOS.find((d) => d.label === heading);
+    if (!demo) {
+      await advance();
+      continue;
+    }
     await caption(page, `${demo.label} — ${demo.caption}`);
     await beat(page, PACE.read + 700);
 

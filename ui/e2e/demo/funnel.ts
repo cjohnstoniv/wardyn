@@ -105,12 +105,15 @@ export async function clearWorkspace(): Promise<void> {
   }
 }
 
-// NOTE: there is deliberately no per-demo scope here. `demo-card-<id>` exists
-// only on the /demos catalog (demo-screen.tsx's DemoCard, which stacks all six
-// on one page); the funnel step renders the shared DemoRunControls BARE
-// (demos-step.tsx), one demo per step. So on this path the page IS the scope,
-// and scoping to a card that never renders is how Act 3 fails. `demo-start-<id>`
-// does live inside DemoRunControls, so starting is still addressed per demo.
+// NOTE: there is deliberately no per-demo scope here. /demos died and Getting
+// Started is the one demos surface now (setup/demos-step.tsx's DemoDetail) —
+// DemoDetail DOES carry a `demo-card-<id>` wrapper testid (H4, the same one
+// the old /demos catalog's DemoCard used to own, kept so episode 10's URL
+// swap stays true), but the funnel still renders exactly ONE demo per step,
+// so on this path the page itself IS already the scope — a card selector here
+// would be redundant, not wrong. `demo-start-<id>` lives inside the shared
+// DemoRunControls (demos/demo-runner.tsx), so starting is still addressed per
+// demo either way.
 
 // The scope-menu button labels this file actually needs — see
 // ui/src/app/components/wardyn/copy.ts's APPROVAL_SCOPE_LABEL. "run" needs no
