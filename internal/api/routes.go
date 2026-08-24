@@ -76,11 +76,14 @@ func (s *Server) routes() chi.Router {
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
 			// later-added Use applies to r's routes but silently NOT to these.
-			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
+			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — that
+			// grep counts mountAccountRoutes' 2 in this same file too — plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 29 direct registrations below +
+			// has gone stale before, W7-S1-1): 26 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) = 34. NOT the whole admin
+			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 33. Five workspace routes (create/update/delete/scan/
+			// build) LEFT this group in 0048 for the owner-or-admin tier — the
+			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
@@ -145,6 +148,11 @@ func (s *Server) routes() chi.Router {
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —
 			// per-principal evidence ("everything developer X did") in one request (D6).
 			r.Get("/audit/export", s.handleExportAudit)
+			// Tamper-evidence sweep over the audit hash chain (migration 0047).
+			// operatorOnly, unlike the two reads above: it reports whole-deployment
+			// audit volume, which is the same disclosure that keeps /metrics gated.
+			// Operator-INVOKED by design — wardynd never verifies at boot.
+			operatorOnly.Get("/audit/chain/verify", s.handleVerifyAuditChain)
 			r.Get("/me", s.handleMe)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
@@ -159,12 +167,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
-			// Run-detail widget layout: per-user, per-preset, server-synced so a
-			// layout survives a new machine (localStorage would not). Scoped to
-			// the caller's OWN principal at the store, exactly like the ssh-keys
-			// block above — never a principal taken from the body.
-			r.Get("/me/run-layout", s.handleGetRunLayout)
-			r.Put("/me/run-layout", s.handlePutRunLayout)
+			s.mountAccountRoutes(r, operatorOnly)
 			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
 			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
 			// no route (404), the HttpOnly session cookie survived, and the next
@@ -172,6 +175,15 @@ func (s *Server) routes() chi.Router {
 			// client's existing call actually terminates the session. Nil-OIDC
 			// (local/token mode) is a safe no-op — see handleLogout.
 			r.Post("/auth/logout", s.handleLogout)
+			// D16: revoke-a-human-now — mounted only when the store is wired
+			// (same "if s.cfg.X != nil" pattern as the Secrets block below),
+			// which cmd/wardynd does exactly when OIDC is configured (there is
+			// nothing to revoke without an OIDC session mechanism). operatorOnly:
+			// a fleet-wide, other-humans' blast radius, the same tier as secret
+			// writes.
+			if s.cfg.SessionRevocations != nil {
+				operatorOnly.Post("/sessions/revoke", s.handleRevokeSessions)
+			}
 			// First-run setup readiness. MUST stay in this humanOrAdminAuth group
 			// (anonymous non-local => 401): it enumerates providers/keys/CLIs
 			// (capability disclosure) and must never sit on the public /healthz.
@@ -211,10 +223,24 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
 
 			// Workspace management (onboarding of local dirs + repos a run may
-			// attach), gated to authenticated humans (SSO session or admin token);
-			// every MUTATING route here is additionally operator-only, so a
-			// signed-in MEMBER (B1's derived role) can list/read workspaces but
-			// cannot CRUD them or widen what a run may do; an ADMIN can.
+			// attach), gated to authenticated humans (SSO session or admin token).
+			//
+			// OWNERSHIP TIER (0048, docs/design/member-role-desktop.md §b): the
+			// CRUD/scan/build routes are OWNER-OR-ADMIN rather than admin-only —
+			// a member creates workspaces they own (create stamps owned_by from
+			// the session) and may edit/delete/scan/build THEIR OWN. The check
+			// lives INSIDE each handler as getWorkspaceAuthorized (mutations) /
+			// getWorkspaceReadable (reads), exactly the way the /runs block does
+			// owner-or-admin on the plain `r` group — no second middleware group,
+			// no chi.Walk matrix churn beyond the reclassification. An
+			// operator-owned workspace (owned_by='', i.e. every pre-0.6 row) still
+			// answers a member's mutation with the same 403 requireOperator wrote.
+			//
+			// A route that WIDENS AN EGRESS CEILING, BINDS CREDENTIAL MATERIAL, or
+			// WRITES THE HOST stays operatorOnly below — approved/denied-egress,
+			// llm-cred, requirements, record + promote-egress, env-as-code/write.
+			// Owning a workspace does not make a member the operator of it.
+			//
 			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
@@ -225,17 +251,19 @@ func (s *Server) routes() chi.Router {
 			// mounted from sources.go, same posture as the workspaces block.
 			s.mountLibraryRoutes(r, operatorOnly)
 
-			operatorOnly.Post("/workspaces", s.handleCreateWorkspace)
+			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
 			r.Get("/workspaces/{id}", s.handleGetWorkspace)
-			operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
-			operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
-			operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+			r.Put("/workspaces/{id}", s.handleUpdateWorkspace)
+			r.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
+			r.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
 			// Workspace image build (the wizard's Build step): status is a
-			// member-tier read like the other workspace GETs; kicking a build
-			// is an operator action (workspace_build.go).
+			// member-tier read like the other workspace GETs; kicking a build is
+			// owner-or-admin — the builder runs WARDYN-GENERATED recipes from the
+			// scanned profile, never member free-text (contrast devcontainer_repo,
+			// which stays unconditionally operator-only).
 			r.Get("/workspaces/{id}/build", s.handleGetWorkspaceBuild)
-			operatorOnly.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
+			r.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
@@ -422,4 +450,29 @@ func (s *Server) routes() chi.Router {
 
 	s.mountUI(r)
 	return r
+}
+
+// mountAccountRoutes registers the caller's own account surfaces — per-user
+// API tokens (self-service on r; the two admin twins on operatorOnly) and the
+// run-detail layout — carved out of routes() purely for funlen; the routes()
+// maintenance-count comment counts the two operatorOnly lines here.
+func (s *Server) mountAccountRoutes(r chi.Router, operatorOnly chi.Router) {
+	// Per-user API tokens (apitokens.go): the same self-service shape as
+	// the ssh-keys block above — scoped to the caller's OWN principal at
+	// the store, so these sit on r rather than the admin group. A MEMBER minting a
+	// token grants themselves nothing new: the token carries their own
+	// stamped role, so it reaches exactly the routes their session does
+	// (see apiTokenAuth). The admin twins — the deployment-wide inventory
+	// and revoke-ANYONE's — are the two operatorOnly lines below.
+	r.Get("/me/tokens", s.handleListAPITokens)
+	r.Post("/me/tokens", s.handleCreateAPIToken)
+	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
+	operatorOnly.Get("/tokens", s.handleListAllAPITokens)
+	operatorOnly.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	// Run-detail widget layout: per-user, per-preset, server-synced so a
+	// layout survives a new machine (localStorage would not). Scoped to
+	// the caller's OWN principal at the store, exactly like the ssh-keys
+	// block above — never a principal taken from the body.
+	r.Get("/me/run-layout", s.handleGetRunLayout)
+	r.Put("/me/run-layout", s.handlePutRunLayout)
 }

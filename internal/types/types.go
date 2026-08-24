@@ -355,6 +355,32 @@ const (
 	// the same posture as WARDYN_GIT_HELPER_SECRET: code running AS the agent uid
 	// can read the key during that window. See broker.mintSSHKey + threat model.
 	GrantSSHKey GrantKind = "ssh_key"
+	// GrantEnvSecret places a STORED SECRET's value into the sandbox environment
+	// under an operator-named variable, at dispatch. It is the second DOCUMENTED
+	// EXCEPTION to the no-resident-secret invariant, and the honest reason is
+	// coverage, not impossibility: a PAT-authenticated CLI or REST tool reads a
+	// *_TOKEN env var, and neither the git_pat helper seam (git-only) nor api_key
+	// proxy-side injection (one host, one header) can reach it. See
+	// docs/adoption/corp-network-onboarding-findings.md B1.
+	//
+	// It is UNLIKE every other kind in three ways an operator must weigh:
+	//
+	//   - NOT BROKERED. There is no mint, no approval gate, no TTL and no JTI —
+	//     the value is resolved store->env at dispatch (api.resolveEnvSecretGrants,
+	//     the same seam resolveLLMInspectionSecrets uses) and the broker refuses
+	//     the kind outright (mintKind's ErrUnknownGrantKind).
+	//   - RESIDENT FOR THE WHOLE RUN. Unlike ssh_key's clone window, an env var
+	//     lives as long as the process tree does; anything running as the agent
+	//     uid can read /proc/self/environ.
+	//   - NO REVOCATION. The kill-switch cascade revokes minted credentials; a
+	//     value already in a process env is not one, so killing the run stops the
+	//     process but does not un-disclose the secret.
+	//
+	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
+	// env_secret grant is dropped unless the operator opens
+	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
+	GrantEnvSecret GrantKind = "env_secret"
 )
 
 // SubscriptionOAuthSecret is a SENTINEL secret name (NOT a stored secret). An
@@ -472,8 +498,11 @@ var (
 // ApprovalScope is how far a human's approve/deny decision reaches. It is
 // ORTHOGONAL to FirstUseMode: that policy setting decides whether an unknown
 // host is escalated to a human at all; this decides the blast radius of the
-// answer. Only egress_domain approvals carry a non-default scope — a credential
-// mints exactly once by construction and a tool_call is bounded by the clamp.
+// answer. egress_domain approvals carry any of the four; a tool_call carries
+// none (the clamp bounds it); a CREDENTIAL approval carries ScopeRun and
+// nothing else — that one value is the per-run credential lease (B2), read RAW
+// by broker.leaseCoversRemint so a git_pat approved once is re-mintable for the
+// rest of the run instead of raising a fresh approval per git operation.
 type ApprovalScope string
 
 const (
@@ -647,6 +676,20 @@ type AuditEvent struct {
 	Outcome   string          `json:"outcome"` // "success" | "failure" | "denied"
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
+
+	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
+	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
+	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT
+	// trigger — never by the caller, who therefore cannot choose them.
+	//
+	// They are populated on the WRITE path only (InsertAuditEvent fills them
+	// from RETURNING), which is what carries the current head hash out to the
+	// audit sinks so a SIEM can detect a later truncation. The paginated READ
+	// paths deliberately do not select them, so both are empty on anything
+	// served by GET /audit — hence omitempty. The chain is verified through
+	// GET /api/v1/audit/chain/verify, not by reading rows back.
+	PrevHash string `json:"prev_hash,omitempty"`
+	RowHash  string `json:"row_hash,omitempty"`
 }
 
 // SSHPublicKey is a human's registered public key for the SSH gateway
@@ -665,17 +708,59 @@ type AuditEvent struct {
 // to a human for "verify on first connect".
 //
 // Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
-// stamped at registration by handleAddSSHKey (migration 0043). It is a STAMP,
-// not a live check — SSH carries no session for requireOperator to read — so a
-// demoted admin's key keeps its override until the key is deleted or
-// re-registered (docs/SSH.md §Bounds).
+// stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
+// on every OIDC login for the authenticating principal's keys (migration
+// 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
+// session for requireOperator to read — so a demoted admin's key keeps its
+// override only until RoleCheckedAt exceeds WARDYN_SSH_ROLE_TTL, or until the
+// key is deleted/re-registered (docs/SSH.md §Bounds).
+//
+// RoleCheckedAt is when Role was last stamped — at registration, or at any
+// later OIDC login (migration 0046). nil means "never refreshed since
+// upgrading to 0046" — a pre-migration row, or a key registered before an
+// OIDC-configured deployment's first login for that principal — and sshAuth
+// treats nil as infinitely stale, never as fresh.
 type SSHPublicKey struct {
-	Fingerprint string    `json:"fingerprint"`
-	Principal   string    `json:"principal"`
-	Name        string    `json:"name"`
-	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
-	Role        string    `json:"role"`
-	CreatedAt   time.Time `json:"created_at"`
+	Fingerprint   string     `json:"fingerprint"`
+	Principal     string     `json:"principal"`
+	Name          string     `json:"name"`
+	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
+	Role          string     `json:"role"`
+	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// APIToken is one per-user API token (migration 0045): a long-lived bearer
+// credential a HUMAN mints for their own scripts/CI so automation stops sharing
+// the single deployment-wide admin token. The auth branch that accepts one
+// (apiTokenAuth in internal/api/apitokens.go) republishes exactly the context
+// a verified SSO session publishes, so grants, RBAC and run ownership bind to
+// the OWNING HUMAN — never to the admin identity.
+//
+// Email/Role/Groups are a SNAPSHOT of the creating session, stamped at create
+// time the way SSHPublicKey.Role is stamped at registration: a bearer token
+// carries no ID token, so there is nothing to re-derive them from per request.
+// The ceiling is the same one SSHPublicKey.Role carries — a demotion does not
+// reach an outstanding token; REVOKE it.
+//
+// Groups distinguishes nil from empty exactly as the session path does (see
+// oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
+// empty means "the IdP sent no usable groups".
+//
+// Token carries the PLAINTEXT credential and is populated on exactly one
+// response — the create call — and is never stored, listed or logged. Every
+// other path leaves it empty, and `omitempty` keeps it out of those bodies.
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Principal  string     `json:"principal"`
+	Email      string     `json:"email,omitempty"`
+	Role       string     `json:"role"`
+	Groups     []string   `json:"groups,omitempty"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	Token      string     `json:"token,omitempty"` // plaintext, create response ONLY
 }
 
 // CapabilitySubjectType names WHO a capability grant is written against

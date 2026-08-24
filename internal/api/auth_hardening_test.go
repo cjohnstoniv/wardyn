@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -197,6 +198,73 @@ func TestIsLoopbackRemoteAddr(t *testing.T) {
 		if isLoopbackRemoteAddr(a) {
 			t.Errorf("isLoopbackRemoteAddr(%q) = true, want false", a)
 		}
+	}
+}
+
+// ─── #19a: auth.failed audit event ─────────────────────────────────────────
+
+// TestAdminAuth401EmitsAuthFailed is the regression for #19a: adminAuth's
+// three 401 branches used to fail silently. Each must now emit auth.failed
+// (actor system, content-free reason + path + source IP).
+func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
+	h := newHarness(t)
+
+	w := do(t, h.srv, http.MethodGet, "/api/v1/runs", "wrong-token", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", w.Code)
+	}
+	var ev *types.AuditEvent
+	for i := range h.audit.events {
+		if h.audit.events[i].Action == "auth.failed" {
+			ev = &h.audit.events[i]
+		}
+	}
+	if ev == nil {
+		t.Fatalf("no auth.failed audit event recorded; events = %+v", h.audit.events)
+	}
+	if ev.ActorType != types.ActorSystem {
+		t.Errorf("ActorType = %q, want system", ev.ActorType)
+	}
+	if ev.Outcome != "failure" {
+		t.Errorf("Outcome = %q, want failure", ev.Outcome)
+	}
+	if ev.Target != "/api/v1/runs" {
+		t.Errorf("Target = %q, want the request path", ev.Target)
+	}
+	if ev.SourceIP == "" {
+		t.Error("SourceIP not set")
+	}
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("Data unmarshal: %v", err)
+	}
+	if data["reason"] != "invalid_admin_token" {
+		t.Errorf("reason = %v, want invalid_admin_token", data["reason"])
+	}
+}
+
+// TestAuthFailedRateLimited is the regression for the flood-guard half of
+// #19a: a scanner throwing rapid 401s must not get one auth.failed row per
+// request — the process-global token bucket caps it well below the request
+// count.
+func TestAuthFailedRateLimited(t *testing.T) {
+	h := newHarness(t)
+
+	const attempts = 50
+	for i := 0; i < attempts; i++ {
+		do(t, h.srv, http.MethodGet, "/api/v1/runs", "wrong-token", "")
+	}
+	var got int
+	for i := range h.audit.events {
+		if h.audit.events[i].Action == "auth.failed" {
+			got++
+		}
+	}
+	if got == 0 {
+		t.Fatal("expected at least one auth.failed event")
+	}
+	if got >= attempts {
+		t.Errorf("auth.failed count = %d for %d rapid-fire 401s, want the limiter to have dropped most of them", got, attempts)
 	}
 }
 

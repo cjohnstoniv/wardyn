@@ -106,8 +106,8 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    then prove the age key actually decrypts what came back, which a row
 #    count alone can't: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts instead of
-#    failing closed with a decrypt error (see "The age key has no rotation
-#    path" — the wrong key fails exactly here, not at boot):
+#    failing closed with a decrypt error (see "Rotating the age key" — the
+#    wrong key fails exactly here, not at boot):
 wardyn run --agent claude-code --workspace <workspace-id>
 ```
 
@@ -138,6 +138,79 @@ fail-closed audit trades *availability* for integrity — refusing to serve unti
 it can record — Wardyn keeps both. The spool is per-process by design: it is the
 fallback for one pod's failed write, and each `wardynd` drains its own back on
 recovery (see [One replica, by construction](#one-replica-by-construction)).
+
+### The hash chain — what a rewritten row looks like
+
+The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
+and the role split hardens that against the app role. Neither binds a **table
+owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row
+— the residual `0007_audit_least_privilege.sql` states plainly. Migration
+`0047_audit_hash_chain.sql` does not close that hole; it makes a single use of
+it **visible**.
+
+Every row written from `0047` onward carries two hex columns:
+
+```
+row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
+                                           actor, action, target, outcome,
+                                           source_ip, data) )
+```
+
+`prev_hash` is the previous row's `row_hash`, so the log is a linked list where
+each row commits to everything before it. Both values are computed **inside
+Postgres**, in the `audit_events` `BEFORE INSERT` trigger — not by the writer —
+so no caller (including the sandbox-facing paths) can choose them, and both
+in-tree insert paths inherit the chain without knowing it exists.
+
+**What it gives you.** Edit one row and its stored `row_hash` no longer matches
+its contents. Delete one and its neighbours' links no longer meet. Either shows
+up as an exact `seq` and a reason.
+
+**What it does not give you.** This is tamper-**evidence**, not
+tamper-proofness. Someone who can rewrite one row can usually rewrite every row
+after it and re-chain the lot; a re-chained tail verifies perfectly clean.
+Truncating the newest rows is likewise invisible to the chain alone — what is
+left is a shorter, valid chain. The defence against both is **off-box**: every
+event on an audit sink stream (`WARDYN_AUDIT_SINKS`) now carries its
+`prev_hash`/`row_hash`, so a SIEM holds head hashes Wardyn cannot later disown.
+A chain that no longer contains a head your SIEM recorded has been rewritten or
+truncated, and that comparison — not the sweep — is the control. Signed receipts
+(a key the database role cannot reach) are the next rung and are **not built**.
+
+**Verifying.** Operator-invoked, never automatic:
+
+```bash
+curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+     https://wardyn.example.com/api/v1/audit/chain/verify
+```
+
+```json
+{"ok": true, "checked": 41233, "legacy": 902, "first_seq": 903,
+ "head_seq": 42135, "head_hash": "9f2c…"}
+```
+
+`wardynd` deliberately does **not** verify at boot: the sweep re-hashes every
+chained row, and paying that on every restart taxes the common case for an
+answer nobody is reading at that moment. Run it from cron and alert on
+`ok: false` — a broken chain answers **200** with `ok: false`, `broken_seq` and
+`reason` (the sweep succeeded; it found something), while `5xx` means the sweep
+could not run. `head_hash` is the value to diff against your SIEM's copy.
+
+One consequence worth knowing before the first alert: **a break is permanent.**
+The sweep stops at the first broken row and the log is append-only, so once a
+row has been rewritten every later sweep reports that same `broken_seq` forever
+— there is no repair, and no "acknowledge" cursor to move the baseline past a
+break you have already investigated. That is the append-only guarantee doing its
+job, not a bug, but it means `ok: false` is a one-way latch: treat the first
+occurrence as the incident and preserve the row range, because the alert will
+not clear.
+
+**Rows written before the upgrade** keep `NULL` hashes and are reported as
+`legacy`. They are outside the chain and are never a failure. There is no
+backfill, on purpose: hashes computed after the fact by the same process that
+could have altered the rows prove nothing, and writing them would mean
+`UPDATE`-ing the append-only table. The chain starts at the first row inserted
+after the migration.
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
@@ -280,6 +353,64 @@ their own run's credential request would self-mint a real token, and
 self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
 bound, both under the same authority the operator ceiling is meant to
 constrain.
+
+**Optional: require a SECOND human on egress decisions.** Set
+`WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain`
+approval may not be the human who created the run — four-eyes, on the one
+decision that widens what a running agent can reach. Off by default, because
+turning it on unprompted would deadlock every single-operator deployment. Both
+verbs are covered: a self-*deny* is refused too, since a deny is how an operator
+closes an approval they would rather nobody saw. A refusal is a `403` recorded as
+`authz.denied` with `reason: second_human_required`, and it lands **before** the
+decision is written, so a refused decision leaves the approval `PENDING` for
+someone else.
+
+**The `admin-token` principal BYPASSES it, and you should plan around that
+rather than be surprised by it.** A bare `WARDYN_ADMIN_TOKEN` caller is
+attributed `system`/`admin-token` precisely because a shared token carries no
+per-human identity — there is no second human to compare it against, and
+`X-Wardyn-Principal` is ignored off local mode specifically so a token bearer
+cannot forge one. Refusing the token instead would lock you out of your own
+approval queue the moment SSO breaks, which is when you need it most, so the
+bypass is the deliberate break-glass. It is not silent: every one writes an
+`approval.second_human.bypass` audit event beside the `actor_type=system`
+`approval.decide`. **For this gate to actually bind, treat the admin token as a
+break-glass credential** — configure SSO, and hold the token out of band.
+
+Local mode is the same story with a different label: the injected operator IS a
+verified human there, so `local:alice` deciding `local:alice`'s own run is
+refused like any other self-decision. On a single-dev machine this switch is
+simply not one to turn on. A run with an empty `created_by` (system-created
+follow-on runs) has no human creator to be the same as, so the rule cannot apply
+and the decision proceeds. The switch is scoped to `egress_domain` only —
+`credential` and `tool_call` approvals are already admin-only regardless of
+ownership.
+
+**A `credential` decision carries one scope: `run` — the per-run credential
+lease.** Every other scope on a `credential` approval is a `400`, and so is any
+scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
+credential helper git invokes on every operation, so single-use forced the
+operator to choose between a click per git op and standing auto-issue of a real
+personal credential (`docs/adoption/corp-network-onboarding-findings.md` B2).
+Approving with `decision_scope=run` (`wardyn approve <id> --scope run`) makes
+that one decision re-mintable for the rest of the run.
+
+Three things bound it. It applies to **`git_pat` only** — `github_token` is
+brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never
+leaves the broker, so none of them has the standing-consumer problem, and
+`broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped
+decision. It is **per scope**: if the grant's scope no longer matches what the
+human approved, the lease does not carry over. And it is **killed by
+revocation** — a leased re-mint still runs the whole mint transaction, so the
+kill-switch cascade ends it the moment the revocation commits.
+
+The audit says which mints were the human's and which were the lease's:
+`credential.mint` carries `lease: true` plus the raw `decision_scope`. The
+comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d — an
+empty `decision_scope` normalizes to `run`, and every credential approval
+decided before this feature carries an empty one, so a normalized comparison
+would have turned every legacy approval in the deployment into a standing lease
+on upgrade. Nothing you approved before v0.6 leases anything.
 
 **An `egress_domain` decision's *scope* adds a second, narrower gate on top
 of the kind check above — and one of the four scopes is gated on ROLE, not
@@ -463,11 +594,16 @@ there — that is the operator's own posture, not a switch that failed.
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
 
-`PUT /permissions/enforcement` replaces the **whole** map and carries no
-`If-Match`/version guard, so an omitted kind is an enforced kind switched off:
-re-fetch `GET /permissions` immediately before writing, or a stale admin tab
-can silently disable a control that two admins both believe is on. The write is
-audited either way, which is attribution rather than prevention.
+`PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind
+is an enforced kind switched off: re-fetch `GET /permissions` immediately
+before writing, or a stale admin tab can silently disable a control that two
+admins both believe is on. `GET /permissions`'s `ETag` header (a content hash
+of the enforcement map alone, not the grant table) can be sent back as this
+`PUT`'s `If-Match` for that: a document that changed underneath a stale tab is
+refused `412` instead of accepted and silently narrowed. `If-Match` is
+optional — omitting it keeps working exactly as before, so this is additive,
+not a new requirement, and the write is audited either way regardless of
+whether `If-Match` was used, which is attribution rather than prevention.
 
 Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
 `capability.enforcement.write`. Enforcement lives in its own table rather than
@@ -479,6 +615,50 @@ There is **no cache** — resolution is two indexed reads per check, so a
 grant applies immediately. A process-local cache would be the same HA blocker
 named elsewhere in this document, and a stale permission cache is a security
 bug rather than a slow page.
+
+### Per-user API tokens: stop sharing the admin token
+
+`WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to
+nobody. Every script that held it was an admin, and the audit log recorded all
+of them as `admin-token`. A **per-user API token** is the replacement: a human
+mints one for their own automation, it carries *their* identity and *their*
+role, and it is revocable on its own.
+
+| Call | Who | What |
+|---|---|---|
+| `POST /api/v1/me/tokens` | any signed-in human | mint one for yourself — the response is the **only** time the plaintext exists |
+| `GET /api/v1/me/tokens` | any signed-in human | your own tokens, revoked ones included |
+| `DELETE /api/v1/me/tokens/{id}` | any signed-in human | revoke one of your own |
+| `GET /api/v1/tokens` | admin | every token in the deployment |
+| `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
+
+Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
+revokes every unrevoked token that principal holds — a token is their session in
+another form, so the incident lever covers both in one call. The `all` arm is
+deployment-wide for tokens too: EVERY live token goes, the calling admin's own
+included — plan to re-mint after a global revoke.
+
+Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
+indistinguishable from that human's console session — run ownership, the
+admin/member gate and capability grants all resolve to the owning human — so a
+member's token reaches exactly the routes their session reaches, and no more. A
+token is **never** the admin identity: minting one requires a verified SSO
+human, so neither the admin token nor local mode can mint one, and a token
+cannot mint a successor (otherwise revoking a leaked one would not end the
+compromise).
+
+Only `hex(sha256(token))` is stored. A lost token is re-minted, never
+recovered, and a database reader — a reporting role, a hot standby, a `pg_dump`
+in a backup bucket — cannot lift a usable credential off a row. `last_used_at`
+is best effort and is the signal for "which of these are dead"; revoke those.
+
+**The role is a stamp, not a live check.** A token carries the role its owner
+held when they minted it, exactly the way a registered SSH key does. Demoting a
+human from admin to member does **not** reach their outstanding tokens — revoke
+them with `DELETE /api/v1/tokens/{id}`, which is also the path for a departed
+owner's credential. Both `token.create` and `token.revoke` are audited (see
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
+owner, so an admin revoking someone else's is legible after the fact.
 
 ### Every denial that isn't a 404
 
@@ -493,12 +673,13 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route | `403` |
-| `not_owner` | a member reached a run/approval/recording that exists but isn't theirs | `404` (byte-identical to missing) |
+| `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | `404` (byte-identical to missing) |
 | `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | `403`, or a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | `403`, or a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | drop |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | drop |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | `403` |
 
 The three drop rows are why `POST /runs` mostly *narrows* rather than refuses:
 a member whose whole allowlist is ungranted gets a run with no member-authored
@@ -526,19 +707,30 @@ concept), no tenant/org columns, no
 separation of duty among admins — every admin (and the admin token, always)
 can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
 residual #14, still open). The SSH gateway's admin override is a
-**registration-time stamp**, not a live role check: since migration `0043` a
+**bounded-stale stamp**, not a live role check: since migration `0043` a
 key authorizes when `run.created_by == the key's principal` OR the key's
-`role` column reads `admin`, and that column is written once, at
-`POST /me/ssh-keys` time, from the role the registering session held then.
-The gateway never re-reads the human's role now, so a demoted admin's
-already-registered key keeps the override until that key is deleted
-(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registered —
-strictly weaker than the web terminal's live `requireOperator` gate. The same
-stamp is why **an admin upgrading from 0.5 does not get the override on the key
-they already have**: `0043` backfills every pre-existing row as `member` (the
-fail-closed value — nothing in the schema knows what role its registrant held),
-and nothing re-stamps it later, so an admin who wants the override must delete
-that key and register it again. A member's key never satisfies the override
+`role` column reads `admin` AND its `role_checked_at` (migration `0046`) is
+no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). That stamp is written at
+`POST /me/ssh-keys` time, from the role the registering session held then,
+but it is also RE-stamped — both `role` and `role_checked_at` — on every OIDC
+login for that principal, across every key they hold, no re-registration
+required. The gateway still never reads the human's role live at connect time
+— SSH carries no session for `requireOperator` to read — so this stays
+bounded-stale rather than live, but a demoted admin's already-registered key
+now loses the override on its own: at their next login (which re-stamps
+`role=member`), or once `role_checked_at` ages past `WARDYN_SSH_ROLE_TTL`
+even if they never log in again — whichever comes first. Deleting the key
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registering it is
+still the immediate lever, just no longer the only one — strictly weaker than
+the web terminal's live `requireOperator` gate, but no longer unboundedly so.
+The same TTL is why **an admin upgrading from 0.5 (or from pre-`0046`) does not
+get the override on the key they already have until it is refreshed**: `0043`
+backfills every pre-existing row as `member` (the fail-closed value — nothing
+in the schema knows what role its registrant held), and `0046` backfills
+`role_checked_at` as `NULL` for every pre-existing row, which `sshAuth` treats
+as infinitely stale — so that key has no override until its owner logs in
+again (the ordinary path, no re-registration needed) or deletes and
+re-registers it. A member's key never satisfies the override
 (`docs/SSH.md`'s Bounds section;
 `threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
@@ -1069,6 +1261,17 @@ validator the server runs): because this is a whole-document replace, a typo'd
 key is not an ignored line — it would leave the real setting out of the body and
 delete it. A misspelled field fails on the host, before anything is sent.
 
+**Optional `If-Match`.** `GET /site-config` returns an `ETag` (a content hash
+of the document); a `PUT` carrying that value back as `If-Match` is refused
+`412` if the document changed underneath it — two admins editing the same
+config, or a stale `corp-baseline.json` applied after someone else's `PUT`
+already landed — instead of one silently overwriting the other. Omitting
+`If-Match` keeps working exactly as before: this is additive, not a new
+requirement, and `wardyn site-config apply` today sends none. A `PUT` that
+does send it and gets `412` should re-`GET`, re-apply its intended change on
+top of the current document, and retry — the same shape as any optimistic
+concurrency failure.
+
 ### Testing it: two probes, not a courtesy button
 
 Wardyn otherwise has no test-connection buttons anywhere: it cannot dial a
@@ -1255,20 +1458,88 @@ verbatim, never injected into. An agent CLI is present in that image only if
 the repo's own devcontainer installs it; an agent run on an image without
 one fails at the CLI, visibly, rather than being silently patched.
 
-## The age key has no rotation path
+## Rotating the age key
 
 The secret store binds **one** age identity for both encryption and decryption
-(`internal/secretstore/pg`), and nothing re-encrypts stored secrets under a new
-key — there is no `wardyn secret rotate`. Changing `WARDYN_AGE_KEY` does not
-migrate anything; it strands every existing ciphertext. To move keys today you
-must re-enter every secret (`wardyn secret set …`, `wardyn subscription connect`)
-against the new identity.
+(`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates
+nothing — it strands every existing ciphertext, and wardynd then fails closed on
+the first decrypt rather than starting.
 
-The "set a persistent key or lose your secrets on restart" warning is already in
-[`deploy/compose/README.md`](../deploy/compose/README.md),
-[TRY-IT.md](TRY-IT.md), and both installer scripts. What those do not say, and
-this does: **back the key up off-host, because you cannot rotate out of a
-compromise without re-entering every secret.**
+`wardynd -rotate-age-key <key-file>` is the supported rotation. It is a
+**maintenance mode, not a server start**: it mints a new identity, re-encrypts
+every row of the `secrets` table from the current key to the new one in ONE
+transaction, replaces the key file, writes a `secret.rekey` audit event, and
+exits. It never opens a listener and never dispatches a run.
+
+Three properties are worth knowing before you run it:
+
+- **The daemon must be stopped.** A serving wardynd holds the OLD identity in
+  memory for the life of the process; after a rotation it decrypts nothing and
+  would write any newly-stored secret under the retired key. A Postgres advisory
+  lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
+  cannot see a serving daemon — no wardynd holds a process-lifetime lock — so
+  stopping it is **your** step, not one the tool enforces.
+- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A
+  row the current key cannot decrypt aborts the whole thing with an error naming
+  that secret and how far it got (`rekey ABORTED after 3 of 9 rows …`), and
+  nothing is committed — every secret is still readable with the old key. There
+  is no half-rotated state to diagnose.
+- **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
+  is a `wardynd` flag, run by whoever has shell access to the key file.
+
+The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines are
+allowed, so `age-keygen` output works as-is) — *not* an env file. It must
+already hold the identity `WARDYN_AGE_KEY` names, or the rotation is refused:
+the whole point is that this file is replaced, and pointing the flag at
+`deploy/compose/.env` would otherwise overwrite it.
+
+```sh
+# 0. Take the Postgres dump above FIRST. It is the only rollback for the data
+#    half; the .bak below is only the rollback for the key half.
+
+# 1. Stop the daemon. Nothing may be writing secrets during the rotation.
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+
+# 2. Put the CURRENT key in a key file, if it is not already in one.
+#    (Compose keeps it as a WARDYN_AGE_KEY= line in deploy/compose/.env.)
+umask 077
+grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | cut -d= -f2- > ~/.wardyn/age.key
+
+# 3. Rotate. The old key still comes in via WARDYN_AGE_KEY; the new one is
+#    generated here and lands in the key file.
+WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+# INFO wardynd: age key rotated; … secrets=7 key_file=/home/you/.wardyn/age.key
+#      public_recipient=age1… rollback_copy=/home/you/.wardyn/age.key.bak
+
+# 4. Put the NEW key back where the deployment reads it from, then restart.
+#    Compose: rewrite the .env line. Helm: update the Secret's age-key entry.
+docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
+```
+
+Verify the same way the restore runbook does — a row count proves nothing about
+decryptability. Launch a run against a workspace that depends on a stored secret
+and confirm it starts. The audit trail records the rotation itself:
+
+```sh
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
+  -c "SELECT time, data FROM audit_events WHERE action='secret.rekey' ORDER BY time DESC LIMIT 1;"
+```
+
+**Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until
+*you* delete it — nothing cleans it up. Restoring it is only half an undo: the
+database is already re-encrypted, so `.bak` is usable **only** together with the
+Postgres dump from step 0. Once you have confirmed the rotated deployment works,
+delete `.bak` — leaving it is leaving a second copy of a retired master key on
+disk.
+
+If a step after the commit fails (the key file could not be replaced), the error
+says so explicitly and names `<key-file>.new`, which holds the new identity and
+at that point is the **only** key that reads the store. Save it before doing
+anything else.
+
+Whatever you do, **back the key up off-host.** Rotation re-encrypts what is
+there; it cannot recover a key you have already lost.
 
 ## Upgrades
 
@@ -1550,11 +1821,44 @@ ERROR wardynd: fatal err="load secret \"wardyn-signing-key\": pg secretstore: de
 That is the correct behaviour — `loadOrCreateSecret` fails closed on a decrypt
 error rather than minting a fresh key over the existing one, which would strand
 the old ciphertext permanently instead of loudly. But it is also unrecoverable
-from inside the cluster: there is no rotation path (see
-[The age key has no rotation path](#the-age-key-has-no-rotation-path)), so the
-fix is always "put the original Secret back", never "generate a new one". Back
-the Secret up off-cluster, wherever the DSN Secret is backed up, and treat
-deleting it as equivalent to deleting the database.
+from inside the cluster. [Rotating the age key](#rotating-the-age-key)
+re-encrypts a store you can still *read*; it cannot help here, because the key
+that reads this one is exactly what is missing. So the fix is always "put the
+original Secret back", never "generate a new one". Back the Secret up
+off-cluster, wherever the DSN Secret is backed up, and treat deleting it as
+equivalent to deleting the database.
+
+**Rotating it on k8s** uses the same runbook
+([Rotating the age key](#rotating-the-age-key)), with two differences.
+
+First, "stop the daemon" is a scale-to-zero — the Deployment *is* the daemon:
+
+```sh
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+kubectl -n wardyn wait --for=delete pod -l app.kubernetes.io/name=wardyn --timeout=2m
+```
+
+Second, **run the rotation from outside the cluster, not in a Pod.**
+`-rotate-age-key` needs only `WARDYN_PG_DSN`, `WARDYN_AGE_KEY` and a writable
+path for the key file — so port-forward Postgres and run the same `wardynd`
+binary on your workstation, exactly as the compose runbook does. Doing it in a
+one-shot Pod is the awkward path, not the clever one: the wardynd image is
+distroless with no shell (`deploy/compose/Dockerfile.wardynd`), so there is
+nothing in it to seed the key file with or to copy the result back out
+afterwards, and the `.bak` would die with the Pod anyway.
+
+```sh
+kubectl -n wardyn port-forward svc/<your-postgres> 15432:5432 &
+WARDYN_PG_DSN='postgres://…@127.0.0.1:15432/wardyn?sslmode=disable' \
+  WARDYN_AGE_KEY="$(kubectl -n wardyn get secret <name> -o jsonpath='{.data.age-key}' | base64 -d)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+```
+
+Then write the new value into the Secret the Deployment reads
+(`secrets.ageKey`, or the `age-key` entry of the external-DSN Secret — see the
+table above) and scale back up. Keep the old Secret value **and** the Postgres
+backup until the rotated deployment is confirmed working; on k8s those are the
+rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
 
 ### The SSH host key survives restarts — because the age key does
 
@@ -1584,6 +1888,22 @@ error before the gateway ever listens, so what clients get is a connection
 refused, never a silently different host key — a strictly better failure than
 the man-in-the-middle warning a re-minted key would produce, and the reason
 `loadOrCreateSecret`'s fail-closed branch matters here specifically.
+
+### The UI-sandbox gateway: a per-run origin is the production default
+
+If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
+set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — this
+is the documented enterprise default, not an optional extra. Leaving it unset
+puts every run's relayed app on the SAME browser origin, separated only by a
+path-scoped cookie; that shared-origin mode is a published residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18), tolerable for a
+single-tenant demo cluster but not the shape a multi-tenant or production
+install should run in. Setting the template needs wildcard DNS and a wildcard
+certificate for the gateway's hostname (e.g. `*.ui.example.com`) — the one-time
+cost that buys every run its own origin, with an enter on any other host
+refused outright. Full recipe, including the wildcard Ingress, in
+[docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the Helm chart
+section linked above.
 
 ## One replica, by construction
 

@@ -166,6 +166,15 @@ func (s *Server) refreshRun(ctx context.Context, runID uuid.UUID, fallback types
 // error) and returning ok=false on failure. Callers must return immediately
 // when ok is false.
 func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	// A store-less build (this package's own harnesses; wardynd always wires PG)
+	// reaches here as a nil interface and would panic into the recoverer's opaque
+	// 500. Answer the same 500 explicitly, with the reason — the workspace routes
+	// authorize BEFORE they parse a body, so this is now the first store touch on
+	// every one of them, and an unexplained panic there reads like an auth bug.
+	if s.cfg.Store == nil {
+		writeError(w, http.StatusInternalServerError, "get workspace: no store configured")
+		return types.Workspace{}, false
+	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
 	if notFoundIf(w, err, "workspace") {
 		return types.Workspace{}, false
@@ -175,6 +184,90 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 		return types.Workspace{}, false
 	}
 	return ws, true
+}
+
+// ownsWorkspaceOrAdmin reports whether the caller of r may ACT ON ws as its
+// owner (owned_by matches) or as an admin — the workspace analog of
+// ownsRunOrAdmin, and the shared owner-or-admin PREDICATE behind both
+// getWorkspaceAuthorized (mutating routes) and getWorkspaceReadable (reads).
+//
+// An OPERATOR-OWNED workspace (owned_by == "", every pre-0048 row and every
+// admin-created one) is deliberately NOT owned by any member here: it stays
+// member-READABLE via getWorkspaceReadable, but writing it stays an admin act,
+// exactly as it is today. The empty-principal guard matters for the same
+// reason: a caller whose principal resolves to "" must never match an
+// operator-owned row's empty owned_by and inherit admin write.
+func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool {
+	if s.isOperator(r.Context()) {
+		return true
+	}
+	principal := principalFromRequest(r)
+	return ws.OwnedBy != "" && principal != "" && ws.OwnedBy == principal
+}
+
+// denyForeignWorkspace writes the refusal for a caller who may not act on a
+// workspace that GENUINELY EXISTS but belongs to another member: the
+// BYTE-IDENTICAL 404 getWorkspaceOr404 writes for a truly-missing id, never a
+// 403 — so probing another member's workspace id learns nothing, there being no
+// existence oracle distinguishing "not yours" from "does not exist". Same shape
+// (and same reason) as getRunAuthorized's own deny.
+//
+// The authz.denied audit fires only HERE, i.e. only once the row is positively
+// known to exist and to be foreign — a truly-missing workspace stays silent, so
+// the audit trail is not a scan log of every 404.
+func (s *Server) denyForeignWorkspace(w http.ResponseWriter, r *http.Request, ws types.Workspace) {
+	writeError(w, http.StatusNotFound, "workspace not found")
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", ws.ID.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+}
+
+// getWorkspaceAuthorized loads a workspace and authorizes the caller to MUTATE
+// it as its owner or an admin (ownsWorkspaceOrAdmin) — the owner-scoped twin of
+// getWorkspaceOr404, for the workspace routes a member may reach for their OWN
+// workspaces (update/delete/scan/build). Callers must return immediately when
+// ok is false. Two distinct refusals, and the split is the design:
+//
+//   - a foreign MEMBER-OWNED workspace gets the byte-identical 404
+//     (denyForeignWorkspace) — no existence oracle across members.
+//   - an OPERATOR-OWNED workspace gets the 403 requireOperator itself would
+//     have written before these routes moved off the operatorOnly group. It is
+//     already listable and readable by every member, so there is no existence
+//     to hide, and answering 404 for a row the member can see in the list would
+//     be a lie about a route that is simply admin-only. This keeps every
+//     pre-0048 workspace's behavior BYTE-IDENTICAL to 0.5 for a member.
+func (s *Server) getWorkspaceAuthorized(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
+		return types.Workspace{}, false
+	}
+	if s.ownsWorkspaceOrAdmin(r, ws) {
+		return ws, true
+	}
+	if ws.OwnedBy == "" {
+		writeError(w, http.StatusForbidden, "requires admin role")
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
+		return types.Workspace{}, false
+	}
+	s.denyForeignWorkspace(w, r, ws)
+	return types.Workspace{}, false
+}
+
+// getWorkspaceReadable loads a workspace for a member-tier READ (get, build
+// status, observed egress, env-as-code). It is getWorkspaceAuthorized minus the
+// write tier: an OPERATOR-OWNED workspace stays readable by any authenticated
+// caller, exactly as it is today, while another MEMBER's owned workspace gets
+// the byte-identical 404 — the one thing 0048 adds to these routes.
+func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
+		return types.Workspace{}, false
+	}
+	if ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws) {
+		return ws, true
+	}
+	s.denyForeignWorkspace(w, r, ws)
+	return types.Workspace{}, false
 }
 
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and

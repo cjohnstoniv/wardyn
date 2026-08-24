@@ -282,6 +282,14 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 				if !enabled {
 					continue
 				}
+				// #12: same TRUST BOUNDARY as the secret case below, gated
+				// behind RequireOperatorSetEgress (default off — see the
+				// Config field doc). When enabled, a scan_seeded egress host
+				// (the workspace scanner reading untrusted repo content) is
+				// skipped; only an operator's DIRECT declaration auto-adds.
+				if s.cfg.RequireOperatorSetEgress && req.Provenance != "operator_set" {
+					continue
+				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
 			case "secret":
 				if !enabled {

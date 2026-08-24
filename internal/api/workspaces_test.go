@@ -123,10 +123,22 @@ func TestDecodeWorkspaceRequest_DistinctOrEmptyTargetsAccepted(t *testing.T) {
 
 func TestUpdateWorkspaceValidation(t *testing.T) {
 	h := newHarness(t)
-	id := uuid.New().String()
-	if w := do(t, h.srv, http.MethodPut, "/api/v1/workspaces/"+id,
+	// The invalid-spec 400 needs a workspace that EXISTS. Since 0048 the update
+	// handler AUTHORIZES BEFORE IT PARSES — a foreign or unknown id has to answer
+	// the same 404 whatever the body says, or the response code becomes the
+	// existence oracle ownership-404 exists to close (see
+	// TestWorkspaceOwnership_ForeignOwned404Parity) — so a body error is only
+	// reachable once the row is found and the caller may act on it.
+	st := newOwnerStore()
+	srv := New(baseTestConfig(h, st))
+	id := st.put(types.Workspace{}).String() // operator-owned; the admin token is an operator
+	if w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id,
 		adminToken, `{"name":"w","kind":"weird","source":"/home/u/repo"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("update invalid spec: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+uuid.New().String(),
+		adminToken, `{"name":"w","kind":"weird","source":"/home/u/repo"}`); w.Code != http.StatusNotFound {
+		t.Errorf("update unknown id (bad body too): code = %d, want 404 — authorize precedes parse; body=%s", w.Code, w.Body.String())
 	}
 	if w := do(t, h.srv, http.MethodPut, "/api/v1/workspaces/not-a-uuid",
 		adminToken, `{"name":"w","kind":"local_dir","source":"/home/u/repo"}`); w.Code != http.StatusBadRequest {

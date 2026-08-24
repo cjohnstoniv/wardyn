@@ -47,6 +47,15 @@ type dispatchParams struct {
 	// full accommodation set — "unknown" must not break the proven CI and
 	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
 	Toolchains *toolchainNeeds
+	// MemberMounts, when its Roots are non-nil, marks this as a run against a
+	// MEMBER-OWNED workspace and carries the operator/MDM-set roots that member's
+	// local_dir binds must resolve inside plus which sources those binds are
+	// (memberMountPosture, workspace_refs.go). Roots ride straight onto
+	// SandboxSpec.MemberMountRoots and Sources stamp runner.Mount.MemberAuthored,
+	// so the driver re-checks every MEMBER-authored bind against the canonicalized
+	// real path as late as this process can. The ZERO value is every operator run
+	// — the driver then takes exactly today's path.
+	MemberMounts memberMountPosture
 	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
 	// ephemeral workspace source(s) declare — no host mount, no clone; the
 	// sandbox just needs the directory to exist. Surfaced as
@@ -286,7 +295,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
-	mounts := buildRunMounts(policy, llm)
+	mounts := buildRunMounts(policy, llm, p.MemberMounts)
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
@@ -299,12 +308,24 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// sidecar is the only consumer that ever needs the resolved values.
 	s.resolveLLMInspectionSecrets(ctx, run, &policy)
 
+	// env_secret grants: stored secret -> sandbox ENV VAR, mask-registered. LAST
+	// in the env composition (after applyDispatchModeEnv, the artifact config,
+	// p.ExtraEnv and resolveLLMTransport's auth vars) so its refusal to overwrite
+	// an already-set variable covers every platform-authored key, not just the
+	// ones written above it. See resolveEnvSecretGrants.
+	s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
 		Mounts:           mounts,
+		// nil for an operator run (the driver then behaves exactly as it does
+		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
+		// binds (stamped above by buildRunMounts) the driver re-checks against
+		// these roots — see runner/member_mount.go.
+		MemberMountRoots: p.MemberMounts.Roots,
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
@@ -618,6 +639,81 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		run.ID.String(), outcome, mustJSON(map[string]any{
 			"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
 		})))
+}
+
+// envAllowMemberEnvSecret opts a deployment IN to letting MEMBERS hold
+// env_secret grants. DEFAULT CLOSED: unset means a member's env_secret grant is
+// dropped by filterMemberGrants even when the operator's ceiling lists the exact
+// (name, secret) pairing. An operator's own runs are unaffected — the ceiling
+// authority is never clamped by its own ceiling.
+const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
+
+// resolveEnvSecretGrants resolves this run's env_secret grants store->sandbox
+// env at dispatch: each grant's scope names a stored secret and the variable to
+// put its VALUE under (envSecretScopeFields). This is the whole delivery
+// mechanism for the kind — there is no mint, no approval and no broker
+// involvement (mintKind refuses env_secret outright), which is why the closest
+// precedent is resolveLLMInspectionSecrets and not any of the git lanes.
+//
+// Every resolved value is registered with the run's mask registry, so a verbatim
+// leak into PTY capture, a session recording, or any audit event's Data is
+// scrubbed like any other run secret. Values NEVER enter the audit stream: the
+// events below carry the variable name and the secret NAME only.
+//
+// FAIL-CLOSED PER GRANT, deliberately the opposite of resolveLLMInspectionSecrets'
+// fail-open: that one feeds a detection corpus, where a missing entry costs
+// detection coverage; this one delivers a credential the task needs, where a
+// silently absent variable surfaces as an unauthenticated API call the agent
+// then reports as a task failure. So a grant is SKIPPED and audited (never
+// substituted, never blank-set) when its scope is unreadable, its secret is
+// reserved, the store is missing or the value is gone.
+//
+// It also refuses to OVERWRITE a variable dispatch already set to a NON-EMPTY
+// value. Everything in sandboxEnv by this point is platform-authored (the
+// harness's own WARDYN_*, the LLM transport's ANTHROPIC_*, artifact-redirect
+// config, p.ExtraEnv), and a grant that could replace one would be a config
+// override wearing a credential's clothes — the WARDYN_ prefix is already
+// refused at write time, and this closes the rest of the set without having to
+// enumerate it. Runs LAST in dispatch's env composition so "already set" means
+// all of it, not just the part written so far. Non-empty, not merely present:
+// an empty value carries no configuration to protect, and treating it as
+// occupied would make a placeholder key unfillable for no gain.
+func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) {
+	for _, g := range policy.EligibleGrants {
+		if g.Kind != types.GrantEnvSecret {
+			continue
+		}
+		name, secretName, err := envSecretScopeFields(g.Scope)
+		skip := ""
+		switch {
+		case err != nil:
+			skip = "scope invalid: " + err.Error()
+		case sinkReservedSecret(secretName):
+			skip = "references a reserved platform-internal secret name"
+		case s.cfg.Secrets == nil:
+			skip = "no secret store configured"
+		case sandboxEnv[name] != "":
+			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
+		}
+		if skip == "" {
+			val, gerr := s.cfg.Secrets.Get(ctx, secretName)
+			if gerr != nil || len(val) == 0 {
+				skip = "secret could not be resolved"
+			} else {
+				sandboxEnv[name] = string(val)
+				if s.cfg.MaskRegistry != nil {
+					s.cfg.MaskRegistry.Add(run.ID, val)
+				}
+			}
+		}
+		data := map[string]any{"name": name, "secret_name": secretName}
+		outcome := "success"
+		if skip != "" {
+			outcome, data["reason"] = "failure", skip
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.env_secret.resolve",
+			run.ID.String(), outcome, mustJSON(data)))
+	}
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

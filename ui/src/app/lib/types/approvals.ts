@@ -8,9 +8,10 @@ export type ApprovalKind = "credential" | "egress_domain" | "tool_call";
 
 export type ApprovalState = "PENDING" | "APPROVED" | "DENIED" | "EXPIRED";
 
-// How far a human's approve/deny decision reaches — egress_domain only; a
-// credential mints once by construction and a tool_call is clamped, so
-// neither carries a scope. Mirrors internal/types/types.go's ApprovalScope
+// How far a human's approve/deny decision reaches — egress_domain carries all
+// four; a credential carries only "run" (the per-run lease: a git_pat approved
+// once is re-mintable for the rest of the run); a tool_call is clamped and
+// carries none. Mirrors internal/types/types.go's ApprovalScope
 // EXACTLY (Valid()'s four values) — hand-maintained, no parity test, so a
 // value added on the Go side and not here is a silent client-side drift.
 export type ApprovalScope = "once" | "run" | "until" | "always";

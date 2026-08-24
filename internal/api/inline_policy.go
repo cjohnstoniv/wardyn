@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
 
 	"github.com/google/uuid"
@@ -227,13 +228,20 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, spec *types.RunPo
 
 	keptGrants := spec.EligibleGrants[:0:0]
 	for _, g := range spec.EligibleGrants {
-		// The decode error is already impossible here: filterMemberGrants 422s
-		// an undecodable stored-secret scope before this runs, and it is the
-		// only order that exists. An empty ref out of one anyway matches no
-		// grant but `*`, so even that would fail closed rather than through.
-		_, secretRef, knownHostsRef, covered, _ := storedSecretGrantPairing(g)
+		// filterMemberGrants 422s an undecodable stored-secret scope — and, since
+		// the pairing switch closed, an unknown kind too — before this runs, and
+		// it is the only order that exists. The error is still HONORED here
+		// rather than discarded: relying on that ordering is what let the old
+		// open default arm through TWO gates instead of one, and an unreadable
+		// pairing has no secretRef to check, so keeping it would be a free pass.
+		_, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
+		if covered && derr != nil {
+			warns = append(warns, fmt.Sprintf("dropped %s grant: %v", g.Kind, derr))
+			drops = append(drops, capDrop{reason: "capability_" + capSecret, detail: string(g.Kind)})
+			continue
+		}
 		if !covered {
-			keptGrants = append(keptGrants, g) // github_token, cloud_sts, … name no stored secret
+			keptGrants = append(keptGrants, g) // github_token, cloud_sts name no stored secret
 			continue
 		}
 		if g.Kind == types.GrantAPIKey {
@@ -368,8 +376,10 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // so it cannot be exempt-matched at this layer anyway. Called for MEMBERS only —
 // an operator is the ceiling authority and stays unclamped. A sentinel LLM
 // api_key grant is kept: it references no operator stored secret and
-// validateInlineSecretRefs host-pins it to the provider. An UNDECODABLE scope is
-// a malformed request → error (fail closed), never a silent drop.
+// validateInlineSecretRefs host-pins it to the provider. An UNDECODABLE scope —
+// or, since the pairing switch closed, an UNKNOWN KIND — is a malformed request
+// → error (fail closed), never a silent drop. env_secret is admin-only and is
+// dropped for a member regardless of the ceiling; see the block below.
 func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	ceiling := s.cfg.DefaultPolicy.EligibleGrants
 	for _, g := range grants {
@@ -386,6 +396,22 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
 				continue
 			}
+		}
+		// env_secret is ADMIN-ONLY by default, ahead of the pairing check — a
+		// member does not get one even for a pairing the operator DID list.
+		// The other kinds a member may reuse are bounded after delivery: an
+		// api_key value never leaves the broker, a git_pat reaches git through
+		// the helper, an ssh_key is wiped after the clone. An env_secret is a
+		// raw value in the process environment for the run's whole life, with no
+		// mint, no TTL and nothing to revoke (see GrantEnvSecret), so "the
+		// operator listed this pairing" is a weaker statement here than it is
+		// for every other kind. An operator who has weighed that opens
+		// envAllowMemberEnvSecret; until then the answer is no.
+		if g.Kind == types.GrantEnvSecret && !envEnabled(os.Getenv(envAllowMemberEnvSecret)) {
+			warns = append(warns, fmt.Sprintf(
+				"dropped env_secret grant for %q: env_secret is admin-only (an operator can open it with %s)",
+				secretRef, envAllowMemberEnvSecret))
+			continue
 		}
 		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, ceiling) {
 			warns = append(warns, fmt.Sprintf(
@@ -404,6 +430,18 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 // such — for every other kind; see storedSecretPairingInCeiling). An undecodable
 // scope returns covered=true WITH the error (fail closed — an unreadable
 // stored-secret grant is rejected, never skipped).
+//
+// The switch is CLOSED — every types.GrantKind is named, and the default arm
+// REFUSES rather than falling through. That arm used to return covered=false,
+// which reads as "this kind names no stored secret" and is the answer both
+// callers give a free pass: filterMemberGrants `kept = append(kept, g)` and
+// narrowMemberInlinePolicy `keptGrants = append(keptGrants, g)`. So a grant kind
+// added to types.GrantKind and wired to a stored secret — env_secret is exactly
+// that — was member-authorable, unclamped by the operator's eligible-grant
+// pairing and unchecked against capSecret, until somebody remembered to come
+// back here. The kind set is small and closed; a compiler-visible list plus a
+// refusing default makes forgetting fail shut instead of open.
+// (TestStoredSecretGrantPairing_UnknownKindIsRefused is the regression.)
 func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered bool, err error) {
 	switch g.Kind {
 	case types.GrantAPIKey:
@@ -415,8 +453,23 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 	case types.GrantSSHKey:
 		h, kr, _, khr, e := sshKeyScopeFields(g.Scope)
 		return h, kr, khr, true, e
-	default:
+	case types.GrantEnvSecret:
+		// An env_secret has no host — it is delivered TO the sandbox, not to a
+		// destination — so the env var NAME takes the host slot. That makes the
+		// ceiling comparison an exact (name, secret) pairing, the same shape
+		// git_pat gets, rather than letting a member reuse an operator-blessed
+		// secret under a variable name the operator never wrote. hostEqual's
+		// lowercasing is harmless here: envSecretScopeFields admits upper case
+		// only, so two names that compare equal ARE equal.
+		n, sn, e := envSecretScopeFields(g.Scope)
+		return n, sn, "", true, e
+	case types.GrantGitHubToken, types.GrantCloudSTS:
+		// Genuinely name no stored secret: github_token mints an App
+		// installation token (scope-intersected by composer.Clamp), cloud_sts is
+		// hard-refused by the embedded IdP. Not covered, and safe to keep.
 		return "", "", "", false, nil
+	default:
+		return "", "", "", true, fmt.Errorf("unknown grant kind %q", g.Kind)
 	}
 }
 

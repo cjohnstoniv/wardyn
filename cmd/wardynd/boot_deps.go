@@ -114,7 +114,11 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
+	// emitting — see sinks.Source's doc comment. A no-op (empty) is
+	// byte-identical to before this field existed.
+	sinks.Source = strings.TrimSpace(source)
 	storeRec := store.Recorder{Pool: pool}
 	var auditRec audit.Recorder = storeRec
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)
@@ -280,6 +284,24 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// keeps working as an admin allowlist with zero re-configuration
 			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
 			LegacyAdminEmails: splitCSV(*f.oidcOperatorEmails),
+			// D16: revoke-a-human-now over the pg-backed cutoff table. Always
+			// wired whenever OIDC is (pool is already required), unlike the
+			// jti-level identity_revocations store which is a separate
+			// concern — see pgSessionRevocations' doc comment.
+			Revocations: &pgSessionRevocations{pool: pool},
+			// OnLogin (migration 0046): every successful login re-stamps
+			// role+role_checked_at on every ssh_public_keys row this principal
+			// owns — the bounded-stale re-check sshAuth's admin-override path
+			// reads (WARDYN_SSH_ROLE_TTL). store.NewPG(pool) is a cheap value
+			// wrapper (constructed the same way elsewhere in this file), not a
+			// connection of its own. Best-effort: a store hiccup here logs and
+			// the login still succeeds — see oidc.Config.OnLogin's own doc for
+			// why that contract lives on the callback side, not here.
+			OnLogin: func(ctx context.Context, sub, role string) {
+				if err := store.NewPG(pool).RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
+					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+				}
+			},
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)

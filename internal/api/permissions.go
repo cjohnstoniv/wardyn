@@ -46,6 +46,10 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get capability enforcement: "+err.Error())
 		return
 	}
+	// The ETag covers ONLY the enforcement map, not Grants: it exists so a
+	// caller can round-trip it as PUT /permissions/enforcement's If-Match
+	// (etag.go) — that endpoint's own whole-document replace, not this one.
+	w.Header().Set("ETag", computeETag(enf))
 	writeJSON(w, http.StatusOK, permissionsResponse{Grants: grants, Enforcement: enf})
 }
 
@@ -209,6 +213,13 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // above already applies. operatorOnly (routes.go); its own table, never
 // SiteConfig, so a stale client round-tripping an older document can never
 // silently disable this (see migration 0042's comment).
+//
+// If-Match (etag.go) is optional optimistic concurrency on top of this
+// whole-map replace: an absent header behaves exactly as before, a present
+// one that no longer matches GET /permissions's current Enforcement ETag is
+// refused with 412 before the write reaches the store. capEnforcementMu
+// (server.go) makes the check-then-write atomic against a second overlapping
+// PUT on this process.
 func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.Request) {
 	var body map[string]bool
 	if !decodeStrict(w, r, &body) {
@@ -220,6 +231,18 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
+	s.capEnforcementMu.Lock()
+	defer s.capEnforcementMu.Unlock()
+	existing, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get existing capability enforcement: "+err.Error())
+		return
+	}
+	if !ifMatchSatisfied(r, computeETag(existing)) {
+		writeError(w, http.StatusPreconditionFailed,
+			"If-Match does not match the current capability enforcement map — GET /permissions again and retry")
+		return
+	}
 	saved, err := s.cfg.Store.PutCapabilityEnforcement(r.Context(), body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "put capability enforcement: "+err.Error())
@@ -227,6 +250,7 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.enforcement.write", "capability_enforcement", "success", mustJSON(saved)))
+	w.Header().Set("ETag", computeETag(saved))
 	writeJSON(w, http.StatusOK, saved)
 }
 

@@ -57,12 +57,26 @@ func TestTryAdvisoryLock_SkipsWhenHeld(t *testing.T) {
 	releaseB()
 }
 
-// TestAdvisoryLockKeysAreDistinct: the reap key must not collide with the
-// migration lock, or a boot-time Migrate would silently disable reaping and a
-// long reap tick would stall a concurrent boot. Needs no server — it is the one
-// property of these constants that can go wrong.
+// TestAdvisoryLockKeysAreDistinct: no two lock keys may collide. Each pair is a
+// different silent failure — a reap key equal to the migration lock would let a
+// boot-time Migrate disable reaping and a long reap tick stall a concurrent
+// boot; a rekey key equal to any of them would make `wardynd -rotate-age-key`
+// refuse to run whenever an unrelated subsystem held its lock, or (worse) let
+// the two proceed believing they had exclusivity. Needs no server — it is the
+// one property of these constants that can go wrong.
 func TestAdvisoryLockKeysAreDistinct(t *testing.T) {
-	if ReaperAdvisoryLockKey == migrateAdvisoryLockKey {
-		t.Fatal("reaper and migration advisory lock keys collide")
+	keys := map[string]int64{
+		"migrate":            migrateAdvisoryLockKey,
+		"reaper":             ReaperAdvisoryLockKey,
+		"groundtruthRotator": GroundTruthRotatorLockKey,
+		"secretRekey":        SecretRekeyLockKey,
+	}
+	seen := map[int64]string{}
+	for name, key := range keys {
+		if prev, dup := seen[key]; dup {
+			t.Errorf("advisory lock keys %q and %q are both %#x", prev, name, key)
+			continue
+		}
+		seen[key] = name
 	}
 }

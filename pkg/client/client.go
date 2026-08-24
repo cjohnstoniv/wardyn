@@ -28,6 +28,7 @@
 //   - setup:       SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity:    Me
 //   - health:      Healthz
+//   - sessions:    RevokeSessions
 //
 // NOT covered (drive these with the CLI or raw HTTP): attach WebSocket /
 // attach-ticket, harness-login device flow, and the agent-facing /internal/*

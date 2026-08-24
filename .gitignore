@@ -107,6 +107,7 @@ ds-bundle/
 !/docs/design/ui-sandboxes-mock/
 !/docs/design/permissioning-prompt.md
 !/docs/design/permissioning-mock/
+!/docs/design/member-role-desktop.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

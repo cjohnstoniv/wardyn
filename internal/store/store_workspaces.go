@@ -145,10 +145,13 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 // denied_egress is appended LAST (not interleaved next to approved_egress):
 // this const feeds both the INSERT list and every RETURNING/SELECT site, so
 // appending is the only edit that cannot silently transpose it past another
-// column of the same underlying type.
+// column of the same underlying type. owned_by (0048) is appended for the same
+// reason, and — like denied_egress — is deliberately absent from
+// UpdateWorkspace's SET clause: ownership is stamped once at create and must
+// survive every composition edit.
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
-	`record_results, llm_cred, attachments, base_image_id, denied_egress`
+	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -156,7 +159,7 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
@@ -164,7 +167,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
 		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
-		workspaceDeniedParam(ws.DeniedEgress),
+		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy,
 	))
 }
 
@@ -514,7 +517,7 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
-		&attachmentsRaw, &ws.BaseImageID, &deniedRaw,
+		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound

@@ -46,3 +46,11 @@ const MaxSessionGroupsBytesForTest = maxSessionGroupsBytes
 func NewRewriteTransportForTest(publicURL, internalURL string, base *http.Client) (http.RoundTripper, error) {
 	return newRewriteTransport(publicURL, internalURL, base)
 }
+
+// SetRevocationsForTest wires a SessionRevocations store onto an already-built
+// Authenticator (D16's Middleware revocation-check tests build the
+// Authenticator through the normal full-discovery newAuth helper, then add
+// the store afterward — cfg is otherwise unexported).
+func SetRevocationsForTest(a *Authenticator, r SessionRevocations) {
+	a.cfg.Revocations = r
+}

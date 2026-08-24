@@ -269,6 +269,12 @@ func TestSSHKeysREST_RoleStampedAtRegistration(t *testing.T) {
 			if stored.Role != tc.wantRole {
 				t.Errorf("stored Role = %q, want %q", stored.Role, tc.wantRole)
 			}
+			// migration 0046: registration is itself a role check, so a
+			// freshly-registered key must not read as stale before its
+			// owner's next login ever gets a chance to refresh it.
+			if stored.RoleCheckedAt == nil {
+				t.Error("stored RoleCheckedAt = nil, want a timestamp stamped at registration")
+			}
 		})
 	}
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -97,6 +98,15 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
+	// secret store and returns, never serving. Ahead of validateConfig on
+	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
+	// govern SERVING, and a rotation run under the deployment's own environment
+	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
+	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
+		return rotateAgeKeyMode(f, p)
+	}
+
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
 	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
 	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
@@ -154,7 +164,7 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
 	if err != nil {
 		return err
 	}
@@ -248,6 +258,29 @@ func run() error {
 		return err
 	}
 
+	// MEMBER-MODE DESKTOP posture. Checked here (not in validateConfig) because
+	// both of its inputs only exist this far into boot: lm.enabled is the
+	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
+	// the answer — and feats.authn is the resolved "OIDC is configured" one.
+	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+		return err
+	}
+
+	// Member local_dir mount posture (the section-(c) ceiling). Parsed at boot so
+	// a malformed root fails closed here rather than at a member's first
+	// onboarding. O4: a root of "/" or $HOME is permitted but WARNED about,
+	// matching the LocalMode unspecified-bind warn precedent — refusing it would
+	// be safer, warning is what the surrounding code already does for a posture
+	// the operator may have chosen deliberately.
+	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
+	if err != nil {
+		return err
+	}
+	for _, warn := range memberWarns {
+		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
+	}
+
 	srv := api.New(api.Config{
 		Store:     store.NewPG(pool),
 		Identity:  idp,
@@ -261,21 +294,27 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:                auditSpool,
-		AuditDrainRecorder:        auditDrainRec,
-		AuditSinkDrops:            sinkDropsReporter(fan),
-		Runner:                    run,
-		AdminToken:                *f.adminToken,
-		LocalMode:                 lm.enabled,
-		LocalOperator:             lm.operator,
-		TrustDomain:               *f.trustDomain,
-		DefaultPolicy:             defaultPolicy,
-		RunnerTarget:              runnerTarget,
-		UIDir:                     *f.uiDir,
-		ControlPlaneURL:           *f.controlURL,
-		RecordingStore:            feats.recStore,
-		OIDC:                      feats.authn,
+		AuditSpool:         auditSpool,
+		AuditDrainRecorder: auditDrainRec,
+		AuditSinkDrops:     sinkDropsReporter(fan),
+		Runner:             run,
+		AdminToken:         *f.adminToken,
+		LocalMode:          lm.enabled,
+		LocalOperator:      lm.operator,
+		TrustDomain:        *f.trustDomain,
+		DefaultPolicy:      defaultPolicy,
+		RunnerTarget:       runnerTarget,
+		UIDir:              *f.uiDir,
+		ControlPlaneURL:    *f.controlURL,
+		RecordingStore:     feats.recStore,
+		OIDC:               feats.authn,
+		// D16: same store buildOptionalFeatures wired into oidc.Config.Revocations
+		// (the read side Middleware checks), given here to internal/api so the
+		// admin revoke-sessions endpoint has the write side. nil exactly when
+		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
+		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
+		MemberMounts:              memberMounts,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
 		AgentAnthropicModel:       *f.agentModel,
@@ -292,6 +331,7 @@ func run() error {
 		DisableSubscriptionInject: feats.disableSubInject,
 		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
+		RequireOperatorSetEgress:  *f.requireOpSetEgress,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
 		LocalLoopback:         lm.loopback,
@@ -306,6 +346,7 @@ func run() error {
 		SSHListenAddr:    *f.sshListen,
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
+		SSHRoleTTL:       *f.sshRoleTTL,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.
@@ -404,50 +445,6 @@ func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPla
 		"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", flagName, listen)
 }
 
-// validateUISandboxConfig is the UI-sandbox gateway's boot-time fail-closed
-// rule, kept beside validateConfig and pure for the same reason.
-//
-// The refusal that matters is the SAME-ADDRESS one. Everything the gateway
-// relays is the sandbox's OWN code, and the only thing keeping that code away
-// from the console's session storage and admin actions is that it arrives on a
-// different browser origin. Bound to the console's address, the gateway would
-// not merely fail to listen twice — the feature's entire security argument
-// would be false. So it is refused loudly here, in terms of what breaks, rather
-// than surfacing as "address already in use". The SSH gateway's address is
-// checked too: a shared port there is a plain misconfiguration, but it is one
-// boot can name instead of leaving to a bind error.
-//
-// The origin template, when set, must carry {run} — a template without it would
-// hand EVERY run the same host, silently turning per-run isolation back into
-// the shared origin it exists to replace.
-//
-// The TLS posture is taken rather than re-derived so this listener answers to
-// the SAME plaintext refusal the console does (refusePlaintextListen): the
-// relay session cookie is a bearer credential, and it travels on this address.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string, posture tlsPosture, allowPlaintextListen bool) error {
-	if uiListen == "" {
-		return nil // off: nothing to validate, no listener, no new surface
-	}
-	if err := refusePlaintextListen("-ui-sandbox-listen", uiListen, posture, allowPlaintextListen); err != nil {
-		return err
-	}
-	if sameListenAddress(uiListen, listen) {
-		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -listen — "+
-			"the UI-sandbox gateway relays the SANDBOX's own pages, and serving them on the console's origin would let that "+
-			"sandbox-authored code read the console session and drive every admin action the operator can; "+
-			"give the gateway its own address (e.g. \":8081\") or unset WARDYN_UI_SANDBOX_LISTEN to disable it", uiListen)
-	}
-	if sshListen != "" && sameListenAddress(uiListen, sshListen) {
-		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -ssh-listen; give each gateway its own address", uiListen)
-	}
-	if originTemplate != "" && !strings.Contains(originTemplate, "{run}") {
-		return fmt.Errorf("refusing to start: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE %q has no {run} placeholder — "+
-			"every run would share one origin while the deployment claims per-run isolation; "+
-			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
-	}
-	return nil
-}
-
 // sameListenAddress reports whether two listen addresses land on the same
 // browser ORIGIN, which is the question the refusal above actually asks — not
 // whether the two binds would collide at the socket layer.
@@ -491,40 +488,6 @@ func listenHostIsUnspecified(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsUnspecified()
-}
-
-// validateOperatorPosture is the second boot-time fail-closed rule, kept beside
-// validateConfig (and pure, for the same reason) but applied later: OIDC is not
-// built until boot_deps.go, well after validateConfig runs at the top of run().
-//
-// Configuring SSO IS the declaration that more than one human exists, so an
-// empty operator allowlist is not a default — it is an ambiguity in which every
-// person the IdP lets in silently holds the admin token's power. Refuse, with
-// WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST as the explicit override (the
-// WARDYN_ALLOW_PLAINTEXT_LISTEN precedent). UNCONDITIONAL — not conditioned on
-// the bind address the way the plaintext rule is: a loopback bind bounds who can
-// reach the port, not who the IdP authenticates.
-//
-// No OIDC => nothing to decide: the admin token and local mode are a single
-// shared credential with no human identity to key a role off, so they are always
-// operators and this rule never fires.
-//
-// hasRoleMap also satisfies the rule: WARDYN_OIDC_ROLE_MAP switches deriveRole
-// (internal/auth/oidc) to claim-based admin/member derivation that no longer
-// depends on the operator allowlist at all (an unmatched claim falls through to
-// WARDYN_OIDC_DEFAULT_ROLE or is denied) — so a role-map-only deployment, the
-// recipe .claude/skills/wardyn-k8s-setup/SKILL.md documents, is not the
-// every-human-is-admin ambiguity this refusal exists to catch.
-func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allowNoOperatorList bool, hasRoleMap bool) error {
-	if !oidcConfigured || len(operatorEmails) > 0 || allowNoOperatorList || hasRoleMap {
-		return nil
-	}
-	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
-		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
-		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox) — absent a role map — " +
-		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
-		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
-		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
 }
 
 // knownPublicAgeKeys are age identities this repository has published — each was
