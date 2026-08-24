@@ -12,6 +12,51 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Members onboard their own workspaces from the console.** The Workspaces
+  screen and the New-Run wizard's Add-a-workspace dialog now work for a member
+  session against the member-scoped routes: create and scan your OWN
+  workspaces, with the admin-set mount boundary shown in place — the daemon
+  tells the console the member's local-dir root (`member_local_dir_root` on
+  `GET /me`), and the path field says so. The writable checkbox does not
+  exist for members (the request never carries `writable`; the server-side
+  allowlist is the boundary either way). The mock at
+  `docs/design/ui-batch2-mock.md` is the design source of truth for every
+  string.
+- **Workspace reassignment (offboarding).** `POST /workspaces/{id}/reassign`
+  (admin-only) moves a member-owned workspace to operator ownership
+  (`owned_by=''`), audited `workspace.reassign` with `from_owner`. Members get
+  the same constant 403 as every admin-only workspace route — deliberately
+  more existence-blind than a 404 split.
+- **No impersonation in the audit trail.** When an admin acts on a
+  member-owned workspace, the audit actor stays the ADMIN's identity, and the
+  event carries `workspace_owner` naming the member — cross-user admin access
+  is queryable (`?actor=` plus `workspace_owner` ≠ actor), pinned by a guard
+  test at every workspace write site.
+- **A failed run says why, in the console.** The run page's FAILED state
+  renders the `failure_hint` the backend has stamped since migration `0044` —
+  bare server text beside the state badge, nothing when there is no hint.
+  The unlisted-host copy in the New-Run wizard now describes what the proxy
+  actually does (refused-and-raised, approve once, retry gets through), and
+  the egress panel names the agent CLI's telemetry endpoint for what it is.
+- **Desktop install lane.** `deploy/desktop/` gains `install.sh` (managed
+  dir, per-device age key minted at install — never distributed via MDM),
+  `com.wardyn.daemon.plist` (launchd), and `wardyn-desktop.sh`
+  (`docker compose --env-file … -p wardyn-desktop up -d --no-build
+  --pull always`, healthz wait, idempotent `wardyn site-config apply`).
+  `wardyn_pick_docker_host` now recognizes a Colima socket the way it does
+  Rancher's — without it, confinement silently collapses on Colima Macs.
+- **Desktop honesty gates.** `scripts/test-desktop-profile.sh` joins
+  `make test-scripts` (which CI runs), and a `desktop-envelope` CI job boots
+  compose with the example profile and asserts the managed policy file is
+  exactly what the daemon serves, an unpoliced run resolves to the ceiling,
+  and profile synthesis stays clamped. The one scripted macOS smoke run is an
+  operator step documented in `docs/DESKTOP.md` — run once, paste output; CI
+  does not cover it and the doc says so.
+- **ROADMAP truth.** The desktop slice moves to 0.6; interactive
+  tool-approvals→console is marked deferred to 0.7 with its reasons (the
+  prompt-tool contract is non-interactive-only, the hook alternative fails
+  open on timeout, and a self-service member who could approve can already
+  attach).
 - **Per-user API tokens.** A signed-in human mints `wdn_…` bearer tokens for
   themselves (`POST /me/tokens` returns the plaintext exactly once; `GET`/
   `DELETE /me/tokens`); an admin can list and revoke anyone's (`/tokens`).
