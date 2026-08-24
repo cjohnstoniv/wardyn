@@ -141,14 +141,16 @@ wardyn_pick_docker_host() {
           _wpd_ep="$(docker context inspect -f '{{ .Endpoints.docker.Host }}' 2>/dev/null || true)"
           case "${_wpd_ep}" in
             *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;  # Rancher Desktop (in-VM path)
+            *".colima/"*"/docker.sock") _wpd_sock="/var/run/docker.sock" ;;  # Colima (in-VM path, same shape)
           esac
           unset _wpd_ep
         fi
         ;;
     esac
-    # Rancher Desktop remap for an explicit DOCKER_HOST=unix://…/.rd/docker.sock.
+    # Rancher Desktop / Colima remap for an explicit DOCKER_HOST=unix://…/{.rd,.colima}/…/docker.sock.
     case "${_wpd_sock}" in
       *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;
+      *".colima/"*"/docker.sock") _wpd_sock="/var/run/docker.sock" ;;
     esac
     [ -n "${_wpd_sock}" ] && export WARDYN_DOCKER_SOCK="${_wpd_sock}"
     unset _wpd_sock
