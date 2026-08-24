@@ -86,8 +86,8 @@ def main() -> int:
     # A joined take's picture starts with the terminal segment, so browser-lane
     # cues are late by that segment's whole duration — minutes, on 11/12. The
     # corpus would still build, and every frame would be wrong.
-    if "-full" in video.name and timeline.name == "narration.json":
-        sys.exit(f"{video.name} is a joined take — pass narration-joined.json, not narration.json")
+    if timeline.name == "narration.json" and ("-full" in video.name or "-ffwd" in video.name):
+        sys.exit(f"{video.name} needs its re-timed timeline (narration-joined.json / narration-ffwd.json), not narration.json")
     cues = sorted(json.loads(timeline.read_text()).get("cues", []), key=lambda c: c["tMs"])
     if not cues:
         sys.exit(f"no cues in {timeline}")

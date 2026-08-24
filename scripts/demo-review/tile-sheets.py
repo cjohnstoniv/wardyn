@@ -97,7 +97,9 @@ def select(frames: list[tuple[float, str, Path]], budget: int) -> list[tuple[flo
             break
         pool = [f for f in frames if kind(f[1]) == k]
         # From index 1: the opening frame is the title card, never the one to lose.
-        drop = {f[2] for f in pool[1 :: max(1, len(pool) // excess)][:excess]}
+        # Only the cue pool's index 0 is the title card; mid/gap pools may thin fully.
+        start = 1 if k == "cue" else 0
+        drop = {f[2] for f in pool[start :: max(1, len(pool) // excess)][:excess]}
         frames = [f for f in frames if f[2] not in drop]
     return frames
 
@@ -200,7 +202,9 @@ def selftest() -> None:
         kept = {p.name.split("_")[1][:-4] for p in c.glob("t*.png")}  # nothing deleted
         assert len(kept) == 7
         md = (c / "sheets.md").read_text()
-        assert "cue01m" not in md and md.count("[") >= 4
+        for want in ("[    1.8s]", "[    9.8s]", "[   21.0s]", "[   22.0s]"):
+            assert want in md, f"cue frame lost: {want}"
+        assert "[   13.0s]" not in md and "[    5.0s]" not in md, "mid+gaps must thin before cues"
     print("selftest ok")
 
 
