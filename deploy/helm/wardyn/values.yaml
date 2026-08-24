@@ -34,12 +34,12 @@ allowMultiReplica: false
 # Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
-# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6 — an image at or
-# below 0.5.0 (which is what the empty image.tag above resolves to today, via
-# .Chart.AppVersion) does not serve it, so the probe 404s forever, the pod never
-# becomes Ready, and the rollout hangs with no other symptom. Pin it back with
-# `--set readinessProbe.path=/healthz` and accept 0.5.0's ceiling: a dead
-# Postgres then reads healthy again.
+# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
+# image.tag above resolves to .Chart.AppVersion, which is 0.6.0 — so the default
+# install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
+# 404s forever, the pod never becomes Ready, and the rollout hangs with no other
+# symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
+# 0.5.0's ceiling: a dead Postgres then reads healthy again.
 readinessProbe:
   path: /readyz
 

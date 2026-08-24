@@ -1612,8 +1612,9 @@ rebuilds them.
 
 **On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever
 matter.** The chart's readiness probe targets `/readyz`, which the 0.6 images
-introduced; an `image.tag` at or below `0.5.0` — including the empty default,
-which resolves to `.Chart.AppVersion` — serves only `/healthz`, so the probe
+introduced. The empty default `image.tag` resolves to `.Chart.AppVersion` —
+`0.6.0` from this release on — so a stock install is fine; an `image.tag`
+explicitly **pinned** at or below `0.5.0` serves only `/healthz`, so the probe
 404s forever, the pod never joins the Service's endpoints, and
 `helm upgrade`/`rollout status` hangs NotReady with nothing crashed and nothing
 logged. Pin the probe back for such an image with
