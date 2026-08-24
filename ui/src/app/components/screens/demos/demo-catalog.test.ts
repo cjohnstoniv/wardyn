@@ -18,9 +18,9 @@ const KEYLESS = DEMOS.filter((d) => !d.needsModel);
 // keyless demos sit on different axes entirely and deliberately REUSE an
 // earlier combo rather than inventing a new mode to distinguish, so both are
 // excluded from the distinctness checks below and asserted on separately (the
-// section filter also excludes the three secrets demos, which cover a
-// different axis — value governance, not first_use_approval/allow-all — and
-// would otherwise swallow this quartet check):
+// section filter also excludes the secrets demos, which cover a different axis
+// — value governance, not first_use_approval/allow-all — and would otherwise
+// swallow this quartet check):
 // - record-a-policy reuses the open-egress combo (Record Mode, not an
 //   egress-approval-mode showcase — recording needs egress wide open, that's
 //   the point).
@@ -32,10 +32,10 @@ const SHOWCASE_QUARTET = KEYLESS.filter(
 );
 
 describe("demo catalog", () => {
-  it("ships exactly nine keyless demos with distinct ids/titles", () => {
-    expect(KEYLESS).toHaveLength(9);
-    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(9);
-    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(9);
+  it("ships exactly fourteen keyless demos with distinct ids/titles", () => {
+    expect(KEYLESS).toHaveLength(14);
+    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(14);
+    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(14);
   });
 
   it("sections split the original egress demos from the new secrets demos", () => {
@@ -49,7 +49,18 @@ describe("demo catalog", () => {
       "once-or-for-good",
     ];
     for (const id of egressIds) expect(DEMOS.find((d) => d.id === id)?.section).toBe("egress");
-    const secretsIds = ["write-only-by-design", "key-never-in-the-box", "authorized-not-issued"];
+    const secretsIds = [
+      "write-only-by-design",
+      "key-never-in-the-box",
+      "authorized-not-issued",
+      // The per-KIND cards, in the ladder the section teaches: header-injected
+      // -> piped -> resident -> re-originated -> refused.
+      "rest-api-token",
+      "pat-stdout-only",
+      "ssh-briefly-resident",
+      "github-app-broker",
+      "sts-fail-closed",
+    ];
     for (const id of secretsIds) expect(DEMOS.find((d) => d.id === id)?.section).toBe("secrets");
     expect(DEMOS).toHaveLength(egressIds.length + secretsIds.length);
   });
@@ -77,10 +88,21 @@ describe("demo catalog", () => {
     }
   });
 
-  it("the secrets-section granted demos use api_key-only grants, a host inside allowed_domains, and a non-reserved secret_name", () => {
-    const granted = DEMOS.filter((d) => d.section === "secrets" && d.policy.eligible_grants?.length);
-    expect(granted.length).toBe(2);
-    for (const d of granted) {
+  // The api_key cards are the ones the proxy injects a HEADER for, so they are
+  // the only ones whose grant host must also be allowlisted (injection never
+  // widens egress — the allowlist still has to name the host). The other kinds
+  // reach the broker's LOCAL mint route instead and need no egress at all,
+  // which is exactly why they are asserted separately below.
+  it("the secrets-section api_key demos use api_key-only grants, a host inside allowed_domains, and a non-reserved secret_name", () => {
+    const injecting = DEMOS.filter(
+      (d) => d.section === "secrets" && d.policy.eligible_grants?.some((g) => g.kind === "api_key"),
+    );
+    expect(injecting.map((d) => d.id)).toEqual([
+      "key-never-in-the-box",
+      "authorized-not-issued",
+      "rest-api-token",
+    ]);
+    for (const d of injecting) {
       expect(d.needsSecret).toBeTruthy();
       for (const g of d.policy.eligible_grants!) {
         expect(g.kind).toBe("api_key");
@@ -92,6 +114,84 @@ describe("demo catalog", () => {
         expect(scope.secret_name).not.toBe("anthropic-managed-oauth");
       }
     }
+  });
+
+  // rest-api-token is the REALISTIC sibling of key-never-in-the-box: same law,
+  // the header a real third-party API actually wants. If that format ever loses
+  // its "Bearer %s" the card stops being the thing it claims to teach.
+  it("rest-api-token wires the standard Authorization: Bearer shape", () => {
+    const d = DEMOS.find((x) => x.id === "rest-api-token")!;
+    const scope = d.policy.eligible_grants![0].scope as { header?: string; format?: string };
+    expect(scope.header).toBe("Authorization");
+    expect(scope.format).toBe("Bearer %s");
+    expect(d.needsSecret).toBe("wardyn-demo-api-token");
+  });
+
+  // Every non-api_key secrets card, pinned against the SERVER rule that would
+  // otherwise 400/422 it — these scopes are validated at policy write, so a
+  // drifted one is a card whose Start can never succeed.
+  it("the per-kind grants match what the server accepts, and name a non-reserved secret", () => {
+    const RESERVED = ["wardyn-signing-key", "wardyn-session-key", "github-app-key", "github-app-id"];
+    const byId = (id: string) => DEMOS.find((d) => d.id === id)!;
+
+    // git_pat: host + secret_name. gitlab.example.com deliberately, NOT a
+    // brokered forge — validateGrantLaneExclusivity refuses a git_pat for one.
+    const pat = byId("pat-stdout-only");
+    const patGrant = pat.policy.eligible_grants![0];
+    expect(patGrant.kind).toBe("git_pat");
+    const patScope = patGrant.scope as { host?: string; secret_name?: string };
+    expect(patScope.host).toBe("gitlab.example.com");
+    expect(patScope.secret_name).toBe(pat.needsSecret);
+    expect(RESERVED).not.toContain(patScope.secret_name);
+    // No egress: the helper mints over the proxy's LOCAL route.
+    expect(pat.policy.allowed_domains).toEqual([]);
+
+    // ssh_key: the host MUST be a supported SSH-over-443 provider or the policy
+    // write 400s AND the startup mint never runs (no audit row to point at).
+    const ssh = byId("ssh-briefly-resident");
+    const sshGrant = ssh.policy.eligible_grants![0];
+    expect(sshGrant.kind).toBe("ssh_key");
+    const sshScope = sshGrant.scope as { host?: string; key_secret_ref?: string };
+    expect(["github.com", "dev.azure.com"]).toContain(sshScope.host);
+    expect(sshScope.key_secret_ref).toBe(ssh.needsSecret);
+    expect(RESERVED).not.toContain(sshScope.key_secret_ref);
+    // run-create unions ssh.github.com:443 in for us, so the card must not
+    // pre-declare it — and its copy has to say where the host came from.
+    expect(ssh.policy.allowed_domains).toEqual([]);
+    expect(ssh.setupUi.join(" ")).toContain("ssh.github.com:443");
+
+    // github_token: TEACH+GATE, and gated on the App rather than a secret —
+    // needsSecret would drop the card from the walk, which is the one thing a
+    // teaching card must never do.
+    const app = byId("github-app-broker");
+    const appGrant = app.policy.eligible_grants![0];
+    expect(appGrant.kind).toBe("github_token");
+    expect(app.needsGitHubApp).toBe(true);
+    expect(app.needsSecret).toBeUndefined();
+    const appScope = appGrant.scope as { repos?: string[]; permissions?: Record<string, string> };
+    expect(appScope.repos?.every((r) => /^[\w.-]+\/[\w.-]+$/.test(r))).toBe(true);
+    // READ permissions only: a write-capable github_token would floor the run
+    // at CC3 and the card's setupUi says it does not.
+    expect(Object.values(appScope.permissions ?? {})).toEqual(["read"]);
+
+    // cloud_sts: an empty object scope, no secret, and an ENABLED Start — the
+    // create refusal is the demo, so a gate here would delete it.
+    const sts = byId("sts-fail-closed");
+    const stsGrant = sts.policy.eligible_grants![0];
+    expect(stsGrant.kind).toBe("cloud_sts");
+    expect(stsGrant.scope).toEqual({});
+    expect(sts.needsSecret).toBeUndefined();
+    expect(sts.needsGitHubApp).toBeUndefined();
+  });
+
+  // Exactly one TEACH+GATE card today. The gate does NOT drop the step
+  // (setup/steps.ts's stepOrder reads needsModel/needsSecret only), so a new
+  // needsGitHubApp demo has to be a deliberate decision, not a copy-paste.
+  it("ships exactly one needsGitHubApp demo, and it is not also needsSecret/needsModel", () => {
+    const gated = DEMOS.filter((d) => d.needsGitHubApp);
+    expect(gated.map((d) => d.id)).toEqual(["github-app-broker"]);
+    expect(gated[0].needsSecret).toBeUndefined();
+    expect(gated[0].needsModel).toBeFalsy();
   });
 
   it("authorized-not-issued's steps pin the real mint 409 body codes", () => {
@@ -123,11 +223,14 @@ describe("demo catalog", () => {
     for (const d of withCaution) expect(d.caution!.length).toBeGreaterThan(40);
   });
 
-  it("every keyless demo has at least one command step to paste", () => {
-    for (const d of KEYLESS) {
-      expect(d.steps.some((s) => s.cmd)).toBe(true);
-      for (const s of d.steps) expect(s.text.length).toBeGreaterThan(0);
-    }
+  // sts-fail-closed is the ONE exception and deliberately so: its run is
+  // refused at create, so no sandbox and no terminal ever exist to paste into.
+  // Pinning it by id (rather than loosening the rule) keeps every other card
+  // honest about being hands-on.
+  it("every keyless demo has at least one command step to paste — except the one with no sandbox", () => {
+    for (const d of DEMOS) for (const s of d.steps) expect(s.text.length).toBeGreaterThan(0);
+    const noCmd = KEYLESS.filter((d) => !d.steps.some((s) => s.cmd));
+    expect(noCmd.map((d) => d.id)).toEqual(["sts-fail-closed"]);
   });
 
   it("ships exactly one harness demo — needs a model, drives the agent via a terminal command", () => {

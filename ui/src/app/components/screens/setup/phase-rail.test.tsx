@@ -8,9 +8,10 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhaseRail } from "./phase-rail";
 import { STEP_LABEL, STEP_ORDER, type SetupStepId, type StepBadge } from "./steps";
+import { DEMOS } from "../demos/demo-catalog";
 
-// Exhaustive over SetupStepId (the compiler enforces it) — the ten demo
-// sub-steps included, since Getting Started absorbed the whole catalog.
+// Exhaustive over SetupStepId (the compiler enforces it) — every demo
+// sub-step included, since Getting Started absorbed the whole catalog.
 const BADGES: Record<SetupStepId, StepBadge> = {
   environment: { text: "Ready · 2 of 3 barriers", tone: "success" },
   corp_network: { text: "Optional", tone: "neutral" },
@@ -25,6 +26,11 @@ const BADGES: Record<SetupStepId, StepBadge> = {
   "write-only-by-design": { text: "Optional", tone: "neutral" },
   "key-never-in-the-box": { text: "Optional", tone: "neutral" },
   "authorized-not-issued": { text: "Optional", tone: "neutral" },
+  "rest-api-token": { text: "Optional", tone: "neutral" },
+  "pat-stdout-only": { text: "Optional", tone: "neutral" },
+  "ssh-briefly-resident": { text: "Optional", tone: "neutral" },
+  "github-app-broker": { text: "Optional", tone: "neutral" },
+  "sts-fail-closed": { text: "Optional", tone: "neutral" },
   workspaces: { text: "In progress", tone: "info" },
   review: { text: "Review what's left", tone: "neutral" },
 };
@@ -43,6 +49,11 @@ const DONE: Record<SetupStepId, boolean> = {
   "write-only-by-design": false,
   "key-never-in-the-box": false,
   "authorized-not-issued": false,
+  "rest-api-token": false,
+  "pat-stdout-only": false,
+  "ssh-briefly-resident": false,
+  "github-app-broker": false,
+  "sts-fail-closed": false,
   workspaces: false,
   review: false,
 };
@@ -95,9 +106,11 @@ describe("PhaseRail", () => {
   // group heading over a 0/0 counter.
   it("omits filtered-out steps, and drops a phase left with none of them", () => {
     cleanup();
-    const order = STEP_ORDER.filter(
-      (id) => !["agent-in-the-box", "write-only-by-design", "key-never-in-the-box", "authorized-not-issued"].includes(id),
-    );
+    // Derived from the catalog, not a hand-kept id list: the point is a phase
+    // with NO surviving steps, and a literal list silently stops emptying the
+    // Secrets phase the moment a demo is added to it.
+    const dropped = new Set<string>(["agent-in-the-box", ...DEMOS.filter((d) => d.section === "secrets").map((d) => d.id)]);
+    const order = STEP_ORDER.filter((id) => !dropped.has(id));
     render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} order={order} />);
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const rail = within(navs[navs.length - 1]);

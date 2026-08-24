@@ -8,7 +8,7 @@
 // exercised through it: one demo per render, `barrierReady` as a prop instead
 // of a setup-status fetch of its own.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -52,18 +52,28 @@ vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(.
 import DemoDetail from "./demos-step";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
 import { HttpError } from "../../../lib/api/core";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 const FIRST = DEMOS[0];
+const APP_GATED = DEMOS.find((d) => d.needsGitHubApp)!;
+const REFUSED_AT_CREATE = DEMOS.find((d) => d.id === "sts-fail-closed")!;
 
-function renderDemo(demo: Demo = FIRST, barrierReady = true) {
+function renderDemo(
+  demo: Demo = FIRST,
+  barrierReady = true,
+  opts: { githubAppReady?: boolean; operator?: boolean; onDemoLaunched?: () => void } = {},
+) {
   return render(
     <MemoryRouter>
-      <DemoDetail
-        demo={demo}
-        barrierReady={barrierReady}
-        onJump={vi.fn()}
-        onDemoLaunched={vi.fn()}
-      />
+      <OperatorProvider operator={opts.operator ?? true}>
+        <DemoDetail
+          demo={demo}
+          barrierReady={barrierReady}
+          githubAppReady={opts.githubAppReady ?? true}
+          onJump={vi.fn()}
+          onDemoLaunched={opts.onDemoLaunched ?? vi.fn()}
+        />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -225,5 +235,87 @@ describe("DemoDetail — the single demo renderer", () => {
     await user.click(screen.getByTestId(`demo-start-${demo.id}`));
     await waitFor(() => expect(screen.getAllByText(/grant-123/).length).toBeGreaterThan(0));
     expect(screen.queryAllByText(/\{grant_id\}/)).toHaveLength(0);
+  });
+
+  // ── the TEACH+GATE lane (needsGitHubApp) ───────────────────────────────────
+  // Deliberately NOT the needsSecret/needsModel shape: those demos are dropped
+  // from the walk entirely, which is fine for a card that is meaningless
+  // without its prerequisite. This one's whole job is to teach a lane nothing
+  // local can fake, so it keeps its place and closes its Start instead.
+  it("a needsGitHubApp demo renders its gate and a DISABLED Start when no App is configured", async () => {
+    renderDemo(APP_GATED, true, { githubAppReady: false });
+    expect(await screen.findByTestId("demo-needs-github-app")).toBeInTheDocument();
+    expect(screen.getByTestId(`demo-start-${APP_GATED.id}`)).toBeDisabled();
+    // The card itself is intact — a gate must never cost the teaching.
+    expect(screen.getByTestId("demo-steps")).toBeInTheDocument();
+    expect(screen.getByTestId(`demo-policy-${APP_GATED.id}`)).toBeInTheDocument();
+  });
+
+  it("the same demo opens normally once an App IS configured", async () => {
+    renderDemo(APP_GATED, true, { githubAppReady: true });
+    await screen.findByTestId(`demo-card-${APP_GATED.id}`);
+    expect(screen.queryByTestId("demo-needs-github-app")).toBeNull();
+    expect(screen.getByTestId(`demo-start-${APP_GATED.id}`)).toBeEnabled();
+  });
+
+  // Member redaction zeroes SetupStatus.Secrets, so github_app reads false for
+  // a member whether or not an App exists — "go add one under Settings" would
+  // be false twice over (they cannot write secrets either).
+  it("the gate copy tells a MEMBER to ask an operator, and an OPERATOR where to go", async () => {
+    renderDemo(APP_GATED, true, { githubAppReady: false, operator: false });
+    expect(await screen.findByTestId("demo-needs-github-app")).toHaveTextContent(/ask an operator/i);
+    expect(screen.queryByRole("link", { name: /settings/i })).toBeNull();
+
+    cleanup();
+    renderDemo(APP_GATED, true, { githubAppReady: false, operator: true });
+    const gate = await screen.findByTestId("demo-needs-github-app");
+    expect(gate).not.toHaveTextContent(/ask an operator/i);
+    expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
+  });
+
+  // ── a REFUSED run-create ───────────────────────────────────────────────────
+  // sts-fail-closed's lesson IS the 422: the mint is unreachable, so the run
+  // never starts. A toast would scroll away mid-take; the card is where the
+  // operator (and the e2e) is already looking.
+  it("a 422 at create renders on the card, not in a toast — and still earns the demo its checkmark", async () => {
+    const onDemoLaunched = vi.fn();
+    createRunMock.mockRejectedValueOnce(
+      new HttpError(422, "policy requires the spire identity provider: embedded identity: cloud_sts grant requires the spire identity provider"),
+    );
+    renderDemo(REFUSED_AT_CREATE, true, { onDemoLaunched });
+
+    await user.click(await screen.findByTestId(`demo-start-${REFUSED_AT_CREATE.id}`));
+    const refused = await screen.findByTestId("demo-create-refused");
+    expect(refused).toHaveTextContent(/spire identity provider/i);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    // Nothing started, so nothing is tracked for a reload to re-attach.
+    expect(localStorage.getItem("wardyn-demo-runs")).toBeNull();
+    // …but the operator SAW what the card teaches, so it counts as done.
+    expect(onDemoLaunched).toHaveBeenCalledWith(REFUSED_AT_CREATE.id);
+    expect(JSON.parse(localStorage.getItem("wardyn-demos-launched")!)).toEqual([
+      REFUSED_AT_CREATE.id,
+    ]);
+  });
+
+  it("a NON-422 create failure also lands on the card, but never counts as demonstrated", async () => {
+    const onDemoLaunched = vi.fn();
+    createRunMock.mockRejectedValueOnce(new HttpError(403, "operator role required"));
+    renderDemo(FIRST, true, { onDemoLaunched });
+
+    await user.click(await screen.findByTestId(`demo-start-${FIRST.id}`));
+    expect(await screen.findByTestId("demo-create-refused")).toHaveTextContent(/operator role required/i);
+    expect(onDemoLaunched).not.toHaveBeenCalled();
+    expect(localStorage.getItem("wardyn-demos-launched")).toBeNull();
+  });
+
+  it("starting again clears a previous refusal instead of stacking two verdicts", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "runner \"none\" cannot enforce confinement_class CC3"));
+    renderDemo(REFUSED_AT_CREATE);
+
+    await user.click(await screen.findByTestId(`demo-start-${REFUSED_AT_CREATE.id}`));
+    await screen.findByTestId("demo-create-refused");
+
+    await user.click(screen.getByTestId(`demo-start-${REFUSED_AT_CREATE.id}`));
+    await waitFor(() => expect(screen.queryByTestId("demo-create-refused")).not.toBeInTheDocument());
   });
 });

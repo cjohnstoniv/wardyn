@@ -19,11 +19,17 @@ import { test, expect } from "./fixtures";
 // GATED (disabled + hint). That gating IS the contract on this host; if it
 // ever gains a runner, this is the spec to revisit.
 
+// Demos this backend can honestly deep-link to: no model, no stored secret.
+// The last two are the per-KIND cards that gate on NEITHER — github-app-broker
+// is TEACH+GATE (it keeps its step and closes its Start, so a missing App does
+// not delete it from the walk) and sts-fail-closed is keyless by construction.
 const KEYLESS_DEMOS = [
   { id: "sealed-box", title: "The sealed box" },
   { id: "fail-then-approve", title: "Fail, then approve" },
   { id: "held-at-the-door", title: "Held at the door" },
   { id: "lines-that-cant-be-crossed", title: "Lines that can't be crossed" },
+  { id: "github-app-broker", title: "A token the sandbox never even sees" },
+  { id: "sts-fail-closed", title: "No identity, no credential" },
 ];
 
 test.describe("Demo sandboxes", () => {
@@ -53,10 +59,11 @@ test.describe("Demo sandboxes", () => {
       await page.goto(`/setup?step=${id}`);
       await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
       // Browsing works, but no barrier is ready → Start is closed, with a hint.
-      // The needsModel/needsSecret demos (agent-in-the-box, key-never-in-the-box,
-      // authorized-not-issued) are NOT walked here: they're dropped from
+      // The needsModel/needsSecret demos (agent-in-the-box, plus the five that
+      // name a stored secret) are NOT walked here: they're dropped from
       // stepOrder entirely without a connected model / stored secret — that
-      // gating is deterministic unit coverage instead (steps.test.ts).
+      // gating is deterministic unit coverage instead (steps.test.ts). The
+      // needsGitHubApp one is walked precisely BECAUSE it is not dropped.
       await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();
       await expect(page.getByTestId(`demo-start-${id}`)).toBeDisabled();
     });

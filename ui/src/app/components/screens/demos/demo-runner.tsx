@@ -24,6 +24,10 @@
 // workspaces) — they run the sandbox, not an agent. The conditional ones
 // (needsModel / needsSecret) are dropped from the funnel walk until their
 // precondition is met (setup/steps.ts's stepOrder), and that IS their gate.
+// `needsGitHubApp` is the THIRD shape and deliberately not a fourth drop: that
+// card exists to teach a lane nothing local can fake, and a dropped card
+// teaches nobody, so it keeps its place in the rail with a DISABLED Start —
+// the same shape !barrierReady already renders.
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, Play, ScrollText, ShieldAlert, Sparkles, Square } from "lucide-react";
@@ -74,6 +78,9 @@ type TrackedRun = { id: string; state: RunState };
 export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const [runs, setRuns] = React.useState<Record<string, TrackedRun>>({});
   const [starting, setStarting] = React.useState<string | null>(null);
+  // {demoId: message} for a run-create that was REFUSED — rendered on the card
+  // (see DemoRunControls' demo-create-refused block), cleared by starting again.
+  const [createErrors, setCreateErrors] = React.useState<Record<string, string>>({});
 
   // The poll reads the latest tracked runs through a ref (usePoll fires on a
   // timer, long after the render that created its closure).
@@ -139,6 +146,12 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const start = React.useCallback(
     async (demo: Demo) => {
       setStarting(demo.id);
+      setCreateErrors((m) => {
+        if (!(demo.id in m)) return m;
+        const n = { ...m };
+        delete n[demo.id];
+        return n;
+      });
       try {
         // Every demo comes up idle for the operator to drive in the attached
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
@@ -165,7 +178,20 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         markDemoLaunched(demo.id); // durable per-demo "was launched" signal
         onStarted?.(demo.id);
       } catch (e) {
-        toast.error("Couldn't start the demo", { description: getErrorMessage(e) });
+        // Card-anchored, not a toast. A create refusal is a POLICY DECISION for
+        // at least one demo (sts-fail-closed's whole lesson is the 422 that
+        // fires before any sandbox exists), and a decision the operator is
+        // meant to READ cannot live in something that scrolls away — the take
+        // and the e2e both need a stable place to point at.
+        setCreateErrors((m) => ({ ...m, [demo.id]: getErrorMessage(e) }));
+        // …and an EXPECTED 422 earns the demo its checkmark. markDemoLaunched
+        // otherwise only fires on create success, which would leave the one
+        // card whose lesson IS the refusal sitting "Optional" forever in a rail
+        // of green checks. The operator saw exactly what it teaches.
+        if (e instanceof HttpError && e.status === 422) {
+          markDemoLaunched(demo.id);
+          onStarted?.(demo.id);
+        }
       } finally {
         setStarting(null);
       }
@@ -198,7 +224,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
     forgetStored(demo.id);
   }, []);
 
-  return { runs, starting, start, end };
+  return { runs, starting, start, end, createErrors };
 }
 
 // DemoCaution — the honest CC1-open-egress danger note (demo 4).
@@ -225,6 +251,8 @@ export function DemoRunControls({
   run,
   starting,
   barrierReady,
+  githubAppReady = true,
+  createError,
   loading,
   onStart,
   onEnd,
@@ -234,11 +262,21 @@ export function DemoRunControls({
   run?: TrackedRun;
   starting: boolean;
   barrierReady: boolean;
+  /** Whether a GitHub App is configured (SetupStatus.secrets.github_app). Only
+   *  a `needsGitHubApp` demo reads it. Defaults TRUE — fail OPEN, the same
+   *  rationale operator-context documents: a status that hasn't loaded, or a
+   *  component mounted without it, must never invent a gate. */
+  githubAppReady?: boolean;
+  /** Message from a REFUSED run-create, rendered on the card. */
+  createError?: string;
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
   onTurnIntoPolicy?: (runId: string) => void;
 }) {
+  // The teach-and-gate lane: the card stays, its Start does not open.
+  const appGated = !!demo.needsGitHubApp && !githubAppReady;
+  const startClosed = !barrierReady || appGated || loading || starting;
   const running = run?.state === "RUNNING";
   const failed = run?.state === "FAILED";
   const pending = !!run && !running && !failed && !isTerminalRunState(run.state);
@@ -300,7 +338,7 @@ export function DemoRunControls({
               <Sparkles className="size-3.5" /> Turn this into a policy
             </Button>
           )}
-          <Button size="sm" variant="ghost" onClick={onStart} disabled={!barrierReady || loading || starting}>
+          <Button size="sm" variant="ghost" onClick={onStart} disabled={startClosed}>
             {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             Start again
           </Button>
@@ -325,9 +363,21 @@ export function DemoRunControls({
           </p>
         </div>
       )}
+      {createError && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
+          data-testid="demo-create-refused"
+        >
+          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+          <p className="min-w-0 leading-snug">
+            Wardyn refused to create this run — nothing started, so there is nothing to clean up.{" "}
+            <span className="break-words font-mono">{createError}</span>
+          </p>
+        </div>
+      )}
       <Button
         onClick={onStart}
-        disabled={!barrierReady || loading || starting}
+        disabled={startClosed}
         data-testid={`demo-start-${demo.id}`}
       >
         {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}

@@ -175,7 +175,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["environment", "Environment"],
       ["corp_network", "Network"],
       ["integrations", "Secrets"],
-      // The five Demos sub-steps — labels come from the demo catalog titles.
+      // Every demo sub-step — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
@@ -186,6 +186,11 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["write-only-by-design", "Write-only, even for you"],
       ["key-never-in-the-box", "The key that never enters the box"],
       ["authorized-not-issued", "Authorized, not issued"],
+      ["rest-api-token", "A bearer token for a real API"],
+      ["pat-stdout-only", "A PAT that only ever exists in a pipe"],
+      ["ssh-briefly-resident", "The one that touches disk — briefly"],
+      ["github-app-broker", "A token the sandbox never even sees"],
+      ["sts-fail-closed", "No identity, no credential"],
       // "Your work" is just the one workspace step — the tier-1/2 library
       // steps (Directories & repos, Base images) retired with
       // sources-library.tsx/image-catalog.tsx.
@@ -212,10 +217,15 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "write-only-by-design",
       "key-never-in-the-box",
       "authorized-not-issued",
+      "rest-api-token",
+      "pat-stdout-only",
+      "ssh-briefly-resident",
+      "github-app-broker",
+      "sts-fail-closed",
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(15);
+    expect(STEP_ORDER).toHaveLength(20);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // Getting Started is the ONE demos surface: every catalog demo is a
     // sub-step, in catalog order, split into the two sections by `Demo.section`
@@ -227,7 +237,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
     ]).toEqual([...DEMO_STEP_IDS]);
     expect(PHASES.find((p) => p.id === "demos_secrets")?.label).toBe("Secrets demos");
     // write-only-by-design leads the secrets section: it is how the operator
-    // stores the secret the other two demos gate on.
+    // stores the secret every granted demo below it gates on.
     expect(PHASES.find((p) => p.id === "demos_secrets")?.steps[0]).toBe("write-only-by-design");
   });
 

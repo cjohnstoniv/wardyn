@@ -82,8 +82,10 @@ wardyn attach <id>
 Prefer clicking? The Getting Started wizard's demo steps
 (<http://localhost:8080/setup?step=sealed-box> — `/demos` redirects there)
 launch throwaway sandboxes with an embedded terminal and live approvals — no
-repo, no workspace. Two sections: **Egress demos** and **Secrets demos**. Nine
-need no model at all, only the sandbox barrier itself, including:
+repo, no workspace. Two sections: **Egress demos** and **Secrets demos**.
+Fourteen of the fifteen need no model at all, only the sandbox barrier itself
+(the Secrets ones additionally want a stored secret, which the same wizard walks
+you through adding). The Egress group includes:
 **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
 then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
 door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then
@@ -93,10 +95,20 @@ policy can grant them), **once, or for good** (`deny_with_review` — approve wi
 **Once** and the retry succeeds, but the *next* attempt after that raises a
 brand-new approval: the grant covers one connection, not the run), and **record
 a policy** (allow-all policy, then synthesize what it actually touched into a
-least-privilege allowlist you can save and re-run confined). A seventh card,
-**the agent in the box**, appears once you connect a model (Level 2 below): it
-runs a real Claude Code agent under the same policy primitives, its model
-injected proxy-side, with `api.anthropic.com` the only host it can reach.
+least-privilege allowlist you can save and re-run confined). One more egress
+card, **the agent in the box**, appears once you connect a model (Level 2
+below): it runs a real Claude Code agent under the same policy primitives, its
+model injected proxy-side, with `api.anthropic.com` the only host it can reach.
+
+The **Secrets** group is eight cards covering a stored *value* rather than a
+destination — the write-only store itself, proxy-side header injection, an
+approval-gated single-use mint, and then one card per credential KIND, because
+what a credential's own protocol accepts is what decides how far out of the
+sandbox it can be kept: an `api_key` never enters the box, a `git_pat` enters
+only as a pipe, an `ssh_key` is the documented resident exception, a
+`github_token` is minted proxy-side and refused if the sandbox asks for it, and
+a `cloud_sts` grant is refused at run-create outright without a SPIRE identity
+provider.
 
 ![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
 

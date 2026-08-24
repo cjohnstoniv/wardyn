@@ -5,9 +5,15 @@
 
 import { test, expect, ADMIN_TOKEN } from "./fixtures";
 
-// The three secrets demos (demo-catalog.ts's "secrets" section), against the
+// The eight secrets demos (demo-catalog.ts's "secrets" section), against the
 // seeded e2e backend (real wardynd + Postgres + `-runner none`, admin-token
-// auth — scripts/e2e-backend.sh).
+// auth — scripts/e2e-backend.sh). This spec drives the three that teach the
+// MECHANISM (write-only / injected / approval-gated); the five per-KIND cards
+// added alongside them split by walkability rather than by subject, so they are
+// covered where that distinction lives: the three needsSecret ones drop from
+// the walk exactly like key-never-in-the-box does below, and the two that gate
+// on neither (github-app-broker, sts-fail-closed) are deep-linked in
+// demos.spec.ts's KEYLESS_DEMOS walk.
 //
 // ACHIEVED LEVEL — UI-only, matching demos.spec.ts's own honest ceiling on
 // this backend, not the full live proof the plan describes. `-runner none`
@@ -27,7 +33,10 @@ import { test, expect, ADMIN_TOKEN } from "./fixtures";
 //    from the walk until that secret is stored — steps.ts's stepOrder — so a
 //    bare deep link to either bounces back to the nearest surviving step
 //    (write-only-by-design, the section's own first demo) rather than
-//    opening a step whose Start would 422.
+//    opening a step whose Start would 422. The three per-kind needsSecret
+//    cards (rest-api-token, pat-stdout-only, ssh-briefly-resident) behave
+//    identically, by the same one predicate — pinned deterministically in
+//    steps.test.ts rather than re-driven three more times here.
 //  - once the secret exists, both steps open, render their real
 //    eligible_grants policy (host/header/secret_name, requires_approval),
 //    and Start is disabled with the same runner-less hint every other demo

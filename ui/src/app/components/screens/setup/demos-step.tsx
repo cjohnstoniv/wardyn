@@ -20,6 +20,7 @@
 //    was mounted by the deleted DemoScreen. record-a-policy's own steps still
 //    tell the operator to click it, so it moved here with the renderer.
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { TriangleAlert } from "lucide-react";
 import {
   DemoCaution,
@@ -30,6 +31,7 @@ import {
 import { type Demo } from "../demos/demo-catalog";
 import { ProfileReview } from "../profile-review";
 import { YamlBlock } from "../../wardyn/code-block";
+import { useOperator } from "../../wardyn/operator-context";
 import type { SetupStepId } from "./steps";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -44,17 +46,28 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export default function DemoDetail({
   demo,
   barrierReady,
+  githubAppReady = true,
   onJump,
   onDemoLaunched,
 }: {
   demo: Demo;
   barrierReady: boolean;
+  /** SetupStatus.secrets.github_app. Only a `needsGitHubApp` demo reads it;
+   *  defaults TRUE so an unloaded status never invents a gate. */
+  githubAppReady?: boolean;
   onJump: (id: SetupStepId) => void;
   onDemoLaunched: (demoId: string) => void;
 }) {
-  const { runs, starting, start, end } = useDemoRuns(onDemoLaunched);
+  const { runs, starting, start, end, createErrors } = useDemoRuns(onDemoLaunched);
   // Local open-state only — ProfileReview needs nothing but a runId.
   const [profileRunId, setProfileRunId] = useState<string | null>(null);
+  // Member vs operator: this gate reads a SECRETS field, and a member's /setup
+  // status has Secrets zeroed by redactSetupStatusForMember — so it reads
+  // closed for a member whether or not an App exists. Telling them to go
+  // configure one would be doubly false (they cannot write secrets either), so
+  // the copy says what is actually true for them.
+  const operator = useOperator();
+  const appGated = !!demo.needsGitHubApp && !githubAppReady;
 
   return (
     <div className="space-y-6" data-testid={`demo-card-${demo.id}`}>
@@ -78,6 +91,35 @@ export default function DemoDetail({
               Environment step
             </button>{" "}
             first, then come back.
+          </p>
+        </div>
+      )}
+
+      {appGated && (
+        <div
+          className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning"
+          data-testid="demo-needs-github-app"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <p>
+            This one needs a GitHub App. Its credential is an installation token minted from the
+            LIVE GitHub API, so — unlike every other demo here — there is nothing to fake locally,
+            and Start stays closed.{" "}
+            {operator ? (
+              <>
+                Configure one under{" "}
+                <Link to="/settings" className="font-medium underline underline-offset-2">
+                  Settings
+                </Link>{" "}
+                (App id + private key), then come back.
+              </>
+            ) : (
+              <>
+                Ask an operator to configure one — and note that a member's setup status reports no
+                App either way, so this gate stays closed for you regardless.
+              </>
+            )}{" "}
+            Everything below still teaches the lane.
           </p>
         </div>
       )}
@@ -120,6 +162,8 @@ export default function DemoDetail({
           run={runs[demo.id]}
           starting={starting === demo.id}
           barrierReady={barrierReady}
+          githubAppReady={githubAppReady}
+          createError={createErrors[demo.id]}
           loading={false}
           onStart={() => start(demo)}
           onEnd={(runId) => end(demo, runId)}

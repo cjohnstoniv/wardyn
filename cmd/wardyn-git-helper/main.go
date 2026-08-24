@@ -84,9 +84,15 @@
 //	simply be a descendant of agent-run) and thereby obtain the token via the
 //	binary too. Closing either gap requires authenticating the CALLER at the
 //	proxy's mint route itself (e.g. SPIFFE-attested mint, or a per-invocation
-//	nonce), which is future work. Interactive runs are likewise not gated by
-//	this mechanism (no agent-run to provision the secret) and rely on the
-//	human attach principal being authorised.
+//	nonce), which is future work. Interactive runs ARE gated: their idle
+//	main process is agent-run too, and its --idle path calls
+//	provision_git_helper_secret exactly as task mode does (see
+//	deploy/images/common/agent-run-lib.sh). What differs is inheritance —
+//	`wardyn attach` is a FRESH exec, not a descendant of that process tree,
+//	so it never inherits WARDYN_GIT_HELPER_SECRET and this helper refuses it
+//	until the human presents the secret themselves. That refusal is a real
+//	gate, not a wall: the 0400 file is agent-readable, which is the same
+//	residual described above.
 //
 //	The secret is never logged.
 //

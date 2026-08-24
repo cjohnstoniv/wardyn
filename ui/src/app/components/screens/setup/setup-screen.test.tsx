@@ -182,9 +182,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Back-ish verb. The walk is stepOrder(status), not the full STEP_ORDER:
     // essentials [environment, corp_network, integrations] → Egress demos →
     // Secrets demos → your work [workspaces] → finish [review]. This fixture
-    // has no model and no stored secret, so the three conditional demo steps
-    // (agent-in-the-box, key-never-in-the-box, authorized-not-issued) are
-    // filtered OUT — 12 walked of the 15 that exist. Review is the LAST step:
+    // has no model and no stored secret, so the SIX conditional demo steps
+    // (agent-in-the-box's needsModel, plus the five needsSecret ones) are
+    // filtered OUT — 14 walked of the 20 that exist. github-app-broker and
+    // sts-fail-closed stay walked: the first is TEACH+GATE (a disabled Start,
+    // never a dropped step) and the second is keyless. Review is the LAST step:
     // the Launch step was cut, because its "Example — not live config" card
     // showed a fabricated task against a repo that may never have been
     // onboarded.
@@ -229,9 +231,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /once, or for good/i })).toBeInTheDocument();
 
-    // Secrets demos — only the ungranted one is walkable without the secret.
+    // Secrets demos — the granted ones drop without their secret; what remains
+    // is the ungranted one plus the two that gate on neither.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /write-only, even for you/i })).toBeInTheDocument();
+    // TEACH+GATE: no GitHub App in this fixture, and the step is STILL here —
+    // the gate is a disabled Start, not a missing card.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /a token the sandbox never even sees/i }),
+    ).toBeInTheDocument();
+    expect(await screen.findByTestId("demo-needs-github-app")).toBeInTheDocument();
+    expect(screen.getByTestId("demo-start-github-app-broker")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /no identity, no credential/i })).toBeInTheDocument();
 
     // your work: the one workspace step (AddWorkspaceDialog + a simple list).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
@@ -296,8 +309,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // shell asks the same predicate selectStep does, so it renders disabled and
     // says why.
     it("the last demo's Next is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
-      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=write-only-by-design");
-      await screen.findByRole("heading", { name: /write-only, even for you/i });
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sts-fail-closed");
+      await screen.findByRole("heading", { name: /no identity, no credential/i });
       const next = screen.getByRole("button", { name: /^next: workspaces$/i });
       expect(next).toBeDisabled();
       expect(next.getAttribute("title")).toMatch(/one probe/i);
@@ -717,12 +730,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (the last step, 12 of 12 — three conditional demo steps
-    // are filtered out of this fixture's walk) — checks live there, not on the
+    // walk to Review (the last step, 14 of 14 — six conditional demo steps are
+    // filtered out of this fixture's walk) — checks live there, not on the
     // barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -772,7 +785,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

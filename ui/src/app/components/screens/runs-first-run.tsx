@@ -8,6 +8,7 @@
 // size (scripts/check-file-size.sh): RunsScreen owns the populated board, this
 // owns the empty one and the no-barrier blocker.
 
+import * as React from "react";
 import { Link } from "react-router-dom";
 import {
   CircleCheck,
@@ -25,7 +26,14 @@ import { Button } from "../ui/button";
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { CC_META } from "../wardyn/cc-meta";
-import { DEMOS } from "./demos/demo-catalog";
+
+// Lazy on purpose. /runs is EAGER (App.tsx keeps it unlazied), so anything this
+// module imports statically lands in the entry chunk — and the demo catalog is
+// mostly PROSE (per-demo overviews, command walkthroughs, setup instructions)
+// that the grid below never reads. bundle-split.test.ts's entry budget is what
+// enforces the split; see runs-first-run-demos.tsx's own header. Keep the
+// catalog import THERE, not here.
+const FirstRunDemoGrid = React.lazy(() => import("./runs-first-run-demos"));
 
 // The one hard blocker in the product: no sandbox barrier means no run can
 // start, full stop. Non-dismissible by design — there's nothing to dismiss it
@@ -158,62 +166,12 @@ export function RunsFirstRun({
         </Link>
       </div>
 
-      <div className="w-full max-w-[900px] space-y-4">
-        <div className="space-y-1 text-center">
-          <h3 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-            See it work
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            No model, no key, no repo. Each one runs a real governed sandbox in about a minute.
-          </p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {DEMOS.map((demo) => {
-            // The flagship agent demo needs a connected model — the same gate
-            // the funnel's own walk applies (steps.ts's stepOrder drops the
-            // step until llmReady), so this card can never link to a step that
-            // isn't there.
-            const needsModel = demo.needsModel && !llmReady;
-            // Its mirror for the granted secrets demos: without the secret
-            // stored, run-create 422s on the unresolvable api_key ref and the
-            // step is filtered out of the walk — so name the missing secret
-            // instead of linking to nothing.
-            const needsSecret = demo.needsSecret && !secretNames.includes(demo.needsSecret);
-            return (
-              <div
-                key={demo.id}
-                data-testid={`runs-empty-demo-${demo.id}`}
-                className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-4"
-              >
-                <h4 className="text-sm font-semibold text-foreground">{demo.title}</h4>
-                <p className="flex-1 text-xs leading-snug text-muted-foreground">{demo.teaches}</p>
-                {needsModel ? (
-                  <p className="text-xs text-muted-foreground">
-                    Needs a model provider ·{" "}
-                    <Link to="/integrations" className="font-medium text-primary hover:underline">
-                      Connect →
-                    </Link>
-                  </p>
-                ) : needsSecret ? (
-                  <p className="text-xs text-muted-foreground">
-                    Needs the <code className="font-mono">{demo.needsSecret}</code> secret ·{" "}
-                    <Link to="/secrets" className="font-medium text-primary hover:underline">
-                      Add it →
-                    </Link>
-                  </p>
-                ) : (
-                  // Secondary/outline — a teal fill is reserved for the one
-                  // primary action on the page ("New run" above). Per-card: the
-                  // funnel step for THIS demo, not a catalog page to hunt in.
-                  <Button variant="outline" size="sm" className="self-start" asChild>
-                    <Link to={`/setup?step=${demo.id}`}>Run it</Link>
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* Suspense fallback is deliberately null, not a skeleton: this grid is
+          secondary content under a hero that has already painted, and a
+          placeholder block appearing then swapping reads as a glitch. */}
+      <React.Suspense fallback={null}>
+        <FirstRunDemoGrid llmReady={!!llmReady} secretNames={secretNames} />
+      </React.Suspense>
     </div>
   );
 }
