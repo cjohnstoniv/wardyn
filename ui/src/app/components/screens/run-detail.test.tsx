@@ -249,6 +249,22 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
   });
 });
 
+// D9: a pre-agent-start failure (mount failure, etc.) never gets an exit code
+// at all — failure_hint is the only place that run says why. Bare server
+// text, no prefix (the state badge already says "Failed").
+describe("RunDetailScreen — D9 failure-hint chip", () => {
+  it("a FAILED run with failure_hint shows the bare server text", async () => {
+    renderRun({ ...RUN, state: "FAILED", failure_hint: "image not found on daemon" });
+    expect(await screen.findByText("image not found on daemon")).toBeInTheDocument();
+  });
+
+  it("a FAILED run without failure_hint shows no hint chip", async () => {
+    renderRun({ ...RUN, state: "FAILED" });
+    await screen.findByText("Failed");
+    expect(screen.queryByText("image not found on daemon")).not.toBeInTheDocument();
+  });
+});
+
 // W17-S1-3: the run-detail Audit tab's own fetch is capped at LIST_LIMIT
 // (server: auditPerRunDefaultLimit) and returned oldest-first — a chatty run's
 // later events can silently fall off the end. A capped page must say so; a

@@ -37,6 +37,7 @@ vi.mock("sonner", () => ({
 
 import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
+import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 
 function renderScreen() {
   return render(
@@ -223,6 +224,56 @@ describe("WorkspacesScreen — Add workspace dialog opens from both the header b
     await screen.findByText("payments");
     await user.click(screen.getByRole("button", { name: /add workspace/i }));
     expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
+  });
+});
+
+// M3 (0027f514): POST /workspaces is member-allowed now — the header "Add
+// workspace" button used to be operator-only. Pin that a MEMBER role sees it
+// enabled, not gated behind the operator-only chip/disabled state.
+describe("WorkspacesScreen — M3 member workspace access", () => {
+  beforeEach(() => {
+    listWorkspacesMock.mockReset().mockResolvedValue([]);
+    createWorkspaceMock.mockReset();
+  });
+
+  function renderAsMember() {
+    return render(
+      <OperatorProvider operator={false} memberLocalDirRoot="/home/agent-projects">
+        <RoleProvider role="member">
+          <MemoryRouter>
+            <WorkspacesScreen />
+          </MemoryRouter>
+        </RoleProvider>
+      </OperatorProvider>,
+    );
+  }
+
+  it("a member sees the header 'Add workspace' button enabled", async () => {
+    renderAsMember();
+    expect(await screen.findByRole("button", { name: "Add workspace" })).toBeEnabled();
+  });
+
+  // add-workspace-dialog.tsx:168 — the writable checkbox unmounts (not
+  // resets) once role==="member" && kind==="local_dir", so a box checked
+  // while Repository was still selected must not ride along into the
+  // submitted local_dir source.
+  it("a member's local_dir submit drops writable even if it was checked under Repository first", async () => {
+    createWorkspaceMock.mockResolvedValue(ws({}, { id: "ws-new", kind: "local_dir" }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderAsMember();
+
+    await user.click(await screen.findByRole("button", { name: "Add workspace" }));
+    const dialog = await screen.findByRole("dialog");
+
+    await user.click(within(dialog).getByRole("button", { name: /^Advanced/ }));
+    await user.click(within(dialog).getByRole("checkbox", { name: /allow writes/i }));
+    await user.click(within(dialog).getByRole("button", { name: "Local directory" }));
+    await user.type(within(dialog).getByLabelText("Path on this host"), "/home/agent-projects/payments");
+    await user.click(within(dialog).getByRole("button", { name: "Add workspace" }));
+
+    await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
+    const [payload] = createWorkspaceMock.mock.calls[0] as [{ sources: Array<{ writable?: boolean }> }];
+    expect(payload.sources[0].writable).toBeUndefined();
   });
 });
 

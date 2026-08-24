@@ -150,6 +150,23 @@ describe("NewRunScreen — the form matches the run mode", () => {
   });
 });
 
+// D33: the Confined card's own body used to promise open-ended holding
+// ("held at the door") while the wizard's actual default (deny_with_review)
+// refuses a new host and raises it for review — the same behavior the
+// Unlisted-hosts card three sections down already stated correctly. Pin the
+// corrected copy and make sure the stale promise is gone.
+describe("NewRunScreen — D33 Confined body matches its default rule", () => {
+  it("states the default-deny-and-review behavior, not an open-ended hold", async () => {
+    renderScreen();
+    expect(
+      await screen.findByText(
+        "Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/held at the door/i)).not.toBeInTheDocument();
+  });
+});
+
 // Before this, the screen had NO client-side validation at all: an empty form
 // launched, and the server's answer arrived after the fact.
 describe("NewRunScreen — Launch says what it is waiting for", () => {
