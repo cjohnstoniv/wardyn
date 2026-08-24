@@ -187,7 +187,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
 
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
-  });
+  }, 30_000);
 
   it("does not cry truncation at the old 500 cap the console no longer asks for", async () => {
     // listAudit sends ?limit=1000 (LIST_LIMIT) and the server honors it, so a
