@@ -4,9 +4,9 @@
  */
 
 /*
- * Video 06 of the series — "Interactive runs".
+ * Video 07 of the series — "Interactive runs".
  *
- * WHAT THIS FILMS. Video 03's run needed nobody; this one is the opposite: an
+ * WHAT THIS FILMS. Video 06's run needed nobody; this one is the opposite: an
  * interactive agent run you drive by hand. The take launches it through the
  * same New Run form (only the choices that change get airtime), lands in the
  * sandbox's own shell over the cockpit terminal, and then earns the series'
@@ -70,8 +70,8 @@
  * This is NOT a test. It asserts only enough to keep itself honest and to
  * know when to advance. It runs against the REAL compose stack on :8080.
  *
- * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
- * filename and names the take wardyn-04-interactive-runs-<stamp>.mp4
+ * Driven by `scripts/record-demo.sh --video 07`, which globs this exact
+ * filename and names the take wardyn-07-interactive-runs-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
  */
@@ -104,7 +104,7 @@ test.describe.configure({ mode: "serial" });
 // ---------------------------------------------------------------------------
 
 /** Unique title (DA5): the board groups by it and the verifier finds it. */
-const RUN_TITLE = process.env.WARDYN_DEMO_V04_TITLE || "Drive it yourself — interactive agent";
+const RUN_TITLE = process.env.WARDYN_DEMO_V07_TITLE || "Drive it yourself — interactive agent";
 
 /** The full sentinel token, byte for byte (harnesscred.go's
  *  managedSentinelAccessToken). A Go constant, so a full match is the honest
@@ -125,7 +125,7 @@ const INJECT_ACTION = "run.llm.subscription_inject";
  */
 const DEMO_SECRET = "wardyn-demo-key";
 /** Never a real credential — a string this file can grep the screen for. */
-const DEMO_SECRET_VALUE = "WARDYN-V06-CANARY-4T7RM";
+const DEMO_SECRET_VALUE = "WARDYN-V07-CANARY-4T7RM";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;
@@ -226,7 +226,7 @@ test.beforeAll(async () => {
 // Beat 1 — the form again, but only the choices that change
 // ---------------------------------------------------------------------------
 
-test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
+test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   test.setTimeout(180_000);
   const page = stage();
   await page.goto("/runs/new");
@@ -317,7 +317,7 @@ test("V06 beat 1 — an agent, and a hand on the wheel", async () => {
 // Beat 2 — the terminal is the run
 // ---------------------------------------------------------------------------
 
-test("V06 beat 2 — inside the box", async () => {
+test("V07 beat 2 — inside the box", async () => {
   test.setTimeout(SANDBOX_UP + 120_000);
   const page = stage();
 
@@ -353,7 +353,7 @@ test("V06 beat 2 — inside the box", async () => {
 // Beat 3 — the decoy
 // ---------------------------------------------------------------------------
 
-test("V06 beat 3 — the decoy", async () => {
+test("V07 beat 3 — the decoy", async () => {
   test.setTimeout(300_000);
   const page = stage();
   const screen = page.locator(".xterm-screen").first();
@@ -420,7 +420,7 @@ test("V06 beat 3 — the decoy", async () => {
 // Beat 4 — the boundary (the quota beat)
 // ---------------------------------------------------------------------------
 
-test("V06 beat 4 — drive the agent", async () => {
+test("V07 beat 4 — drive the agent", async () => {
   test.setTimeout(600_000);
   const page = stage();
   const screen = page.locator(".xterm-screen").first();
@@ -463,7 +463,7 @@ test("V06 beat 4 — drive the agent", async () => {
 // Beat 4b — the unscripted hold (conditional: not every take raises it)
 // ---------------------------------------------------------------------------
 
-test("V06 beat 4b — the unscripted hold", async () => {
+test("V07 beat 4b — the unscripted hold", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -502,7 +502,7 @@ test("V06 beat 4b — the unscripted hold", async () => {
 // Beat 5 — on the record
 // ---------------------------------------------------------------------------
 
-test("V06 beat 5 — on the record", async () => {
+test("V07 beat 5 — on the record", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -560,7 +560,7 @@ test("V06 beat 5 — on the record", async () => {
 // subscription limit that parks beat 4.
 // ---------------------------------------------------------------------------
 
-test("V06 beat 6 — one masked write", async () => {
+test("V07 beat 6 — one masked write", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -604,7 +604,7 @@ test("V06 beat 6 — one masked write", async () => {
   await spotlight(page, null);
 });
 
-test("V06 beat 7 — the key that never enters the box", async () => {
+test("V07 beat 7 — the key that never enters the box", async () => {
   test.setTimeout(900_000);
   const page = stage();
 
@@ -745,7 +745,7 @@ test("V06 beat 7 — the key that never enters the box", async () => {
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
 
-test("V06 beat 8 — authorized, not issued", async () => {
+test("V07 beat 8 — authorized, not issued", async () => {
   test.setTimeout(900_000);
   const page = stage();
 
@@ -880,7 +880,7 @@ test("V06 beat 8 — authorized, not issued", async () => {
 // Conclusion
 // ---------------------------------------------------------------------------
 
-test("V06 conclusion", async () => {
+test("V07 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -907,7 +907,7 @@ test("V06 conclusion", async () => {
   await caption(page, "Let's see what happens when the agent works on its own.");
   await beat(page, PACE.read + 400);
   await caption(page, "");
-  await silentCard(page, "Next — 07: Autonomous agent");
+  await silentCard(page, "Next — 08: Autonomous agent");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

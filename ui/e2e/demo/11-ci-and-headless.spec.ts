@@ -4,11 +4,11 @@
  */
 
 /*
- * V09 · CI & headless — the BROWSER half (beats 5-6).
+ * V11 · CI & headless — the BROWSER half (beats 5-6).
  *
  * This video is a hybrid, and this file is only its back end. Beats 1-4 are a
  * host shell — the CI policy file, one `scripts/ci-run.sh` invocation, its exit
- * code, its artifacts — and live in scripts/demo-beats/09-ci-and-headless.sh,
+ * code, its artifacts — and live in scripts/demo-beats/11-ci-and-headless.sh,
  * filmed under the same screen grab by `record-demo.sh --terminal-script`. The
  * two segments are joined, terminal first, into one mp4. Read that script
  * first: everything this file inherits was set up there.
@@ -107,7 +107,7 @@ function pipelineRun(): { id: string; state: string; task: string } {
   if (!fs.existsSync(RUN_JSON)) {
     throw new Error(
       `no ${RUN_JSON} — beats 5-6 film the run beats 1-4 launched, and that is where its id comes from. ` +
-        `Record this video with: scripts/record-demo.sh --video 09 --terminal-script scripts/demo-beats/09-ci-and-headless.sh`,
+        `Record this video with: scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh`,
     );
   }
   const run = JSON.parse(fs.readFileSync(RUN_JSON, "utf8")) as { id?: string; state?: string; task?: string };
@@ -255,8 +255,8 @@ test("beat 6 — same trail, no human", async () => {
   await spotlight(page, null);
 
   // ── conclusion ───────────────────────────────────────────────────────────
-  // The series motif ("Run anything. Keep your keys.") belongs to V10 and is
-  // deliberately absent here — V02 through V09 never speak it.
+  // The series motif ("Run anything. Keep your keys.") belongs to V12 and is
+  // deliberately absent here — V02 through V11 never speak it.
   await caption(page, "A pipeline doesn't need a human to enforce a policy.");
   await beat(page, PACE.read);
   await caption(page, "The policy makes the decision.");

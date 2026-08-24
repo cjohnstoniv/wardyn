@@ -269,7 +269,7 @@ async function restageWorkspace(): Promise<void> {
   // (source_scan.go's scan_seeded rows) — and AllowedHostsCard counts those
   // alongside approved_egress. One stray package.json in here and beat 7's
   // "Allowed hosts · 1" is "· 2", with the receipt naming a host nobody
-  // decided on camera. Same reset video 06 does for its own workspace dir.
+  // decided on camera. Same reset video 09 does for its own workspace dir.
   rmSync(WORKSPACE_PATH, { recursive: true, force: true });
   mkdirSync(WORKSPACE_PATH, { recursive: true });
 

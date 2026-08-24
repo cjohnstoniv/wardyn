@@ -14,13 +14,13 @@
 #
 # WHICH take is on the bench comes from WARDYN_DEMO_VIDEO (record-demo.sh
 # --video exports it). Unset means the legacy end-to-end walkthrough, whose
-# checks ARE the autonomous episode's (07) — so the default path is byte-for-byte what this script
+# checks ARE the autonomous episode's (08) — so the default path is byte-for-byte what this script
 # always did. The narration and artifact checks at the bottom are SHARED: they
 # run for every take of every video, because "it recorded" and "it has a voice"
 # are claims no video gets to skip.
 #
 #   scripts/verify-demo-take.sh [video.mp4]
-#   WARDYN_DEMO_VIDEO=07 scripts/verify-demo-take.sh video.mp4
+#   WARDYN_DEMO_VIDEO=08 scripts/verify-demo-take.sh video.mp4
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +35,7 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
 
-# The autonomous episode's checks (new 07 — the legacy walkthrough's act 5), exactly as this script has
+# The autonomous episode's checks (new 08 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
 #
 # A FUNCTION, and deliberately not a subshell or a pipeline: ok()/bad() increment
@@ -226,7 +226,7 @@ grep -qx "deploy-webhook-token" <<<"${NAMES}" && ok "deploy-webhook-token stored
 # The canary must not appear in the audit trail (a write-only store that logs
 # the value would be the leak the video denies).
 AUD=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/audit?limit=500" 2>/dev/null || true)
-grep -q "WARDYN-V02-CANARY" <<<"${AUD}" && bad "the canary VALUE appears in the audit trail" || ok "canary value nowhere in the audit trail"
+grep -q "WARDYN-V04-CANARY" <<<"${AUD}" && bad "the canary VALUE appears in the audit trail" || ok "canary value nowhere in the audit trail"
 }
 
 # --- video 03: your first run ---------------------------------------------------
@@ -234,7 +234,7 @@ grep -q "WARDYN-V02-CANARY" <<<"${AUD}" && bad "the canary VALUE appears in the 
 # the writable workspace.
 check_video_03_first_run() {
 head_ "Video 03 · the run"
-V03_TITLE="${WARDYN_DEMO_V03_TITLE:-Take inventory — first governed run}"
+V03_TITLE="${WARDYN_DEMO_V06_TITLE:-Take inventory — first governed run}"
 RUNS=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/runs" 2>/dev/null || echo '[]')
 STATE=$(python3 - "$RUNS" "$V03_TITLE" <<'PYEOF'
 import sys, json
@@ -501,7 +501,11 @@ PYEOF
 fi
 }
 
-# --- video 08: policies & confinement -------------------------------------------
+# --- (old) video 08: policies & confinement -------------------------------------
+# RETIRING, no longer dispatched (Workstream C renumber, 2026-08-24): this
+# content folds into the new episode 05 and case key "08" now means the
+# autonomous-agent episode (check_video_02, above). Kept for whoever writes
+# 05's real checks to borrow assertions from.
 # The take authors ONE policy (`nightly-triage`) by PASTING a prepared CC1 spec
 # over the editor's CC2-floored starter, then launches a shell run BY REFERENCE
 # to it. Three ways that goes green while filming a lie, and each gets a check:
@@ -873,19 +877,29 @@ case "${WARDYN_DEMO_VIDEO:-}" in
       bad "no narration timeline at ${TL00}"
     fi
     ;;
-  # Final 12-episode numbering (owner-approved renumber): 02 setup (old 01),
-  # 03 workspaces (old 02), 04 first run (old 03), 05 what-it-stops (new),
-  # 06 interactive (old 04), 07 autonomous (old 05), 08 policies, 09 record
-  # (old 06), 10 scopes (old 07), 11 CI (old 09), 12 audit+attach (old 10).
-  ""|07) check_video_02 ;;
+  # THE SERIES RESTRUCTURE (merry-snacking-harbor.md Workstream C, 2026-08-24):
+  # 01 problem/solution · 02 set up the host · 03 the demos (was what-it-stops,
+  # content rework pending) · 04 your work/workspaces · 05 your first policy
+  # (NEW — the panel/templates/meter episode; not filmed yet, no checks below)
+  # · 06 your first run (was 05) · 07 interactive runs (was 06) · 08 an
+  # autonomous agent (was 07) · 09 record a run (unchanged) · 10 approvals &
+  # egress (unchanged) · 11 CI & headless (unchanged) · 12 audit & attach
+  # (unchanged). The check_video_NN_* function NAMES below still carry their
+  # OWN older numbering (accumulated across earlier renumbers) — only the case
+  # KEYS re-key to the table above; trust the case label, not the callee name.
+  ""|08) check_video_02 ;;             # unset legacy walkthrough == the autonomous episode's own checks
   04) check_video_02_workspace ;;
-  05) check_video_03_first_run ;;
+  06) check_video_03_first_run ;;
   09) check_video_06_record ;;
   10) check_video_07_approvals ;;
-  08) check_video_08_policies ;;
   11) check_video_09 ;;
   12) check_video_10 ;;
-  02|03|06)
+  # check_video_08_policies (the old policies-and-confinement checks) is no
+  # longer dispatched: that content retires into the new episode 05
+  # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the
+  # meantime). Left defined, unused, for whoever writes 05's real checks to
+  # borrow from.
+  02|03|05|07)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;

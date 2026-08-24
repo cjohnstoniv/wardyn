@@ -1,6 +1,6 @@
 # Try Wardyn in 10 minutes
 
-[Watch — Your first run (2:30–3:00)](README.md#v03--your-first-run)
+[Watch — Your first run (2:30–3:00)](README.md#v06--your-first-run)
 
 The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
@@ -8,7 +8,7 @@ stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
 key), and **record, then replay confined** to onboard your own work.
 
-[Watch — Getting started (6:00–6:30)](README.md#v01--getting-started)
+[Watch — Why govern agents (6:00–6:30)](README.md#v01--why-govern-agents)
 
 The Getting-started rail detects this host's real capabilities — which
 confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
@@ -132,7 +132,7 @@ point at any RUNNING sandbox.
 
 ## Level 2 — real Claude Code run (bring an Anthropic API key)
 
-[Watch — Interactive runs (~3:00)](README.md#v04--interactive-runs)
+[Watch — Interactive runs (~3:00)](README.md#v07--interactive-runs)
 
 ```sh
 # 1. Store the key (write-only; no API path ever returns it):
@@ -187,7 +187,7 @@ opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 
 ### Model auth: three ways to give Claude Code its LLM access
 
-[Watch — Interactive runs (~3:00)](README.md#v04--interactive-runs)
+[Watch — Interactive runs (~3:00)](README.md#v07--interactive-runs)
 
 Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
 subscription mount (host mode's resident `~/.claude`) > managed subscription >
@@ -230,7 +230,7 @@ the real credential out of the sandbox *except* the Bedrock access-key path
 
 ## Level 2.5 — record a session, rerun it as a governed profile
 
-[Watch — Record a run (2:30–3:00)](README.md#v06--record-a-run)
+[Watch — Record a run (2:30–3:00)](README.md#v09--record-a-run)
 
 The primary way to onboard your own work: in a workspace, **record** a named
 interactive session (with model access), then rerun it governed — the New Run

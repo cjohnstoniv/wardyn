@@ -28,7 +28,7 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 
 ## The series harness
 
-The 0.5 story is not one video, it is ten. Same rig throughout — same driver,
+The 0.5 story is not one video, it is twelve. Same rig throughout — same driver,
 same overlay, same narration, same verifier — with one spec per video:
 
 ```sh
@@ -110,7 +110,7 @@ ssh-keygen -R '[127.0.0.1]:2222'
 `verify-demo-take.sh` reads `WARDYN_DEMO_VIDEO` and picks its checks from it.
 Unset means the legacy walkthrough, which films act 5 — so it gets act 5's
 checks, byte for byte what this script always ran, and that is also
-`--video 07` (the autonomous episode inherits the walkthrough's beats). Most
+`--video 08` (the autonomous episode inherits the walkthrough's beats). Most
 episodes carry their own check functions; the remaining stubs
 (`video-specific checks TBD by spec`) ship their assertions with the spec
 that films them, because a check written before the beat exists is a guess,
@@ -123,9 +123,9 @@ silently, or recorded at the wrong size.
 
 ### The terminal lane: `--terminal-script`
 
-Two videos of the series have no page to film. **V09 (CI & headless)** is a
+Two videos of the series have no page to film. **V11 (CI & headless)** is a
 policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
-and its artifacts; **V10 (audit & attach)** is three terminals each holding
+and its artifacts; **V12 (audit & attach)** is three terminals each holding
 `ssh <run-uuid>@127.0.0.1 -p 2222` with a different key. Playwright cannot drive
 either of them.
 
@@ -229,7 +229,7 @@ mattering: see "The video is captured from TWO sources" below.
 |---|---|---|
 | Acts 1–6 — the console | **the browser recording itself** (Playwright `recordVideo`) | **always** → `…/Videos/wardyn-demo-<ts>.mp4` |
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
-| Host-shell beats (V09, V10) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
+| Host-shell beats (V11, V12) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot
@@ -637,8 +637,9 @@ scripts/verify-demo-take.sh /mnt/c/Users/<you>/Videos/wardyn-demo-<ts>.mp4
 
 It checks the take against the **audit trail and the filesystem**, not the exit
 code, and exits non-zero if any of it fails. The list below is the walkthrough's
-— i.e. video 02's, and the default when `WARDYN_DEMO_VIDEO` is unset; the last
-two entries are shared by every video (see "The series harness" above):
+— i.e. the autonomous episode's (video 08), and the default when
+`WARDYN_DEMO_VIDEO` is unset; the last two entries are shared by every video
+(see "The series harness" above):
 
 - the act-5 run exists and `api.anthropic.com` was allowed (the model path worked)
 - `example.com` went `egress.pending` → `approval.decide` → `egress.allow`

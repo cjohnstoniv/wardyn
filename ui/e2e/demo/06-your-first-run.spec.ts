@@ -4,7 +4,7 @@
  */
 
 /*
- * Video 04 of the series — "Your first run".
+ * Video 06 of the series — "Your first run".
  *
  * WHAT THIS FILMS. The simplest governed thing Wardyn can do: a plain shell
  * command, run unattended in the background, against the workspace video 02
@@ -13,8 +13,8 @@
  * run is, the three kinds of task, why this one needs zero egress, what the
  * rail promises before launch, and then the receipts a finished run leaves
  * behind — its exit code, the file it really wrote to the host, and the audit
- * trail from create to complete. Driving an agent is video 04; autonomy with
- * a human decision mid-run is video 05.
+ * trail from create to complete. Driving an agent is video 07; autonomy with
+ * a human decision mid-run is video 08.
  *
  * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from
  * local/episodes-03-12-scripts-current.md's "Episode 04 — Your first run"
@@ -33,12 +33,12 @@
  *
  * STATE IT INHERITS. Video 02's finished stack: the slugify workspace exists,
  * onboarded WRITABLE on camera (the write grant is what lets this run's file
- * reach the host). record-demo.sh --video 05 does not reset. If the workspace
+ * reach the host). record-demo.sh --video 06 does not reset. If the workspace
  * is missing (a fresh stack, or 02 was never shot here) the beforeAll fails
  * loudly with the staging instruction instead of filming a broken form.
  *
  * OWNERSHIP OF NOUNS. This video launches one run titled RUN_TITLE (unique to
- * V03 — the board groups by title, and the verifier finds the run by it) and
+ * V06 — the board groups by title, and the verifier finds the run by it) and
  * writes one file, NOTES-INVENTORY.txt, inside the slugify workspace. It
  * touches no other series noun.
  *
@@ -47,8 +47,8 @@
  * product is broken. It runs against the REAL compose stack on :8080 with a
  * real sandbox.
  *
- * Driven by `scripts/record-demo.sh --video 05`, which globs this exact
- * filename and names the take wardyn-03-your-first-run-<stamp>.mp4
+ * Driven by `scripts/record-demo.sh --video 06`, which globs this exact
+ * filename and names the take wardyn-06-your-first-run-<stamp>.mp4
  * (docs/README.md links that asset name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
  */
@@ -72,7 +72,7 @@ test.describe.configure({ mode: "serial" });
 // ---------------------------------------------------------------------------
 
 /** Unique title (DA5): the board groups by it and the verifier finds it. */
-const RUN_TITLE = process.env.WARDYN_DEMO_V03_TITLE || "Take inventory — first governed run";
+const RUN_TITLE = process.env.WARDYN_DEMO_V06_TITLE || "Take inventory — first governed run";
 
 /** The artifact the run writes into the workspace — the proof a background
  *  run really touched the host. Deleted before the take so the diff is real. */
@@ -121,8 +121,8 @@ async function preflight(page: Page): Promise<void> {
     : (body?.items ?? body?.workspaces ?? []);
   expect(
     items.some((w) => w.name === WORKSPACE_NAME),
-    `no "${WORKSPACE_NAME}" workspace on this stack — video 03 runs against the one video 02 onboards. ` +
-      `Shoot 03 first (scripts/record-demo.sh --video 03), or restage it off camera.`,
+    `no "${WORKSPACE_NAME}" workspace on this stack — video 06 runs against the one video 02 onboards. ` +
+      `Shoot 02 first (scripts/record-demo.sh --video 02), or restage it off camera.`,
   ).toBe(true);
   fs.rmSync(path.join(WORKSPACE_PATH, ARTIFACT), { force: true });
 
@@ -160,7 +160,7 @@ test.beforeAll(async () => {
 // Cold open + Beat 1 — the form, taught while nothing is moving
 // ---------------------------------------------------------------------------
 
-test("V05 beat 1 — name it, aim it", async () => {
+test("V06 beat 1 — name it, aim it", async () => {
   test.setTimeout(180_000);
   const page = stage();
   await page.goto("/runs/new");
@@ -242,7 +242,7 @@ test("V05 beat 1 — name it, aim it", async () => {
 // Beat 2 — the workspace, the envelope, the rail
 // ---------------------------------------------------------------------------
 
-test("V05 beat 2 — the envelope", async () => {
+test("V06 beat 2 — the envelope", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -428,7 +428,7 @@ test("V05 beat 2 — the envelope", async () => {
 // Beat 3 — launch, and let it be a background run
 // ---------------------------------------------------------------------------
 
-test("V05 beat 3 — launch, walk away", async () => {
+test("V06 beat 3 — launch, walk away", async () => {
   test.setTimeout(RUN_FINISHES + 120_000);
   const page = stage();
 
@@ -501,7 +501,7 @@ test("V05 beat 3 — launch, walk away", async () => {
 // Beat 4 — the receipts
 // ---------------------------------------------------------------------------
 
-test("V05 beat 4 — the receipts", async () => {
+test("V06 beat 4 — the receipts", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
@@ -523,7 +523,7 @@ test("V05 beat 4 — the receipts", async () => {
   // replay itself already played in beat 3, in the Overview's hero pane —
   // the Files-changed widget stays out of this video: a 7-second sandbox is
   // torn down before it ever polls, so it is honestly empty here, and its
-  // moment is video 05 where an agent works long enough to watch live.)
+  // moment is video 07 where an agent works long enough to watch live.)
   expect(
     fs.existsSync(path.join(WORKSPACE_PATH, ARTIFACT)),
     `the run's ${ARTIFACT} never landed in ${WORKSPACE_PATH} — was the workspace onboarded writable?`,
@@ -579,7 +579,7 @@ test("V05 beat 4 — the receipts", async () => {
 // Conclusion
 // ---------------------------------------------------------------------------
 
-test("V05 conclusion", async () => {
+test("V06 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
@@ -605,7 +605,7 @@ test("V05 conclusion", async () => {
   await caption(page, "And this time, we'll drive it ourselves.");
   await beat(page, PACE.read);
   await caption(page, "");
-  await silentCard(page, "Next — 06: Interactive runs");
+  await silentCard(page, "Next — 07: Interactive runs");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

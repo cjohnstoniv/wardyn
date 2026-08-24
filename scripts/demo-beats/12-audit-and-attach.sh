@@ -2,12 +2,12 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# V10 — Audit & attach, beats 1-3: the TERMINAL half of the series finale.
+# V12 — Audit & attach, beats 1-3: the TERMINAL half of the series finale.
 #
-#   scripts/record-demo.sh --video 10 \
-#     --terminal-script scripts/demo-beats/10-audit-and-attach.sh
+#   scripts/record-demo.sh --video 12 \
+#     --terminal-script scripts/demo-beats/12-audit-and-attach.sh
 #
-# The other half is ui/e2e/demo/10-audit-and-attach.spec.ts (beats 4-6, the
+# The other half is ui/e2e/demo/12-audit-and-attach.spec.ts (beats 4-6, the
 # audit trail and the tape). record-demo.sh concatenates the two segments
 # TERMINAL FIRST, so this file is the opening of the video and the spec picks up
 # exactly where it leaves off.
@@ -643,7 +643,7 @@ tmux kill-session -t "${SESSION}" 2>/dev/null
 # WARDYN_DEMO_WORK_DIR is in that list for the SAME reason and is the one that
 # bites silently: demo-typist.sh writes its narration timeline to
 # ${WARDYN_DEMO_WORK_DIR}/narration-terminal.json and record-demo.sh merges it
-# back from ui/test-results/demo-video-10/. The typist is sourced INSIDE this
+# back from ui/test-results/demo-video-12/. The typist is sourced INSIDE this
 # tmux session, so without the pass-through the driver falls back to the
 # pre---video path, the mux reads an empty per-video file, and beats 1-3 ship
 # VOICELESS under a fully narrated browser half with every step exiting 0.

@@ -3,6 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// RETIRING (Workstream C lane 5, mechanical renumber, 2026-08-24). Number
+// slot 08 now belongs to the autonomous-agent episode (08-autonomous-agent.
+// spec.ts, moved from old 07) — this file was renamed OUT of the numbered
+// 01-12 sequence (git history preserved via `git mv`) so the two files could
+// stop colliding. Its content — the barrier-tier honesty story and the
+// saved-policy-reuse teaching below — RETIRES INTO the new episode 05
+// ("Your first policy — the panel, templates, THE METER, save"), per
+// Workstream C of /home/cjohn/.claude/plans/merry-snacking-harbor.md. Lane 6
+// absorbs this material when it authors 05-*.spec.ts (a NEW file — lane 5
+// deliberately did not create it or place a placeholder at slot 05, since the
+// new episode's real content, including the safety-meter beats, does not
+// exist yet). Delete this file once its material has been folded in.
+//
+// UNCHANGED BELOW: no narration/content edits — that is lane 6's call to
+// make while rewriting this into the new episode.
+
 /*
  * Video 08 of the series — Policies & confinement tiers.
  *

@@ -9,8 +9,8 @@
 # console from inside the page (Playwright recordVideo) and gets its presentation
 # from ui/e2e/demo/overlay.ts — a caption bar, a spotlight ring, chapter cards,
 # every line of it also SPOKEN by scripts/narrate-server.py. Two videos of the
-# 0.5 series have no page to film: V09 (CI & headless) is `cat` a policy, run
-# scripts/ci-run.sh, `echo $?`, read the artifacts; V10 (audit & attach) is three
+# series have no page to film: V11 (CI & headless) is `cat` a policy, run
+# scripts/ci-run.sh, `echo $?`, read the artifacts; V12 (audit & attach) is three
 # terminals holding `ssh <run-uuid>@127.0.0.1 -p 2222` with three different keys.
 # Before this file the terminal lane could film exactly one hardcoded thing —
 # `make setup` during Act 0 — with no captions and no voice. This gives it the
@@ -27,7 +27,7 @@
 #     type_cmd 'echo $?'
 #     narration_end
 #
-# and record it with:  scripts/record-demo.sh --video 09 --terminal-script <path>
+# and record it with:  scripts/record-demo.sh --video 11 --terminal-script <path>
 #
 # THE VOCABULARY MIRRORS overlay.ts ON PURPOSE. say() is caption(), beat() is
 # beat(), chapter() is chapter(), type_cmd() is typeInTerminal(). Same names,

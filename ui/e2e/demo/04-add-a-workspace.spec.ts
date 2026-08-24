@@ -48,7 +48,7 @@
  * and the secret `deploy-webhook-token`. It touches nothing else the series
  * uses.
  *
- * THE SENTINEL. Beat 4 pastes WARDYN-V02-CANARY-9K2QN into the Add-secret
+ * THE SENTINEL. Beat 4 pastes WARDYN-V04-CANARY-9K2QN into the Add-secret
  * dialog's Value field, which MASKS at entry (secrets.tsx) — its glyphs are
  * never on screen. At the paste the DOM value necessarily holds the
  * plaintext (asserted MASKED, not absent); from the save onward this file
@@ -106,7 +106,7 @@ const SECRET_NAME = "deploy-webhook-token";
  * file can grep the whole page for. Video-scoped in the name so it cannot
  * collide with anything another take leaves behind.
  */
-const SENTINEL = "WARDYN-V02-CANARY-9K2QN";
+const SENTINEL = "WARDYN-V04-CANARY-9K2QN";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;

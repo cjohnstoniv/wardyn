@@ -4,12 +4,12 @@
  */
 
 /*
- * V10 — Audit & attach. The series finale, and the BROWSER HALF of it.
+ * V12 — Audit & attach. The series finale, and the BROWSER HALF of it.
  *
  * This video is a HYBRID: beats 1-3 are three real ssh terminals and live in
- * scripts/demo-beats/10-audit-and-attach.sh; beats 4-6 are this file. Both
+ * scripts/demo-beats/12-audit-and-attach.sh; beats 4-6 are this file. Both
  * lanes run under one `scripts/record-demo.sh --video 12 --terminal-script
- * scripts/demo-beats/10-audit-and-attach.sh` invocation, and record-demo.sh
+ * scripts/demo-beats/12-audit-and-attach.sh` invocation, and record-demo.sh
  * concatenates them TERMINAL FIRST, then the console. So this file opens on
  * state the beat script left behind and must never re-stage it:
  *
@@ -74,7 +74,7 @@ const RECORDING_LOADS = 120_000;
 const BEAT_SHORT = 1400;
 
 // Where the terminal lane leaves the run id it just attacked (written by
-// scripts/demo-beats/10-audit-and-attach.sh, beside the lane's own narration
+// scripts/demo-beats/12-audit-and-attach.sh, beside the lane's own narration
 // timeline). Resolved from this file so it does not depend on the process cwd.
 const RUN_ID_HANDOFF = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

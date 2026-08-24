@@ -4,9 +4,9 @@
  */
 
 /*
- * V05 — Autonomous agent.
+ * V08 — Autonomous agent.
  *
- * Video 07 of the series — the autonomous agent. The setup episode stood the stack up, walked the
+ * Video 08 of the series — the autonomous agent. The setup episode stood the stack up, walked the
  * Getting Started funnel and onboarded a workspace; nothing has yet RUN inside
  * the boundary. This film is that: one real agent run, named, confined to a
  * single host, held once at the proxy on camera, finishing with a diff of the
@@ -25,14 +25,14 @@
  * handling, the unnamed-workspace-combobox workaround, decide()'s
  * decide-by-host discipline and the terminal-state wait are all hard-won on
  * camera. What act 5 had that this does NOT: the `always` scope, the workspace
- * receipt and the proof run. Those are V07's, and V05 deliberately grants only
- * "This run" so a later take of V05 still gets to raise its own hold.
+ * receipt and the proof run. Those are V10's, and V08 deliberately grants only
+ * "This run" so a later take of V08 still gets to raise its own hold.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
  * product is broken. It runs against the REAL compose stack on :8080 with a
- * live runner, real sandboxes and a CONNECTED MODEL — V05 is one of the two
- * quota-bound videos (V04/V05), and there is no model-free variant here on
+ * live runner, real sandboxes and a CONNECTED MODEL — V08 is one of the two
+ * quota-bound videos (V07/V08), and there is no model-free variant here on
  * purpose: every SAY line in the script is committed to an agent writing code.
  *
  * STATE IT INHERITS, and what it re-stages for itself:
@@ -44,18 +44,19 @@
  *  - A model provider is connected (V01 did it). Asserted before Launch,
  *    because the rail renders "No model provider is connected…" and beat 6
  *    spotlights that rail on camera.
- *  - Per SV16/SV20 this take is shot after V04's interactive take (the quota window), so it
- *    is recorded with `scripts/record-demo.sh --video 07 --no-reset`. A reset
- *    would destroy V08's reused run, the connected model lane and the SSH host
- *    key. Hygiene inside the window is DA5's workspace-scoped clearing only —
+ *  - Per SV16/SV20 this take is shot after V07's interactive take (the quota window), so it
+ *    is recorded with `scripts/record-demo.sh --video 08 --no-reset`. A reset
+ *    would destroy the policy episode's reused run, the connected model lane
+ *    and the SSH host key. Hygiene inside the window is DA5's workspace-scoped
+ *    clearing only —
  *    which is exactly what this file's beforeAll does.
  *
  * Selectors are getByRole + accessible names, matching ui/e2e/fixtures.ts and
  * the rest of the suite: a copy change breaks this loudly and in one place,
  * markup churn does not break it at all.
  *
- * Driven by scripts/record-demo.sh --video 07 (it globs 07-*.spec.ts and names
- * the take wardyn-05-autonomous-agent-<stamp>.mp4 — docs/README.md links that
+ * Driven by scripts/record-demo.sh --video 08 (it globs 08-*.spec.ts and names
+ * the take wardyn-08-autonomous-agent-<stamp>.mp4 — docs/README.md links that
  * exact asset name, so this FILENAME IS LOAD-BEARING).
  */
 
@@ -84,7 +85,7 @@ const BEAT_SHORT = 1400;
 /**
  * This run's TITLE, and the key everything downstream finds it by.
  *
- * UNIQUE TO V05 on purpose (DA5). The series shoots ten videos against one
+ * UNIQUE TO V08 on purpose (DA5). The series shoots twelve videos against one
  * long-lived stack, several of them launch runs, and scripts/verify-demo-take.sh
  * picks this take's run out of `wardyn runs list` BY EXACT TITLE — a title
  * shared with the walkthrough's own run (task.ts's DEMO_TITLE) would have the
@@ -121,7 +122,7 @@ const PROOF_TITLE = "Borrowed by name — never held";
 /** Video 02's secret and canary. If 02 was never shot on this stack the
  *  beforeAll stores the secret itself, so this video stands alone. */
 const PROOF_SECRET = "deploy-webhook-token";
-const PROOF_CANARY = "WARDYN-V02-CANARY-9K2QN";
+const PROOF_CANARY = "WARDYN-V04-CANARY-9K2QN";
 
 /** Where the workspace lands inside the sandbox (add-workspace-dialog.tsx's DEFAULT_TARGET). */
 const MOUNT_TARGET = "/home/agent/work";
@@ -133,10 +134,11 @@ const MOUNT_TARGET = "/home/agent/work";
 // listed here rather than in a shoot-day note because a precondition that
 // lives only in prose gets forgotten:
 //
-//   1. Record with `scripts/record-demo.sh --video 07 --no-reset` (SV20). The
+//   1. Record with `scripts/record-demo.sh --video 08 --no-reset` (SV20). The
 //      harness re-materializes ~/wardyn-demo/slugify from the fixture on EVERY
 //      invocation regardless of --no-reset, so the on-disk workspace is always
-//      virgin; what --no-reset protects is V08's run and the model lane.
+//      virgin; what --no-reset protects is the policy episode's run and the
+//      model lane.
 //   2. A Claude subscription with quota. This launches a real agent.
 //   3. A connected model provider, from V01. Asserted before Launch anyway.
 //   4. Local mode / operator session (SV1) — see the file header on why the
@@ -246,7 +248,7 @@ test.beforeAll(async () => {
 // before it starts.
 // ---------------------------------------------------------------------------
 
-test("V07 beats 1-6 — name it, aim it, fence it", async () => {
+test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   test.setTimeout(600_000);
   const page = stage();
 
@@ -460,7 +462,7 @@ test("V07 beats 1-6 — name it, aim it, fence it", async () => {
 // Beats 7-9 — the run itself: unattended, held once, finished with a diff.
 // ---------------------------------------------------------------------------
 
-test("V07 beats 7-9 — launch, held at the boundary, files changed", async () => {
+test("V08 beats 7-9 — launch, held at the boundary, files changed", async () => {
   // Real agent, real sandbox, a human decision in the middle. Minutes.
   test.setTimeout(2_700_000);
   const page = stage();
@@ -592,8 +594,8 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
   // left undecided and unnarrated here: the script gives this video no line for it.)
   //
   // The BARE Approve — the split button's plain click, which is "This run".
-  // Not the caret: the scope ladder is V05's video, and an `always` here would
-  // write example.com onto the workspace and kill V05's own hold beat.
+  // Not the caret: the scope ladder is V10's video, and an `always` here would
+  // write example.com onto the workspace and kill V08's own hold beat.
   // decide() proves the decision landed by waiting for the row to clear, so a
   // rejected decision can never be narrated over.
   await decide(page, "Approve", "Approve for this run.", HELD_HOST);
@@ -791,7 +793,7 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
 // WHAT COULD MAKE THIS BEAT LIE: a stack with the recording store disabled, or
 // a cast that never uploaded, renders a NOTICE in the same frame — same border,
 // same title bar — and the narration would be describing a player that is not
-// there. So this asserts the player and fails loudly. A V05 take without the
+// there. So this asserts the player and fails loudly. A V08 take without the
 // tape is the wrong take, not a shorter one.
 //
 // Its own test() rather than a tail on beats 7-9: ~45 s of playback plus a
@@ -799,7 +801,7 @@ test("V07 beats 7-9 — launch, held at the boundary, files changed", async () =
 // stage() hands back the same page, so nothing is reset between them.
 // ---------------------------------------------------------------------------
 
-test("V07 beat 9b — the run kept its own tape", async () => {
+test("V08 beat 9b — the run kept its own tape", async () => {
   test.setTimeout(600_000);
   const page = stage();
   const headers = process.env.WARDYN_DEMO_TOKEN
@@ -899,7 +901,7 @@ test("V07 beat 9b — the run kept its own tape", async () => {
 // see the nouns block for why this must not ride the agent run above.
 // ---------------------------------------------------------------------------
 
-test("V07 beat 10 — borrowed, never held", async () => {
+test("V08 beat 10 — borrowed, never held", async () => {
   test.setTimeout(300_000);
   const page = stage();
   const headers = process.env.WARDYN_DEMO_TOKEN
@@ -1052,7 +1054,7 @@ test("V07 beat 10 — borrowed, never held", async () => {
   await caption(page, "Or can we write the rules once?");
   await beat(page, PACE.read + 400);
   await caption(page, "");
-  await silentCard(page, "Next — 08: Policies & confinement");
+  await silentCard(page, "Next — 09: Record a run");
 });
 
 /** The unspoken outro card, per the series convention video 01 set. */

@@ -2,18 +2,18 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# V09 · CI & headless — the TERMINAL half (beats 1-4).
+# V11 · CI & headless — the TERMINAL half (beats 1-4).
 #
 # WHAT THIS FILMS. Four host-shell beats, in one continuous frame: the CI
 # policy file (`cat examples/policies/ci.json`), one env-prefixed
 # `scripts/ci-run.sh` invocation that builds its own control plane and runs one
 # governed sandbox to completion, the exit code that invocation hands back
 # (`echo $?`), and the three artifacts it leaves behind. Beats 5-6 are a browser
-# and live in ui/e2e/demo/09-ci-and-headless.spec.ts; record-demo.sh joins the
+# and live in ui/e2e/demo/11-ci-and-headless.spec.ts; record-demo.sh joins the
 # two segments, terminal first, and merges both narration timelines.
 #
-#     scripts/record-demo.sh --video 09 \
-#       --terminal-script scripts/demo-beats/09-ci-and-headless.sh
+#     scripts/record-demo.sh --video 11 \
+#       --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 #
 # THE STACK THIS BRINGS UP IS NOT THE SERIES STACK, ON PURPOSE. Every other
 # video in the 0.5 series films the :8080 console that `make setup` left behind.
@@ -96,12 +96,12 @@ cd "${REPO_ROOT}" || exit 1
 # halves of the recorder disagree on where a terminal timeline lives:
 # demo-typist.sh defaults it to ui/test-results/demo-video/narration-terminal
 # .json (the pre---video path), while record-demo.sh reads and merges
-# ${WARDYN_DEMO_WORK_DIR}/narration-terminal.json — which for `--video 09` is
-# ui/test-results/demo-video-09/. Left alone, the typist writes one file and the
+# ${WARDYN_DEMO_WORK_DIR}/narration-terminal.json — which for `--video 11` is
+# ui/test-results/demo-video-11/. Left alone, the typist writes one file and the
 # mux reads another: beats 1-4 ship SILENT under a fully narrated browser half,
 # and every step of the take still exits 0. Setting it here is a per-caller
 # patch; the root fix is one line in demo-typist.sh's own default (which
-# scripts/demo-beats/10-audit-and-attach.sh needs too) and is out of scope for
+# scripts/demo-beats/12-audit-and-attach.sh needs too) and is out of scope for
 # this file. Honors an explicit override, and collapses to the typist's default
 # when this script is run standalone with no WARDYN_DEMO_WORK_DIR.
 export WARDYN_DEMO_TERMINAL_TIMELINE="${WARDYN_DEMO_TERMINAL_TIMELINE:-${WARDYN_DEMO_WORK_DIR:+${WARDYN_DEMO_WORK_DIR}/narration-terminal.json}}"
