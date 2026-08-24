@@ -65,13 +65,13 @@ func TestBuildRunMounts_DropsResidentClaudeCredsOnNonModelRun(t *testing.T) {
 
 	// Non-model run (e.g. task_mode=exec, or a verify/scan run): the two
 	// resident-credential mounts must be dropped; the unrelated repo mount stays.
-	got := buildRunMounts(policy, llmTransport{modelRun: false})
+	got := buildRunMounts(policy, llmTransport{modelRun: false}, memberMountPosture{})
 	if len(got) != 1 || got[0].Target != "/work/repo" {
 		t.Errorf("non-model run mounts = %+v, want only the /work/repo mount (claudeCredTarget/claudeCredJSONTarget dropped)", got)
 	}
 
 	// Model run: all three mounts pass through unchanged.
-	got = buildRunMounts(policy, llmTransport{modelRun: true})
+	got = buildRunMounts(policy, llmTransport{modelRun: true}, memberMountPosture{})
 	if len(got) != 3 {
 		t.Errorf("model run mounts = %+v, want all 3 policy mounts to pass through", got)
 	}

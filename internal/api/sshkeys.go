@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -91,15 +92,37 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The key's role is stamped HERE, from the registering session's own role,
+	// exactly the way handleAttachTicket stamps a ticket at mint time: SSH
+	// carries no session cookie, so the gateway has no live requireOperator to
+	// consult at connect time and this stamp is its ONLY role source at
+	// registration (migration 0043). Ceiling, documented in docs/SSH.md
+	// §Bounds: BOUNDED-STALE, not live — a demotion reaches this key only at
+	// its owner's next OIDC login (oidc.Config.OnLogin re-stamps role AND
+	// role_checked_at for every key the principal owns) or once
+	// role_checked_at exceeds WARDYN_SSH_ROLE_TTL (migration 0046), whichever
+	// comes first — never instantly, and never without one of those two.
+	role := oidc.RoleMember
+	if s.isOperator(r.Context()) {
+		role = oidc.RoleAdmin
+	}
+	// now is both CreatedAt and RoleCheckedAt: registration IS a role check —
+	// role above was just read from this same request's live session — so a
+	// freshly-registered key must not read as stale (migration 0046) before
+	// its owner's next login ever gets a chance to refresh it.
+	now := s.cfg.Now().UTC()
+
 	k := types.SSHPublicKey{
 		// FingerprintSHA256 + MarshalAuthorizedKey are both computed from the
 		// PARSED key, never echoing the caller's raw bytes back into storage —
 		// whitespace/options noise in the pasted line canonicalizes away.
-		Fingerprint: ssh.FingerprintSHA256(pk),
-		Principal:   principal,
-		Name:        name,
-		PublicKey:   strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pk)), "\n"),
-		CreatedAt:   s.cfg.Now().UTC(),
+		Fingerprint:   ssh.FingerprintSHA256(pk),
+		Principal:     principal,
+		Name:          name,
+		PublicKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pk)), "\n"),
+		Role:          role,
+		RoleCheckedAt: &now,
+		CreatedAt:     now,
 	}
 	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
 	if errors.Is(err, store.ErrConflict) {

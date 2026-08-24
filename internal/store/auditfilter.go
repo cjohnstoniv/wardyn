@@ -26,14 +26,21 @@ import (
 // product is a quiet wrong answer. Keep the two in step; they are deliberately
 // adjacent.
 //
-// Note actor is NOT filterable: for an agent event it IS the per-run SPIFFE ID,
-// so ?actor= would merely restate ?run_id=. ActorType (human/agent/system) is the
-// question that actually has more than one answer today.
+// Actor IS filterable (D6): for a HUMAN event it is the operator/member principal
+// (e.g. "alice@corp.example"), so ?actor= answers "everything developer X did" —
+// the per-principal evidence a vendor/compliance question needs and that no wider
+// window yields. (An earlier note dismissed actor as filterable because for an
+// AGENT event it is the per-run SPIFFE ID and would merely restate ?run_id= — but
+// that reasoning only ever considered agent events; a human's approvals, kills,
+// and policy writes all carry their principal here, and that is exactly what the
+// finding asks for.) The agent-side "everything under X's runs" view still needs
+// the agent_runs.created_by join, which does not fit this table-local filter.
 type AuditFilter struct {
 	Since        time.Time       // events at or after this instant
 	Until        time.Time       // events strictly before this instant
 	Action       string          // exact action, e.g. "run.kill"
 	ActionPrefix string          // action family, e.g. "credential." or "egress."
+	Actor        string          // exact principal, e.g. "alice@corp.example" (human evidence)
 	ActorType    types.ActorType // human / agent / system
 	Outcome      string          // success / failure / warn
 }
@@ -51,6 +58,8 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 	case f.Action != "" && ev.Action != f.Action:
 		return false
 	case f.ActionPrefix != "" && !strings.HasPrefix(ev.Action, f.ActionPrefix):
+		return false
+	case f.Actor != "" && ev.Actor != f.Actor:
 		return false
 	case f.ActorType != "" && ev.ActorType != f.ActorType:
 		return false
@@ -97,6 +106,9 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 		// starts_with, not LIKE: the prefix is caller-supplied and `%`/`_` are LIKE
 		// wildcards, so LIKE would need escaping to mean what Matches means.
 		add("starts_with(action, $%d)", f.ActionPrefix)
+	}
+	if f.Actor != "" {
+		add("actor = $%d", f.Actor)
 	}
 	if f.ActorType != "" {
 		add("actor_type = $%d", string(f.ActorType))

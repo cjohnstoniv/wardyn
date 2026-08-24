@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -47,11 +48,12 @@ import (
 
 // Secret names seeded/used at boot.
 const (
-	secretSigningKey   = "wardyn-signing-key"  // embedded identity ES256 PEM
-	secretGitHubAppID  = "github-app-id"       // GitHub App numeric id
-	secretGitHubAppKey = "github-app-key"      // GitHub App PEM private key
-	secretSessionKey   = "wardyn-session-key"  // OIDC session-cookie HMAC key (32 bytes)
-	secretSSHHostKey   = "wardyn-ssh-host-key" // SSH gateway ed25519 host key PEM
+	secretSigningKey   = "wardyn-signing-key"    // embedded identity ES256 PEM
+	secretGitHubAppID  = "github-app-id"         // GitHub App numeric id
+	secretGitHubAppKey = "github-app-key"        // GitHub App PEM private key
+	secretSessionKey   = "wardyn-session-key"    // OIDC session-cookie HMAC key (32 bytes)
+	secretSSHHostKey   = "wardyn-ssh-host-key"   // SSH gateway ed25519 host key PEM
+	secretUISessionKey = "wardyn-ui-session-key" // UI-sandbox relay cookie HMAC key (32 bytes)
 )
 
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
@@ -96,12 +98,24 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
+	// secret store and returns, never serving. Ahead of validateConfig on
+	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
+	// govern SERVING, and a rotation run under the deployment's own environment
+	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
+	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
+		return rotateAgeKeyMode(f, p)
+	}
+
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
 	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
 	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
 	// unit-testable without standing up the whole daemon.
 	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.listen, *f.tlsTerminated, *f.allowPlaintextListen)
 	if err != nil {
+		return err
+	}
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 
@@ -150,7 +164,7 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
 	if err != nil {
 		return err
 	}
@@ -204,6 +218,13 @@ func run() error {
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
 	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg)
+	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
+	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
+	// double-writing the primary store. Guarded: a typed-nil Fanout would be a
+	// non-nil interface that panics on Emit.
+	if fan != nil {
+		brk = brk.WithSIEM(fan)
+	}
 
 	// Approval FSM service (adapter over internal/approval + internal/store).
 	// FIX #5: wired with maskedRec (masked + SIEM fanout), matching idp/broker —
@@ -237,6 +258,29 @@ func run() error {
 		return err
 	}
 
+	// MEMBER-MODE DESKTOP posture. Checked here (not in validateConfig) because
+	// both of its inputs only exist this far into boot: lm.enabled is the
+	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
+	// the answer — and feats.authn is the resolved "OIDC is configured" one.
+	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+		return err
+	}
+
+	// Member local_dir mount posture (the section-(c) ceiling). Parsed at boot so
+	// a malformed root fails closed here rather than at a member's first
+	// onboarding. O4: a root of "/" or $HOME is permitted but WARNED about,
+	// matching the LocalMode unspecified-bind warn precedent — refusing it would
+	// be safer, warning is what the surrounding code already does for a posture
+	// the operator may have chosen deliberately.
+	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
+	if err != nil {
+		return err
+	}
+	for _, warn := range memberWarns {
+		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
+	}
+
 	srv := api.New(api.Config{
 		Store:     store.NewPG(pool),
 		Identity:  idp,
@@ -250,20 +294,27 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:                auditSpool,
-		AuditDrainRecorder:        auditDrainRec,
-		Runner:                    run,
-		AdminToken:                *f.adminToken,
-		LocalMode:                 lm.enabled,
-		LocalOperator:             lm.operator,
-		TrustDomain:               *f.trustDomain,
-		DefaultPolicy:             defaultPolicy,
-		RunnerTarget:              runnerTarget,
-		UIDir:                     *f.uiDir,
-		ControlPlaneURL:           *f.controlURL,
-		RecordingStore:            feats.recStore,
-		OIDC:                      feats.authn,
+		AuditSpool:         auditSpool,
+		AuditDrainRecorder: auditDrainRec,
+		AuditSinkDrops:     sinkDropsReporter(fan),
+		Runner:             run,
+		AdminToken:         *f.adminToken,
+		LocalMode:          lm.enabled,
+		LocalOperator:      lm.operator,
+		TrustDomain:        *f.trustDomain,
+		DefaultPolicy:      defaultPolicy,
+		RunnerTarget:       runnerTarget,
+		UIDir:              *f.uiDir,
+		ControlPlaneURL:    *f.controlURL,
+		RecordingStore:     feats.recStore,
+		OIDC:               feats.authn,
+		// D16: same store buildOptionalFeatures wired into oidc.Config.Revocations
+		// (the read side Middleware checks), given here to internal/api so the
+		// admin revoke-sessions endpoint has the write side. nil exactly when
+		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
+		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
+		MemberMounts:              memberMounts,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
 		AgentAnthropicModel:       *f.agentModel,
@@ -280,6 +331,7 @@ func run() error {
 		DisableSubscriptionInject: feats.disableSubInject,
 		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
+		RequireOperatorSetEgress:  *f.requireOpSetEgress,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
 		LocalLoopback:         lm.loopback,
@@ -294,6 +346,14 @@ func run() error {
 		SSHListenAddr:    *f.sshListen,
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
+		SSHRoleTTL:       *f.sshRoleTTL,
+		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
+		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
+		// checks both.
+		UIListenAddr:     *f.uiListen,
+		UIAdvertiseURL:   *f.uiAdvertise,
+		UIOriginTemplate: *f.uiOriginTemplate,
+		UISessionKey:     feats.uiSessionKey,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -307,6 +367,10 @@ func run() error {
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
 	startSSHGateway(rootCtx, f, srv)
+
+	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
+	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
+	startUISandboxGateway(rootCtx, f, posture, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
@@ -348,50 +412,82 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 		return tlsPosture{}, errors.New("TLS misconfigured: set BOTH -tls-cert/WARDYN_TLS_CERT and -tls-key/WARDYN_TLS_KEY, or neither")
 	}
 	tlsEnabled := tlsCert != "" && tlsKey != ""
-	if !tlsEnabled && !tlsTerminated && !allowPlaintextListen && listenBindsSpecificRoutable(listen) {
-		return tlsPosture{}, fmt.Errorf("refusing to start: serving plaintext HTTP but the listen address %q binds a specific non-loopback interface — "+
-			"every credential and cookie the control plane speaks would travel in cleartext to any LAN/WAN peer; "+
-			"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
-			"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", listen)
-	}
-	return tlsPosture{
+	posture := tlsPosture{
 		tlsEnabled:    tlsEnabled,
 		secureCookies: tlsEnabled || tlsTerminated,
-	}, nil
+	}
+	if err := refusePlaintextListen("-listen", listen, posture, allowPlaintextListen); err != nil {
+		return tlsPosture{}, err
+	}
+	return posture, nil
 }
 
-// validateOperatorPosture is the second boot-time fail-closed rule, kept beside
-// validateConfig (and pure, for the same reason) but applied later: OIDC is not
-// built until boot_deps.go, well after validateConfig runs at the top of run().
+// refusePlaintextListen is the plaintext-on-a-specific-routable-bind rule
+// itself, shared because wardynd serves TWO listeners off ONE TLS posture: the
+// console (-listen) and the UI-sandbox gateway (-ui-sandbox-listen, which
+// reuses the same cert/key or the same upstream terminator). A deployment with
+// neither makes BOTH cleartext, and the gateway's `wardyn_ui_sess` cookie is a
+// bearer credential for a run exactly as the console's session is for the
+// control plane — 8h, `Secure=false` in that posture, and readable off the wire
+// by any LAN peer. Guarding only the console would leave the second listener
+// serving the very thing the first one refuses to.
 //
-// Configuring SSO IS the declaration that more than one human exists, so an
-// empty operator allowlist is not a default — it is an ambiguity in which every
-// person the IdP lets in silently holds the admin token's power. Refuse, with
-// WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST as the explicit override (the
-// WARDYN_ALLOW_PLAINTEXT_LISTEN precedent). UNCONDITIONAL — not conditioned on
-// the bind address the way the plaintext rule is: a loopback bind bounds who can
-// reach the port, not who the IdP authenticates.
-//
-// No OIDC => nothing to decide: the admin token and local mode are a single
-// shared credential with no human identity to key a role off, so they are always
-// operators and this rule never fires.
-//
-// hasRoleMap also satisfies the rule: WARDYN_OIDC_ROLE_MAP switches deriveRole
-// (internal/auth/oidc) to claim-based admin/member derivation that no longer
-// depends on the operator allowlist at all (an unmatched claim falls through to
-// WARDYN_OIDC_DEFAULT_ROLE or is denied) — so a role-map-only deployment, the
-// recipe .claude/skills/wardyn-k8s-setup/SKILL.md documents, is not the
-// every-human-is-admin ambiguity this refusal exists to catch.
-func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allowNoOperatorList bool, hasRoleMap bool) error {
-	if !oidcConfigured || len(operatorEmails) > 0 || allowNoOperatorList || hasRoleMap {
+// The carve-outs are deliberately identical for both: loopback and the
+// unspecified bind (the compose 0.0.0.0-in-container topology) stay warn-only,
+// and WARDYN_ALLOW_PLAINTEXT_LISTEN is the one explicit escape hatch.
+func refusePlaintextListen(flagName, listen string, posture tlsPosture, allowPlaintextListen bool) error {
+	if posture.secureCookies || allowPlaintextListen || !listenBindsSpecificRoutable(listen) {
 		return nil
 	}
-	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
-		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
-		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox) — absent a role map — " +
-		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
-		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
-		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
+	return fmt.Errorf("refusing to start: serving plaintext HTTP but the %s address %q binds a specific non-loopback interface — "+
+		"every credential and cookie it speaks would travel in cleartext to any LAN/WAN peer; "+
+		"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
+		"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", flagName, listen)
+}
+
+// sameListenAddress reports whether two listen addresses land on the same
+// browser ORIGIN, which is the question the refusal above actually asks — not
+// whether the two binds would collide at the socket layer.
+//
+// Ports must match. Given that, the hosts are the same origin when they are
+// literally equal, when either is the "everything" bind (empty, 0.0.0.0, ::),
+// or when either is a LOOPBACK form. That last one is the whole point: a
+// one-box daemon is reached as "localhost:8080", and localhost resolves to
+// 127.0.0.1 or [::1] depending on what the resolver answers first — so
+// `-listen 127.0.0.1:8080 -ui-sandbox-listen [::1]:8080` is two binds that
+// both succeed and ONE origin the browser cannot tell apart, which is exactly
+// the same-origin collapse this rule exists to prevent.
+//
+// Only two SPECIFIC, non-loopback hosts on one port are genuinely two origins
+// (two NICs, two names), and those still pass.
+func sameListenAddress(a, b string) bool {
+	ah, ap := listenHost(a), listenPort(a)
+	bh, bp := listenHost(b), listenPort(b)
+	if ap != bp || ap == "" {
+		return false
+	}
+	if strings.EqualFold(ah, bh) {
+		return true
+	}
+	return listenHostIsUnspecified(ah) || listenHostIsUnspecified(bh) ||
+		listenIsLoopback(a) || listenIsLoopback(b)
+}
+
+// listenPort is listenHost's twin: the port half of a listen address, or "".
+func listenPort(listen string) string {
+	if _, port, err := net.SplitHostPort(listen); err == nil {
+		return strings.TrimSpace(port)
+	}
+	return ""
+}
+
+// listenHostIsUnspecified reports whether host binds every interface.
+func listenHostIsUnspecified(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
 }
 
 // knownPublicAgeKeys are age identities this repository has published — each was
@@ -616,6 +712,26 @@ func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte
 				return nil, fmt.Errorf("generate session key: %w", gerr)
 			}
 			slog.Info("wardynd: generated and persisted OIDC session key")
+			return key, nil
+		},
+	)
+}
+
+// loadOrCreateUISessionKey returns the UI-sandbox gateway's relay-cookie HMAC
+// key, persisted in the secret store and generated on first boot — the same
+// loadOrCreateSecret pattern as the signing/session/SSH-host keys. It is
+// SEPARATE from the OIDC session key on purpose: the two cookies live on
+// different origins and authorize different things, so one key must never be
+// able to forge the other's cookie.
+func loadOrCreateUISessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
+	return loadOrCreateSecret(ctx, secrets, secretUISessionKey,
+		func(b []byte) bool { return len(b) >= 32 },
+		func() ([]byte, error) {
+			key := make([]byte, 32)
+			if _, gerr := rand.Read(key); gerr != nil {
+				return nil, fmt.Errorf("generate ui session key: %w", gerr)
+			}
+			slog.Info("wardynd: generated and persisted UI-sandbox relay cookie key")
 			return key, nil
 		},
 	)

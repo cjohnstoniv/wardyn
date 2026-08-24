@@ -224,8 +224,17 @@ export const FIELD_HELP = {
   },
   first_use_approval: {
     what: "What happens when the sandbox reaches a host that is not listed.",
+    // The three mode bodies are docs/design/ui-batch2-mock.md's canon strings
+    // (D33 for deny_with_review, D8 for wait_for_review), verbatim. They used to
+    // live on the run wizard's own Confined card and NetworkDialog's
+    // UNLISTED_RULES; this panel replaced both, so it inherits the copy — a hold
+    // is BOUNDED (first_use_hold_seconds, 30s default), which the old
+    // "until you approve or deny it" wording promised away.
     values:
-      "always_deny (hard-deny) | deny_with_review (raise an approval, deny now, a retry passes once approved) | wait_for_review (raise and HOLD the connection). Inert under allow_all_egress.",
+      "always_deny — refused outright, no prompt, no wait. " +
+      "deny_with_review — Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through. " +
+      "wait_for_review — The connection waits, live, for the standard 30-second window. Decide in time and it goes through; miss it and it's refused — the approval itself stays open for you to decide. " +
+      "Inert under allow_all_egress.",
     doc: "first_use_approval-modes",
     snippet: "deny_with_review",
   },
@@ -301,6 +310,13 @@ export const FIELD_HELP = {
       "cpu_millis (2000 = 2 vCPU), memory_mib, pids_limit, disk_mib. A zero or omitted field takes the platform default — every run is capped either way.",
     doc: "resources--resourcelimits",
     snippet: { cpu_millis: 2000, memory_mib: 4096, pids_limit: 512 },
+  },
+  ui_apps: {
+    what: "In-sandbox loopback HTTP apps the UI gateway may relay to a browser.",
+    values:
+      "name (lower-case slug, also the /usr/local/bin/wardyn-ui-<name> launcher), port (inside the sandbox, on 127.0.0.1), optional path. Max 8. Declaring one grants nothing: the gateway is off unless WARDYN_UI_SANDBOX_LISTEN is set, and every session still needs a single-use ticket.",
+    doc: "ui_apps--uiapp",
+    snippet: [{ name: "editor", port: 8080 }],
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
 

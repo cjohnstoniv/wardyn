@@ -37,6 +37,11 @@ var envDocAllow = map[string]bool{
 	// registry of every test-only WARDYN_* var, not just the ones the mechanical
 	// scan happens to reach.
 	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
+	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
+	// the console's and the UI-sandbox gateway's, which must differ. Shell-only
+	// like the block below, but test scaffolding rather than operator config, so
+	// they belong here.
+	"WARDYN_E2E_ADDR": true, "WARDYN_E2E_UI_ADDR": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
@@ -47,9 +52,18 @@ var envDocAllow = map[string]bool{
 var envDocShellOnly = map[string]bool{
 	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
 	"WARDYN_CI_PROJECT": true, "WARDYN_REGISTRY_PORT": true, "WARDYN_SSH_PORT": true,
+	// The compose host-port mapping for the UI-sandbox gateway — WARDYN_SSH_PORT's
+	// sibling, and a mapping only: what enables the gateway is
+	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
+	"WARDYN_UI_SANDBOX_PORT": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
+	// The compose wardynd service's own image tag, so a job on a shared daemon
+	// can build its own instead of racing another job's write to the mutable
+	// :local tag (scripts/run-e2e-ssh.sh, run-e2e-ui-sandbox.sh). Its sibling
+	// WARDYN_PROXY_IMAGE is NOT here: Go reads that one (-proxy-image).
+	"WARDYN_WARDYND_IMAGE": true,
 	// Compose/runner plumbing and the `make setup` installer: read by
 	// docker-compose.yaml, scripts/setup.sh, scripts/up.sh and scripts/ci-run.sh,
 	// never by Go. Documented in ENV.md's "Compose / scripts" + "Setup / operator
@@ -58,6 +72,10 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
+	// The desktop-tier installer's own image override — read only by
+	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in
+	// ENV.md's "Setup / operator scripts" section.
+	"WARDYN_INSTALL_IMAGE": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
@@ -130,7 +148,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 			continue // compose/scripts config; no Go reader by design
 		}
 		if !seen[v] {
-			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only)", v, envDocRoots)
+			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only, or envDocShellOnly if compose/scripts read it)", v, envDocRoots)
 		}
 	}
 }

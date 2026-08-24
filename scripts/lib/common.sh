@@ -58,8 +58,10 @@ clone_present() { docker exec "$1" test -d "$2/.git" >/dev/null 2>&1; }
 # license_scope_files — the SINGLE source of truth for which tracked files must
 # carry the SPDX/copyright header, used by scripts/license-headers.sh in both
 # its gate and its --fix mode. Excludes generated
-# (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist), and the
-# MIT-origin shadcn primitives (ui/src/app/components/ui/). Run from the repo
+# (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist, and the
+# asciinema-player copy under ui/e2e/demo/assets/player/ whose sibling NOTICE
+# carries its upstream attribution), and the MIT-origin shadcn primitives
+# (ui/src/app/components/ui/). Run from the repo
 # root (both callers `cd` there first). Emits one path per line.
 #
 # `*.sh` is in scope: shell is where the setup/gate/e2e logic lives, so an
@@ -69,7 +71,8 @@ license_scope_files() {
   git ls-files '*.go' '*.ts' '*.tsx' '*.css' '*.sh' \
     | grep -vE '^ui/(node_modules|dist)/' \
     | grep -vE '\.gen\.go$|_gen\.go$|zz_generated' \
-    | grep -vE '^ui/src/app/components/ui/'
+    | grep -vE '^ui/src/app/components/ui/' \
+    | grep -vE '^ui/e2e/demo/assets/player/'
 }
 
 # os_kind -> windows | wsl | linux | darwin | unknown. The single source of
@@ -138,14 +141,16 @@ wardyn_pick_docker_host() {
           _wpd_ep="$(docker context inspect -f '{{ .Endpoints.docker.Host }}' 2>/dev/null || true)"
           case "${_wpd_ep}" in
             *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;  # Rancher Desktop (in-VM path)
+            *".colima/"*"/docker.sock") _wpd_sock="/var/run/docker.sock" ;;  # Colima (in-VM path, same shape)
           esac
           unset _wpd_ep
         fi
         ;;
     esac
-    # Rancher Desktop remap for an explicit DOCKER_HOST=unix://…/.rd/docker.sock.
+    # Rancher Desktop / Colima remap for an explicit DOCKER_HOST=unix://…/{.rd,.colima}/…/docker.sock.
     case "${_wpd_sock}" in
       *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;
+      *".colima/"*"/docker.sock") _wpd_sock="/var/run/docker.sock" ;;
     esac
     [ -n "${_wpd_sock}" ] && export WARDYN_DOCKER_SOCK="${_wpd_sock}"
     unset _wpd_sock

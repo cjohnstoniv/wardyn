@@ -73,6 +73,9 @@ services:
     # so the digest freezes the exact image; bump both together on a version move.
     image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
     container_name: ${WARDYN_NS:-wardyn}-postgres
+    # Survive a host reboot (e.g. a MacBook's weekly MDM window) — otherwise only
+    # the registry came back and the stack was down until a manual `up` (D18).
+    restart: unless-stopped
     # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
     # the resident `claude` CLI composer backend) can reach the same database.
     # Host port parameterized (WARDYN_PG_PORT) so concurrent stacks on a shared host
@@ -147,8 +150,16 @@ services:
         # it can extract and run that binary for host-side proxy detection.
         HOST_GOOS: "${WARDYN_HOST_GOOS:-linux}"
         HOST_GOARCH: "${WARDYN_HOST_GOARCH:-amd64}"
-    image: wardyn/wardynd:local
+    # Overridable so a job that must NOT share the mutable :local tag with a
+    # concurrent build on the same daemon can build+run its own (scripts/
+    # run-e2e-ssh.sh, run-e2e-ui-sandbox.sh). Default unchanged for every
+    # other caller.
+    image: ${WARDYN_WARDYND_IMAGE:-wardyn/wardynd:local}
     container_name: ${WARDYN_NS:-wardyn}-api
+    # Survive a host reboot alongside postgres/registry (D18); a per-run proxy
+    # sidecar is launched by the docker runner (not a compose service), so its
+    # restart posture is set container-side, not here.
+    restart: unless-stopped
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).
@@ -219,7 +230,7 @@ services:
       # directory plainly exists on the host. Empty = no root mounted (the
       # default), which the error message also states rather than implies.
       WARDYN_WORKSPACES_ROOT: "${WARDYN_WORKSPACES_ROOT:-}"
-      WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:local"
+      WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
@@ -325,6 +336,18 @@ services:
       # latter.
       WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
       WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
+      # UI-sandbox gateway (docs/UI-SANDBOXES.md), same off-by-default shape:
+      # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
+      # key, whatever the port mapping above publishes. Turn it on with
+      # WARDYN_UI_SANDBOX_LISTEN=:8081 (matching that mapping) and
+      # WARDYN_UI_SANDBOX_ADVERTISE=http://localhost:8081 — the second value is
+      # what the console's Open button uses, and it must NOT be the console's
+      # own origin: the relay serves the sandbox's own pages. The per-run
+      # origin template is not usable here (it needs wildcard DNS), so a
+      # compose stack runs the shared-origin mode this documents as a residual
+      # (threatmodel/THREAT-MODEL.md §5 #18).
+      WARDYN_UI_SANDBOX_LISTEN: "${WARDYN_UI_SANDBOX_LISTEN:-}"
+      WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
@@ -423,6 +446,15 @@ services:
       # unused mapped port with no listener behind it is inert (connection
       # refused).
       - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
+      # UI-sandbox gateway (docs/UI-SANDBOXES.md). Same always-mapped,
+      # loopback-only, inert-until-enabled treatment as the SSH port above.
+      # 127.0.0.1:8081 is a DIFFERENT ORIGIN than 127.0.0.1:8080 as far as the
+      # browser is concerned (origin = scheme + host + PORT), which is exactly
+      # the separation the gateway needs — but cookies are not port-scoped, so
+      # on this stack the console's own cookies would be attached to relay
+      # requests if the gateway did not strip every wardyn_* cookie inbound.
+      # It does (internal/api/uigateway.go, uiStripInbound).
+      - "127.0.0.1:${WARDYN_UI_SANDBOX_PORT:-8081}:8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -549,7 +581,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.proxy
-    image: wardyn/wardyn-proxy:local
+    # Same override knob as wardynd's, and the same variable wardynd reads
+    # above — building this stanza and running the stack agree by construction.
+    image: ${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}
     # Never started; build-only. `command: true` would still require an entry,
     # so we park it under a profile that the demo never activates.
     profiles: ["build-only"]
@@ -584,6 +618,22 @@ services:
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
     image: wardyn/agent-codex-cli:local
+    profiles: ["build-only"]
+    command: ["sleep", "infinity"]
+
+  # agent-vscode: same build-only convention as agent-claude-code/agent-codex-cli
+  # above — never started by the demo, exists so `docker compose --profile
+  # build-only build` produces the tagged image. `FROM wardyn/agent-claude-code:local`
+  # (deploy/images/vscode/Dockerfile), so it depends on that image existing
+  # locally first — same as `make agent-image-vscode` depending on
+  # `agent-images-core`. Opt-in like agent-full: register it via
+  # WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}' rather than
+  # the default map above.
+  agent-vscode:
+    build:
+      context: ../..
+      dockerfile: deploy/images/vscode/Dockerfile
+    image: wardyn/agent-vscode:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
 

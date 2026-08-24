@@ -6,7 +6,6 @@ package sinks
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -130,6 +129,12 @@ func (w *WebhookSink) Name() string { return "webhook" }
 
 // Emit enqueues ev for delivery. If the buffer is full the event is dropped
 // and the drop counter is incremented. Emit never blocks.
+//
+// ponytail: at-most-once past the 4096 buffer. The loss is now COUNTED and
+// surfaced as wardyn_audit_sink_drops_total{sink} on /metrics (D2), so a SIEM
+// falling behind is visible. A per-sink disk spool (reusing api.AuditSpool) that
+// drains on recovery is the at-least-once upgrade — deferred: it needs its own
+// on-disk lifecycle + backpressure, larger than the metric this POC needs.
 func (w *WebhookSink) Emit(_ context.Context, ev types.AuditEvent) error {
 	select {
 	case w.queue <- ev:
@@ -291,14 +296,17 @@ func (w *WebhookSink) post(ctx context.Context, body []byte) error {
 }
 
 // encodeBatch serialises each event as a JSON object followed by a newline
-// (JSON-lines / NDJSON format).
+// (JSON-lines / NDJSON format), via marshalEvent so the #10 WARDYN_AUDIT_SOURCE
+// stamp applies here exactly as it does for the file/syslog sinks.
 func encodeBatch(batch []types.AuditEvent) ([]byte, error) {
 	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
 	for i := range batch {
-		if err := enc.Encode(batch[i]); err != nil {
+		b, err := marshalEvent(batch[i])
+		if err != nil {
 			return nil, err
 		}
+		buf.Write(b)
+		buf.WriteByte('\n')
 	}
 	return buf.Bytes(), nil
 }

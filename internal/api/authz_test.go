@@ -76,6 +76,11 @@ type routeEntity string
 const (
 	entityRun      routeEntity = "run"
 	entityApproval routeEntity = "approval"
+	// entityWorkspace is the 0048 ownership noun: a MEMBER-OWNED workspace
+	// (owned_by = the member's principal). An operator-owned workspace is a
+	// different case entirely — still admin-only to mutate — and is pinned by
+	// workspace_owner_test.go rather than by this matrix.
+	entityWorkspace routeEntity = "workspace"
 )
 
 type classifiedRoute struct {
@@ -92,32 +97,37 @@ var routeMatrix = map[string]classifiedRoute{
 	// ── anonymous ──
 	"GET /":              {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
+	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	"GET /auth/logout":   {class: classAnonymous},
 
 	// ── admin ──
-	"GET /metrics":                                              {class: classAdmin},
-	"POST /api/v1/setup/harness-login":                          {class: classAdmin},
-	"PUT /api/v1/setup/harness-credential/{provider}":           {class: classAdmin},
-	"DELETE /api/v1/setup/harness-credential/{provider}":        {class: classAdmin},
-	"POST /api/v1/policies":                                     {class: classAdmin},
-	"PUT /api/v1/policies/{id}":                                 {class: classAdmin},
-	"DELETE /api/v1/policies/{id}":                              {class: classAdmin},
-	"POST /api/v1/sources":                                      {class: classAdmin},
-	"POST /api/v1/sources/{id}/scan":                            {class: classAdmin},
-	"DELETE /api/v1/sources/{id}":                               {class: classAdmin},
-	"POST /api/v1/base-images":                                  {class: classAdmin},
-	"DELETE /api/v1/base-images/{id}":                           {class: classAdmin},
-	"POST /api/v1/workspaces":                                   {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}":                               {class: classAdmin},
-	"DELETE /api/v1/workspaces/{id}":                            {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/scan":                         {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/build":                        {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/llm-cred":                      {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/requirements":                  {class: classAdmin},
+	"GET /metrics": {class: classAdmin},
+	// The admin twins of /me/tokens: the deployment-wide inventory names other
+	// humans, and revoke-any is the remediation path for a token whose owner was
+	// demoted or has left (migration 0045's stamp ceiling).
+	"GET /api/v1/tokens":                                 {class: classAdmin},
+	"DELETE /api/v1/tokens/{id}":                         {class: classAdmin},
+	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
+	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
+	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
+	"POST /api/v1/policies":                              {class: classAdmin},
+	"PUT /api/v1/policies/{id}":                          {class: classAdmin},
+	"DELETE /api/v1/policies/{id}":                       {class: classAdmin},
+	"POST /api/v1/sources":                               {class: classAdmin},
+	"POST /api/v1/sources/{id}/scan":                     {class: classAdmin},
+	"DELETE /api/v1/sources/{id}":                        {class: classAdmin},
+	"POST /api/v1/base-images":                           {class: classAdmin},
+	"DELETE /api/v1/base-images/{id}":                    {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/approved-egress":        {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/denied-egress":          {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/llm-cred":               {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/requirements":           {class: classAdmin},
+	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
+	// the handler precisely so the member refusal is a CONSTANT 403 that never
+	// varies with whether the named workspace exists.
+	"POST /api/v1/workspaces/{id}/reassign":                     {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record":                       {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/env-as-code/write":            {class: classAdmin},
@@ -128,11 +138,21 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/site-config/test-redirect":                    {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":                             {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}":                          {class: classAdmin},
+	"GET /api/v1/permissions":                                   {class: classAdmin},
+	"POST /api/v1/permissions/grants":                           {class: classAdmin},
+	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
+	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
+	"POST /api/v1/sessions/revoke":                              {class: classAdmin},
+	// The audit hash-chain sweep, unlike the two /audit READS below: its
+	// verdict counts every row in the deployment, which is whole-fleet audit
+	// volume — the disclosure that keeps /metrics admin-gated too.
+	"GET /api/v1/audit/chain/verify": {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
+	"GET /api/v1/audit/export": {class: classMember},
 	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
@@ -143,32 +163,62 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/tokens is the same self-service shape as /me/ssh-keys above:
+	// classMember, principal-scoped AT THE STORE, so DELETE /me/tokens/{id}
+	// answers a foreign id with store.ErrNotFound (404) without needing an
+	// owner/foreign pair here. The token a member mints carries their own
+	// stamped role, so minting one crosses no tier — see apiTokenAuth.
+	"GET /api/v1/me/tokens":         {class: classMember},
+	"POST /api/v1/me/tokens":        {class: classMember},
+	"DELETE /api/v1/me/tokens/{id}": {class: classMember},
+	// /me/capabilities is the member-safe twin of GET /permissions above: it
+	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
+	// it sits on r like every other /me/* read, not operatorOnly.
+	"GET /api/v1/me/capabilities": {class: classMember},
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
-	"GET /api/v1/me/run-layout":                   {class: classMember},
-	"PUT /api/v1/me/run-layout":                   {class: classMember},
-	"GET /api/v1/policies":                        {class: classMember},
-	"GET /api/v1/policies/{id}":                   {class: classMember},
-	"GET /api/v1/runs":                            {class: classMember},
-	"GET /api/v1/secrets":                         {class: classMember},
-	"GET /api/v1/setup/status":                    {class: classMember},
-	"GET /api/v1/site-config":                     {class: classMember},
-	"GET /api/v1/sources":                         {class: classMember},
-	"GET /api/v1/sources/{id}":                    {class: classMember},
+	"GET /api/v1/me/run-layout":    {class: classMember},
+	"PUT /api/v1/me/run-layout":    {class: classMember},
+	"GET /api/v1/policies":         {class: classMember},
+	"GET /api/v1/policies/default": {class: classMember},
+	"GET /api/v1/policies/{id}":    {class: classMember},
+	"GET /api/v1/runs":             {class: classMember},
+	"GET /api/v1/secrets":          {class: classMember},
+	"GET /api/v1/setup/status":     {class: classMember},
+	"GET /api/v1/site-config":      {class: classMember},
+	"GET /api/v1/sources":          {class: classMember},
+	"GET /api/v1/sources/{id}":     {class: classMember},
+	// The workspace READS stay member-class: an operator-owned workspace — every
+	// pre-0048 row — is readable by any authenticated caller exactly as before.
+	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
+	// "scoped internally, proven by the feature's own tests" arrangement GET
+	// /runs and GET /approvals already have here (workspace_owner_test.go).
 	"GET /api/v1/workspaces":                      {class: classMember},
 	"GET /api/v1/workspaces/{id}":                 {class: classMember},
 	"GET /api/v1/workspaces/{id}/build":           {class: classMember},
 	"GET /api/v1/workspaces/{id}/env-as-code":     {class: classMember},
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
-	"POST /api/v1/auth/logout":                    {class: classMember},
-	"POST /api/v1/me/ssh-keys":                    {class: classMember},
-	"POST /api/v1/policies/grade":                 {class: classMember},
-	"POST /api/v1/runs":                           {class: classMember},
-	"POST /api/v1/runs/preflight":                 {class: classMember},
-	"DELETE /api/v1/me/ssh-keys/{fingerprint}":    {class: classMember},
+	// Creating a workspace is the member ON-RAMP (the created row is
+	// owner-stamped from the session) — there is no {id} to own yet.
+	"POST /api/v1/workspaces":                  {class: classMember},
+	"POST /api/v1/auth/logout":                 {class: classMember},
+	"POST /api/v1/me/ssh-keys":                 {class: classMember},
+	"POST /api/v1/policies/grade":              {class: classMember},
+	"POST /api/v1/runs":                        {class: classMember},
+	"POST /api/v1/runs/preflight":              {class: classMember},
+	"DELETE /api/v1/me/ssh-keys/{fingerprint}": {class: classMember},
 
 	// ── owner-or-admin ──
+	// The workspace CRUD/scan/build tier (0048): a member acts on the workspaces
+	// THEY own, a foreign owned one is the byte-identical 404, and an admin
+	// reaches every one. The 403 an operator-owned row still returns to a member
+	// is NOT exercised here (this probe only ever seeds member-owned fixtures) —
+	// TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly pins it.
+	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace},
+	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace},
+	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace},
+	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun},
@@ -251,6 +301,19 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	}
 }
 
+// fakeAuthzSessionRevocations is a no-op oidc.SessionRevocations double that
+// exists only to make POST /api/v1/sessions/revoke visible to chi.Walk: the
+// route is mounted conditionally (see routes.go) on cfg.SessionRevocations
+// != nil, same as Secrets/RecordingStore above — the matrix's "every
+// conditional route mounted" doctrine requires it wired here too.
+type fakeAuthzSessionRevocations struct{}
+
+func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }
+func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { return nil }
+
 func TestAuthzMatrix(t *testing.T) {
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
@@ -264,6 +327,7 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.RecordingStore = rs
+	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	srv := New(cfg)
 
 	const memberSub = "sub-member"
@@ -287,6 +351,19 @@ func TestAuthzMatrix(t *testing.T) {
 	seedApproval := func(createdBy string) uuid.UUID {
 		runID := seedRun(createdBy)
 		return aap.seed(runID)
+	}
+	// seedWorkspace creates a MEMBER-OWNED workspace (0048). ownedBy is the
+	// member principal; the composition floor (one ephemeral source) keeps the
+	// fixture free of any host path, so these probes exercise ownership alone.
+	seedWorkspace := func(ownedBy string) uuid.UUID {
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.workspaces[id] = types.Workspace{
+			ID: id, Name: "ws-" + ownedBy, OwnedBy: ownedBy, Status: types.WorkspaceScanned,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		}
+		ast.mu.Unlock()
+		return id
 	}
 
 	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
@@ -371,6 +448,8 @@ func TestAuthzMatrix(t *testing.T) {
 					ownedID, foreignID = seedRun(memberSub), seedRun(otherSub)
 				case entityApproval:
 					ownedID, foreignID = seedApproval(memberSub), seedApproval(otherSub)
+				case entityWorkspace:
+					ownedID, foreignID = seedWorkspace(memberSub), seedWorkspace(otherSub)
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
@@ -505,6 +584,8 @@ func newAuthzStore() *authzStore {
 var _ store.Store = (*authzStore)(nil)
 var _ store.RunsByCreatorPager = (*authzStore)(nil)
 
+func (s *authzStore) Ping(_ context.Context) error { return nil }
+
 func (s *authzStore) CreateRun(_ context.Context, r types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -583,6 +664,9 @@ func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) 
 }
 func (s *authzStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.AgentExecID = execID })
+}
+func (s *authzStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.FailureHint = hint })
 }
 func (s *authzStore) TouchRun(context.Context, uuid.UUID) error { return nil }
 
@@ -665,6 +749,20 @@ func (s *authzStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []stri
 }
 func (s *authzStore) SetWorkspaceLLMCred(context.Context, uuid.UUID, *types.WorkspaceLLMCred) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
+}
+
+// SetWorkspaceOwner is REAL (not a stub) so the reassign tests can assert the
+// column actually moved and that a re-read shows the row operator-owned.
+func (s *authzStore) SetWorkspaceOwner(_ context.Context, id uuid.UUID, owner string) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	ws.OwnedBy = owner
+	s.workspaces[id] = ws
+	return ws, nil
 }
 func (s *authzStore) SetWorkspaceRequirements(context.Context, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
@@ -824,6 +922,63 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+// ─── per-user api tokens (migration 0045) ─────────────────────────────────
+//
+// Honest empty state, same rationale as the SSH stubs above: this matrix pins
+// the coarse admit/refuse boundary of the five token routes, not the feature.
+// GetAPITokenByRaw returning ErrNotFound is what makes every bearer in this file
+// take the pre-existing admin path — the matrix presents session cookies and the
+// admin token, never a `wdn_` bearer, so the token auth branch must be inert
+// here. apitokens_test.go is that branch's own pin.
+func (s *authzStore) CreateAPIToken(_ context.Context, t types.APIToken, _ string) (types.APIToken, error) {
+	return t, nil
+}
+func (s *authzStore) GetAPITokenByRaw(context.Context, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (s *authzStore) TouchAPIToken(context.Context, uuid.UUID, time.Time) error { return nil }
+func (s *authzStore) ListAPITokensByPrincipal(context.Context, string) ([]types.APIToken, error) {
+	return nil, nil
+}
+func (s *authzStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Time) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+
+// ─── capability grants (migration 0042) ───────────────────────────────────
+//
+// authzStore is the one NON-embedding store.Store double in the tree (see this
+// type's doc comment on why it implements every method rather than embedding),
+// so widening Store lands here as six compile errors until they are stubbed.
+//
+// The stubs are honest EMPTY state, not permissive shortcuts: no grants and no
+// enforcement rows is exactly a freshly-upgraded 0.5 deployment, so every route
+// this matrix walks resolves precisely as it did before 0042 existed. That is
+// the state the back-compat proof wants under the authorization matrix; the
+// resolver's own allow/deny/precedence matrix lives in capabilities_test.go
+// with a store double that can actually hold rows.
+func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
+	return g, nil
+}
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
+	return enabled, nil
+}
 
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
 

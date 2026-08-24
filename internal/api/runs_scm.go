@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -280,6 +281,52 @@ func sshKeyScopeFields(scope json.RawMessage) (host, keySecretRef, username, kno
 		return "", "", "", "", errors.New("ssh_key scope requires host and key_secret_ref")
 	}
 	return sc.Host, sc.KeySecretRef, sc.Username, sc.KnownHostsSecretRef, nil
+}
+
+// envSecretScopeFields decodes an env_secret grant scope {name, secret_name}.
+// Both are REQUIRED (fail closed). name is the SANDBOX ENV VAR the stored
+// secret_name's value lands under at dispatch (resolveEnvSecretGrants).
+//
+// The name is VALIDATED here, not merely decoded, because it is written into a
+// process environment: POSIX-portable [A-Z_][A-Z0-9_]* only. Lower case is
+// refused too — not for portability but for reviewability, so an env_secret
+// grant in a policy diff cannot be mistaken for anything but an env var — and a
+// WARDYN_ prefix is refused outright: those names configure the agent's own
+// harness (WARDYN_TASK_MODE, WARDYN_GIT_PAT_GRANTS, …), so authoring one would
+// turn a credential delivery into a dispatch-config override.
+func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err error) {
+	var sc struct {
+		Name       string `json:"name"`
+		SecretName string `json:"secret_name"`
+	}
+	if err = json.Unmarshal(scope, &sc); err != nil {
+		return "", "", err
+	}
+	if sc.Name == "" || sc.SecretName == "" {
+		return "", "", errors.New("env_secret scope requires name and secret_name")
+	}
+	if !validEnvVarName(sc.Name) {
+		return "", "", fmt.Errorf("env_secret name %q must match [A-Z_][A-Z0-9_]*", sc.Name)
+	}
+	if strings.HasPrefix(sc.Name, "WARDYN_") {
+		return "", "", fmt.Errorf("env_secret name %q is reserved: WARDYN_* configures the sandbox harness itself", sc.Name)
+	}
+	return sc.Name, sc.SecretName, nil
+}
+
+// validEnvVarName reports whether s is a POSIX-portable, upper-case environment
+// variable name. Hand-rolled rather than regexp: one pass, no package-level
+// MustCompile, and the whole rule is three character classes wide.
+func validEnvVarName(s string) bool {
+	for i, c := range s {
+		switch {
+		case c >= 'A' && c <= 'Z', c == '_':
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // sshOver443Endpoint maps a supported SCM host to its SSH-over-443 endpoint

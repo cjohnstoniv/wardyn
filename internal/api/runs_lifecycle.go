@@ -240,6 +240,59 @@ func (s *Server) SweepTerminalSandboxes(ctx context.Context) (int, error) {
 	return swept, nil
 }
 
+// RunSecretGrace is how long a run must have been terminal before its masking
+// corpus is evicted. It is a GRACE, not a retention policy: the late readers
+// secretmask.Registry.Evict names (the audit recorder masking a finalize event,
+// a teardown_error from a retried sandbox sweep, a recording uploaded as the
+// session closes) all run within seconds-to-minutes of the terminal
+// transition, and masking fails OPEN, so evicting too early unmasks exactly the
+// events most likely to quote a credential. An hour buys those readers room
+// while still bounding how long plaintext lives in daemon memory.
+const RunSecretGrace = time.Hour
+
+// SweepRunSecrets drops the per-run plaintext secret corpora held in memory for
+// runs that went terminal more than RunSecretGrace ago, and reports how many it
+// evicted (W12-S1-2 / W21-S1-9: nothing in production called Registry.Evict, so
+// every run's credentials accumulated in wardynd's heap for the process
+// lifetime — a long-lived daemon ended up holding plaintext for every run it
+// had ever dispatched).
+//
+// Eligibility is read from the RUN'S OWN STATE rather than hooked onto a
+// terminal-transition call site, so every path that ends a run (watcher, kill,
+// idle reaper, boot reconcile, failAndRevoke) is covered by construction and no
+// new one can be forgotten. It fails CLOSED on anything it cannot positively
+// prove terminal-and-cold: a store error, or a held run id with no row in the
+// listing, keeps its secrets.
+func (s *Server) SweepRunSecrets(ctx context.Context) int {
+	if s.cfg.MaskRegistry == nil || s.cfg.Store == nil {
+		return 0
+	}
+	held := s.cfg.MaskRegistry.RunIDs()
+	if len(held) == 0 {
+		return 0
+	}
+	runs, err := s.cfg.Store.ListRuns(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
+		return 0
+	}
+	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
+	for _, run := range runs {
+		byID[run.ID] = run
+	}
+	cutoff := time.Now().UTC().Add(-RunSecretGrace)
+	evicted := 0
+	for _, id := range held {
+		run, known := byID[id]
+		if !known || !isTerminalRunState(run.State) || !run.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		s.cfg.MaskRegistry.Evict(id)
+		evicted++
+	}
+	return evicted
+}
+
 // finalizeRunTail runs the terminal-transition side effects shared by the live
 // completion watcher (startCompletionWatcher) and the boot reconciler
 // (reconcileFinalize), AFTER the caller has won the CAS into terminal state:
@@ -301,7 +354,12 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // leaving the create/dispatch FAILED paths leaking a live run token + broker creds
 // (C003). Revoke runs only when THIS transition won, so a concurrent kill that
 // already moved the run is not double-handled.
-func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState) {
+// hint is the operator-facing one-line reason surfaced under the FAILED badge
+// (D9); it is persisted (best-effort, run.FailureHint) only when THIS transition
+// won, so a concurrent kill that legitimately moved the run first is never
+// annotated with a failure reason it did not have. "" leaves the column empty
+// (a clean FAILED-by-nonzero-exit carries its exit code instead).
+func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
 	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
@@ -315,8 +373,28 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return
 	}
 	if applied {
+		if hint != "" {
+			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
+			// the ~30 test doubles that embed store.Store never implement it, so a
+			// core method would nil-panic in every one that reaches this path. The
+			// real PG store implements it; a double that wants to observe the hint
+			// declares the method and is picked up here.
+			if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+				if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
+					slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
+						slog.String("run_id", runID.String()), slog.Any("err", herr))
+				}
+			}
+		}
 		s.revokeRunCascade(ctx, runID)
 	}
+}
+
+// runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
+// persist a run's FailureHint (D9). Kept off the core store.Store interface on
+// purpose — see the assertion site above.
+type runFailureHintSetter interface {
+	SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error
 }
 
 // handleKillRun is the kill-switch: it cascades in a FIXED order — WIN the KILLED

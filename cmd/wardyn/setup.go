@@ -150,7 +150,7 @@ func setupTierCmd(use string) *cobra.Command {
 			if use == "vault" {
 				p = planVault(e)
 			}
-			return executePlan(p, run, yes)
+			return executePlan(use, p, run, yes)
 		},
 	}
 	cmd.Flags().BoolVar(&run, "run", false, "actually execute the install (default: print the plan)")
@@ -220,9 +220,20 @@ func detectDocker() dockerEnv {
 }
 
 type dockerInfoJSON struct {
-	OperatingSystem string   `json:"OperatingSystem"`
-	OSType          string   `json:"OSType"`
-	SecurityOptions []string `json:"SecurityOptions"`
+	OperatingSystem string                     `json:"OperatingSystem"`
+	OSType          string                     `json:"OSType"`
+	SecurityOptions []string                   `json:"SecurityOptions"`
+	Runtimes        map[string]json.RawMessage `json:"Runtimes"` // keyed by runtime name, e.g. "runsc"/"kata"
+}
+
+// tierRuntimeName is the Docker runtime name each tier registers — "runsc"
+// for Wall, "kata" for Vault (the exact name kataScript's printed daemon.json
+// block uses).
+func tierRuntimeName(use string) string {
+	if use == "vault" {
+		return "kata"
+	}
+	return "runsc"
 }
 
 func dockerInfo() (dockerInfoJSON, bool) {
@@ -427,7 +438,13 @@ func planVault(e dockerEnv) plan {
 // Execution
 // ---------------------------------------------------------------------------
 
-func executePlan(p plan, run, yes bool) error {
+// executePlan prints p and, when run allows it, executes its script. use
+// ("wall" | "vault") names which tier this is FOR, so a non-enabling outcome
+// (unsupported host, plan-only, declined, or an install that ran but left
+// Docker without the runtime registered) can say so on stderr and exit
+// non-zero — not the previous blanket exit 0, which gave a script/CI caller
+// no way to branch on whether the tier actually ended up available.
+func executePlan(use string, p plan, run, yes bool) error {
 	fmt.Printf("%s\n\n%s\n", p.title, p.why)
 
 	if p.action == actUnsupported {
@@ -437,7 +454,7 @@ func executePlan(p plan, run, yes bool) error {
 		if p.hostHint != "" {
 			fmt.Println(p.hostHint)
 		}
-		return nil // never run an install that can't work here
+		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: unsupported on this host", use)}
 	}
 
 	fmt.Println("\nIt will run (with sudo as needed):")
@@ -447,13 +464,34 @@ func executePlan(p plan, run, yes bool) error {
 	}
 	if !run {
 		fmt.Println("\nRe-run with --run to execute (or copy the commands above), then Re-check in the UI.")
-		return nil
+		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: printed the plan only (pass --run to execute)", use)}
 	}
 	if !yes && !confirm("\nProceed now?") {
 		fmt.Println("Aborted.")
-		return nil
+		return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: aborted (declined, or stdin is non-interactive)", use)}
 	}
-	return runScript(p.script)
+	if err := runScript(p.script); err != nil {
+		return fmt.Errorf("install script failed: %w", err)
+	}
+
+	// The script exiting 0 is not proof the tier is live: Vault's plan
+	// deliberately never edits daemon.json (kataScript only PRINTS the
+	// runtime block — see its own doc comment), and Wall's automatic
+	// registration still depends on the daemon reload it issues actually
+	// taking. Re-probe `docker info` for the runtime Docker would use so a
+	// script that "succeeded" but left a manual step undone doesn't read as
+	// a silent, indistinguishable success.
+	rtName := tierRuntimeName(use)
+	if info, ok := dockerInfo(); ok {
+		if _, present := info.Runtimes[rtName]; present {
+			fmt.Printf("\nDocker reports the %q runtime registered — the %s tier is enabled.\n", rtName, use)
+			return nil
+		}
+	}
+	fmt.Printf("\nThe install script ran, but Docker does not report a %q runtime yet.\n"+
+		"Finish any manual step above (e.g. the daemon.json edit + restart), then re-run `wardyn setup status` to confirm.\n",
+		rtName)
+	return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: runtime %q not visible in `docker info` after install", use, rtName)}
 }
 
 // ---------------------------------------------------------------------------

@@ -28,8 +28,11 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 
 ## The series harness
 
-The 0.5 story is not one video, it is twelve. Same rig throughout — same driver,
-same overlay, same narration, same verifier — with one spec per video:
+The story is not one video, it is twelve. Same rig throughout — same driver,
+same overlay, same narration, same verifier — with one spec per video. 0.6 adds
+a thirteenth, **V13 (your terminal, our cluster)**, which has no spec at all: it
+is terminal-only and shot against a Kubernetes cluster rather than the compose
+stack (see "The terminal lane" below).
 
 ```sh
 scripts/record-demo.sh --video 03    # records ui/e2e/demo/03-*.spec.ts, and only that
@@ -48,7 +51,7 @@ scripts/record-demo.sh               # no --video: the end-to-end walkthrough, u
 With no `--video` nothing is filtered at all: the `demo` project's own
 `testMatch` decides, exactly as it did before the series existed.
 
-The shared code the ten specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
+The shared code the twelve specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
 (the browser, the recorded context, the one page — importing it registers a
 spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`)
 and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`,
@@ -123,11 +126,12 @@ silently, or recorded at the wrong size.
 
 ### The terminal lane: `--terminal-script`
 
-Two videos of the series have no page to film. **V11 (CI & headless)** is a
+Three videos of the series have no page to film. **V11 (CI & headless)** is a
 policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
 and its artifacts; **V12 (audit & attach)** is three terminals each holding
-`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key. Playwright cannot drive
-either of them.
+`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key; **V13 (your terminal,
+our cluster)** is `kubectl`, `wardyn ssh` and one `ssh` session against a
+Kubernetes sandbox. Playwright cannot drive any of them.
 
 ```sh
 scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
@@ -191,6 +195,79 @@ Two things to know before rolling:
   `--no-record` dry run of the beat script (or simply the previous take) makes
   the real one warm.
 
+### V13 is shot against a cluster, not the compose stack
+
+| | |
+|---|---|
+| **Beats** | `kubectl get pods -n wardyn` → `wardyn ssh --print <run-id>` → `ssh <run-id>@127.0.0.1 -p 2222 hostname` → `'exit 37'` and `echo $?` → `wardyn audit <run-id> --action-prefix ssh.` |
+| **Script** | [`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh) — terminal-only, one pane, no tmux (V12 needs three because its subject is three identities; this one's is one operator and one cluster) |
+| **Stack** | the `make kind-quickstart` cluster, **not** `make setup`'s compose stack. Preflight asserts `/healthz` reports `runner=k8s`, because both publish `127.0.0.1:8080` and a 200 says nothing about who answered |
+| **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
+| **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V12's subject, not this one's |
+| **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.auth` success attributed to the run's owner |
+| **Knobs** | four, all with a default that is what the table above describes — set one only when your cluster is not the quickstart's. `WARDYN_V13_CONTEXT` (default `kind-wardyn-quickstart`) and `WARDYN_V13_NAMESPACE` (default `wardyn`) name the kube context and namespace both the beat script and the verifier read the admin token from; `WARDYN_V13_DIR` (default `/tmp/wardyn-v13`) is where preflight writes its log; `WARDYN_V13_PUBKEY` (default `~/.ssh/id_ed25519.pub`) is the key beat 3 registers and authenticates with. `WARDYN_URL` (default `http://127.0.0.1:8080`) and `WARDYN_DEMO_RUN_ID` are the shared knobs, not V13's own |
+
+Staging, once, before rolling — `preflight` checks every item and films nothing:
+
+```sh
+make kind-quickstart                                  # if the cluster is not up
+kubectl config use-context kind-wardyn-quickstart     # beat 1 types a bare kubectl
+export WARDYN_ADMIN_TOKEN="$(kubectl -n wardyn get secret wardyn-auth \
+  -o jsonpath='{.data.admin-token}' | base64 -d)"
+# one idle interactive run — interactive means no agent task is exec'd, so no
+# model credential is involved and the sandbox just sits there
+curl -sS -X POST http://127.0.0.1:8080/api/v1/runs \
+  -H "Authorization: Bearer ${WARDYN_ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"agent":"claude-code","repo":"local:demo","confinement_class":"CC1","interactive":true,
+       "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny",
+       "min_confinement_class":"CC1","auto_stop_after_sec":-1}}'
+scripts/demo-beats/13-terminal-to-the-cluster.sh --preflight
+scripts/record-demo.sh --video 13 \
+  --terminal-script scripts/demo-beats/13-terminal-to-the-cluster.sh
+```
+
+The beat script never launches, kills or reconfigures a run — it picks the
+newest `RUNNING` one (or `WARDYN_DEMO_RUN_ID`) and stops with that `curl` in the
+error if there is none. A **retake wants a fresh run**: the audit trail is
+append-only, so the previous take's rows are still on the old one and beat 5
+would film them.
+
+### Re-take at the release cut
+
+Recording is a **release-cut act**, not a branch act — nothing here is re-shot
+on `prep/v0.6`. What 0.6 changed about what the series *claims*, so the cut
+knows exactly what it owes:
+
+Numbers below are the **twelve-episode** series `main` renumbered to (`01
+why-govern-agents` … `12 audit-and-attach`), plus 0.6's new `V13`. The old
+0.5 numbering the campaign was shot in maps: old 01 → **V02**, 02 → **V04**,
+03 → **V05**, 04 → **V06**, 05 → **V07**, 06 → **V09**, 07 → **V10**, 08
+stays **V08**, 09 → **V11**, 10 → **V12**.
+
+| Video | What 0.6 changed | Re-take at the cut? |
+|---|---|---|
+| **V13** — your terminal, our cluster | **New.** Terminal-only ([`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh)), shot against the `make kind-quickstart` cluster | **Yes.** One take was shot and graded during the campaign, but nothing is published to `/demos` and neither the take nor its verify report is on this branch — the cut re-shoots it |
+| **V02–V12** (every episode with a browser lane) | No spec and no caption changed, but the **console did**: `Permissions` is a new sidebar entry, so every take on file films a sidebar the shipped console no longer has. This is *every* spec except `01-why-govern-agents` — V11 and V12 are terminal-**first**, not terminal-only, and their browser halves (`${CI_STACK}/runs`, `/audit`, `/runs/:id`) render the same shell | **Yes — restaging only.** The narration is still true; the chrome is stale |
+| **V01** — why govern agents | Nothing. It films `ui/e2e/demo/assets/primer.html`, a local deck, and never loads the console | No |
+| **V09** — record a run (old 06) | Source comments only. The frozen-counter note the spec carried is retired (0.6 fixed the correlation index), but **no caption, no on-screen string and no beat changed** | Only as part of the V02–V12 restaging above |
+| **V12** — audit & attach (old 10) | Untouched in content. Its one ground-truth line — "dark here, because that sensor is opt-in" — stays true: the counter fix does not make the `groundtruth` compose profile any less opt-in | Restaging only, for its browser half's sidebar |
+| **V11** — CI & headless (old 09) | Untouched in content | Restaging only, for its browser half's sidebar |
+
+**What can be checked on this branch is V13's wiring, and it holds**:
+`verify-demo-take.sh` gained `check_video_13` and the `13)` dispatch arm, the
+beat script and the verifier agree byte-for-byte on the handoff path
+(`${WARDYN_DEMO_WORK_DIR:-…/demo-video-13}/v13-run-id.txt`), and the verifier's
+three audit assertions — `ssh.exec` for argv `hostname` at exit 0, an
+`ssh.exec` row carrying exit 37, and every `ssh.auth` success attributed to the
+run's owner — are exactly the beats the script films.
+
+`check_video_13` has been exercised end to end once: the campaign's live lane
+recorded a take against its `kind-quickstart` cluster and graded it with the
+verifier's report. That is why this row says "re-shoot", not "first take". But
+there is no dry-run mode — the check reads a live cluster's audit trail — and
+that cluster, the take, and the report are all gone. So the cut re-creates the
+cluster and re-shoots, and until it does, the series has no V13 to publish.
+
 ## Before the first take
 
 ```sh
@@ -229,7 +306,7 @@ mattering: see "The video is captured from TWO sources" below.
 |---|---|---|
 | Acts 1–6 — the console | **the browser recording itself** (Playwright `recordVideo`) | **always** → `…/Videos/wardyn-demo-<ts>.mp4` |
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
-| Host-shell beats (V11, V12) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
+| Host-shell beats (V11, V12, V13) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot

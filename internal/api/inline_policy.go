@@ -7,7 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"os"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -52,13 +55,13 @@ import (
 // from real authorizations.
 //
 // The 4th return is L6's clamp-warning list (composer.Clamp's own "what did I
-// change" notes) — non-nil only on the member inline-policy branch, since
-// that is the ONLY resolution path that ever clamps. handleCreateRun (launch)
-// discards it: a launch may stay silent about a clamp exactly as it always
-// has (the resolved/attached spec is already the clamped one regardless — the
-// clamp itself is never skipped). handlePreflightRun surfaces it in Review so
-// a member sees WHY their inline_policy differs from what they typed, before
-// they launch.
+// change" notes, plus the capability/grant drops) — non-nil only on the member
+// inline-policy branch, since that is the ONLY resolution path that ever
+// clamps. BOTH callers surface it: handlePreflightRun in Review, so a member
+// sees WHY their inline_policy differs from what they typed before they
+// launch, and handleCreateRun on the 201, because the console launches without
+// preflighting and a silent narrowing is a run that quietly is not the run the
+// member asked for.
 func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
@@ -102,6 +105,30 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			}
 			spec.EligibleGrants = kept
 			clampWarnings = append(clampWarnings, grantWarns...)
+			// Every one of those drops is now AUDITED as well. It used to be a
+			// warning and nothing else, so an operator reading the stream could
+			// not tell that a member had tried to pair one of their secrets with
+			// a host of the member's own choosing (the gap ROADMAP names).
+			drops := make([]capDrop, 0, len(grantWarns))
+			for _, gw := range grantWarns {
+				drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
+			}
+			// 0.6 capabilities: the clamp above bounds the member to the
+			// OPERATOR's ceiling; this bounds what survived it to what THIS
+			// member personally holds.
+			capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, &spec)
+			if cerr != nil {
+				writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+				return types.RunPolicySpec{}, nil, nil, false
+			}
+			clampWarnings = append(clampWarnings, capWarns...)
+			// Skipped for a dry run for the SAME reason policy.inline is (see
+			// the doc comment): Review re-resolves on every edit, and a stream
+			// of denials for a policy nobody launched is indistinguishable from
+			// denials that actually bounded a run.
+			if !dryRun {
+				s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
+			}
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
@@ -147,6 +174,172 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	return spec, policyID, nil, true
 }
 
+// capDrop is one thing a capability took away from a member's inline policy:
+// the reason it went (one of the values OPERATIONS lists under authz.denied)
+// and the detail that names WHICH thing — a host, a secret name, or the
+// pairing warning the member is also shown in Review.
+type capDrop struct{ reason, detail string }
+
+// narrowMemberInlinePolicy bounds a MEMBER's own inline policy by the
+// capability grants that member holds. It runs after composer.Clamp and
+// filterMemberGrants, and the difference between them is the whole doctrine:
+// the clamp bounds a member to what the OPERATOR authorized deployment-wide,
+// this bounds what survived to what THIS member was granted personally. A
+// stored-secret pairing therefore has to clear BOTH — operator-eligible AND
+// granted here — because either one alone is a hole.
+//
+// It touches only the MEMBER-AUTHORED spec. Everything admin-authored — a
+// stored policy, the workspace's requirements, the scan's seeded hosts, the
+// model provider's own egress, the grant re-added at launch by
+// foldRunIntegration/applyWorkspaceRequirements — is folded in by the callers
+// AFTER this returns, and is deliberately left alone: narrowing what an admin
+// already authorized would brick workspace runs at scale, and a member who
+// cannot be trusted with a workspace should not be granted the workspace.
+//
+// DROPS, never rejects, exactly as filterMemberGrants does — with a warning per
+// drop, so preflight/Review names what will not be there before launch, and a
+// capDrop so the audit stream records it. A member whose whole allowlist is
+// ungranted gets a run with no member-authored egress, not a 403: the run's
+// admin-authored egress is still there and is what the task usually needs.
+//
+// Under an operator ceiling of allow_all_egress the allowlist is not the gate
+// at all (composer.Clamp leaves AllowAllEgress set and the proxy allows any
+// non-denied public host), so egress_host narrowing does nothing there. That is
+// the operator's own posture, named here so nobody reads a green switch as a
+// bound that deployment does not have.
+func (s *Server) narrowMemberInlinePolicy(ctx context.Context, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
+	var warns []string
+	var drops []capDrop
+
+	keptDomains := spec.AllowedDomains[:0:0]
+	for _, d := range spec.AllowedDomains {
+		ok, err := s.capSeamAllowed(ctx, capEgressHost, d)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			warns = append(warns, fmt.Sprintf("dropped egress host %q: not granted to you", d))
+			drops = append(drops, capDrop{reason: "capability_" + capEgressHost, detail: d})
+			continue
+		}
+		keptDomains = append(keptDomains, d)
+	}
+	spec.AllowedDomains = keptDomains
+
+	keptGrants := spec.EligibleGrants[:0:0]
+	for _, g := range spec.EligibleGrants {
+		// filterMemberGrants 422s an undecodable stored-secret scope — and, since
+		// the pairing switch closed, an unknown kind too — before this runs, and
+		// it is the only order that exists. The error is still HONORED here
+		// rather than discarded: relying on that ordering is what let the old
+		// open default arm through TWO gates instead of one, and an unreadable
+		// pairing has no secretRef to check, so keeping it would be a free pass.
+		_, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
+		if covered && derr != nil {
+			warns = append(warns, fmt.Sprintf("dropped %s grant: %v", g.Kind, derr))
+			drops = append(drops, capDrop{reason: "capability_" + capSecret, detail: string(g.Kind)})
+			continue
+		}
+		if !covered {
+			keptGrants = append(keptGrants, g) // github_token, cloud_sts name no stored secret
+			continue
+		}
+		if g.Kind == types.GrantAPIKey {
+			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
+				keptGrants = append(keptGrants, g) // a live OAuth token, not a stored secret
+				continue
+			}
+		}
+		// BOTH refs, because an ssh_key grant's known_hosts_secret_ref resolves
+		// a stored secret whose raw value the broker hands back (see
+		// storedSecretPairingInCeiling) — gating only the key would leave the
+		// smaller half of the same door open.
+		refused := ""
+		for _, ref := range []string{secretRef, knownHostsRef} {
+			if ref == "" {
+				continue
+			}
+			ok, err := s.capSeamAllowed(ctx, capSecret, ref)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok {
+				refused = ref
+				break
+			}
+		}
+		if refused != "" {
+			warns = append(warns, fmt.Sprintf("dropped %s grant referencing secret %q: not granted to you", g.Kind, refused))
+			drops = append(drops, capDrop{reason: "capability_" + capSecret, detail: refused})
+			continue
+		}
+		keptGrants = append(keptGrants, g)
+	}
+	spec.EligibleGrants = keptGrants
+
+	// Workspace repos. denyMemberRequest gates the req.workspace_id door, but an
+	// inline workspace_repos entry naming an ONBOARDED repo is a second door to
+	// the same room: composer.Clamp drops only WorkspaceMounts, referencedWorkspaces
+	// matches the entry by URL, and applyWorkspaceRequirements then folds that
+	// workspace's admin-authored egress, operator_set secret grants and base image
+	// into the member's run. Gated here rather than at either call site because
+	// resolveRunPolicy is the chokepoint launch AND the preflight dry-run share, so
+	// Review can never preview a workspace launch would refuse.
+	//
+	// Repos only: a member's WorkspaceMounts are already nil by the time this runs
+	// (composer.Clamp drops every proposed mount unconditionally), so a second loop
+	// over them would be filtering an empty slice.
+	//
+	// A repo NO workspace owns is left alone — validateWorkspaceSources 422s it as
+	// un-onboarded a few lines later, and dropping it here would turn that clear
+	// refusal into a silently smaller run.
+	if len(spec.WorkspaceRepos) > 0 && s.cfg.Store != nil {
+		all, err := s.cfg.Store.ListWorkspaces(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("api: list workspaces: %w", err)
+		}
+		idx := indexWorkspacesBySource(all)
+		keptRepos := spec.WorkspaceRepos[:0:0]
+		for _, wr := range spec.WorkspaceRepos {
+			ws, onboarded := idx.repo[wr.Repo]
+			if onboarded {
+				ok, err := s.capSeamAllowed(ctx, capWorkspace, ws.ID.String())
+				if err != nil {
+					return nil, nil, err
+				}
+				if !ok {
+					warns = append(warns, fmt.Sprintf("dropped repo %q: workspace %s is not granted to you", wr.Repo, ws.ID))
+					drops = append(drops, capDrop{reason: "capability_" + capWorkspace, detail: wr.Repo})
+					continue
+				}
+			}
+			keptRepos = append(keptRepos, wr)
+		}
+		spec.WorkspaceRepos = keptRepos
+	}
+
+	return warns, drops, nil
+}
+
+// auditMemberPolicyDrops records what a member's inline policy LOST — one event
+// per REASON, not one per dropped item. A spec naming twenty ungranted hosts is
+// one authorization outcome, not twenty, and a stream that flooded on it is the
+// first thing an operator would filter away. Grouping by reason (rather than
+// blending every drop into one event) keeps `reason` the single value every
+// authz.denied consumer already reads, with the affected values beside it.
+func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, drops []capDrop) {
+	byReason := map[string][]string{}
+	for _, d := range drops {
+		byReason[d.reason] = append(byReason[d.reason], d.detail)
+	}
+	for _, reason := range slices.Sorted(maps.Keys(byReason)) { // stable order for the stream
+		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", "runs.inline_policy", "denied", mustJSON(map[string]any{
+				"reason": reason, "dropped": byReason[reason],
+			})))
+	}
+}
+
 // validateInlineSecretRefs fails a policy spec closed when any of its api_key
 // OR git_pat eligible grants names a secret that does not actually exist, is a
 // reserved platform-internal key, or when no secret store is configured at all.
@@ -183,8 +376,10 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 // so it cannot be exempt-matched at this layer anyway. Called for MEMBERS only —
 // an operator is the ceiling authority and stays unclamped. A sentinel LLM
 // api_key grant is kept: it references no operator stored secret and
-// validateInlineSecretRefs host-pins it to the provider. An UNDECODABLE scope is
-// a malformed request → error (fail closed), never a silent drop.
+// validateInlineSecretRefs host-pins it to the provider. An UNDECODABLE scope —
+// or, since the pairing switch closed, an UNKNOWN KIND — is a malformed request
+// → error (fail closed), never a silent drop. env_secret is admin-only and is
+// dropped for a member regardless of the ceiling; see the block below.
 func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	ceiling := s.cfg.DefaultPolicy.EligibleGrants
 	for _, g := range grants {
@@ -201,6 +396,22 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
 				continue
 			}
+		}
+		// env_secret is ADMIN-ONLY by default, ahead of the pairing check — a
+		// member does not get one even for a pairing the operator DID list.
+		// The other kinds a member may reuse are bounded after delivery: an
+		// api_key value never leaves the broker, a git_pat reaches git through
+		// the helper, an ssh_key is wiped after the clone. An env_secret is a
+		// raw value in the process environment for the run's whole life, with no
+		// mint, no TTL and nothing to revoke (see GrantEnvSecret), so "the
+		// operator listed this pairing" is a weaker statement here than it is
+		// for every other kind. An operator who has weighed that opens
+		// envAllowMemberEnvSecret; until then the answer is no.
+		if g.Kind == types.GrantEnvSecret && !envEnabled(os.Getenv(envAllowMemberEnvSecret)) {
+			warns = append(warns, fmt.Sprintf(
+				"dropped env_secret grant for %q: env_secret is admin-only (an operator can open it with %s)",
+				secretRef, envAllowMemberEnvSecret))
+			continue
 		}
 		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, ceiling) {
 			warns = append(warns, fmt.Sprintf(
@@ -219,6 +430,18 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 // such — for every other kind; see storedSecretPairingInCeiling). An undecodable
 // scope returns covered=true WITH the error (fail closed — an unreadable
 // stored-secret grant is rejected, never skipped).
+//
+// The switch is CLOSED — every types.GrantKind is named, and the default arm
+// REFUSES rather than falling through. That arm used to return covered=false,
+// which reads as "this kind names no stored secret" and is the answer both
+// callers give a free pass: filterMemberGrants `kept = append(kept, g)` and
+// narrowMemberInlinePolicy `keptGrants = append(keptGrants, g)`. So a grant kind
+// added to types.GrantKind and wired to a stored secret — env_secret is exactly
+// that — was member-authorable, unclamped by the operator's eligible-grant
+// pairing and unchecked against capSecret, until somebody remembered to come
+// back here. The kind set is small and closed; a compiler-visible list plus a
+// refusing default makes forgetting fail shut instead of open.
+// (TestStoredSecretGrantPairing_UnknownKindIsRefused is the regression.)
 func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered bool, err error) {
 	switch g.Kind {
 	case types.GrantAPIKey:
@@ -230,8 +453,23 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 	case types.GrantSSHKey:
 		h, kr, _, khr, e := sshKeyScopeFields(g.Scope)
 		return h, kr, khr, true, e
-	default:
+	case types.GrantEnvSecret:
+		// An env_secret has no host — it is delivered TO the sandbox, not to a
+		// destination — so the env var NAME takes the host slot. That makes the
+		// ceiling comparison an exact (name, secret) pairing, the same shape
+		// git_pat gets, rather than letting a member reuse an operator-blessed
+		// secret under a variable name the operator never wrote. hostEqual's
+		// lowercasing is harmless here: envSecretScopeFields admits upper case
+		// only, so two names that compare equal ARE equal.
+		n, sn, e := envSecretScopeFields(g.Scope)
+		return n, sn, "", true, e
+	case types.GrantGitHubToken, types.GrantCloudSTS:
+		// Genuinely name no stored secret: github_token mints an App
+		// installation token (scope-intersected by composer.Clamp), cloud_sts is
+		// hard-refused by the embedded IdP. Not covered, and safe to keep.
 		return "", "", "", false, nil
+	default:
+		return "", "", "", true, fmt.Errorf("unknown grant kind %q", g.Kind)
 	}
 }
 

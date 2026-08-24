@@ -78,7 +78,7 @@ export function SummaryHeader({
   // W25-1: claim "attachable" only under the SAME owner-or-admin predicate
   // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
   // && !owned`) — otherwise a member sees this chip promise attachability and
-  // then gets a red "requires the operator role" error the instant they open
+  // then gets a red "requires the admin role" error the instant they open
   // the terminal below it (OverviewTab renders <AttachTerminal> whenever
   // `attachable`).
   const operator = useOperator();
@@ -146,6 +146,17 @@ export function SummaryHeader({
       {exitCode !== undefined && (
         <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono className="shrink-0">
           exit {exitCode}
+        </Chip>
+      )}
+
+      {/* D9: the pre-agent-start failure class (mount failure, etc.) never
+          gets an exit code at all — this is the only place THAT run says
+          why. Independent of the exit chip above: a run can show one, the
+          other, both, or neither. Bare server text, no prefix — the state
+          badge already says "Failed". */}
+      {run.failure_hint && (
+        <Chip tone="danger" className="max-w-[280px] shrink-0 truncate" title={run.failure_hint}>
+          {run.failure_hint}
         </Chip>
       )}
 

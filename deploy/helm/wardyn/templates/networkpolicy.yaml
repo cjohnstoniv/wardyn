@@ -10,14 +10,24 @@ re-open only what wardynd needs:
     .Values.k8s.apiServer.ports, scoped to .Values.k8s.apiServer.to when set
     (empty by default — see the BOLD warning on that value) — wardynd itself
     drives the k8s runner substrate via client-go
-  - ingress to the HTTP (+ SSH when ssh.enabled) ports from the configured
-    sources (default: same namespace, e.g. an ingress controller / the UI)
+  - ingress to the HTTP (+ SSH when ssh.enabled, + the UI-sandbox gateway when
+    uiSandbox.enabled) ports from the configured sources (default: same
+    namespace, e.g. an ingress controller / the UI)
   - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
     k8s.runsNamespace differs from this release's namespace: that namespace's
     proxy sidecars call back to wardynd for credential mints, approval
     checks, and recording uploads — never SSH, which is an operator/human
     surface, not something a run's sidecar has any business reaching
 */}}
+{{- /*
+`default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
+this chart's defaults with the PREVIOUS release's values map, so upgrading a
+0.5 release hands these templates a map with no uiSandbox/readinessProbe at
+all. Unguarded, that upgrade dies at render on a nil pointer instead of rolling
+out; guarded, the 0.5 defaults simply carry forward.
+*/ -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -45,9 +55,13 @@ spec:
       ports:
         - protocol: TCP
           port: http
-        {{- if .Values.ssh.enabled }}
+        {{- if $ssh.enabled }}
         - protocol: TCP
           port: ssh
+        {{- end }}
+        {{- if $ui.enabled }}
+        - protocol: TCP
+          port: ui
         {{- end }}
     {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
     # A different runs namespace carries no chart labels (the chart never
@@ -58,8 +72,9 @@ spec:
     # and strand every run's proxy sidecar with no route back to wardynd
     # (credential mints, approval checks, recording uploads all go dark,
     # with no render-time or even boot-time signal). A SEPARATE rule (not
-    # folded into the one above): this peer gets http only, never ssh — a
-    # run's proxy sidecar has no business on the SSH port.
+    # folded into the one above): this peer gets http only, never ssh and
+    # never the UI-sandbox gateway — a run's proxy sidecar has no business on
+    # either operator/human port.
     - from:
         - namespaceSelector:
             matchLabels:

@@ -38,6 +38,10 @@ function authErrorMessage(code: string): string {
       return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_ALLOWED_EMAIL_DOMAINS.";
     case "no_role":
       return "Your account has no Wardyn role assigned. Ask an operator to map your role (WARDYN_OIDC_ROLE_MAP) or add your email to WARDYN_OIDC_OPERATOR_EMAILS.";
+    case "oidc_transient":
+      return "Your identity provider didn't respond in time. This is usually temporary — try signing in again.";
+    case "oidc_config":
+      return "Sign-in with your identity provider failed. Try again; if it keeps happening, ask an operator to check the OIDC client configuration.";
     default:
       return "Sign-in failed. Try again, or contact an operator.";
   }

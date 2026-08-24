@@ -4,7 +4,7 @@
  */
 
 // Run policies (admin-gated config) + the egress first-use mode helpers.
-import type { ConfinementClass } from "./runs";
+import type { ConfinementClass, UIApp } from "./runs";
 
 // git_pat = a stored Personal Access Token brokered to git for a non-GitHub host
 // (Azure DevOps / GitLab / ...). Unlike api_key (proxy-injected, value never
@@ -148,6 +148,10 @@ export interface RunPolicySpec {
   llm_inspection?: LLMInspectionSpec;
   // Sandbox CPU/memory/PID/disk caps. Omitted => platform defaults.
   resources?: ResourceLimits;
+  // Declared in-sandbox loopback HTTP apps the UI gateway may relay to the
+  // browser (mirrors Go's RunPolicySpec.UIApps). Read-only in the console —
+  // ui_apps is operator-authored via the API/YAML, no editor in 0.6.
+  ui_apps?: UIApp[];
 }
 
 export interface RunPolicy {

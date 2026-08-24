@@ -113,7 +113,7 @@ var _ RunsByCreatorPager = PG{}
 func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
@@ -125,15 +125,11 @@ func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page)
 // Same fail-closed contract as RunsByCreatorPager — an absent implementation
 // must never fall back to the unscoped list.
 //
-// PRODUCTION WIRING NOTE: api.Config.Approvals is wardynd's approvalService
-// wrapper (cmd/wardynd/adapters.go), not a bare store.PG — like its existing
-// ListApprovalsPage, this method needs a matching delegation method added there
-// before a member's unscoped GET /approvals is actually served from the store
-// rather than the fail-closed 500. That wiring is out of this lane's scope
-// (internal/api, internal/store, internal/composer call sites only); until it
-// lands, the api-layer call site's fail-closed fallback is what a deployment
-// actually observes for THIS ONE case (?run_id= of an owned run is unaffected —
-// it never needs this interface).
+// api.Config.Approvals is wardynd's approvalService wrapper
+// (cmd/wardynd/adapters.go), not a bare store.PG, so it needs its own
+// delegation method for this to be reachable in production — it has one, and
+// asserts the interface, so a member's unscoped GET /approvals is served from
+// the store rather than the api-layer fail-closed fallback.
 type ApprovalsByRunCreatorPager interface {
 	ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
 }
@@ -166,7 +162,7 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs ORDER BY created_at DESC`, nil)
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
 }
@@ -189,6 +185,37 @@ func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, 
 	// Bulk hydrate: ONE sources query for the union across the whole page —
 	// referencedWorkspaces full-lists on run-create/preflight, so per-row
 	// hydration would multiply a hot path.
+	return s.hydrateAll(ctx, wss)
+}
+
+// WorkspacesByOwnerPager is the ownership-scoped analogue of
+// Pager.ListWorkspacesPage: a MEMBER's GET /workspaces sees their OWN owned rows
+// plus the operator-owned ones (owned_by = ”), never another member's.
+//
+// Unlike RunsByCreatorPager, an absent implementation here is NOT a
+// fail-closed case: the api-layer fallback fetches all and applies the SAME
+// owned_by filter in Go before windowing, so the scoping still holds — only the
+// LIMIT/OFFSET moves out of the database. Kept out of Pager for the usual
+// reason (a test fake embedding Store must not silently inherit it).
+type WorkspacesByOwnerPager interface {
+	ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error)
+}
+
+// Compile-time assertion: PG satisfies WorkspacesByOwnerPager.
+var _ WorkspacesByOwnerPager = PG{}
+
+// ListWorkspacesPageForOwner is ListWorkspacesPage narrowed to what one member
+// may see: their own owned rows plus every operator-owned row (” — the 0048
+// default, i.e. every pre-0.6 workspace). workspaces_owned_by_idx (0048) covers
+// the IN.
+func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error) {
+	q, args := p.appendTo(
+		`SELECT `+wsCols+` FROM workspaces WHERE owned_by IN ('', $1) ORDER BY created_at DESC`,
+		[]any{owner})
+	wss, err := collect(ctx, s.Pool, "list", "workspaces by owner", q, args, scanWorkspace)
+	if err != nil {
+		return nil, err
+	}
 	return s.hydrateAll(ctx, wss)
 }
 

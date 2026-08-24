@@ -175,3 +175,36 @@ describe("SSHKeysScreen — add key", () => {
     expect(screen.getByLabelText(/^name$/i)).not.toBeRequired();
   });
 });
+
+// migration 0043's `role`: the stamp is taken at registration and never
+// re-taken, so a demoted admin's key keeps the SSH override until it is
+// deleted and added again (docs/SSH.md §Bounds). The list is the only place a
+// human can see which of their keys carries it.
+describe("SSHKeysScreen — admin-override badge", () => {
+  it("marks only the admin-stamped key", async () => {
+    listKeysMock.mockResolvedValue([
+      {
+        fingerprint: "SHA256:aaa",
+        principal: "alice@example.com",
+        name: "laptop",
+        public_key: "",
+        role: "member",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        fingerprint: "SHA256:bbb",
+        principal: "alice@example.com",
+        name: "workstation",
+        public_key: "",
+        role: "admin",
+        created_at: "2026-01-02T00:00:00Z",
+      },
+    ]);
+    renderScreen();
+    const badge = await screen.findByText("Admin override");
+    expect(badge).toBeInTheDocument();
+    expect(screen.getAllByText("Admin override")).toHaveLength(1);
+    // …on the admin key's row, not the member key's.
+    expect(badge.closest("tr")).toHaveTextContent("workstation");
+  });
+});

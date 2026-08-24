@@ -114,6 +114,8 @@ test.describe("Secrets screen", () => {
     await expect(body).not.toContainText("BEGIN PRIVATE KEY");
 
     // The Add dialog's value field starts empty and shows no prior value.
+    // `exact` because the field's reveal toggle is labelled "Show value" — a
+    // substring match on "Value" resolves to both.
     const dlg = await openAddDialog(page);
     const value = dlg.getByLabel("Value", { exact: true });
     await expect(value).toHaveValue("");

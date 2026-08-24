@@ -54,6 +54,22 @@ type ImageBuildSweeper interface {
 	SweepOrphanedBuilds(ctx context.Context) error
 }
 
+// SandboxOrphanSweeper is an OPTIONAL capability a Runner may implement: a
+// label-keyed sweep of sandbox containers whose run row no longer owns them.
+// A crash BETWEEN CreateSandbox and SetSandboxRef (runs_dispatch.go) leaves the
+// per-run agent/proxy containers + network running under a run row with an EMPTY
+// sandbox_ref — and every ref-keyed teardown (reconcileOrphanedSandbox,
+// SweepTerminalSandboxes) skips a ref-empty row, so those containers leak across
+// every reboot, untracked (D13). This sweep finds them by the wardyn.run-id
+// label the substrate stamps and tears down any whose run isOrphan, past the
+// minAge dispatch grace. Checked by type assertion (like ImageBuildSweeper) so
+// api stays target-agnostic; a Runner without it (nil, a test fake, a future
+// non-docker target) is simply never swept. isOrphan is called by the substrate
+// with each labeled run id; only api can read run rows to answer it.
+type SandboxOrphanSweeper interface {
+	SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error)
+}
+
 // ReconcileOnBoot rebuilds the safety net that keeps a run from stranding
 // non-terminal forever with a live sandbox and un-revoked credentials (C3), then
 // keeps rebuilding it for the life of the daemon. Three parts, because they are
@@ -95,7 +111,65 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	go s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval)
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx))
+	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
+	// flipped every ref-empty abandoned run terminal, so those runs' leaked
+	// containers are visible to the label sweep as "row terminal, containers still
+	// alive" — the exact leak (D13). It repeats on the same slow cadence in
+	// runWatcherSweeper.
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+}
+
+// sweepOrphanedSandboxes tears down the per-run containers of runs whose row no
+// longer owns them (see SandboxOrphanSweeper): a run row that is terminal,
+// missing, or non-terminal-but-ref-empty-past-grace with no live watcher. The
+// store-state verdict lives HERE (only api reads run rows); the label listing +
+// deterministic-name teardown + age gate live in the substrate. Best-effort:
+// a Runner without the optional capability is a no-op.
+func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
+	sweeper, ok := s.cfg.Runner.(SandboxOrphanSweeper)
+	if !ok {
+		return nil
+	}
+	runs, err := s.cfg.Store.ListRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("sweep orphaned sandboxes: list runs: %w", err)
+	}
+	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
+	for _, run := range runs {
+		byID[run.ID] = run
+	}
+	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
+	isOrphan := func(runID uuid.UUID) bool {
+		run, known := byID[runID]
+		if !known {
+			return true // no run row owns these containers — pure leak
+		}
+		if isTerminalRunState(run.State) {
+			return true // the run ended; its containers should already be gone
+		}
+		if run.SandboxRef != "" {
+			return false // live and tracked — its own lifecycle owns teardown
+		}
+		// Non-terminal with NO sandbox_ref: abandoned mid-dispatch UNLESS a live
+		// watcher still owns it (the SetSandboxRef write was merely lost to a
+		// transient store error while the run reached RUNNING with a heartbeating
+		// watcher — mirrors finalizeUndispatchedRuns' RunWatcherFresh guard). The
+		// substrate's minAge gate is the second guard for a young in-flight dispatch.
+		if hasLease {
+			if fresh, ferr := leaser.RunWatcherFresh(ctx, runID, watcherLeaseStaleAfter); ferr == nil && fresh {
+				return false
+			}
+		}
+		return true
+	}
+	swept, err := sweeper.SweepOrphanedSandboxes(ctx, undispatchedGrace, isOrphan)
+	if swept > 0 {
+		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
+	}
+	if err != nil {
+		return fmt.Errorf("sweep orphaned sandboxes: %w", err)
+	}
+	return nil
 }
 
 // reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass, closing
@@ -394,6 +468,15 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 					lastUndispatched = now
 					if err := s.finalizeUndispatchedRuns(ctx); err != nil {
 						slog.WarnContext(ctx, "wardynd: undispatched run reconcile", slog.Any("err", err))
+					}
+					// Same slow cadence as the undispatched pass (both are unbounded
+					// full-table reads whose eligibility only changes on the
+					// undispatchedGrace timescale), and AFTER it, so a just-finalized
+					// ref-empty run's leaked containers are swept the same tick (D13).
+					// ponytail: no separate ticker — piggy-backing this cadence keeps
+					// one ContainerList per grace period, free next to what it reclaims.
+					if err := s.sweepOrphanedSandboxes(ctx); err != nil {
+						slog.WarnContext(ctx, "wardynd: orphaned sandbox sweep", slog.Any("err", err))
 					}
 				}
 				if err := s.sweepRunWatchers(ctx); err != nil {

@@ -185,7 +185,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
 
 export const WIDGET_IDS = Object.keys(RUN_WIDGETS) as WidgetId[];
 
-export function isWidgetId(id: string): id is WidgetId {
+function isWidgetId(id: string): id is WidgetId {
   return id in RUN_WIDGETS;
 }
 

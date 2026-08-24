@@ -145,6 +145,29 @@ describe("RunsScreen — first-run empty state", () => {
     expect(await screen.findByText(run.task)).toBeInTheDocument();
   });
 
+  // W2-S1-4: /setup/status is a full ListRuns plus a shell-out host sweep. It
+  // is polled only while there is actually something to watch for — the
+  // no-barrier blocker clearing, or an unreachable daemon coming back — never
+  // forever on the landing screen of every open tab.
+  it("stops polling /setup/status on a healthy host, keeps polling while the no-barrier blocker is up", async () => {
+    vi.useFakeTimers();
+    try {
+      renderScreen();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
+
+      getSetupStatusMock.mockResolvedValue(
+        baseStatus({ ready: false, runner: { driver: "docker", confinement_classes: [] } }),
+      );
+      getSetupStatusMock.mockClear();
+      renderScreen();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(getSetupStatusMock.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never shows the no-barrier banner for a merely-unreachable daemon", async () => {
     getSetupStatusMock.mockResolvedValue({
       ...baseStatus({ runner: { driver: "none", confinement_classes: [] } }),

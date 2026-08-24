@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -385,5 +386,72 @@ func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
 	normal := types.AgentRun{ID: uuid.New(), Task: "build the thing"}
 	if tee2, _ := srv.newSessionRecorder(normal, "sess", runner.AttachOptions{Cols: 80, Rows: 24}); tee2 == nil {
 		t.Error("a normal run must still be recorded — the gate over-reached")
+	}
+}
+
+// TestNewSessionRecorder_OversizeCastTruncatedNotLost pins the bound on the
+// live-attach cast. It used to grow in the daemon's heap for the whole session
+// and then be REJECTED WHOLE by the store's own 64 MiB cap at close, so a long
+// interactive session's evidence was destroyed at exactly the moment it was
+// supposed to be persisted. Now the buffer stops at maxSessionCastBytes and what
+// was recorded up to that point is kept — still a well-formed asciicast (whole
+// event lines only), and flagged truncated in the audit trail.
+func TestNewSessionRecorder_OversizeCastTruncatedNotLost(t *testing.T) {
+	store, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	audit := &recRecorder{}
+	srv := New(Config{RecordingStore: store, Audit: audit, AdminToken: adminToken})
+	runID := uuid.New()
+
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "long", runner.AttachOptions{Cols: 80, Rows: 24})
+	chunk := bytes.Repeat([]byte("a"), 64<<10)
+	for written := 0; written < maxSessionCastBytes+(1<<20); written += len(chunk) {
+		if _, werr := tee.Write(chunk); werr != nil {
+			t.Fatalf("tee write: %v", werr)
+		}
+	}
+	finish(context.Background(), types.ActorHuman, "dave")
+
+	key := recording.CastKey(runID.String(), "long")
+	rc, err := store.OpenCast(context.Background(), key)
+	if err != nil {
+		t.Fatalf("the oversize session was not persisted at all: %v", err)
+	}
+	defer rc.Close()
+	body, _ := io.ReadAll(rc)
+
+	if len(body) > maxSessionCastBytes {
+		t.Errorf("persisted cast is %d bytes, past the %d cap", len(body), maxSessionCastBytes)
+	}
+	if len(body) < maxSessionCastBytes/2 {
+		t.Errorf("persisted cast is only %d bytes; the recording was dropped, not truncated", len(body))
+	}
+	// Well-formed: header line first, every line complete JSON, no half event.
+	if !bytes.HasSuffix(body, []byte("\n")) {
+		t.Error("cast was cut mid-line; a truncated recording must still end on an event boundary")
+	}
+	lines := bytes.Split(bytes.TrimSuffix(body, []byte("\n")), []byte("\n"))
+	for i, ln := range lines {
+		if !json.Valid(ln) {
+			t.Fatalf("cast line %d is not valid JSON (truncation split an event): %.80q", i, ln)
+		}
+	}
+
+	var rec *types.AuditEvent
+	for i := range audit.events {
+		if audit.events[i].Action == "session.recording" {
+			rec = &audit.events[i]
+		}
+	}
+	if rec == nil {
+		t.Fatal("no session.recording audit event for the truncated session")
+	}
+	if rec.Outcome != "success" {
+		t.Errorf("session.recording outcome = %q, want success", rec.Outcome)
+	}
+	if !bytes.Contains(rec.Data, []byte(`"truncated":true`)) {
+		t.Errorf("session.recording data = %s, want truncated:true — a short cast must not pass for a whole one", rec.Data)
 	}
 }

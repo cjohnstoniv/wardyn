@@ -1,13 +1,14 @@
 # SSH gateway
 
-[Watch — Audit & attach (2:00–2:30)](README.md#v10--audit--attach)
+[Watch — Audit & attach (2:00–2:30)](README.md)
 
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
 `wardyn attach`) shows. It authenticates registered **public keys only** (no
-passwords) and is **owner-only**: a human may SSH into a run only if they
-created it. An admin reaching someone else's run still uses the web terminal
-— see [Bounds](#bounds) for why that gap is real, not an oversight.
+passwords) and is **owner-or-admin**: a human may SSH into a run they
+created, or — if their key was registered while they held the admin role —
+into anyone's. That admin half is a bounded-stale stamp, not a live role
+check; see [Bounds](#bounds) for the ceiling that comes with it.
 
 The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is
 set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`,
@@ -21,7 +22,7 @@ key** — paste your public key (the console never asks for a private key; the
 paste field's own helper line says so, and pasting one is refused
 server-side with a specific error). A key registered against your SSO
 session lands under your OIDC `sub` — the only principal the gateway's
-owner-only check (below) will ever match against a run you created.
+owner check (below) will ever match against a run you created.
 
 **Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
 registers the key against the shared, non-human `admin-token` principal, not
@@ -49,6 +50,10 @@ exists under a DIFFERENT account, only that this exact `POST` didn't take.
 
 ### Reclaiming a squatted fingerprint
 
+> **0.6, migration `0046`:** a direct-SQL registration that sets `role='admin'` must ALSO set
+> `role_checked_at = now()`, or the gateway refuses the override as never-checked
+> (`admin override stale`). The API registration path stamps it for you.
+
 The fingerprint primary key is **global** — correct for auth, since a key
 must map to exactly one principal, never two. That means it is also, by
 construction, possible for someone else to register a public key you also
@@ -75,6 +80,15 @@ command for a run you own while it is RUNNING:
 ssh <run-id>@<advertise-host> -p <port>
 ```
 
+Or let the CLI assemble it: `wardyn ssh <run-id>` reads the gateway's
+address off `/healthz` and execs your local `ssh(1)` against it, so there is
+no connect string to copy. `wardyn ssh --print <run-id>` emits that command
+instead of running it (for a script or a demo) and `--config` emits the
+`ssh_config` block below — both byte-identical to what the card renders. It
+is a separate command from `wardyn attach`, deliberately: `attach` carries
+the admin bearer over a WebSocket, `ssh` carries your registered public key
+over the real SSH protocol.
+
 `<run-id>` **is** the SSH username — the gateway has no session cookie to
 carry it any other way, so the run id is the addressing, the same way a
 hostname addresses a machine. `<advertise-host>` is whatever the operator set
@@ -98,6 +112,42 @@ trusting a new host, same as any SSH server — the fingerprint is
 
 A stopped or SSH-disabled run shows no card at all — there is nothing to
 connect to, and no "try anyway" affordance that would just fail.
+
+### From a cluster
+
+Nothing above changes when wardynd runs in Kubernetes — the gateway is the
+same listener, and the client commands are identical. What the operator owes
+is a route to it and an address to advertise. Four pieces, all documented
+where they are implemented:
+
+- **Getting traffic in.** `ssh.enabled` adds the SSH port to wardynd's
+  *existing* Service, so by default SSH inherits whatever exposure HTTP has.
+  `make kind-quickstart` publishes it as a NodePort and prints the ready-made
+  `ssh -p 2222 <run-id>@127.0.0.1` line — POC-grade, single command
+  ([chart README, Quickstart](../deploy/helm/wardyn/README.md#quickstart)).
+  To expose SSH differently from the console — its own `LoadBalancer` while
+  HTTP stays internal `ClusterIP` — the chart README carries a minimal
+  bring-your-own Service targeting the same pods
+  ([Split SSH exposure](../deploy/helm/wardyn/README.md#split-ssh-exposure)).
+- **The address clients are told to use.** `ssh.advertiseHost`
+  (`WARDYN_SSH_ADVERTISE`) is what the run-detail card and `/healthz` print.
+  It is advisory copy only — the gateway binds `WARDYN_SSH_LISTEN`, not this
+  — but in a cluster the bind and the reachable address always differ, so an
+  unset value hands every user a `127.0.0.1` that is not theirs. The chart
+  never guesses it; see
+  [`values.yaml`'s `ssh` block](../deploy/helm/wardyn/values.yaml) and
+  [ENV.md](ENV.md).
+- **The host key across pod churn.** There is no host key in the chart and no
+  volume for one: wardynd generates an ed25519 key on first boot and persists
+  it in the secret store, so the fingerprint your users pinned survives a
+  rolling upgrade — *as long as the age key does*. Lose the age key and the
+  pod crash-loops before the gateway listens, which is a connection refused
+  rather than a silently changed fingerprint. See OPERATIONS,
+  ["The SSH host key survives restarts"](OPERATIONS.md#the-ssh-host-key-survives-restarts--because-the-age-key-does).
+- **Caveat, unchanged by the substrate.** `sftp` and `-L` exec binaries inside
+  the *sandbox*, not in wardynd's pod, so a BYOI run still needs
+  `sftp-server`/`socat` — see [Image contract](#image-contract-byoi). A
+  cluster install does not supply them on the image's behalf.
 
 ## 3. sftp
 
@@ -186,6 +236,18 @@ is binary protocol data, not terminal output, and is never recorded (masking
 and asciicast framing both assume text; recording binary transfer bytes
 would neither work nor mean anything).
 
+**Masking scope, stated plainly.** `internal/secretmask` masks values it was
+told about — platform-managed secrets and minted credentials registered into
+it at run start. A value a human **types** into the shell — pastes an API key,
+exports a token by hand — is not in that registry and is never masked: it
+lands in the recorded asciicast verbatim, permanently, subject to whatever
+retention window `WARDYN_RECORDING_RETENTION_DAYS` is set to (default:
+forever). There is no route to delete or redact one recording in isolation
+once it exists; the only lever is the age-based retention sweep, which acts
+on all eligible recordings, not one. If a human types a secret into an SSH (or
+browser-attach) session, treat that recording as holding it in the clear until
+retention deletes it.
+
 ## Bounds
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.
@@ -193,17 +255,69 @@ would neither work nor mean anything).
 username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-only, no admin override.** SSH authorization is
-`run.created_by == the key's registered principal` — a single equality
-check, deliberately narrower than the browser terminal (owner-or-admin via a
-minted attach ticket; admin-only via the ticket-less session-cookie
-fall-through). SSH has no session cookie and no role column to carry an
-admin override through, so today: an admin reaching another human's run
-uses the web terminal (owner-or-admin attach ticket); a member has no path
-to another human's run over either transport. Extending SSH to admins needs
-a role column this table doesn't have yet — tracked as a residual in
-[../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), not
-silently assumed away.
+**Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
+the web terminal's, but no longer unboundedly so.** SSH authorization is
+`run.created_by == the key's registered principal`, OR the key's `role`
+column (migration `0043`) reads `admin` AND its `role_checked_at` (migration
+`0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). A member's key
+never satisfies the override — only the owner check does, same as before. The
+`role` column is stamped at `POST /me/ssh-keys` time, from the role the
+registering session actually held **then** — but it is now also RE-stamped,
+along with `role_checked_at`, on every OIDC login for that principal
+(`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in
+`cmd/wardynd/boot_deps.go`): a live read of the human's current role, applied
+to every key they hold, no re-registration required. The gateway still never
+consults the human's role live at connect time — SSH carries no session for
+`requireOperator` to read — so this stays **bounded-stale, not live**, unlike
+the browser terminal's `requireOperator` gate, which reads the session's role
+fresh on every attach. What bounds the staleness now: **a demoted admin's
+already-registered key keeps its override only until whichever comes first —
+their own next login (re-stamping `role=member`), `role_checked_at` aging past
+`WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
+key being deleted/re-registered.** An operator who wants the override gone
+immediately (rather than waiting out the TTL, or waiting for the demoted human
+to log in) has the same lever as before: delete that principal's key
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service only — there is no admin
+view of another human's keys, so this means asking them, or an operator with
+direct store access, to remove it). Re-registration (delete, then re-`POST`)
+still works too, and still re-stamps immediately; it is no longer the ONLY way
+to force a refresh, just the immediate one that does not wait on either a
+login or the TTL. There is still no in-place "update this key's role"
+endpoint.
+
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+key, and even an `admin`-stamped key loses the override until it is
+refreshed.** `role` is stamped at registration, and migration `0043`
+backfilled every pre-0.6 row as `member` — the fail-closed value, because
+nothing in the schema knows what role a pre-0.6 registrant actually held, and
+guessing `admin` would hand every key already in the deployment a cross-user
+reach it was never granted. Migration `0046` adds a second fail-closed
+backfill on top: `role_checked_at` defaults `NULL` for every pre-existing row,
+and `sshAuth` treats `NULL` as infinitely stale — so **an `admin`-stamped key
+that predates `0046` has no override until its owner does ONE of two things:
+log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both
+`role` and `role_checked_at` for every key that principal owns, no
+re-registration needed) **or `DELETE`/`POST` the key again** (still supported,
+still immediate, useful when you want the refresh before your next login
+rather than after). Which of your own keys carries the `admin` stamp is
+visible without reading the database: Settings → SSH keys badges the row
+**Admin override**. That badge reflects the STORED `role` only — it does not
+currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
+so a badged key can still be refused by the gateway once its stamp goes stale;
+the audit log (`ssh.auth`, `outcome=failure`, reason "admin override stale")
+is the authoritative signal for that, not the badge. It is still a
+self-service view only — there is no console listing of another human's keys,
+for the same reason the API has none.
+
+An override connection is audited distinctly: the `ssh.auth` success event
+carries `override:true` in its data whenever the owner check did NOT match
+and the admin-role check is what let the connection through — so "who used
+the override, and when" is a normal audit-log query, not something you have
+to infer from `run.created_by` mismatches after the fact. Tracked as
+threat-model residual #15 in
+[../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), which now
+documents the staleness ceiling above rather than the older "no override at
+all" gap.
 
 **Pre-auth listener DoS bounds.** `ssh.NewServerConn` blocks with no default
 timeout, so an unauthenticated pre-auth connection is a real containment
@@ -234,7 +348,9 @@ else the client's shell happens to export reaches the sandbox.
 `session.attach` with `transport:ssh` in its data (the shell path — same
 action name the browser terminal uses, so both show up together in a run's
 timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp` (`bytes` transferred),
-`ssh.forward` (`port`, `bytes`).
+`ssh.forward` (`port`, `bytes`). This is the source of record for these four;
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
+every other audit action in the system and points back here for these.
 
 ## Migration & internals
 

@@ -31,6 +31,18 @@ replicas: 1
 # accepts that.
 allowMultiReplica: false
 
+# Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
+# of the Service's endpoints; liveness and startup stay on /healthz either way.
+#
+# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
+# image.tag above resolves to .Chart.AppVersion, which is 0.6.0 — so the default
+# install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
+# 404s forever, the pod never becomes Ready, and the rollout hangs with no other
+# symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
+# 0.5.0's ceiling: a dead Postgres then reads healthy again.
+readinessProbe:
+  path: /readyz
+
 service:
   type: ClusterIP
   port: 8080
@@ -38,7 +50,12 @@ service:
 serviceAccount:
   # Create a dedicated ServiceAccount for wardynd (recommended).
   create: true
-  # Name to use; generated from the fullname when empty.
+  # Name to use; generated from the fullname when empty. With k8s.enabled=true
+  # AND create=false, this must be set explicitly — the chart refuses to
+  # render otherwise (templates/rbac.yaml): the k8s-runner RBAC binding would
+  # otherwise silently fall to the namespace's "default" ServiceAccount,
+  # handing pods/exec + secrets/networkpolicies create-delete to every other
+  # pod in the namespace that also uses it.
   name: ""
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
@@ -88,8 +105,21 @@ secrets:
   # the render rather than silently dropping it — use ageKeyFromSecret there.
   ageKey: ""
   # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
-  # "age-key" entry you want injected as WARDYN_AGE_KEY.
+  # "age-key" entry you want injected as WARDYN_AGE_KEY. REQUIRED whenever
+  # postgres.dsn.secretRef.name is set (persistent Postgres) — the chart refuses
+  # to render otherwise, because at the default (false, ephemeral key) the pod
+  # crash-loops on its SECOND restart, unable to decrypt what the first boot
+  # encrypted. Wiring the key through env/extraEnv counts too, and
+  # allowEphemeralAgeKey below is the deliberate opt-out. See README
+  # "Database (DSN)".
   ageKeyFromSecret: false
+  # Render an external-DSN install with an EPHEMERAL age identity anyway. The
+  # combination above is refused by templates/secret.yaml because it is not a
+  # trade-off, it is a scheduled outage: the pod crash-loops on its second start
+  # and the secrets the first boot wrote are unrecoverable. Same "I accept the
+  # ceiling" escape hatch as allowMultiReplica — for a throwaway install where
+  # losing every stored secret on restart is genuinely fine.
+  allowEphemeralAgeKey: false
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
@@ -182,6 +212,35 @@ ssh:
   # (WARDYN_SSH_ADVERTISE, combined with `port` above). Required when
   # enabled — the chart never guesses a public address.
   advertiseHost: ""
+
+# UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
+# relay from a browser to ONE policy-declared loopback port inside a run's
+# sandbox, e.g. a code editor). Off by default; enabled it is a CONDITIONAL
+# third port on the same Service/Deployment, driving
+# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE.
+#
+# `port` MUST differ from service.port: what the gateway serves is the
+# SANDBOX's own pages, and the separate browser origin is the only thing
+# keeping that code away from the console's session (the chart refuses to
+# render, and wardynd refuses to boot, when the two are equal). Terminating both ports on one hostname
+# defeats the same control — give the gateway its own host, and a certificate
+# that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
+uiSandbox:
+  enabled: false
+  port: 8081
+  # Externally-reachable BASE URL of the gateway, e.g.
+  # "https://wardyn-ui.example.com" (WARDYN_UI_SANDBOX_ADVERTISE) — published
+  # on /healthz for the console's Open button. Required when enabled: the
+  # chart never guesses a public address, and the raw in-cluster bind is
+  # wrong for every real deployment.
+  advertiseURL: ""
+  # OPTIONAL per-run origin, e.g. "https://run-{run}.ui.example.com"
+  # (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) — needs wildcard DNS and a wildcard
+  # certificate, and MUST contain {run} (boot refuses it otherwise). Set, each
+  # run's apps get their own browser origin; unset, every run shares one
+  # origin separated only by a path-scoped cookie — a published residual
+  # (threatmodel/THREAT-MODEL.md §5 #18), not a detail.
+  originTemplate: ""
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 networkPolicy:

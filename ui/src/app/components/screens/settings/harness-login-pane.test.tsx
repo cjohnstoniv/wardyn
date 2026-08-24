@@ -7,7 +7,7 @@ import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { extractSetupToken, extractAuthUrl, isLikelyStartUrl, HarnessLoginPane } from "./harness-login-pane";
+import { extractSetupToken, extractAuthUrl, isLikelyStartUrl, HarnessLoginPane, loginFlow } from "./harness-login-pane";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -87,6 +87,17 @@ describe("isLikelyStartUrl", () => {
     expect(isLikelyStartUrl("http://my-org.awsapps.com/start")).toBe(false);
     // A newline would smuggle extra keys into the generated ~/.aws/config INI.
     expect(isLikelyStartUrl("https://\nsso_region = x")).toBe(false);
+  });
+});
+
+// W12-W12-C-6 + W5-S1-7: the "done" phase's success line used to be a hardcoded
+// "your Claude subscription is connected" regardless of provider, so an AWS SSO
+// capture ended with the same Anthropic-only claim. doneLabel is per-provider.
+describe("loginFlow doneLabel", () => {
+  it("names the provider actually connected, not always Claude", () => {
+    expect(loginFlow("anthropic").doneLabel).toMatch(/claude subscription/i);
+    expect(loginFlow("aws").doneLabel).toMatch(/aws sso/i);
+    expect(loginFlow("aws").doneLabel).not.toMatch(/claude subscription/i);
   });
 });
 

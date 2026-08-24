@@ -7,12 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -217,5 +220,73 @@ func TestObservedEgress(t *testing.T) {
 	}
 	if got.RunsExamined != 1 {
 		t.Errorf("runs_examined = %d, want 1 (only the run using this workspace)", got.RunsExamined)
+	}
+}
+
+// W25-S1-2: the observed-egress route is member-reachable, and every host it
+// returns is another run's audit-trail telemetry. A member must see only the
+// runs they created — the same owner-or-admin line /runs/{id} draws — while an
+// admin still sees the whole workspace's telemetry for the promote flow.
+func TestObservedEgress_MemberSeesOnlyOwnRuns(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	mine, theirs := uuid.New(), uuid.New()
+	fake := &observedEgressStore{
+		ws: types.Workspace{
+			ID: wsID, Name: "shared",
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/shared", Target: "/home/agent/work"}},
+			Status:  types.WorkspaceScanned,
+		},
+		runs: []types.AgentRun{
+			{ID: mine, WorkspacePath: "/srv/shared", CreatedBy: "sub-bob"},
+			{ID: theirs, WorkspacePath: "/srv/shared", CreatedBy: "sub-alice"},
+		},
+		events: map[uuid.UUID][]types.AuditEvent{
+			mine:   {{Action: "egress.deny", Target: "bobs-host.example.com"}},
+			theirs: {{Action: "egress.deny", Target: "alices-host.example.com"}},
+		},
+	}
+	srv := New(baseTestConfig(h, fake))
+
+	call := func(ctxMod func(context.Context) context.Context) (denied []string, examined int) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+wsID.String()+"/observed-egress", nil)
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", wsID.String())
+		ctx := context.WithValue(r.Context(), chi.RouteCtxKey, rctx)
+		if ctxMod != nil {
+			ctx = ctxMod(ctx)
+		}
+		w := httptest.NewRecorder()
+		srv.handleObservedEgress(w, r.WithContext(ctx))
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var got struct {
+			Denied       []string `json:"denied"`
+			RunsExamined int      `json:"runs_examined"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Denied, got.RunsExamined
+	}
+
+	denied, examined := call(func(ctx context.Context) context.Context {
+		return withOIDCRole(withOIDCHuman(ctx, "sub-bob"), oidc.RoleMember)
+	})
+	if strings.Join(denied, ",") != "bobs-host.example.com" {
+		t.Errorf("member denied = %v, want only their own run's host", denied)
+	}
+	if examined != 1 {
+		t.Errorf("member runs_examined = %d, want 1", examined)
+	}
+
+	denied, examined = call(nil) // no OIDC session on ctx == operator
+	if strings.Join(denied, ",") != "alices-host.example.com,bobs-host.example.com" {
+		t.Errorf("admin denied = %v, want both runs' hosts", denied)
+	}
+	if examined != 2 {
+		t.Errorf("admin runs_examined = %d, want 2", examined)
 	}
 }

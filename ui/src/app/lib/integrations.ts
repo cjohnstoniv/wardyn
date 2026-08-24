@@ -132,7 +132,7 @@ export const T = {
   WRITE_ONLY: "The store is write-only: the value can't be read back.",
   MANAGED_LINE: "One login in a sandbox; the token is injected proxy-side and the sandbox holds only an inert sentinel.",
   HOSTCLI_LINE: "Uses the ~/.claude login on this host, mounted read-only into the run.",
-  VIEWER_HINT: "Operator role required",
+  VIEWER_HINT: "Admin role required",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
   TY_OPENAI: "Drives Codex CLI, direct API calls, and Wardyn's features.",
   // "Agent in the box" Getting-Started step (v0.5 local/design-prompts-v0.5/

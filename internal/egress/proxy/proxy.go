@@ -340,13 +340,20 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting
 // the port to 80 for plain HTTP / 443 for CONNECT when absent.
+//
+// It strips ALL trailing dots from the host (TrimRight, not a single
+// TrimSuffix). A single TrimSuffix left "evil.com..:443" as host "evil.com.",
+// which every downstream consumer then one-dot-trimmed to "evil.com." — missing
+// a dot-free deny key "evil.com" while VetHost still resolved+dialed it (an
+// explicit-deny bypass under allow_all_egress). This is the single funnel every
+// request host flows through, so normalizing it here reduces every FQDN-root
+// spelling to the canonical dot-free host for all downstream matching.
 func splitHostPort(hostport string, defaultPort int) (host string, port int) {
-	hostport = strings.TrimSuffix(hostport, ".")
 	if h, ps, err := net.SplitHostPort(hostport); err == nil {
 		port, _ = strconv.Atoi(ps)
-		return strings.ToLower(h), port
+		return strings.ToLower(strings.TrimRight(h, ".")), port
 	}
-	return strings.ToLower(hostport), defaultPort
+	return strings.ToLower(strings.TrimRight(hostport, ".")), defaultPort
 }
 
 // evaluate runs the full decision pipeline for a request, emitting the
@@ -533,12 +540,14 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalDenied, host)
 		http.Error(w, "egress denied by policy", http.StatusForbidden)
 		return
 	case egress.Pending:
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
 		return
 	}
@@ -621,12 +630,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalDenied, host)
 		http.Error(w, "egress denied by policy", http.StatusForbidden)
 		return
 	case egress.Pending:
 		if log != nil {
 			p.sink.emit(*log)
 		}
+		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
 		return
 	}
@@ -897,7 +908,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), 0, 0)
+	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
+		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	p := newProxy(Options{
 		RunID:           cfg.RunID,

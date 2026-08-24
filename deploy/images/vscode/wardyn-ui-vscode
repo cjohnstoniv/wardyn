@@ -1,0 +1,24 @@
+#!/bin/sh
+# wardyn-ui-vscode: the UI-sandbox launcher for the "vscode" app
+# (deploy/images/README.md "Adding a new agent image" §BYOI launcher
+# convention; internal/api/uigateway.go's uiLauncherScript).
+#
+# Invocation contract: exec'd with NO args and no tty, backgrounded by the
+# caller (`"$b" >/dev/null 2>&1 </dev/null &`) — this script must therefore
+# run code-server in the FOREGROUND and just listen; it is reparented to the
+# sandbox's PID 1 and dies with the sandbox, same as every other relayed app.
+# The one exception is `--help`, kept only so the image can be sanity-checked
+# from outside a run (`docker run --rm --entrypoint … --help`).
+set -eu
+
+if [ "${1:-}" = "--help" ]; then
+	echo "wardyn-ui-vscode: launches code-server on 127.0.0.1:8080 (loopback-only, no auth)"
+	exit 0
+fi
+
+exec /usr/local/lib/code-server/bin/code-server \
+	--auth none \
+	--bind-addr 127.0.0.1:8080 \
+	--disable-telemetry \
+	--disable-update-check \
+	"$HOME/work"

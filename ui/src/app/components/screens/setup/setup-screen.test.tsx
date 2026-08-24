@@ -215,7 +215,16 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // proves the lazily-loaded detail body mounts (its setup section).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
-    expect(await screen.findByText(/set up a sandbox like this yourself/i)).toBeInTheDocument();
+    // 10s, not RTL's 1000ms default: this is the ONE find in the walk that waits
+    // on the React.lazy(() => import("./demos-step")) boundary (setup-screen.tsx),
+    // and that chunk drags in demo-screen/xterm. Vite transforms it on first
+    // demand — ~200ms alone, but deterministically past a second when all 79 test
+    // files transform in parallel. The suite's own 20s budget above does not
+    // cover this: findBy* carries its own timeout. Only the first crossing pays
+    // it; the four demo sub-steps below reuse the loaded chunk.
+    expect(
+      await screen.findByText(/set up a sandbox like this yourself/i, undefined, { timeout: 10_000 }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /fail, then approve/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next:/i }));

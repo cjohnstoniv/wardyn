@@ -43,7 +43,7 @@ export function compactEndpoint(raw: string, maxLen = 48): string {
   return host + path.slice(0, headLen) + "…" + path.slice(path.length - tailLen);
 }
 
-export function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
+function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
   if (state === "reached") return <Chip tone="success" dot>Reached</Chip>;
   if (state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
   return <Chip tone="warning" dot>{state === "bypass" ? "Redirect not enforced" : "Blocked"}</Chip>;

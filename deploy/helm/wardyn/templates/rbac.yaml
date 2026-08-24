@@ -33,6 +33,9 @@ Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
 (Classes(), resolveRuntimeClassName()).
 */}}
 {{- if .Values.k8s.enabled -}}
+{{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
+{{- fail "wardyn: k8s.enabled is set with serviceAccount.create=false and no serviceAccount.name — the RoleBinding/ClusterRoleBinding below would bind the k8s-runner privileges (pods/exec, secrets create/delete, networkpolicies create/delete) to the namespace's default ServiceAccount, handing them to every OTHER pod in the namespace that also uses it. Either leave serviceAccount.create=true (the default, a dedicated ServiceAccount), or set serviceAccount.name to an existing ServiceAccount you intend to grant these privileges to." -}}
+{{- end -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

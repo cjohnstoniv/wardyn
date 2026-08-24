@@ -55,6 +55,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
+    "permissions_posture",
     "runner",
     "scm_provider",
     "site_config"

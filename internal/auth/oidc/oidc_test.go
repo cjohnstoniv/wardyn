@@ -8,10 +8,12 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -339,6 +341,303 @@ func TestFullCodeFlow(t *testing.T) {
 
 	if capturedPrincipal != "sub-user" {
 		t.Errorf("principal from session = %q, want %q", capturedPrincipal, "sub-user")
+	}
+}
+
+// newAuthWithTokenServer is newAuth, but routes token exchange at a
+// caller-supplied server instead of env's own fixed tokenSrv — lets D12's
+// retry tests control the token endpoint's failure/success sequence per test.
+func (e *idpEnv) newAuthWithTokenServer(t *testing.T, tokenSrv *httptest.Server) *writoidc.Authenticator {
+	t.Helper()
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: e.httpSrv.URL + "/token",
+		replacedToken: tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	cfg := writoidc.Config{
+		IssuerURL:    e.httpSrv.URL,
+		ClientID:     e.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+	}
+	auth, err := writoidc.New(ctx, cfg, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+	return auth
+}
+
+// doCallbackFlow drives LoginHandler → CallbackHandler against auth/env and
+// returns the callback response — the shared rig for D12's retry tests, which
+// only differ in what the token endpoint does.
+func doCallbackFlow(t *testing.T, env *idpEnv, auth *writoidc.Authenticator) *httptest.ResponseRecorder {
+	t.Helper()
+	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
+	loginW := httptest.NewRecorder()
+	auth.LoginHandler(loginW, loginReq)
+	cookies := cookieMap(loginW.Result().Cookies())
+	stateVal := cookies["wardyn_oidc_state"].Value
+	nonceVal := cookies["wardyn_oidc_nonce"].Value
+	pkceVal := cookies["wardyn_oidc_pkce"].Value
+
+	env.buildIDToken(t, "sub-retry", "retry@example.com", nonceVal, time.Now().Add(time.Hour))
+
+	cbReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: pkceVal})
+	cbW := httptest.NewRecorder()
+	auth.CallbackHandler(cbW, cbReq)
+	return cbW
+}
+
+// ─── TestCallbackHandlerRetriesTransientTokenEndpointError (D12) ─────────────
+//
+// The token endpoint 503s twice, then succeeds — retryExchange must ride out
+// the blip and finish the login rather than hard-failing on the first 503.
+
+func TestCallbackHandlerRetriesTransientTokenEndpointError(t *testing.T) {
+	env := newIdPEnv(t)
+
+	var calls int32
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "at", "token_type": "Bearer", "expires_in": 3600,
+			"id_token": env.latestIDTok,
+		})
+	}))
+	t.Cleanup(tokenSrv.Close)
+
+	cbW := doCallbackFlow(t, env, env.newAuthWithTokenServer(t, tokenSrv))
+
+	if cbW.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (the 3rd attempt should have succeeded); body=%s", cbW.Code, cbW.Body.String())
+	}
+	if loc := cbW.Result().Header.Get("Location"); strings.Contains(loc, "auth_error") {
+		t.Errorf("redirected with an error after the retry succeeded: %s", loc)
+	}
+	// 3: attempt 1 costs 2 raw hits (fails, so x/oauth2 probes both
+	// client-auth styles — see the exhausted-transient test below), attempt 2
+	// succeeds on its first raw hit (no probe once a call succeeds).
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("token endpoint hit %d times, want 3 (attempt 1: 2 failing probe hits, attempt 2: 1 succeeding hit)", got)
+	}
+}
+
+// ─── TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient (D12) ────
+//
+// The token endpoint 503s on every attempt — retryExchange gives up after
+// tokenExchangeRetries and the callback must redirect with the TRANSIENT
+// code, not the generic/config one, so the sign-in screen tells the user to
+// just try again rather than blaming the deployment's OIDC config.
+
+func TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient(t *testing.T) {
+	env := newIdPEnv(t)
+
+	var calls int32
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(tokenSrv.Close)
+
+	cbW := doCallbackFlow(t, env, env.newAuthWithTokenServer(t, tokenSrv))
+
+	if cbW.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (a user-actionable redirect, not a bare error page); body=%s", cbW.Code, cbW.Body.String())
+	}
+	loc := cbW.Result().Header.Get("Location")
+	if !strings.Contains(loc, "auth_error=oidc_transient") {
+		t.Errorf("redirect = %q, want it to carry auth_error=oidc_transient", loc)
+	}
+	// 6, not 3: golang.org/x/oauth2 itself probes BOTH client-auth styles
+	// (header then params) whenever a token-endpoint call errors and the
+	// style hasn't been learned yet — each of retryExchange's 3 attempts
+	// therefore costs 2 raw HTTP hits while every one of them is failing.
+	// The number that actually matters for "bounded" is the attempt count
+	// (tokenExchangeRetries=3), which the transient-redirect assertion above
+	// already pins; this just confirms retryExchange stopped at exactly 3
+	// attempts rather than looping forever.
+	if got := atomic.LoadInt32(&calls); got != 6 {
+		t.Errorf("token endpoint hit %d times, want 6 (tokenExchangeRetries=3 attempts x 2 auth-style probe requests each)", got)
+	}
+}
+
+// ─── TestCallbackHandlerPermanentTokenErrorNotRetried (D12) ──────────────────
+//
+// invalid_grant (or any other 4xx) is the IdP actively rejecting the request
+// — the authorization code is single-use, so retrying it can only ever
+// confuse a clear error into a worse one. Must fail on the FIRST attempt and
+// redirect with the CONFIG code, not the transient one.
+
+func TestCallbackHandlerPermanentTokenErrorNotRetried(t *testing.T) {
+	env := newIdPEnv(t)
+
+	var calls int32
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+	}))
+	t.Cleanup(tokenSrv.Close)
+
+	cbW := doCallbackFlow(t, env, env.newAuthWithTokenServer(t, tokenSrv))
+
+	if cbW.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body=%s", cbW.Code, cbW.Body.String())
+	}
+	loc := cbW.Result().Header.Get("Location")
+	if !strings.Contains(loc, "auth_error=oidc_config") {
+		t.Errorf("redirect = %q, want it to carry auth_error=oidc_config", loc)
+	}
+	// 2, not 1: golang.org/x/oauth2's own client-auth-style probe (see the
+	// comment in the exhausted-transient test above) costs 2 raw hits for
+	// this SINGLE retryExchange attempt. What this proves is retryExchange
+	// itself never re-attempts a permanent error: if it had, this would be a
+	// multiple of 2 greater than 2 (4, 6, ...).
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("token endpoint hit %d times, want 2 (1 retryExchange attempt x 2 auth-style probe requests, i.e. no retry of the permanent error)", got)
+	}
+}
+
+// ─── D16: Middleware session-revocation check ─────────────────────────────────
+
+// fakeSessionRevocations is an in-memory writoidc.SessionRevocations double
+// for Middleware's revocation-check tests: it always answers `revoked`/`err`
+// regardless of sub/issuedAt (per-sub vs global cutoff logic is the pg
+// adapter's job in cmd/wardynd, not oidc's — Middleware only needs to know
+// SOMETHING said yes or no).
+type fakeSessionRevocations struct {
+	revoked bool
+	err     error
+	calls   int32
+}
+
+func (f *fakeSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+	atomic.AddInt32(&f.calls, 1)
+	return f.revoked, f.err
+}
+func (f *fakeSessionRevocations) RevokeSub(context.Context, string) error { return nil }
+func (f *fakeSessionRevocations) RevokeAll(context.Context) error         { return nil }
+
+// runMiddleware builds a request carrying cookie, drives it through
+// auth.Middleware, and reports whether a principal reached next.
+func runMiddleware(auth *writoidc.Authenticator, cookie *http.Cookie) (principalSet bool, code int) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writoidc.PrincipalFromContext(r.Context()) != "" {
+			principalSet = true
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	auth.Middleware(next).ServeHTTP(w, r)
+	return principalSet, w.Code
+}
+
+func TestMiddlewareRevokedSessionDenied(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+	fake := &fakeSessionRevocations{revoked: true}
+	writoidc.SetRevocationsForTest(auth, fake)
+
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "sub-revoked", Email: "revoked@example.com", Role: writoidc.RoleAdmin,
+		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	principalSet, code := runMiddleware(auth, cookie)
+	if principalSet {
+		t.Error("a revoked session must not authenticate")
+	}
+	if code != http.StatusOK {
+		t.Errorf("status = %d, want %d (falls through, never a 500)", code, http.StatusOK)
+	}
+	if atomic.LoadInt32(&fake.calls) != 1 {
+		t.Errorf("IsSessionRevoked called %d times, want 1", fake.calls)
+	}
+}
+
+func TestMiddlewareNotRevokedSessionAllowed(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+	writoidc.SetRevocationsForTest(auth, &fakeSessionRevocations{revoked: false})
+
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "sub-fine", Email: "fine@example.com", Role: writoidc.RoleAdmin,
+		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	principalSet, code := runMiddleware(auth, cookie)
+	if !principalSet {
+		t.Error("a session the revocation store says is fine must authenticate")
+	}
+	if code != http.StatusOK {
+		t.Errorf("status = %d, want %d", code, http.StatusOK)
+	}
+}
+
+// TestMiddlewareRevocationStoreErrorFailsClosed: a store error on a
+// security gate checked on every authenticated request must never be
+// indistinguishable from "not revoked".
+func TestMiddlewareRevocationStoreErrorFailsClosed(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+	writoidc.SetRevocationsForTest(auth, &fakeSessionRevocations{err: errors.New("pg: connection refused")})
+
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "sub-db-down", Email: "dbdown@example.com", Role: writoidc.RoleAdmin,
+		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	principalSet, code := runMiddleware(auth, cookie)
+	if principalSet {
+		t.Error("a revocation-store error must fail CLOSED (no principal), not open")
+	}
+	if code != http.StatusOK {
+		t.Errorf("status = %d, want %d (falls through, never a 500)", code, http.StatusOK)
+	}
+}
+
+// TestMiddlewareNilRevocationsUnsetChangesNothing pins the additive-config
+// invariant every other optional Config field follows: leaving Revocations
+// nil (an OIDC deployment that hasn't wired D16's store) must behave exactly
+// like before D16 existed.
+func TestMiddlewareNilRevocationsUnsetChangesNothing(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil) // Revocations left nil
+
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "sub-no-store", Email: "nostore@example.com", Role: writoidc.RoleAdmin,
+		Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	principalSet, code := runMiddleware(auth, cookie)
+	if !principalSet {
+		t.Error("with no revocation store wired, a valid session must authenticate as before D16")
+	}
+	if code != http.StatusOK {
+		t.Errorf("status = %d, want %d", code, http.StatusOK)
 	}
 }
 
@@ -752,6 +1051,12 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 		if p := writoidc.PrincipalFromContext(r.Context()); p != "" {
 			t.Errorf("unexpected principal %q on context without session", p)
 		}
+		// No cookie was presented at all — the ordinary non-browser-client
+		// case — so this must NOT be flagged as a rejected session (that
+		// would make auth.failed fire on every plain bearer-token request).
+		if reason := writoidc.SessionRejectedFromContext(r.Context()); reason != "" {
+			t.Errorf("SessionRejectedFromContext = %q, want \"\" (no cookie presented)", reason)
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -774,10 +1079,12 @@ func TestExpiredSessionRejected(t *testing.T) {
 	expired := buildSession(t, auth, "sub-bob", "bob@example.com", writoidc.RoleAdmin, time.Now().Add(-time.Second))
 
 	var principalSet bool
+	var rejectedReason string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if writoidc.PrincipalFromContext(r.Context()) != "" {
 			principalSet = true
 		}
+		rejectedReason = writoidc.SessionRejectedFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -788,6 +1095,11 @@ func TestExpiredSessionRejected(t *testing.T) {
 
 	if principalSet {
 		t.Error("expired session should not set a principal")
+	}
+	// #19a: an expired session must surface as an audit-visible reason (the
+	// "dropped" cookie case) rather than falling through silently.
+	if rejectedReason != "expired_session" {
+		t.Errorf("SessionRejectedFromContext = %q, want %q", rejectedReason, "expired_session")
 	}
 	// The stale cookie should be cleared (MaxAge=-1).
 	resp := w.Result()
@@ -816,10 +1128,12 @@ func TestTamperedCookieRejected(t *testing.T) {
 	valid.Value = parts[0] + "." + string(sig)
 
 	var principalSet bool
+	var rejectedReason string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if writoidc.PrincipalFromContext(r.Context()) != "" {
 			principalSet = true
 		}
+		rejectedReason = writoidc.SessionRejectedFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -830,6 +1144,10 @@ func TestTamperedCookieRejected(t *testing.T) {
 
 	if principalSet {
 		t.Error("tampered cookie should not set a principal")
+	}
+	// #19a: a tampered cookie must surface as an audit-visible reason.
+	if rejectedReason != "invalid_session" {
+		t.Errorf("SessionRejectedFromContext = %q, want %q", rejectedReason, "invalid_session")
 	}
 }
 
@@ -1108,9 +1426,10 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 	var got writoidc.Session
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got = writoidc.Session{
-			Sub:   writoidc.PrincipalFromContext(r.Context()),
-			Email: writoidc.EmailFromContext(r.Context()),
-			Role:  writoidc.RoleFromContext(r.Context()),
+			Sub:    writoidc.PrincipalFromContext(r.Context()),
+			Email:  writoidc.EmailFromContext(r.Context()),
+			Role:   writoidc.RoleFromContext(r.Context()),
+			Groups: writoidc.GroupsFromContext(r.Context()),
 		}
 	})
 	checkReq := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -1207,3 +1526,163 @@ func TestRewriteTransport(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
+// callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string)) *writoidc.Authenticator {
+	t.Helper()
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: e.httpSrv.URL + "/token",
+		replacedToken: e.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	cfg := writoidc.Config{
+		IssuerURL:    e.httpSrv.URL,
+		ClientID:     e.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+		OnLogin:      onLogin,
+	}
+	auth, err := writoidc.New(ctx, cfg, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+	return auth
+}
+
+// ─── TestCallbackInvokesOnLoginWithSubAndRole ─────────────────────────────────
+//
+// Migration 0046's refresh hook: a successful login must call Config.OnLogin
+// exactly once, with the ID token's sub and the role CallbackHandler just
+// derived — the two values internal/api's wiring (cmd/wardynd/boot_deps.go)
+// needs to call store.RefreshSSHKeyRoles. A DENIED login (no role derivable)
+// must never call it — internal/api/sshkeys_test.go and
+// internal/api/sshgateway_test.go already cover nil (the zero value: every
+// existing TestFullCodeFlow-shaped test runs with no OnLogin set at all, and
+// passes) being a safe no-op.
+
+func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
+	env := newIdPEnv(t)
+	var gotCtx context.Context
+	var gotSub, gotRole string
+	calls := 0
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string) {
+		calls++
+		gotCtx, gotSub, gotRole = ctx, sub, role
+	})
+
+	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
+	loginW := httptest.NewRecorder()
+	auth.LoginHandler(loginW, loginReq)
+	cookies := cookieMap(loginW.Result().Cookies())
+	stateVal, nonceVal, pkceVal := cookies["wardyn_oidc_state"].Value, cookies["wardyn_oidc_nonce"].Value, cookies["wardyn_oidc_pkce"].Value
+
+	env.buildIDToken(t, "sub-onlogin", "onlogin@example.com", nonceVal, time.Now().Add(time.Hour))
+
+	cbReq := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	cbReq.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: pkceVal})
+	cbW := httptest.NewRecorder()
+	auth.CallbackHandler(cbW, cbReq)
+
+	if cbW.Code != http.StatusFound {
+		t.Fatalf("CallbackHandler status = %d, want 302; body: %s", cbW.Code, cbW.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("OnLogin called %d times, want exactly 1", calls)
+	}
+	if gotCtx == nil {
+		t.Error("OnLogin ctx = nil")
+	}
+	if gotSub != "sub-onlogin" {
+		t.Errorf("OnLogin sub = %q, want %q", gotSub, "sub-onlogin")
+	}
+	// No RoleMap configured: deriveRole's unset-map default is RoleAdmin (see
+	// TestCallbackRoleMapUnsetDefaultsAdmin) — that IS the role this login
+	// derived, so OnLogin must have received exactly that, not a hardcoded
+	// or empty value.
+	if gotRole != writoidc.RoleAdmin {
+		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
+	}
+}
+
+// TestCallbackDeniedLoginNeverInvokesOnLogin: a role-map miss with no
+// DefaultRole denies the login (see TestCallbackRoleNoMatchNoDefaultDenied) —
+// OnLogin must not fire for a login that never actually happened.
+func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
+	env := newIdPEnv(t)
+	calls := 0
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: env.httpSrv.URL + "/token",
+		replacedToken: env.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	auth, err := writoidc.New(ctx, writoidc.Config{
+		IssuerURL:    env.httpSrv.URL,
+		ClientID:     env.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
+		OnLogin:      func(context.Context, string, string) { calls++ },
+	}, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+
+	const stateVal, nonceVal = "state-denied", "nonce-denied"
+	env.buildIDToken(t, "sub-denied", "denied@example.com", nonceVal, time.Now().Add(time.Hour))
+	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=code", nil)
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: "verifier"})
+	w := httptest.NewRecorder()
+	auth.CallbackHandler(w, r)
+
+	if calls != 0 {
+		t.Errorf("OnLogin called %d times for a denied login, want 0", calls)
+	}
+}
+
+// #19a x D16: the two Middleware revocation branches must surface an
+// audit-visible reason, exactly like the expired/invalid cookie branches.
+func TestMiddlewareRevocationBranchesSurfaceReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fake   *fakeSessionRevocations
+		reason string
+	}{
+		{"revoked", &fakeSessionRevocations{revoked: true}, "revoked_session"},
+		{"store error fails closed", &fakeSessionRevocations{err: errors.New("pg down")}, "session_revocation_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			auth := env.newAuth(t, nil)
+			writoidc.SetRevocationsForTest(auth, tc.fake)
+			cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+				Sub: "sub-x", Email: "x@example.com", Role: writoidc.RoleAdmin,
+				Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("EncodeSessionForTest: %v", err)
+			}
+			var principalSet bool
+			var got string
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				principalSet = writoidc.PrincipalFromContext(r.Context()) != ""
+				got = writoidc.SessionRejectedFromContext(r.Context())
+			})
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.AddCookie(cookie)
+			auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+			if principalSet {
+				t.Error("must not authenticate")
+			}
+			if got != tc.reason {
+				t.Errorf("SessionRejectedFromContext = %q, want %q", got, tc.reason)
+			}
+		})
+	}
+}

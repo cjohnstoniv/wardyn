@@ -17,7 +17,8 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.3** | CI mode (BYOA): headless pipeline launches with no pre-running control plane — `wardyn run --wait` (outcome exit codes), `--image` (bring-your-own container, wrapped + governed), `task_mode: exec` (plain commands, no agent/LLM), one-shot `scripts/ci-run.sh`, GitHub Actions / Azure DevOps examples ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
 | **v0.3.1** | Repo-scoped git egress via the proxy-side git-broker (`/wardyn/gh/<org>/<repo>`; `github.com` leaves the allowlist), Getting Started demos, container login for a Claude subscription (`claude setup-token` captured in a sandbox), paginated list endpoints (`limit`/`offset` + `X-Wardyn-Truncated`), SDK route-family coverage, mobile console navigation, [docs/ENV.md](docs/ENV.md) | **Shipped (pre-alpha)** |
 | **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes (below) | **Shipped (pre-alpha)** |
-| **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Unreleased (pre-alpha)** — code-complete and CI-green on this branch; not yet merged to main or tagged (0.4.5 is the last version with a written CHANGELOG entry, itself still untagged — see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Unreleased (pre-alpha)** — code-complete on `prep/v0.6`; not yet merged to main or tagged. The daemon-free merge gate (`make ci`) is green on this branch — all 22 targets, verified end to end 2026-08-20, gitleaks' full-history scan included; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host, so they are a pre-existing lane defect, not a 0.6 regression |
 
 ### What v0.4 shipped
 
@@ -104,8 +105,9 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   attaches to — exec, sftp, and `-L` port forwarding (destination restricted
   to the sandbox's own loopback), each with its own audit action
   (`ssh.exec`/`ssh.sftp`/`ssh.forward`) and the shell path recorded exactly
-  like the browser terminal. Registered-public-key auth only, owner-only
-  authorization (no operator override yet — see "Named gaps" below). Off by
+  like the browser terminal. Registered-public-key auth only, and owner-only
+  authorization *at the time* — v0.6 added an admin override (see "What v0.6
+  shipped" below, and "Named gaps" for the ceiling it carries). Off by
   default (`WARDYN_SSH_LISTEN` unset = no listener, no host key even
   generated). See [docs/SSH.md](docs/SSH.md).
 - **Authorization/RBAC + owner scoping.** Real `admin`/`member` roles, derived
@@ -133,22 +135,190 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   downloadable workflow artifact (deliberately not auto-attached to the
   GitHub Release — attach it by hand if wanted). linux/amd64 only today.
 
+### What v0.6 shipped
+
+- **Permissioning: capability grants for a user, a group, or everyone.** RBAC
+  grows past admin/member. An admin grants — or denies — one member, one IdP
+  group (the union of the ID token's `roles` and `groups` claims, so Entra App
+  Roles work as-is), or every signed-in human a capability on one of four kinds:
+  `egress_host` (which hosts they may decide an `egress_domain` approval for,
+  and which survive on their own `inline_policy`), `secret` (which stored
+  secrets that policy may reference, and which names `GET /secrets` lists back),
+  `workspace` (which onboarded workspace they may launch against), and `image`
+  (which custom sandbox image they may name at all — the one kind that *widens*
+  what a member can do; `devcontainer_repo` stays unconditionally admin-only,
+  because it executes attacker-authored build configuration, which is not a
+  thing to hand out one row at a time). Rows live in `capability_grants` with a
+  per-kind switch in `capability_enforcement` (migration `0042`), managed
+  through `GET /permissions`, `POST /permissions/grants`, `DELETE
+  /permissions/grants/{id}` and `PUT /permissions/enforcement` (all admin-only),
+  with `GET /me/capabilities` as the member-safe read of the caller's own
+  effective set. Resolution is **deny beats allow beats the per-kind enforcement
+  switch** (`capAllowed`, `internal/api/capabilities.go`) — deny sits above the
+  switch deliberately, so a deny row bites on a kind nobody has enforced yet —
+  with admins, the admin token, and local mode exempt, and no cache (a new grant
+  applies on the next request). **Every switch ships off**: a deployment
+  upgraded from 0.5 with no rows written behaves exactly as it did, which is
+  what makes this adoptable one kind at a time. The doctrine — *a capability
+  bounds what the MEMBER chose, never what the ADMIN pre-authorized* — is why a
+  stored policy, a workspace's requirements, scan-seeded hosts, and the model
+  provider's own egress are never narrowed. See
+  [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Capabilities: what one member, or
+  one group, may do".
+- **Kubernetes became the base deployment story, not just a second substrate.**
+  `make kind-quickstart` ([`deploy/kind/quickstart.sh`](deploy/kind/quickstart.sh))
+  goes from a bare host to a real cluster install in one command — image build,
+  a throwaway kind cluster on a NetworkPolicy-enforcing CNI, a Helm install with
+  the k8s runner on — and prints the URL and admin token it just minted;
+  `make kind-down` takes it away again. The front door now documents both lanes
+  side by side: Compose via `make setup`, Kubernetes via the chart, whose
+  quickstart sits above the full install walkthrough
+  ([`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)). Day-2
+  operations are written from commands actually run against a live cluster
+  ([docs/OPERATIONS.md](docs/OPERATIONS.md)). The install also gained the pieces
+  a real deployment needs and 0.5 did not have: a `/readyz` endpoint, so the
+  chart has a genuine readiness probe rather than a liveness check doing double
+  duty (and the probe is pinnable); a `/metrics` that can see a dead store and a
+  backed-up audit spool instead of reporting health it never checked; a refusal
+  of the ephemeral-age-key trap, where a chart-generated age key would strand
+  every stored secret on the next pod restart; an external-DSN install that no
+  longer traps the operator in a crash-loop; and `k8s.enabled` refusing
+  `serviceAccount.create=false` with no name to fall back to.
+- **Terminals beyond the browser.** `wardyn ssh <run-id>` reaches a run over the
+  v0.5 gateway with no attach flag to trip on, and `wardyn ssh --print` emits
+  the raw command for a script or a demo. The lane is proven on the other
+  substrate too — `make test-e2e-ssh-k8s` drives it against kind, not only
+  Compose — and demo **V13 ("your terminal, our cluster")** films it end to end
+  against the `kind-quickstart` cluster, graded against that install's own audit
+  trail rather than an exit code. That beat and its grader are wired and were
+  exercised on a live cluster once; the take itself is a release-cut act and is
+  not published yet ([docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md)).
+  The gateway also gained an **admin override**: a registered key now carries
+  the role it was registered under (`role` column, migration
+  `0043_ssh_key_role.sql`) and `sshAuth` authorizes `run.CreatedBy == the key's
+  principal` **OR** `key.Role == admin`, with every override audited distinctly
+  (`ssh.auth` success carries `override:true`). It is honestly weaker than the
+  web terminal's live `requireOperator` gate — the role is a registration-time
+  stamp, never re-read — and that ceiling is a named gap below, not an
+  assumption quietly made. See [docs/SSH.md](docs/SSH.md).
+- **UI sandboxes: a governed relay from the browser to one declared port inside
+  a run.** A policy may declare `ui_apps` — a name, a loopback port and a path,
+  operator-authored, never a command string — and `wardynd` relays exactly those
+  ports over the **same exec lane** (`socat` on `Runner.ExecStream`) the SSH
+  `-L` forward already uses: no pod/container-IP dial, no `NetworkPolicy`
+  change, **no new network path out of the sandbox**. It is off by default and
+  lives on a second listener at a second browser origin
+  (`WARDYN_UI_SANDBOX_LISTEN`); boot refuses an address equal to `-listen`,
+  because what the relay serves is the sandbox's own JavaScript and the separate
+  origin is the whole thing keeping it away from the console's session. Access
+  is a single-use, 30-second, owner-or-admin attach ticket redeemed for a
+  path-scoped `HttpOnly` cookie, and the listener holds no other credential —
+  it never falls through to the console session or the admin bearer.
+  `wardyn/agent-vscode` (`make agent-image-vscode`) is the first app it carries:
+  a pinned, sha256-verified code-server on `127.0.0.1:8080` behind a
+  `/usr/local/bin/wardyn-ui-vscode` launcher, which is the entire BYOI contract
+  — any image can serve a declared app by shipping one. The bound is stated up
+  front, in the product and in [docs/UI-SANDBOXES.md](docs/UI-SANDBOXES.md):
+  **nothing inside a relayed app is recorded** — the audit trail says an app was
+  opened and closed, never what was done in it. Proven by a conformance case
+  that runs the relay's transport identically on both substrates, an
+  HTTP-client e2e lane (`make test-e2e-ui-sandbox`) and a browser e2e lane
+  (`make test-e2e-ui`). A browser desktop (noVNC) is deliberately **deferred**:
+  it is an image variant on this same primitive, not a server change. A general
+  native lane stays **exploratory** — the four candidates are costed in
+  UI-SANDBOXES.md rather than promised, and natively on the user's own machine
+  remains VS Code Remote-SSH over the SSH gateway.
+- **The ground-truth counter fix — the one filed defect that came home.** The
+  demo series had filed a frozen control-plane counter for 0.6: Tetragon
+  exported events, the ingest posted batches, the tally never moved. The root
+  cause was the ingest sidecar's container→run index — built from a `docker ps`
+  snapshot (running containers only) and replaced wholesale on every refresh,
+  while the Tetragon export tails with lag, so a run whose container exited
+  before the tail caught up resolved unmapped, was dropped, and moved no counter
+  at all. The index is now fed by `docker events` (a container is known at
+  CREATE, before its first exec) and merged rather than replaced, with entries
+  outliving their container by 15 minutes so a lagging tail still correlates.
+  `/healthz` and the heartbeat now publish `dropped_unmapped` beside
+  `dropped_total` and `observed_total`, and the idle state names which of its
+  two causes it is, so "the sensor saw nothing" and "the sensor saw plenty and
+  correlated none" stop reading as the same `observed_total: 0`. The three
+  sensor ceilings that investigation measured are now stated where operators
+  read them — including `kernel.network.connect` staying permanently dead on
+  WSL2 + Docker Desktop, which is environmental and measured, not a bug.
+- **Desktop tier: a governed daemon on a managed laptop — the macOS install
+  lane, shipped-half.** What v0.7 was going to build from nothing, 0.6 shipped
+  the first half of: `deploy/desktop/` is a real, documented, machine-checked
+  configuration of the same compose stack every other single-host deployment
+  runs, not a separate build — `WARDYN_LOCAL_MODE`, a per-device `age.key`
+  minted by the installer and never by MDM, and the org's ceiling delivered as
+  an ordinary `policy.json` file ([docs/DESKTOP.md](docs/DESKTOP.md)). The
+  install lane itself — `install.sh`, a launchd `LaunchDaemon`, and the
+  `wardyn-desktop.sh` wrapper it runs — is macOS-only; the Linux/systemd path
+  the topology diagram shows is not built. **Member role: none, by design, on
+  the local-mode variant** — local-mode callers are *always* admins
+  (`Server.requireOperator`), so this tier's default posture has no member/
+  admin split at all, only "the developer is the operator." The envelope's
+  documented SSO variant does carry real OIDC member/admin RBAC (same code
+  path as every other tier), but `wardyn-desktop.sh`'s automatic
+  `site-config apply` only runs under local mode — under SSO it warns and
+  leaves that one step to a human, since the wrapper has no CLI-usable
+  credential once a real login is required. `scripts/test-desktop-profile.sh`
+  (`make test-scripts`) and `ci.yml`'s `desktop-envelope` job (boots the real
+  compose profile and proves `/policies/default`, no-policy resolution and
+  Recording Mode synthesis all honor the managed ceiling) are the honesty
+  gates; a scripted smoke run against a real Mac is the one piece still
+  owed — see [docs/DESKTOP.md](docs/DESKTOP.md) "Try it, once, on a real Mac".
+- **Extras.** The react-router advisory suppression is **deleted**:
+  GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0 — the suppression had
+  been carried on a stale note claiming only the 7 → 8 major fixed it — so the
+  console takes 7.18.2 and `make npm-audit` is green with **nothing** ignored
+  (the major itself stays a named gap below, now on its own merits). A P2 polish
+  slice landed across the CLI, API and console: `wardyn logs`, host/run filters
+  on `approvals list|get`, tier commands that stop exiting 0 when the tier is
+  not enabled, a typo'd site-config key that fails on the host instead of
+  silently deleting the setting, `make reset` naming the corporate baseline it
+  is about to destroy, the default ceiling policy becoming viewable in UI, CLI
+  and API, and a run of console fixes that stop surfaces claiming state they had
+  not checked. A fresh ponytail over-engineering audit ranked 26 cuts and
+  applied the ones a provenance check did not overturn.
+- **What 0.6 deliberately did not ship.** The k8s substrate is still **not** at
+  feature parity with Docker — BYOI/devcontainer builds, `local_dir` mounts,
+  per-pod PIDs/disk enforcement and a k8s ground-truth correlator remain on the
+  v1.0 row, and both [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)
+  and [docs/OPERATIONS.md](docs/OPERATIONS.md) keep the honest, code-checked
+  "Kubernetes: known gaps" list rather than letting the cloud-base framing imply
+  parity. Of the two designed-but-unscheduled candidates from the 0.5 campaign,
+  one stays unscheduled — the sentinel-class PAT lane (proxy-injected git PATs,
+  never resident), which slots into 0.7/0.8 when scheduled, not before — and one
+  is now a named, dated decision rather than an open maybe: **C0, routing an
+  interactive run's tool approvals to the console the way autonomous `hold`
+  runs already do, is DEFERRED to v0.7.** Upstream pins `claude`'s
+  `--permission-prompt-tool` to non-interactive use, and the hook-based
+  alternative fails *open* on a timeout — the wrong default for an approval
+  gate. Self-service value collapses anyway: the human deciding the prompt can
+  already attach to the run and answer it directly, so the console route buys
+  convenience, not a capability that doesn't otherwise exist.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
 implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
 
-v0.6 → v0.8 is the planned path to alpha: cloud base and permissioning (0.6),
-the same governance deployed to developer desktops (0.7), then the alpha RC
-(0.8). Designed-but-unscheduled candidates from the 0.5 campaign — the
-sentinel-class PAT lane (proxy-injected git PATs, never resident) and routing an
-interactive run's tool approvals to the console the way autonomous `hold` runs
-already do — slot into 0.7/0.8 when scheduled, not before.
+v0.7 → v0.8 is the remaining path to alpha: the same governance deployed to
+developer desktops (0.7), then the alpha RC (0.8). The cloud base and
+permissioning 0.6 owed are shipped — see "What v0.6 shipped" above, which now
+includes the desktop tier's macOS install lane; v0.7 is what's left of it
+(Linux/systemd, the enterprise-distribution polish) rather than the whole
+tier from scratch. The sentinel-class PAT lane (proxy-injected git PATs,
+never resident), the one remaining designed-but-unscheduled candidate from
+the 0.5 campaign, slots into 0.7/0.8 when scheduled, not before. **C0**
+(routing an interactive run's tool approvals to the console) is **DEFERRED to
+v0.7** for the reason stated under "What 0.6 deliberately did not ship"
+above — not unscheduled, decided.
 
 | Milestone | Scope |
 |---|---|
-| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** The k8s/Helm deploy matures from "a second substrate" into the base deployment story, and RBAC grows past admin/member into a **permissioning system**: admins grant users and *groups* specific Wardyn capabilities — which egress hosts they may approve or use, which secrets they may reference, which workspace/base images they may launch — the bare minimum an enterprise POC needs. Plus **terminals beyond the browser**: attaching a run in a real local terminal is a first-class, demoed flow — including against the cloud mode, so a developer's own terminal drives a sandbox running in the cluster (the v0.5 SSH gateway is the seam; 0.6 finishes the reach). And **UI sandboxes**: launch GUI apps (VS Code and friends) inside a governed sandbox, viewable in the browser, and natively on the user's machine where the app has a remote protocol (VS Code Remote-SSH works over the gateway today; a general native lane is exploratory). One filed defect comes home too: the ground-truth pipeline's frozen control-plane counter (tetragon exports, the ingest posts, the tally never moves — filed for 0.6 from the demo-series evidence) gets root-caused and fixed |
-| **v0.7** | **Enterprise desktop deployment.** The base for orgs deploying Wardyn *onto developer machines* (MacBooks first) the way enterprise application admins actually ship software — managed distribution and managed configuration per current common practice — with the same permissioning system as the k8s cloud mode, enforced locally: the org decides which egress, secrets, and images a developer's agents may use, the developer runs auto-agents inside that envelope. Wardyn becomes the sanctioned way an org lets its developers run agents at all |
+| **v0.7** | **Enterprise desktop deployment — the rest of it.** 0.6 already shipped the macOS half (`deploy/desktop/`: install lane, launchd, the envelope contract — [docs/DESKTOP.md](docs/DESKTOP.md)). What's left: the Linux/systemd installer the topology diagram already names, packaging/signing for real MDM distribution (a Jamf/Intune-ready payload, not a git checkout), and closing the SSO-variant gap where `wardyn-desktop.sh` can't self-apply `site-config.json` without a human login. **C0** (routing interactive tool approvals to the console) also lands here — see "What 0.6 deliberately did not ship" for why it waited |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · hash-chained audit + signed action receipts · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
@@ -184,25 +354,34 @@ shipped behavior; none is scheduled.
 - **Team mode as a packaged, sealed multi-user product** — as opposed to the
   RBAC that ships IN the control plane today (see
   [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what").
-  Admin/member roles and owner scoping are real and shipped (v0.5); what's still
-  speculative, no design in the tree: SAML/SCIM provisioning, an
+  Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
+  added capability grants over a user, an IdP group, or everyone (see "What
+  v0.6 shipped") — which is authorization detail on top of those two roles, not
+  a tenancy model. What's still speculative, no design in the tree: SAML/SCIM
+  provisioning, an
   organization/tenant structure, per-user API tokens (today's only credentials
   are the shared admin bearer token or an OIDC session — no personal,
   independently-revocable API token a member could hand to a script), and
   CUSTOM roles beyond admin/member. The admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,
   no separation of duty from a real admin user (v1.0's row, above).
-- **The SSH gateway has no admin/operator override.** SSH authorization is a
-  single `run.created_by == the key's registered principal` check — narrower
-  than the web terminal's `requireOperator` gate, which lets an admin attach to
-  ANY run. An admin who needs another human's run over SSH has no path there
-  today; they use the web terminal, same as a member would. The fix is a role
-  column an operator's own registered key could satisfy alongside "owner" —
-  marked with a `ponytail:` comment at the check itself
-  (`internal/api/sshgateway.go`'s `sshAuth`) rather than built, since no
-  deployment has asked for it and the narrower behavior is safe by
-  construction, not merely unfinished (`threatmodel/THREAT-MODEL.md`
-  residual #15).
+- **The SSH gateway's admin override is a bounded-stale stamp, weaker than
+  the web terminal's live check.** `sshAuth` grants an admin's own registered
+  key an override — `run.created_by == principal` OR (`key.role == admin` AND
+  `key.role_checked_at` no older than `WARDYN_SSH_ROLE_TTL`, migrations
+  `0043_ssh_key_role.sql` and `0046_ssh_key_role_checked_at.sql`). The stamp
+  is no longer registration-time-only: every OIDC login re-stamps `role` and
+  `role_checked_at` for all of that principal's keys (`oidc.Config.OnLogin`),
+  and the TTL (default `24h`) expires a stamp on its own even if the human
+  never logs in again — closing the "keeps the override forever until
+  re-registered" gap this bullet used to name. What's left: the gateway still
+  never reads the human's role LIVE at connect time, unlike the web
+  terminal's `requireOperator` gate — SSH carries no session for that gate to
+  read — so a demotion can still ride an unexpired stamp for up to one TTL
+  window. Overrides are audited distinctly (`ssh.auth` carries
+  `override:true`), and the ceiling is documented, not silently assumed away,
+  in `docs/SSH.md`'s Bounds section and `threatmodel/THREAT-MODEL.md`
+  residual #15.
 - **The legacy `sources`/`base_image` workspace columns have no drop date, and
   the migration number reserved for it is gone.** 0.4.5's source-library split
   (migration `0031_source_library.sql`) kept the old embedded columns live for
@@ -211,17 +390,29 @@ shipped behavior; none is scheduled.
   one." That number is now taken — `0032_attach_tickets_token_sha256.sql`
   shipped in v0.5, and the v0.5 k8s/SSH merge renumbered its own new
   migrations up past it (`0033_ssh_public_keys.sql`, `0034_attach_ticket_role.sql`)
-  — so the eventual drop migration needs a fresh number (`0035+`) whenever it's
-  scheduled. Nothing depends on it happening by any particular release; it's
+  — and v0.6 took the numbers through `0043_ssh_key_role.sql`, so the eventual
+  drop migration needs a fresh number (`0044+`) whenever it's scheduled. That
+  floor moves with every release; read the migrations directory rather than
+  this sentence. Nothing depends on it happening by any particular release; it's
   listed here so the stale "is 0032" comment in `0031_source_library.sql`
   isn't mistaken for a live plan.
-- **Age-key rotation for the secret store.** One age identity binds both
-  encryption and decryption (`internal/secretstore/pg`); nothing re-encrypts
-  stored secrets under a new key, and there is no `wardyn secret rotate`.
-  Changing `WARDYN_AGE_KEY` strands every existing ciphertext — see
-  [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "The age key has no rotation path".
-- **react-router 7 → 8 major bump.** A per-advisory pnpm-audit suppression
-  covers GHSA-qwww-vcr4-c8h2 until then — needs a UI owner.
+- **Age-key rotation is offline and operator-driven.** `wardynd -rotate-age-key`
+  now re-encrypts every stored secret to a fresh identity in one transaction
+  ([docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Rotating the age key"), so the old
+  "no rotation path at all" ceiling is gone. What remains: the daemon has to be
+  **stopped** for it, and nothing enforces that — no wardynd holds a
+  process-lifetime advisory lock, so the tool can refuse a second concurrent
+  rotation but cannot see a serving process. There is also no scheduled or
+  automatic rotation, and no `wardyn secret rotate`: the CLI deliberately never
+  touches the key.
+- **react-router 7 → 8 major bump.** No longer security-forced: GHSA-qwww-vcr4-c8h2
+  patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the
+  pnpm-audit suppression that once covered it is deleted — `make npm-audit` is
+  green with nothing ignored. What remains is the major itself, blocked twice
+  over: every stable 8.x peer-depends on React >=19.2.7 (this console is on
+  18.3.1, so v8 means a React 19 migration first), and `react-router-dom` has no
+  8.x at all — v8 is also a package rename to `react-router`. Needs a UI owner
+  and a React 19 decision, not an advisory deadline.
 - **Kata/TPROXY/io_uring composer quick-hits.** Parked since the
   composer-readiness work.
 - **A member's inline model-access grant needs an operator integration.** A
@@ -236,14 +427,20 @@ shipped behavior; none is scheduled.
   ceiling: a member whose model access relies ONLY on a raw operator secret + a
   wildcard `api_key` ceiling with NO integration and NO workspace requirement
   gets nothing re-added — the run launches without model access (fail-closed, no
-  exfil). Two smaller edges ride along: the drop emits a clamp *warning*
-  (surfaced in preflight/Review) but no `authz.denied` audit event, so a
-  deliberate member exfil *attempt* is not operator-visible; and `handleComposeRun`
-  does not run the drop, so for that same config its proposal previews
-  `Provisioned: true` while launch delivers none (preflight/Review filters and
-  agrees with launch, so the Review step shows the truth). The fix, if
-  pure-BYOK-for-members is a wanted flow: re-run the provider-convention
-  model-grant at launch, not only at compose time.
+  exfil). The drop used to be invisible to an operator — a clamp *warning* in
+  preflight/Review and nothing else — so a deliberate member exfil *attempt*
+  left no trace; 0.6 closed that: every drop now also records an
+  `authz.denied` audit event with reason `grant_pairing_not_eligible`,
+  aggregated one event per reason at launch (never on a preflight dry-run) and
+  carrying the pairings that went (`auditMemberPolicyDrops`, same file). No
+  preview lane disagrees with launch: preflight is the only one, and it
+  resolves through the same `resolveRunPolicy` chokepoint and the same
+  `resolveRunLLMAccess` verdict the create path uses (`internal/api/preflight.go`),
+  so its checklist shows the dropped grant and the resulting no-model-access
+  before the member launches. The fix, if pure-BYOK-for-members is a wanted
+  flow: re-run the provider-convention model grant AFTER `filterMemberGrants`,
+  so a member's own key survives with no integration and no workspace
+  requirement behind it.
 - **Scan-seeded egress has no provenance gate.** A scanned repo's derived hosts
   are unioned into a run's egress allowlist as *required* with no provenance
   check (`applyWorkspaceRequirements`/`source_scan.go`), so a hostile onboarded

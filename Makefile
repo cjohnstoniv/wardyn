@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -89,6 +89,16 @@ agent-image-full: agent-images-core ## Build the fat toolchain agent image (Go/P
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
 	@echo "Full toolchain image built: wardyn/agent-full:local"
 
+# The claude-code agent image plus a pinned code-server, for the UI-sandbox
+# relay's "vscode" app (Workstream D, deploy/images/vscode/Dockerfile). Not in
+# agent-images-core/agent-images: it is +~228 MiB and only a run whose policy
+# declares a ui_apps entry needs it. Register it under an agent name with:
+#   WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
+agent-image-vscode: agent-images-core ## Build the code-server UI-sandbox agent image
+	@echo "Building the code-server UI-sandbox image..."
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/vscode/Dockerfile -t wardyn/agent-vscode:local .
+	@echo "Vscode UI-sandbox image built: wardyn/agent-vscode:local"
+
 build: ## Build Go binaries (default tags)
 	@echo "Building Go binaries..."
 	go build ./...
@@ -103,7 +113,7 @@ build-k8s: ## Build Go binaries with -tags k8s
 
 test: ## Run all Go tests
 	@echo "Running Go tests..."
-	go test ./...
+	WARDYN_TEST_PG= go test ./...
 
 # Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
 # (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
@@ -114,13 +124,13 @@ test: ## Run all Go tests
 # needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
 test-race: ## Race-detector sweep over BOTH tag sets (tagless + -tags docker)
 	@echo "Running Go tests under the race detector (tagless)..."
-	go test -race ./...
+	WARDYN_TEST_PG= go test -race ./...
 	@echo "Running Go tests under the race detector (-tags docker)..."
-	go test -race -tags docker ./...
+	WARDYN_TEST_PG= go test -race -tags docker ./...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
-	go test -tags docker ./...
+	WARDYN_TEST_PG= go test -tags docker ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
 # Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
@@ -133,12 +143,23 @@ test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
 # scripts/test-report.sh.
 test-report: ## Go unit suite with per-suite JSON + coverage artifacts
+# WARDYN_TEST_PG stripped: pg-gated tests belong to test-report-pg (which
+# serializes packages — see its -p 1 note). Inheriting the DSN here (e.g. from
+# `WARDYN_TEST_PG=… make release-check`) re-runs them in PARALLEL packages
+# against the one shared DB, resurrecting the site_config race. CI matches:
+# only the pg job sets the DSN (ci.yml).
 	@echo "Running Go unit suite with detailed reports..."
-	./scripts/test-report.sh unit ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh unit ./...
 
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
+# -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
+# DSN), and singleton state — site_config above all — is mutated by tests in
+# internal/api AND test/apie2e. Parallel packages therefore race each other
+# through the DB (seen: LegacyArtifactOverridesFold vs the apie2e integrations
+# PUT). Serializing packages costs ~1 min; per-package throwaway databases are
+# the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	./scripts/test-report.sh pg \
+	./scripts/test-report.sh pg -p 1 \
 		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
 		./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
 
@@ -149,7 +170,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
 test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed)
 	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
-	./scripts/test-report.sh docker -tags docker ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh docker -tags docker ./...
 
 # The whole tree under -tags k8s, so the k8s confinement substrate
 # (internal/runner/k8s) and the wardynd wiring that calls it — none of which
@@ -159,7 +180,7 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
 test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed)
 	@echo "Running k8s-tagged suite with reports (fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	./scripts/test-report.sh k8s -tags k8s ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -tags k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
@@ -321,6 +342,32 @@ test-e2e-ssh: ## Live SSH gateway e2e: exec/sftp/-L forward/recording/denial/con
 	@echo "Running live SSH gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ssh.sh
 
+# The same gateway on the OTHER substrate: the sandbox is a Pod, reached
+# through Runner.Attach/ExecStream's k8s implementation. Proves the exec lane
+# ('id' exits 0 + exit-code propagation), the pty lane, and the ssh.exec +
+# session.attach{transport:ssh} audit rows. sftp/-L are skipped OUT LOUD (an
+# image contract, not a substrate one — the script says why, docs/SSH.md
+# "Image contract (BYOI)" is canonical); the compose lane above proves those.
+# Runs against the cluster `make kind-quickstart` leaves behind — it never
+# creates or deletes one — and self-skips without WARDYN_TEST_K8S=1.
+test-e2e-ssh-k8s: ## Live SSH gateway e2e on Kubernetes (needs a kind-quickstart cluster up)
+	@echo "Running live SSH gateway e2e on Kubernetes (existing kind-quickstart cluster; shell lane only)..."
+	WARDYN_TEST_K8S=1 ./scripts/run-e2e-ssh-k8s.sh
+
+# Live UI-sandbox gateway e2e: the ticket -> enter -> cookie -> code-server
+# handoff on the SECOND origin, the ui.* audit rows (and the session.attach row
+# that must NOT appear), an undeclared app and a foreign run's ticket both
+# refused 403, the inbound/outbound header strips asserted against an
+# in-sandbox echo responder, and the exec baseline (relayed socat execs pooled,
+# then reaped by the idle timeout). Brings up its OWN dedicated compose stack
+# (project "wardynv06uisbx", ports 18081/15433/18083) with both listeners wired
+# and tears it down after -- never touches another stack. Needs Docker + curl +
+# jq and the code-server image (built on demand: make agent-image-vscode);
+# self-skips without WARDYN_TEST_DOCKER=1.
+test-e2e-ui-sandbox: ## Live UI-sandbox relay e2e: handoff/audit/403s/header strips/exec baseline
+	@echo "Running live UI-sandbox gateway e2e (dedicated compose stack; requires Docker)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ui-sandbox.sh
+
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -353,6 +400,21 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	./scripts/check-file-size.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+
+# The shell half of the test suite: each of these pins a fixed regression in
+# scripts/ that no Go test can see (up.sh's reset warnings, the compose
+# namespace/port derivation, up-policy's parsing). Daemon-free by selection —
+# scripts/test-reset-all-sandbox-reap.sh and test-podman.sh are deliberately
+# NOT here, they need a live daemon / a podman host.
+test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
+	@echo "Running daemon-free shell regression tests..."
+	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-desktop-profile.sh
+	./scripts/test-image-pins.sh
+	./scripts/test-repo-scan-ok.sh
+	./scripts/test-reset-capture-hint.sh
+	./scripts/test-reset-host-gate.sh
+	./scripts/test-up-policy.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`
@@ -394,8 +456,8 @@ licenses: ## Forbid copyleft/non-permissive Go dependencies (all three tag sets)
 # discipline scripts/check-image-pins.sh exists to enforce.
 helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
 	@echo "Linting + rendering the Helm chart..."
-	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth
-	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth); \
+	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
 	echo "$$out" | grep -q "kind: Service" || { echo "chart rendered no Service"; exit 1; }; \
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
@@ -406,7 +468,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "fs"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=fs — with wardynd's pg default a stock install silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off"; exit 1; }; \
 	echo "$$out" | grep -q "podSelector: {}" || { echo "chart ingress default is not same-namespace"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "default render does not show automount:false exactly twice (the created ServiceAccount object + the pod spec) — k8s.enabled and ssh.enabled both default off, so both must still default-deny the API server token"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "default render does not show automount:false exactly twice (the created ServiceAccount object + the pod spec) — k8s.enabled and ssh.enabled both default off, so both must still default-deny the API server token"; exit 1; }; \
+	echo "$$out" | grep -A14 "readinessProbe:" | grep -q 'path: "/readyz"' || { echo "readinessProbe no longer targets /readyz — a dead Postgres would read healthy again (W28-S1-7)"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] || { echo "expected exactly 2 probes still on /healthz (liveness + startup)"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
@@ -424,14 +488,26 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
-	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }
+	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth 2>&1 | grep -q "no age identity is wired" || { echo "chart no longer refuses an external-DSN install with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote, so the pod crash-loops on its SECOND start and those rows are unrecoverable (W27-S1-5)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map that predates the 0.6 blocks — 'helm upgrade --reuse-values' from a 0.5 release hands the templates exactly that map, and an unguarded .Values.uiSandbox.enabled kills the upgrade at render (nil pointer)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set uiSandbox.port=8080 2>&1 | grep -q "uiSandbox.port and service.port are both" || { echo "chart no longer refuses uiSandbox.port == service.port — wardynd refuses to boot on it (validateUISandboxConfig), so the render would apply cleanly and then crash-loop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set ssh.port=8080 2>&1 | grep -q "ssh.port and service.port are both" || { echo "chart no longer refuses ssh.port == service.port — the Service would carry one port number twice and the API server rejects it"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa >/dev/null 2>&1 || { echo "serviceAccount.create=false with an explicit serviceAccount.name no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install
@@ -519,6 +595,20 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
 	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false
 
+# ── kind quickstart (the k8s "one command to a real install" path) ──────────
+# What helm-install-test above proves in CI, an operator can run on their own
+# box: build wardynd/proxy/one agent image, stand up a throwaway kind cluster
+# with a NetworkPolicy-enforcing CNI, helm install with the k8s runner
+# substrate ON, and print a URL + token. Both targets are thin on purpose —
+# the cluster name, the ports and every install flag live in ONE place
+# (deploy/kind/quickstart.sh), so `kind-down` can never drift from what
+# `kind-quickstart` created.
+kind-quickstart: ## kind: build + throwaway cluster + helm install, k8s runner on (prints URL + token)
+	deploy/kind/quickstart.sh
+
+kind-down: ## Delete the kind-quickstart cluster
+	deploy/kind/quickstart.sh --down
+
 # Validate the compose files parse (does NOT need a running daemon).
 # Both invocations, since scripts/ci-run.sh runs the base + the CI overlay together.
 # The overlay interpolates ${WARDYN_CI_TOOLS_DIR:?...}; a dummy value is enough to
@@ -573,16 +663,15 @@ npm-license: ## Fail closed on copyleft in a SHIPPED (prod) UI dependency
 # Deliberately NO --ignore-registry-errors: a registry blip must fail red, not
 # silently pass (security invariant 5, fail-closed).
 #
-# One advisory is suppressed, by id, in ui/package.json's pnpm.auditConfig
-# (pnpm's native mechanism — the same shape as .gitleaksignore's per-fingerprint
-# allowlist; package.json is JSON so the reason has to live here):
-#   GHSA-qwww-vcr4-c8h2  react-router <8.3.0 — "RSC Mode CSRF Bypass". NOT
-#     APPLICABLE: this console is a client-only SPA (ui/src/main.tsx mounts
-#     <BrowserRouter>) on react 18.3.1, and React Router's RSC mode needs React
-#     19 plus a server runtime, so the vulnerable code path cannot be reached.
-#     Only fix is the 7.x -> 8.x major bump; DELETE this entry when that lands.
-# A different advisory on the same package still fails the gate — the ignore is
-# per-id, never per-package.
+# NOTHING is suppressed: this gate runs against the real advisory set. The last
+# suppression (GHSA-qwww-vcr4-c8h2, react-router "RSC Mode CSRF Bypass") is gone
+# — it was carried on the belief that only the 7.x -> 8.x major fixed it, which
+# was never true of the 7.x line: the advisory patches at BOTH 7.18.2 and 8.3.0,
+# and we take 7.18.2. Read a GHSA's full patched-version list before suppressing;
+# a stale "no patch exists" note outlives the release that refutes it.
+# A future ignore goes in ui/package.json's pnpm.auditConfig.ignoreGhsas (pnpm's
+# native mechanism) with its reason here — per-id, never per-package, so a
+# different advisory on the same package still fails the gate.
 npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dependency
 	@echo "Auditing UI production dependencies for advisories (high+)..."
 	cd ui && pnpm audit --prod --audit-level=high
@@ -593,7 +682,7 @@ npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dep
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker build-k8s tidy-check lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+ci: build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
@@ -681,7 +770,7 @@ reset: ## Clean slate: wipe local volumes (runs + audit + recordings) then setup
 reset-all: ## FULL undo: host daemon + compose + ~/.wardyn files (ARGS: --dry-run, --purge-*)
 	./scripts/up.sh reset-all $(ARGS)
 
-doctor: ## Read-only preflight (docker, ports, confinement classes, WSL/Windows)
+doctor: ## Read-only preflight — creates/changes nothing (docker, ports, confinement classes, WSL/Windows)
 	./scripts/up.sh doctor
 
 dev-pg: ## Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)

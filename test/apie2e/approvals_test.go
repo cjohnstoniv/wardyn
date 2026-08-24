@@ -72,7 +72,7 @@ func TestApprovals_ApproveThenMintInGatedTx(t *testing.T) {
 	}
 
 	// (3) Discover and approve the PENDING approval over the public SDK.
-	approvals, err := h.sdk.ListApprovals(ctx, types.ApprovalPending)
+	approvals, err := h.sdk.ListApprovals(ctx, types.ApprovalPending, runID)
 	if err != nil {
 		t.Fatalf("ListApprovals: %v", err)
 	}

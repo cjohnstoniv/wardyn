@@ -56,6 +56,9 @@ type scopeFixture struct {
 	approval *authzApprovals
 	runID    uuid.UUID
 	memberID string
+	// rec is the harness's audit recorder, kept so a test can assert what a
+	// decision WROTE and not only what it answered.
+	rec *recRecorder
 }
 
 func newScopeFixture(t *testing.T) *scopeFixture {
@@ -81,7 +84,7 @@ func newScopeFixture(t *testing.T) *scopeFixture {
 	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: memberSub, State: types.RunRunning}
 	ast.mu.Unlock()
 
-	return &scopeFixture{srv: srv, store: ast, approval: aap, runID: runID, memberID: memberSub}
+	return &scopeFixture{srv: srv, store: ast, approval: aap, runID: runID, memberID: memberSub, rec: h.audit}
 }
 
 func (f *scopeFixture) seedEgress(t *testing.T, host string) uuid.UUID {
@@ -281,6 +284,49 @@ func TestDecideScope_NonEgressKindRejectsScope(t *testing.T) {
 	}
 }
 
+// TestDecideScope_RunOnCredentialIsTheLease covers rule 4's one exception, and
+// it is the ONLY test that touches the lease's human-reachable door. The broker
+// suite seeds decision_scope straight into its fake rows, so every lease test
+// there stays green with this API path 400ing; the sibling above pins only the
+// refusal direction (once -> 400). Delete the exception from rule 4 and both
+// suites remain green while every `wardyn approve <id> --scope run` on a
+// credential approval 400s and B2's per-run lease is unreachable end to end.
+//
+// Asserted through the STORE because the broker reads decision_scope RAW
+// (leaseCoversRemint compares it against types.ScopeRun and never
+// Normalize()s): a handler that answered the same 200 but persisted "" would
+// mint once and then hand the agent ErrAlreadyMinted for the rest of the run.
+func TestDecideScope_RunOnCredentialIsTheLease(t *testing.T) {
+	f := newScopeFixture(t)
+	admin := ssoSession(t, "sub-admin-lease", "admin@corp.example", oidc.RoleAdmin)
+
+	id := uuid.New()
+	f.approval.mu.Lock()
+	f.approval.byID[id] = types.ApprovalRequest{
+		ID: id, RunID: f.runID, Kind: types.ApprovalCredential,
+		State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	}
+	f.approval.mu.Unlock()
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
+		admin, decideBody(t, types.ScopeRun, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("run scope on a credential approval: status = %d, want 200 "+
+			"(this is the per-run lease's only door); body=%s", w.Code, w.Body.String())
+	}
+
+	f.approval.mu.Lock()
+	got := f.approval.byID[id]
+	f.approval.mu.Unlock()
+	if got.State != types.ApprovalApproved {
+		t.Fatalf("state = %q, want APPROVED", got.State)
+	}
+	if got.DecisionScope != types.ScopeRun {
+		t.Fatalf("persisted decision_scope = %q, want %q — the broker reads it raw, "+
+			"so anything else leases nothing", got.DecisionScope, types.ScopeRun)
+	}
+}
+
 // TestDecideScope_DefaultsToRun pins the compatibility promise: a caller that
 // sends no scope at all gets today's behavior. Every pre-existing client — the
 // SDK, the console, and the three shell suites — is in this case.
@@ -461,5 +507,71 @@ func TestDecideScope_AlwaysRejectSetsAreNotSymmetric(t *testing.T) {
 					tc.verb, tc.host, approved, denied)
 			}
 		})
+	}
+}
+
+// TestReconcileWorkspaceEgressDecisions is the D28 heal: the post-Decide
+// write-back is not atomic with Decide, so a PG blip there leaves an approval
+// durably decided `always` while its workspace never got the allow/deny row —
+// the operator's permanent decision dropped behind a 200. Reconcile re-applies
+// every decided always-egress decision to its workspace, recreating the dropped
+// row (and idempotently no-op'ing already-persisted ones).
+//
+// The pre-fix state is modelled directly: a decided always approval whose
+// workspace egress lists are empty (the dropped write-back). Before the fix
+// nothing recreated it; after, reconcile does — proven by the row appearing.
+func TestReconcileWorkspaceEgressDecisions(t *testing.T) {
+	f := newScopeFixture(t)
+	// A workspace linked to the fixture's run, with EMPTY egress lists — the
+	// state left behind when the write-back was dropped.
+	wsID := f.seedWorkspace(t, nil, nil)
+
+	seedDecided := func(host string, state types.ApprovalState) {
+		id := uuid.New()
+		f.approval.mu.Lock()
+		f.approval.byID[id] = types.ApprovalRequest{
+			ID: id, RunID: f.runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"` + host + `"}`),
+			State:          state, DecisionScope: types.ScopeAlways,
+		}
+		f.approval.mu.Unlock()
+	}
+	seedDecided("registry.npmjs.org", types.ApprovalApproved) // -> approved_egress
+	seedDecided("evil.example.com", types.ApprovalDenied)     // -> denied_egress
+	// A non-always decision must NOT be persisted by the reconcile.
+	f.approval.mu.Lock()
+	idRun := uuid.New()
+	f.approval.byID[idRun] = types.ApprovalRequest{
+		ID: idRun, RunID: f.runID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(`{"host":"ephemeral.example.com"}`),
+		State:          types.ApprovalApproved, DecisionScope: types.ScopeRun,
+	}
+	f.approval.mu.Unlock()
+
+	n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("reconciled %d decisions, want 2 (the two always ones)", n)
+	}
+	approved, denied := f.egressLists(t, wsID)
+	if !slices.Contains(approved, "registry.npmjs.org") {
+		t.Errorf("approve·always host not healed onto approved_egress: %v", approved)
+	}
+	if !slices.Contains(denied, "evil.example.com") {
+		t.Errorf("deny·always host not healed onto denied_egress: %v", denied)
+	}
+	if slices.Contains(approved, "ephemeral.example.com") {
+		t.Errorf("a run-scoped decision must not be persisted: %v", approved)
+	}
+
+	// Idempotent: a second reconcile re-applies the same rows without duplicating.
+	if _, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	approved, _ = f.egressLists(t, wsID)
+	if got := slices.Contains(approved, "registry.npmjs.org"); !got || len(approved) != 1 {
+		t.Errorf("reconcile not idempotent: approved=%v", approved)
 	}
 }

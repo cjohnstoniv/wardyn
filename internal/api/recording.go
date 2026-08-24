@@ -4,8 +4,6 @@
 package api
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -168,12 +166,14 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	// verbatim in the body — and the Masker's exact-byte match would miss it.
 	// Critically that includes a MULTI-LINE SSH private key, which broker.mint()
 	// mask-registers (internal/broker/broker.go) precisely so PTY/asciicast
-	// streams mask it. Also mask each secret's JSON-string-escaped rendering so
-	// those land masked on this path too. RESIDUAL (disclosed in THREAT-MODEL.md
-	// and secretmask.Mask): a secret SPLIT across two asciicast events by
-	// wardyn-rec's PTY read boundaries is still not caught — the `"],[t,"o","`
-	// event framing breaks the verbatim byte run, which no per-value match closes.
-	snap = appendJSONEscapedVariants(snap)
+	// streams mask it. secretmask.JSONEscapedVariants adds each secret's
+	// JSON-string-escaped rendering so those land masked on this path too (the
+	// same expansion the audit maskingRecorder now applies to ev.Data — D31).
+	// RESIDUAL (disclosed in THREAT-MODEL.md and secretmask.Mask): a secret SPLIT
+	// across two asciicast events by wardyn-rec's PTY read boundaries is still not
+	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
+	// which no per-value match closes.
+	snap = secretmask.JSONEscapedVariants(snap)
 	m := secretmask.NewMasker(snap)
 
 	// Bridge MaskingWriter (io.Writer) to SaveCast (io.Reader) via io.Pipe.
@@ -205,43 +205,4 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 		<-done
 	}
 	return pr, cleanup
-}
-
-// appendJSONEscapedVariants returns snap plus, for every secret whose JSON-string
-// encoding would alter its bytes (a newline, quote, backslash, or control char),
-// that escaped rendering as it appears inside an asciicast "o" event body. Used
-// only on the recording upload path, whose body is already asciicast JSON, so the
-// Masker's verbatim match catches multi-line secrets (SSH keys) that never appear
-// unescaped there. A secret with no JSON-special bytes contributes no extra
-// variant (its raw form already matches).
-func appendJSONEscapedVariants(snap [][]byte) [][]byte {
-	out := make([][]byte, len(snap), len(snap)*2)
-	copy(out, snap)
-	for _, s := range snap {
-		esc, ok := jsonStringEscape(s)
-		if ok && !bytes.Equal(esc, s) {
-			out = append(out, esc)
-		}
-	}
-	return out
-}
-
-// jsonStringEscape returns the bytes of s as they appear INSIDE a JSON string
-// (i.e. json.Marshal's output minus the surrounding quotes). SetEscapeHTML is
-// off so `<`, `>`, `&` are left literal — asciinema (Python/serde_json, which
-// writes the cast) does not \u-escape those, and Go's default encoder would, so
-// the escaped variant must match asciinema's rendering, not Go's. Buffers a
-// trailing newline the Encoder appends. Returns ok=false only if encoding fails.
-func jsonStringEscape(s []byte) (escaped []byte, ok bool) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(string(s)); err != nil {
-		return nil, false
-	}
-	b := bytes.TrimRight(buf.Bytes(), "\n") // Encoder.Encode appends a '\n'
-	if len(b) < 2 {
-		return nil, false
-	}
-	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
 }

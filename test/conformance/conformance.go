@@ -15,6 +15,9 @@
 //     sandbox.
 //  5. Wait exit-code propagation: Exec'ing a short-lived command, Wait must
 //     block until it exits and return its exit code (incl. a non-zero code).
+//  6. Loopback relay parity: ExecStream reaches a port the sandbox is already
+//     listening on inside its own netns, full-duplex, with stdin still open —
+//     the transport the UI-sandbox gateway rides.
 package conformance
 
 import (
@@ -23,6 +26,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +87,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("WaitExitCode", func(t *testing.T) { testWaitExitCode(t, r, opts) })
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
+	t.Run("ExecStreamLoopbackRelay", func(t *testing.T) { testExecStreamLoopbackRelay(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -592,5 +597,181 @@ func minimalSpec(image string) runner.SandboxSpec {
 		Image: image,
 		// ConfinementClass deliberately left empty; callers set it.
 		Labels: map[string]string{"wardyn.conformance": "true"},
+	}
+}
+
+// loopbackRelayPort is the in-sandbox port the loopback-relay case uses. It is
+// fixed (not random) because it appears in both halves of the case — the
+// listener script and the dial argv — and every sandbox here is freshly
+// created for this one case, so nothing else is on it.
+const loopbackRelayPort = "39099"
+
+// loopbackRelayMarker is served by the in-sandbox listener and must come back
+// through the exec lane byte for byte.
+const loopbackRelayMarker = "wardyn-loopback-relay-ok"
+
+// loopbackRelayListenScript starts a loopback-only HTTP listener inside the
+// sandbox the same way the UI gateway's launcher does (uiEnsureApp): a
+// detaching start followed by a readiness poll, so the exec that started it
+// EXITS and the listener stays. Distinct exit codes separate "this image
+// cannot run the case" from "the case ran and failed" — the same coded-probe
+// rule conformance_k8s_test.go's apiServerProbeScript follows:
+//
+//	90  no httpd applet   — image contract, not a substrate verdict
+//	91  no nc applet      — image contract, not a substrate verdict
+//	92  could not write the document root
+//	93  httpd refused to start
+//	94  the port never came up
+//	0   the listener is up on 127.0.0.1:<port>
+const loopbackRelayListenScript = `command -v httpd >/dev/null 2>&1 || exit 90
+command -v nc >/dev/null 2>&1 || exit 91
+mkdir -p /tmp/wardyn-relay && echo ` + loopbackRelayMarker + ` > /tmp/wardyn-relay/probe.txt || exit 92
+httpd -p 127.0.0.1:` + loopbackRelayPort + ` -h /tmp/wardyn-relay || exit 93
+i=0
+while [ $i -lt 30 ]; do
+  nc -z 127.0.0.1 ` + loopbackRelayPort + ` && exit 0
+  i=$((i+1))
+  sleep 1
+done
+exit 94`
+
+// testExecStreamLoopbackRelay is the substrate-parity gate for the UI-sandbox
+// relay (internal/api/uigateway.go). The relay is not a new network path: it
+// is ExecStream carrying bytes to a port the sandbox is ALREADY listening on
+// inside its own netns — the same lane the SSH gateway's `-L` forward uses.
+// This case proves that lane behaves identically on every substrate, without
+// importing any of the gateway's own code.
+//
+// It asserts the one thing testExecStream does not: FULL DUPLEX with stdin
+// still open. testExecStream's round-trip only works because it half-closes
+// stdin (`cat` needs EOF to finish); a relayed HTTP connection — and every
+// WebSocket a code editor opens over it — must instead receive the response
+// while stdin stays open for the next request. A substrate whose ExecStream
+// only flushes on half-close would pass testExecStream and hang every relay.
+//
+// Skipped when the driver declares no ConfinementClasses (honest stub: no
+// sandbox to listen in), when ExecStream is unsupported, or when the image
+// carries no httpd/nc applet — the last is an IMAGE contract, not a substrate
+// one (docs/UI-SANDBOXES.md's "Image contract (BYOI)"), and it says so out
+// loud rather than passing silently.
+func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skipf("driver %q declares no confinement classes; the loopback relay is not testable without a sandbox substrate", r.Name())
+	}
+
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "ExecStreamLoopbackRelay")
+
+	// ── 1. start the in-sandbox listener over its own ExecStream ────────────
+	starter, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", loopbackRelayListenScript}})
+	if errors.Is(err, runner.ErrExecStreamUnsupported) {
+		t.Skipf("ExecStream not implemented (driver %q): %v", r.Name(), err)
+	}
+	if err != nil {
+		t.Fatalf("ExecStream(listener): %v", err)
+	}
+	startOut := drainBoth(starter)
+	if err := starter.Stdin.Close(); err != nil {
+		t.Fatalf("listener Stdin.Close: %v", err)
+	}
+	code, err := starter.Wait()
+	if err != nil {
+		t.Fatalf("listener Wait: %v", err)
+	}
+	_ = starter.Close()
+	switch code {
+	case 0:
+	case 90, 91:
+		t.Skipf("sandbox image %q has no httpd/nc applet (exit %d); the loopback-relay case needs a listener it can start in-image — an IMAGE contract, not a substrate verdict", opts.image(), code)
+	default:
+		t.Fatalf("in-sandbox listener did not come up (exit %d; 92=doc root, 93=httpd refused, 94=port never opened). Output:\n%s", code, startOut())
+	}
+
+	// ── 2. dial it over a SECOND ExecStream, stdin left OPEN ────────────────
+	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"nc", "127.0.0.1", loopbackRelayPort}})
+	if err != nil {
+		t.Fatalf("ExecStream(dial): %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// Read INCREMENTALLY, never io.ReadAll: the dialer does not exit while its
+	// stdin is open (that is the whole point of this case), so waiting for EOF
+	// would wait forever even after the response has landed. Stderr is drained
+	// alongside it — a substrate that demultiplexes stdout/stderr through a
+	// pipe pair (docker's stdcopy) stalls BOTH streams if only one is read.
+	respCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		tmp := make([]byte, 4096)
+		for {
+			n, rerr := sess.Stdout.Read(tmp)
+			if n > 0 {
+				buf.Write(tmp[:n])
+				if strings.Contains(buf.String(), loopbackRelayMarker) {
+					respCh <- buf.String()
+					return
+				}
+			}
+			if rerr != nil {
+				respCh <- buf.String()
+				return
+			}
+		}
+	}()
+	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
+
+	// HTTP/1.0: the listener answers and closes its side, so the response is
+	// complete without a Content-Length walk. Stdin is deliberately NEVER
+	// closed — that is the assertion.
+	req := "GET /probe.txt HTTP/1.0\r\nHost: 127.0.0.1:" + loopbackRelayPort + "\r\n\r\n"
+	if _, err := sess.Stdin.Write([]byte(req)); err != nil {
+		t.Fatalf("dial Stdin.Write: %v", err)
+	}
+
+	var resp string
+	select {
+	case resp = <-respCh:
+	case <-time.After(opts.timeout()):
+		t.Fatal("timed out reading the relayed response — the exec lane did not deliver bytes back while stdin was still open (full-duplex requirement of the UI relay)")
+	}
+
+	if !strings.Contains(resp, "200 OK") {
+		t.Errorf("relayed response = %q, want an HTTP 200 from the sandbox's own loopback listener", resp)
+	}
+	if !strings.Contains(resp, loopbackRelayMarker) {
+		t.Errorf("relayed response = %q, want it to carry the listener's body %q byte for byte", resp, loopbackRelayMarker)
+	}
+}
+
+// drainBoth reads an ExecSession's stdout and stderr concurrently so neither
+// pipe can block the exec, and returns a func that yields the combined text
+// once both are done. Used for the loopback-relay listener, whose only output
+// is diagnostic.
+func drainBoth(sess *runner.ExecSession) func() string {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	wg.Add(2)
+	for _, rd := range []io.Reader{sess.Stdout, sess.Stderr} {
+		go func(rd io.Reader) {
+			defer wg.Done()
+			b, _ := io.ReadAll(rd)
+			mu.Lock()
+			buf.Write(b)
+			mu.Unlock()
+		}(rd)
+	}
+	return func() string {
+		wg.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
 	}
 }

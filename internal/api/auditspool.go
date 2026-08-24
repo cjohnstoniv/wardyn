@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -33,6 +34,10 @@ type AuditSpool struct {
 	mu   sync.Mutex
 	f    *os.File
 	path string
+	// tornDrops counts spool lines Drain could not unmarshal — a torn tail from
+	// an ENOSPC/partial write, dropped rather than replayed (D30). Surfaced on
+	// /metrics so a corruption episode is visible, not just logged.
+	tornDrops atomic.Int64
 }
 
 // NewAuditSpool opens (creating if needed) an append-only JSONL spool at path.
@@ -46,7 +51,7 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -63,10 +68,39 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := a.f.Write(append(b, '\n')); err != nil {
+	// D30: if the spool ends in a torn tail — a newline-less fragment left by an
+	// ENOSPC episode or a partial Write that landed bytes then errored — separate
+	// it from this event with a leading newline. Without it, Drain splits on '\n'
+	// and reads `fragment{this event}` as ONE line, fails to unmarshal it, and
+	// drops BOTH: this good event (whose primary-store write had ALREADY failed)
+	// is silently destroyed, exactly the "never silently lost" invariant C1 is
+	// meant to hold. With the separator the fragment is its own (dropped, counted)
+	// line and this event survives on its own line.
+	payload := append(b, '\n')
+	if a.endsUnterminated() {
+		payload = append([]byte{'\n'}, payload...)
+	}
+	if _, err := a.f.Write(payload); err != nil {
 		return err
 	}
 	return a.f.Sync()
+}
+
+// endsUnterminated reports whether the spool's last on-disk byte is not '\n' —
+// a torn tail. It reads via ReadAt (pread), which O_APPEND leaves unaffected, so
+// the append fd doubles as the probe. Any stat/read error returns false: the
+// safe fallback is to append exactly as before (a healthy or unreadable file is
+// never given a spurious separator).
+func (a *AuditSpool) endsUnterminated() bool {
+	fi, err := a.f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	var last [1]byte
+	if _, err := a.f.ReadAt(last[:], fi.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
 }
 
 // Drain replays up to batch spooled events into rec (the DURABLE store recorder)
@@ -127,6 +161,10 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		if err := json.Unmarshal(line, &ev); err != nil {
 			// A corrupt/partial line (e.g. a torn last write) can never be
 			// replayed; drop it with a loud log rather than wedging the drain.
+			// Counted (D30) so a corruption episode is observable on /metrics, not
+			// only in the logs — the Append separator now confines the loss to the
+			// torn fragment itself, never the good event written after it.
+			a.tornDrops.Add(1)
 			slog.WarnContext(ctx, "wardynd: dropping unparseable audit spool line", slog.Any("err", err))
 			consumed++
 			continue
@@ -183,6 +221,45 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	_ = a.f.Close()
 	a.f = nf
 	return replayed, replayErr
+}
+
+// Lines reports how many events are sitting in the spool right now — the audit
+// backlog a store outage builds up, and the count that has to drain back before
+// the queryable trail is complete again. Served as the wardyn_audit_spool_lines
+// gauge on /metrics: a spool that never returns to 0 is a drain that is not
+// working, which nothing else on the scrape surface shows. A nil spool (spooling
+// disabled) reports 0, and so does an unreadable file — this is an observability
+// gauge, not a correctness path.
+//
+// ponytail: re-reads and counts the file per call, O(spool size). The spool is
+// empty in steady state and /metrics is scraped, not hot-looped; track a counter
+// alongside f only if a long outage ever makes this show up in a profile.
+func (a *AuditSpool) Lines() int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	buf, err := os.ReadFile(a.path)
+	if err != nil {
+		return 0
+	}
+	// Same line semantics as Drain: trailing newline is a terminator, not a line.
+	trimmed := bytes.TrimRight(buf, "\n")
+	if len(bytes.TrimSpace(trimmed)) == 0 {
+		return 0
+	}
+	return bytes.Count(trimmed, []byte{'\n'}) + 1
+}
+
+// TornDrops reports how many spool lines Drain has dropped as unparseable (a
+// torn tail from an ENOSPC/partial write). A nil spool reports 0. Served as the
+// wardyn_audit_spool_torn_total counter on /metrics.
+func (a *AuditSpool) TornDrops() int64 {
+	if a == nil {
+		return 0
+	}
+	return a.tornDrops.Load()
 }
 
 // StartDrain runs Drain on a ticker until ctx is cancelled, replaying spooled

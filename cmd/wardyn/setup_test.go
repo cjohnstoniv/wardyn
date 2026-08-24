@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -280,5 +281,108 @@ func TestDetectDockerUsesSharedPlatformDetector(t *testing.T) {
 	}
 	if e.kvm != p.KVM {
 		t.Errorf("detectDocker().kvm=%v diverged from setup.DetectPlatform().KVM=%v — reuse the shared detector", e.kvm, p.KVM)
+	}
+}
+
+// --------------------------------------------------------------------------
+// executePlan exit-code honesty (W4-S1-8): a tier command must exit non-zero
+// on every path where the tier ended up NOT enabled — unsupported host,
+// plan-only (no --run), a declined/non-TTY confirm, and a script that ran
+// but left the runtime unregistered — instead of the old blanket exit 0.
+// --------------------------------------------------------------------------
+
+// withFakeDocker puts a fake `docker` on PATH that ignores its args and
+// prints out as `docker info --format {{json .}}` would, so dockerInfo()'s
+// re-probe is deterministic without touching the real Docker daemon.
+func withFakeDocker(t *testing.T, out string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat <<'EOF'\n" + out + "\nEOF\n"
+	fake := filepath.Join(dir, "docker")
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, not a secret
+		t.Fatalf("write fake docker: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestExecutePlan_UnsupportedIsNonZero(t *testing.T) {
+	err := executePlan("wall", plan{action: actUnsupported, title: "t", why: "w"}, false, false)
+	if err == nil {
+		t.Fatal("expected a non-nil error for an unsupported host")
+	}
+	if code := exitCodeFor(err); code != 1 {
+		t.Errorf("exitCodeFor = %d, want 1", code)
+	}
+}
+
+func TestExecutePlan_PlanOnlyWithoutRunIsNonZero(t *testing.T) {
+	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, false, false)
+	if err == nil {
+		t.Fatal("expected a non-nil error when --run was not passed")
+	}
+	if code := exitCodeFor(err); code != 1 {
+		t.Errorf("exitCodeFor = %d, want 1", code)
+	}
+}
+
+func TestExecutePlan_DeclinedConfirmIsNonZero(t *testing.T) {
+	// confirm() reads a line from os.Stdin; an empty read (EOF, as a
+	// non-interactive CI stdin gives it) parses as "not yes" — exactly the
+	// non-TTY case the finding names.
+	origStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	_ = w.Close()
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+
+	err = executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, false)
+	if err == nil {
+		t.Fatal("expected a non-nil error when the confirm prompt is declined/EOF")
+	}
+	if code := exitCodeFor(err); code != 1 {
+		t.Errorf("exitCodeFor = %d, want 1", code)
+	}
+}
+
+func TestExecutePlan_RunSucceedsButRuntimeMissingIsNonZero(t *testing.T) {
+	// A fake docker whose Runtimes has neither "runsc" nor "kata" — the
+	// Vault case (kataScript never edits daemon.json for the caller) as well
+	// as a Wall install whose daemon reload didn't take.
+	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{}}}`)
+
+	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	if err == nil {
+		t.Fatal("expected a non-nil error when the runtime never shows up in `docker info`")
+	}
+	if code := exitCodeFor(err); code != 1 {
+		t.Errorf("exitCodeFor = %d, want 1", code)
+	}
+}
+
+func TestExecutePlan_RunSucceedsAndRuntimeRegisteredIsNil(t *testing.T) {
+	withFakeDocker(t, `{"OperatingSystem":"Ubuntu","OSType":"linux","Runtimes":{"runc":{},"runsc":{}}}`)
+
+	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "true"}, true, true)
+	if err != nil {
+		t.Errorf("expected nil once docker info reports the runsc runtime, got %v", err)
+	}
+}
+
+func TestExecutePlan_ScriptFailureIsAnError(t *testing.T) {
+	err := executePlan("wall", plan{action: actPrint, title: "t", why: "w", script: "exit 7"}, true, true)
+	if err == nil {
+		t.Fatal("expected a non-nil error when the install script itself fails")
+	}
+}
+
+func TestTierRuntimeName(t *testing.T) {
+	if got := tierRuntimeName("wall"); got != "runsc" {
+		t.Errorf("tierRuntimeName(wall) = %q, want runsc", got)
+	}
+	if got := tierRuntimeName("vault"); got != "kata" {
+		t.Errorf("tierRuntimeName(vault) = %q, want kata", got)
 	}
 }

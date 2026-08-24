@@ -71,6 +71,15 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { C } from "../../../lib/workspace-copy";
+
+// W19-W19b-1: a held request approved during a confined replay does more than
+// release the connection — learnVerifyEgress (internal/api/approvals.go) folds
+// the host into this workspace's required egress contract, so future runs
+// never ask again. POLICIES.md's "Approval decision scopes" section already
+// spells this out; the click surface itself didn't. Local rather than
+// workspace-copy.ts's mock-sourced canon — this line has no mock counterpart.
+const VERIFY_APPROVE_LEARNS_HINT =
+  "Approving a held request here also adds that host to this workspace's requirements — future runs won't ask again.";
 import { useOperator } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
@@ -467,6 +476,7 @@ function SessionCard({
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
           />
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(confinedRR.run_id)}>
             <Square className="size-3.5" /> Done
           </Button>
@@ -567,6 +577,7 @@ function OrphanedSessionCard({
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
           />
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
             Done

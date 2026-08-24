@@ -105,6 +105,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets.m["github-app-key"] = []byte("-----BEGIN RSA PRIVATE KEY-----\nfake-app-key-material\n-----END RSA PRIVATE KEY-----\n")
 	secrets.m["github-app-id"] = []byte("123456")
 	secrets.m["wardyn-ssh-host-key"] = []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfake-host-key-material\n-----END OPENSSH PRIVATE KEY-----\n")
+	secrets.m["wardyn-ui-session-key"] = []byte("0123456789abcdef0123456789abcdef")
 	secrets.m["bedrock-api-key"] = []byte("bedrock-bearer-token-value")
 
 	cases := []struct {
@@ -123,6 +124,10 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		{"reserved-github-app-key", gitPATSpec("github.com", "github-app-key", "")},
 		{"reserved-github-app-id", gitPATSpec("github.com", "github-app-id", "")},
 		{"reserved-ssh-host-key", gitPATSpec("github.com", "wardyn-ssh-host-key", "")},
+		// Same class as the host key: the HMAC key signing the UI-relay cookie.
+		// Handed into a sandbox, sandbox-authored JS on the shared UI origin can
+		// forge wardyn_ui_sess for any run and any role.
+		{"reserved-ui-session-key", gitPATSpec("github.com", "wardyn-ui-session-key", "")},
 		{"reserved-bedrock-api-key", gitPATSpec("bedrock-runtime.us-east-1.amazonaws.com", "bedrock-api-key", "")},
 	}
 	for _, c := range cases {

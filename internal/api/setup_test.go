@@ -73,8 +73,14 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	if len(memberSt.Secrets.Present) != 0 {
 		t.Errorf("member: secrets.present = %v, want empty (redacted)", memberSt.Secrets.Present)
 	}
-	if len(memberSt.Runner.ConfinementClasses) != 0 {
-		t.Errorf("member: runner.confinement_classes = %v, want empty (redacted)", memberSt.Runner.ConfinementClasses)
+	// NOT redacted: ConfinementClasses feeds barrierReady (deriveReadiness),
+	// which gates a member's own demo Start button — zeroing it disabled
+	// demos for every member (W3-S1-2).
+	if len(memberSt.Runner.ConfinementClasses) == 0 {
+		t.Errorf("member: runner.confinement_classes = %v, want the real classes (drives demo barrierReady)", memberSt.Runner.ConfinementClasses)
+	}
+	if memberSt.Runner.Driver != "" {
+		t.Errorf("member: runner.driver = %q, want empty (redacted diagnostic detail)", memberSt.Runner.Driver)
 	}
 	// NOT redacted: the answer a member's console needs to function.
 	if !memberSt.LLMReady {
@@ -468,7 +474,7 @@ func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
 // Node-only by construction => warn naming WARDYN_AGENT_IMAGES; any operator
 // override is assumed provisioned on purpose => info, not a red.
 func TestAgentImageCheck(t *testing.T) {
-	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:latest") {
+	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:") {
 		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr ref", chk.Status, chk.Detail)
 	}
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {

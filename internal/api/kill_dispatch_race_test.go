@@ -196,7 +196,7 @@ func TestKillRun_FailAndRevokeRace_SingleRevocation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			srv.failAndRevoke(context.Background(), runID, types.RunPending)
+			srv.failAndRevoke(context.Background(), runID, types.RunPending, "test: forced dispatch failure")
 		}()
 		close(start)
 		wg.Wait()

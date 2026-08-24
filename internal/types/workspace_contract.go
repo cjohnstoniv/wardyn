@@ -85,7 +85,10 @@ type BaseImageEntry struct {
 	Name string    `json:"name"`
 	// Image is the ref: the image itself (registry/byo) or the FROM (custom).
 	Image string `json:"image"`
-	// Steps are Dockerfile lines layered on Image (custom only).
+	// Steps are Dockerfile lines attached to a "custom" Image. NOT CURRENTLY
+	// APPLIED at build time — see WorkspaceBaseImage.Steps's doc (workspace.go)
+	// for why (host-side build RCE, outside every confinement tier). Stored so
+	// the catalog row round-trips; never layered onto Image today.
 	Steps     []string  `json:"steps,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

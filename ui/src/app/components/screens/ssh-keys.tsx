@@ -31,6 +31,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
+import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { absoluteTime, relativeTime } from "../../lib/format";
@@ -111,6 +112,14 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                     <span className="inline-flex items-center gap-2">
                       <KeyRound className="size-3.5 text-cyan" />
                       {k.name || <span className="text-muted-foreground">(unnamed)</span>}
+                      {k.role === "admin" && (
+                        <Chip
+                          tone="warning"
+                          title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
+                        >
+                          Admin override
+                        </Chip>
+                      )}
                     </span>
                   </TableCell>
                   <TableCell>

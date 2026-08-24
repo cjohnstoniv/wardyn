@@ -68,11 +68,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	// Same member custom-image denial launch runs (runs_create.go's
+	// Same member request-field denial launch runs (runs_create.go's
 	// decodeAndValidateCreateRun): a preflight dry-run must refuse a member's
-	// BYOI/devcontainer_repo request with the SAME 403 create would, not preview
-	// a rosier checklist for a request that would be denied at launch.
-	if s.denyMemberCustomImage(w, r, req) {
+	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
+	// create would, not preview a rosier checklist for a request that would be
+	// denied at launch.
+	if s.denyMemberRequest(w, r, req) {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
@@ -207,7 +208,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// warning can never disagree. The helper clones internally: reconcileLLMAccess
 	// drops orphaned grants in place, but launch persists every grant on the resolved
 	// spec, so the checklist must keep seeing the FULL spec.
-	llmAccess := s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
+	//
+	// W16-S1-3: skipped for task_mode=exec, mirroring runNeedsModelWarning's own
+	// exec gate at create time — an exec run runs a plain shell command, invokes
+	// no model, and needs no credential, so resolving it unconditionally previewed
+	// a false "missing model access" blocker on every CI exec job's --dry-run.
+	var llmAccess *composeLLMAccess
+	if req.TaskMode != "exec" {
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
+	}
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess)
 	writeJSON(w, http.StatusOK, preflightResponse{

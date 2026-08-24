@@ -62,16 +62,6 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   unverified: "Unverified",
 };
 
-// Setup-checklist residency sub-line (compose_setup.go's Residency field) — the
-// one-line honest answer to "where does this credential actually live at run
-// time", shown muted under a checklist row. Keyed by the wire value; an
-// unrecognized/absent residency renders no sub-line (see SetupItemResidency).
-export const SETUP_RESIDENCY_NOTE: Record<string, string> = {
-  proxy_injected: "held by the proxy — never inside the sandbox",
-  resident_mount: "mounted into the sandbox",
-  brokered_mint: "brokered at launch by the control plane — never stored in the sandbox",
-};
-
 // Outcome-true button labels (D9) — the label predicts what the click does.
 export const BTN = {
   showSetupCommand: "Show setup command",
@@ -113,14 +103,14 @@ export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 // this just stops a viewer from discovering the tier as a raw 403 toast).
 // ONE reason string, reused at every disabled operator-only control so it
 // never drifts between screens.
-export const OPERATOR_ONLY_REASON = "Requires the operator role.";
+export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 
 // Said once, where a viewer would actually feel the consequence (the run's
 // own pending-approval banner) — the read/launch/kill viewer tier still means
-// their run blocks on an approval exactly like an operator's does; only the
+// their run blocks on an approval exactly like an admin's does; only the
 // deciding is out of reach.
 export const VIEWER_APPROVAL_BLOCKS_NOTE =
-  "This run is blocked until an operator decides it — you can see the requested scope below, but deciding needs the operator role.";
+  "This run is blocked until an admin decides it — you can see the requested scope below, but deciding needs the admin role.";
 
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
@@ -274,6 +264,16 @@ export function approvalScopeBadge(
   }
   return APPROVAL_SCOPE_LABEL[scope].toLowerCase();
 }
+
+// D7 — the tag LiveApprovals shows on a pending row whose host matches the
+// agent CLI's own known telemetry endpoint (WARDYN_ALLOW_AGENT_TELEMETRY
+// opt-in, or a historical run from before that switch defaulted to
+// suppressing it). Cockpit-adjacent, not a screen of its own — kept beside
+// RUN_COCKPIT rather than folded into it.
+export const TELEMETRY_TAG = {
+  label: "Agent telemetry",
+  title: "The agent CLI's usual diagnostics endpoint. Approve or deny it like any other host.",
+};
 
 // Run cockpit (/runs/:id) — the terminal-first live-run screen. Every string
 // the redesign introduces lands HERE first, so the four Terminal states and the
@@ -438,6 +438,41 @@ export const RUN_COCKPIT = {
   // board's strip and deliberately absent here: a hint that lies is worse than
   // no hint.
   shortcuts: "⌘\\ dock · Esc exit focus",
+} as const;
+
+// UI apps lane (docs/design/ui-sandboxes-prompt.md §7, FROZEN) — the run-detail
+// "Attach from your terminal" card's third lane and the policies screen's
+// read-only ui_apps row. Every byte here is canon; run-detail-ssh.tsx and
+// run-detail-ssh.test.tsx must render/assert these verbatim, never a paraphrase.
+export const UI_APPS_LANE = {
+  title: "UI apps",
+  intro:
+    "Wardyn relays a port the sandbox is already listening on to your browser. The sandbox gets no network of its own — the relay rides the same exec lane the terminal does.",
+  appSub: (port: number, path: string) => `localhost:${port}${path}`,
+  cta: (app: string) => `Open ${app}`,
+  ctaBusy: "Opening…",
+  newTab:
+    "Opens in a new tab, on a different address than this console. That separation is deliberate: the app is the sandbox's own code, and it must never be able to read your console session.",
+  noRecording:
+    "Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that you opened and closed the app, never what you did in it.",
+  off: "Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev server — to your browser through Wardyn. An operator turns it on by setting WARDYN_UI_SANDBOX_LISTEN where wardynd starts.",
+  noApps:
+    "On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in the policy's ui_apps list — an app is a name, a loopback port and a path.",
+  errorTitle: (app: string) => `Couldn't start ${app}`,
+  errorLauncher: (app: string) =>
+    `This image has no /usr/local/bin/wardyn-ui-${app}. Use an image that ships the launcher (deploy/images/vscode/), or add one to your own image.`,
+} as const;
+
+// Prefix of the server's verbatim missing-launcher body (docs/design/ui-
+// sandboxes-prompt.md §7's "server-side counterpart"), used to decide whether
+// to prepend the friendly lane.error.launcher guidance above the raw text.
+export const UI_APPS_LAUNCHER_MISSING_PREFIX = "no UI launcher in this image:";
+
+// Policies screen's read-only ui_apps detail row (same frozen table, §7).
+export const POLICY_UI_APPS = {
+  label: "UI apps",
+  none: "None declared",
+  value: (app: string, port: number, path: string) => `${app} → localhost:${port}${path}`,
 } as const;
 
 // ui-approvals-2: the wire kind (ApprovalRequest.kind, e.g. "egress_domain")

@@ -488,6 +488,30 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(screen.getByRole("button", { name: /^replay again$/i })).toBeInTheDocument();
   });
 
+  // W19-W19b-2: learnVerifyEgress writes a live approval to ws.requirements
+  // (egress:<host>, level required), not ws.approved_egress — a host approved
+  // that way must not still render as blocked, and the Approve CTA it would
+  // duplicate-write with must not offer to approve it again.
+  it("treats a host approved via the requirements contract (not approved_egress) as already-allowed", async () => {
+    const rr: RecordResult = {
+      ...confinedRR,
+      observations: obs({
+        domains: [
+          { host: "registry.npmjs.org", allow_count: 4, deny_count: 0, pending_count: 0 },
+          { host: "github.com", allow_count: 1, deny_count: 0, pending_count: 0 },
+          { host: "learned.example.com", allow_count: 0, deny_count: 1, pending_count: 0 }, // live-approved via requirements
+        ],
+      }),
+    };
+    renderPane({
+      record_results: { "build-test": learning, "verify:build-test": rr },
+      approved_egress: ["github.com"],
+      requirements: { "egress:learned.example.com": { level: "required", provenance: "operator_set" } },
+    });
+    const blocked = screen.queryByTestId("verify-session-blocked");
+    expect(blocked === null || within(blocked).queryByText("learned.example.com") === null).toBe(true);
+  });
+
   // ui-wsDetail-3: same overwrite-with-no-confirm gap, on the settled
   // CONFINED review's own re-run button.
   it("Replay again asks for confirmation before overwriting the settled containment review", async () => {

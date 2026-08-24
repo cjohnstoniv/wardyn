@@ -26,6 +26,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 . "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
+. "${REPO_ROOT}/scripts/lib/verify-demo-take-13.sh"   # check_video_13 (see the note there)
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
 VIDEO="${1:-}"
@@ -888,9 +889,11 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # · 06 your first run (was 05) · 07 interactive runs (was 06) · 08 an
   # autonomous agent (was 07) · 09 record a run (unchanged) · 10 approvals &
   # egress (unchanged) · 11 CI & headless (unchanged) · 12 audit & attach
-  # (unchanged). The check_video_NN_* function NAMES below still carry their
-  # OWN older numbering (accumulated across earlier renumbers) — only the case
-  # KEYS re-key to the table above; trust the case label, not the callee name.
+  # (unchanged) · 13 terminal to the cluster (0.6's new terminal-only episode,
+  # which never had an old number). The check_video_NN_* function NAMES below
+  # still carry their OWN older numbering (accumulated across earlier
+  # renumbers) — only the case KEYS re-key to the table above; trust the case
+  # label, not the callee name.
   ""|08) check_video_02 ;;             # unset legacy walkthrough == the autonomous episode's own checks
   04) check_video_02_workspace ;;
   06) check_video_03_first_run ;;
@@ -898,6 +901,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   10) check_video_07_approvals ;;
   11) check_video_09 ;;
   12) check_video_10 ;;
+  13) check_video_13 ;;
   # check_video_08_policies (the old policies-and-confinement checks) is no
   # longer dispatched: that content retires into the new episode 05
   # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the
@@ -908,13 +912,24 @@ case "${WARDYN_DEMO_VIDEO:-}" in
     printf '    video-specific checks TBD by spec\n'
     ;;
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..12, or unset for the walkthrough" ;;
+     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
 
 head_ "Narration"
-TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video}/narration.json"
+# Per-video by default, exactly as record-demo.sh resolves DEMO_OUT_DIR — a bare
+# demo-video/ is the no---video walkthrough's directory and nothing else's.
+TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video${WARDYN_DEMO_VIDEO:+-${WARDYN_DEMO_VIDEO}}}/narration.json"
+# A video with no ui/e2e/demo/<nn>-*.spec.ts has no browser lane and no
+# narration.json to have — its cues are the terminal lane's. Same rule
+# record-demo.sh resolves RUN_DRIVER=0 by, so the two cannot drift. Anything
+# WITH a spec keeps being checked against narration.json: a hybrid take whose
+# browser half went silent must still fail, and V09/V10 assert their terminal
+# timeline separately for exactly that reason.
+if [[ -n "${WARDYN_DEMO_VIDEO:-}" ]] && ! compgen -G "${REPO_ROOT}/ui/e2e/demo/${WARDYN_DEMO_VIDEO}-*.spec.ts" >/dev/null; then
+  TL="${TL%/narration.json}/narration-terminal.json"
+fi
 if [[ -s "${TL}" ]]; then
   python3 - "${TL}" <<'PY'
 import json, sys

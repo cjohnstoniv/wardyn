@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,11 +29,29 @@ func (f *fakeLister) managedContainers(ctx context.Context) ([]managedContainer,
 	return f.containers, nil
 }
 
+// fakeWatcher stands in for the `docker events` stream: it announces a fixed
+// set of containers, then blocks until ctx is done (as the real stream does).
+type fakeWatcher struct {
+	announce []managedContainer
+	seen     chan struct{}
+}
+
+func (f *fakeWatcher) watchContainers(ctx context.Context, add func(managedContainer)) error {
+	for _, mc := range f.announce {
+		add(mc)
+	}
+	if f.seen != nil {
+		close(f.seen)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestDockerCorrelator_FullAndShortID(t *testing.T) {
 	run := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	full := "0123456789abcdef0123456789abcdef" // 32 chars
 	lister := &fakeLister{containers: []managedContainer{{ID: full, RunID: run}}}
-	c := newDockerCorrelator(lister, time.Minute)
+	c := newDockerCorrelator(lister, nil, time.Minute)
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +77,7 @@ func TestDockerCorrelator_FullAndShortID(t *testing.T) {
 func TestDockerCorrelator_OnMissRefreshThrottled(t *testing.T) {
 	run := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 	lister := &fakeLister{} // starts empty
-	c := newDockerCorrelator(lister, time.Hour)
+	c := newDockerCorrelator(lister, nil, time.Hour)
 	_ = c.Refresh(context.Background())
 	callsAfterFirst := lister.calls
 
@@ -73,7 +92,7 @@ func TestDockerCorrelator_OnMissRefreshThrottled(t *testing.T) {
 	// Now make the container available and use a zero throttle: a miss should
 	// refresh and then resolve.
 	lister.containers = []managedContainer{{ID: "newcontainer000000000000", RunID: run}}
-	c2 := newDockerCorrelator(lister, 0)
+	c2 := newDockerCorrelator(lister, nil, 0)
 	_ = c2.Refresh(context.Background())
 	lister.containers = []managedContainer{{ID: "appears-later-00000000000", RunID: run}}
 	if r, ok := c2.RunForContainer("appears-later-00000000000"); !ok || r != run {
@@ -194,5 +213,143 @@ func TestGatedMapper_ForwardsUnmappedWhenOptedIn(t *testing.T) {
 	}
 	if ev.RunID != nil {
 		t.Errorf("run id = %v, want nil for an unmapped event", ev.RunID)
+	}
+}
+
+// ── E1/E2 regression: the frozen counter (short-lived containers) ───────────
+
+// TestDockerCorrelator_ResolvesAfterContainerExits is half of the frozen-counter
+// regression. Refresh used to REPLACE the index with the current `docker ps`
+// snapshot, so the moment a run's container exited (and teardown removed it)
+// every kernel event still coming down the lagging Tetragon tail resolved
+// unmapped, was gated, and moved no counter at all. Entries must now outlive
+// their container by containerRetention.
+func TestDockerCorrelator_ResolvesAfterContainerExits(t *testing.T) {
+	run := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+	full := "aaaabbbbccccddddeeeeffff00001111"
+	lister := &fakeLister{containers: []managedContainer{{ID: full, RunID: run}}}
+	c := newDockerCorrelator(lister, nil, time.Minute)
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The container exits and teardown removes it: it is gone from the listing.
+	lister.containers = nil
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := c.RunForContainer(full); !ok || r != run {
+		t.Errorf("exited container must still correlate within the retention window: got %v/%v, want %v", r, ok, run)
+	}
+	if r, ok := c.RunForContainer(full[:31]); !ok || r != run { // the id form this Tetragon build emits
+		t.Errorf("truncated id after exit: got %v/%v, want %v", r, ok, run)
+	}
+
+	// Past the retention window the entry is swept, so the index cannot grow
+	// without bound.
+	c.retain = 0
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.RunForContainer(full); ok {
+		t.Error("entry must be swept once it is older than the retention window")
+	}
+}
+
+// TestDockerCorrelator_WatchLearnsShortLivedContainer is the other half: a
+// container that starts and exits BETWEEN two polls is never in any snapshot at
+// all (the live one-shot repro in local/gt-diagnosis.md). Only the docker event
+// stream can bind it, and it must be bound without any successful listing.
+func TestDockerCorrelator_WatchLearnsShortLivedContainer(t *testing.T) {
+	run := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+	full := "1111222233334444555566667777888"
+	w := &fakeWatcher{
+		announce: []managedContainer{{ID: full, RunID: run}},
+		seen:     make(chan struct{}),
+	}
+	// The lister NEVER reports the container — as `docker ps` never did.
+	c := newDockerCorrelator(&fakeLister{}, w, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); c.Watch(ctx) }()
+	select {
+	case <-w.seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher never ran")
+	}
+
+	if r, ok := c.RunForContainer(full[:12]); !ok || r != run {
+		t.Errorf("event-stream container must correlate: got %v/%v, want %v", r, ok, run)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Watch did not return on context cancellation")
+	}
+}
+
+// TestManagedFromDockerEventLine pins the `docker events --format '{{json .}}'`
+// shape the watcher parses: the labels ride on Actor.Attributes, so a create
+// event alone carries everything the index needs (no follow-up inspect, which
+// would race the container's removal). Non-agent containers stay out.
+func TestManagedFromDockerEventLine(t *testing.T) {
+	const line = `{"status":"create","id":"c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",` +
+		`"Type":"container","Action":"create","Actor":{"ID":"c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",` +
+		`"Attributes":{"image":"wardyn/agent","wardyn.managed":"true","wardyn.component":"agent",` +
+		`"wardyn.run-id":"77777777-7777-7777-7777-777777777777"}},"scope":"local"}`
+	var row dockerEventLine
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		t.Fatal(err)
+	}
+	mc, ok := managedFromLabels(row.ID, row.Actor.Attributes)
+	if !ok {
+		t.Fatal("agent container event must yield an index entry")
+	}
+	if mc.RunID != uuid.MustParse("77777777-7777-7777-7777-777777777777") {
+		t.Errorf("run id = %v", mc.RunID)
+	}
+	if mc.ID != row.Actor.ID {
+		t.Errorf("container id = %q", mc.ID)
+	}
+
+	// The proxy sidecar's own kernel events are not the agent's behaviour.
+	row.Actor.Attributes["wardyn.component"] = "proxy"
+	if _, ok := managedFromLabels(row.ID, row.Actor.Attributes); ok {
+		t.Error("proxy container must not enter the index")
+	}
+}
+
+// TestGatedMapper_CountsUnmappedDrops is the visibility half: a gated event used
+// to move NO counter (not observed, not dropped), so "the sensor saw nothing"
+// and "the sensor saw plenty and correlated none" were the same
+// observed_total==0 on /healthz. The gate must count what it refuses.
+func TestGatedMapper_CountsUnmappedDrops(t *testing.T) {
+	run := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	mapper := &gatedMapper{inner: groundtruth.NewMapper(fakeGTCorrelator{id: "knowncontainerid0000", run: run})}
+
+	if _, ok := mapper.MapLine([]byte(`{"process_exec":{"process":{"binary":"/bin/sh","docker":"unknowncontainer0000"}}}`)); ok {
+		t.Fatal("unmapped event must still be gated")
+	}
+	if got := mapper.droppedUnmappedCount(); got != 1 {
+		t.Errorf("dropped_unmapped = %d, want 1 after one gated event", got)
+	}
+
+	if _, ok := mapper.MapLine([]byte(`{"process_exec":{"process":{"binary":"/bin/sh","docker":"knowncontainerid0000"}}}`)); !ok {
+		t.Fatal("correlated event must be forwarded")
+	}
+	if got := mapper.droppedUnmappedCount(); got != 1 {
+		t.Errorf("dropped_unmapped = %d, want 1 — a correlated event is not a drop", got)
+	}
+
+	// An unrecorded event KIND is not a correlation failure and must not inflate
+	// the counter.
+	if _, ok := mapper.MapLine([]byte(`{"process_exit":{"process":{"binary":"/bin/sh"}}}`)); ok {
+		t.Fatal("unrecorded kind must not map")
+	}
+	if got := mapper.droppedUnmappedCount(); got != 1 {
+		t.Errorf("dropped_unmapped = %d, want 1 — an unrecorded kind is not a gated drop", got)
 	}
 }

@@ -428,7 +428,10 @@ func agentImageCheck(images map[string]string) SetupCheck {
 // known, by construction, to carry Node only (deploy/images/claude-code/Dockerfile).
 // The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
 func isConventionNodeOnlyImage(ref string) bool {
-	return ref == "ghcr.io/cjohnstoniv/agent-claude-code:latest" ||
+	// Prefix, not an exact tag: the ghcr convention now carries the daemon's
+	// version tag (D19), not a fixed :latest — every published tag is the same
+	// Node-only convention image.
+	return strings.HasPrefix(ref, "ghcr.io/cjohnstoniv/agent-claude-code:") ||
 		ref == "wardyn/agent-claude-code:local" ||
 		ref == "wardyn/agent-claude-code:demo"
 }
@@ -577,6 +580,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
 			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
 		}
+		// permissions_posture (#19b): non-blocking/informational, so a read
+		// failure here is skipped rather than surfaced as a setup/status 500 —
+		// unlike secrets/site-config above, nothing else on this page depends
+		// on the enforcement map.
+		if enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx); err == nil {
+			checks = append(checks, permissionsPostureCheck(enf))
+		}
 	}
 
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
@@ -640,11 +650,19 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // still launch runs normally. This only ZEROES fields on an already-computed,
 // already-200 response — it can never itself produce an error state (no
 // non-401 error is possible for a member here, by construction).
+//
+// Runner.ConfinementClasses survives redaction: it is not diagnostic detail,
+// it is the barrier-count signal ui/lib/readiness.ts's deriveReadiness reads
+// verbatim to compute barrierReady, which gates the keyless demos' Start
+// button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
+// for every member regardless of the real runner state. Only Driver and the
+// per-class ConfinementSubstrates map — genuine diagnostic detail — are
+// dropped.
 func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
-	st.Runner = SetupRunner{ConfinementClasses: []string{}}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
 	return st
 }
 

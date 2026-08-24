@@ -105,3 +105,23 @@ operator-supplied token/issuer in .Values.env or .Values.extraEnv.
 {{- end -}}
 {{- if $ok }}true{{ end -}}
 {{- end -}}
+
+{{/*
+Refuse at render when an optional port collides with the console's HTTP port.
+wardynd refuses to BOOT when uiSandbox.port equals service.port (the separate
+browser origin is the control — cmd/wardynd/main.go validateUISandboxConfig),
+and a Service carrying the same port number twice is rejected by the API server
+anyway. Both are failures that only show up after apply — as a crash-loop or a
+rejected object — so say it at render, like every other guard in this chart.
+*/}}
+{{- define "wardyn.assertPorts" -}}
+{{- $http := int .Values.service.port -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
+{{- if and $ssh.enabled (eq (int ($ssh.port | default 2222)) $http) -}}
+{{- fail (printf "wardyn: ssh.port and service.port are both %d — the SSH gateway and the console cannot share one port. Give ssh.port its own number." $http) -}}
+{{- end -}}
+{{- if and $ui.enabled (eq (int ($ui.port | default 8081)) $http) -}}
+{{- fail (printf "wardyn: uiSandbox.port and service.port are both %d — wardynd refuses to boot when they are equal, because the sandbox's own pages must land on a DIFFERENT browser origin than the console. Give uiSandbox.port its own number." $http) -}}
+{{- end -}}
+{{- end -}}

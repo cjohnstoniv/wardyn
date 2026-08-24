@@ -8,8 +8,14 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupStatus } from "../../../lib/types";
 import { EnvironmentStep, recommendedTier } from "./environment-step";
-import { CONFINEMENT_CONSTANT_NOTE, CC_META } from "../../wardyn/cc-meta";
+import {
+  CONFINEMENT_CONSTANT_NOTE,
+  CC_MATRIX_ROWS,
+  CC_MATRIX_WHERE,
+  CC_META,
+} from "../../wardyn/cc-meta";
 import { BTN, RESIDUAL_PREFIX } from "../../wardyn/copy";
+import { CC_ORDER } from "../../../lib/types";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { TIER_GUIDES } from "./setup-guide";
 
@@ -195,6 +201,31 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     const expected = `${RESIDUAL_PREFIX} ${CC_META.CC2.doesntProtect}`;
     const caveats = screen.getAllByLabelText("Yes, with caveat");
     expect(caveats.some((el) => el.getAttribute("title") === expected)).toBe(true);
+  });
+
+  // (H3) Data-drift guard, inherited from the deleted TierMatrix suite (0.6
+  // ponytail #1): this step is now the ONLY render site of CC_MATRIX_ROWS, so a
+  // row added to — or regraded in — cc-meta.ts must show up here or nowhere at
+  // all. Tone is counted off the three graded-cell aria-labels rather than the
+  // CSS classes, since the rest of the step carries success/warning tones too.
+  it("(H3) renders every CC_MATRIX_ROWS label + where-it-runs cell, graded from the data", () => {
+    renderStep();
+    for (const row of CC_MATRIX_ROWS) {
+      expect(screen.getByText(row.label)).toBeInTheDocument();
+    }
+    expect(screen.getByText(CC_MATRIX_WHERE.label)).toBeInTheDocument();
+    for (const cc of CC_ORDER) {
+      expect(screen.getByText(CC_MATRIX_WHERE.cells[cc])).toBeInTheDocument();
+    }
+    const want = { yes: 0, caveat: 0, no: 0 };
+    for (const row of CC_MATRIX_ROWS) {
+      for (const cc of CC_ORDER) want[row.cells[cc]]++;
+    }
+    expect({
+      yes: screen.getAllByLabelText("Yes").length,
+      caveat: screen.getAllByLabelText("Yes, with caveat").length,
+      no: screen.getAllByLabelText("No").length,
+    }).toEqual(want);
   });
 
   // ── recommendedTier helper (exported for tests only) ─────────────────────────

@@ -613,8 +613,9 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 			}
 			return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
 		case mintConflictAlreadyMinted:
-			return "", "", "", fmt.Errorf("credential already minted (single-use) — a prior mint for this grant already succeeded; " +
-				"see docs/adoption/corp-network-onboarding-findings.md B2 for the standing-lease gap this hits on a second git op")
+			return "", "", "", fmt.Errorf("credential already minted (single-use) — a prior mint for this grant already succeeded. " +
+				"For a git_pat this is the second-git-op case (docs/adoption/corp-network-onboarding-findings.md B2): approve with " +
+				"decision_scope=run (`wardyn approve <id> --scope run`) to take a per-run lease instead of one mint per operation")
 		case mintConflictScopeMismatch:
 			return "", "", "", fmt.Errorf("requested scope does not match the grant (no-widening)")
 		case mintConflictPending:

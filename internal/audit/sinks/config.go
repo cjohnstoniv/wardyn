@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Config is the top-level JSON configuration block for the sinks subsystem.
@@ -24,6 +25,28 @@ type Config struct {
 	Syslog  *SyslogConfig  `json:"syslog,omitempty"`
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
 	File    *FileConfig    `json:"file,omitempty"`
+}
+
+// Source (#10, WARDYN_AUDIT_SOURCE), when non-empty, is stamped as an extra
+// top-level "source" field on every event a sink serializes — see
+// marshalEvent. It lets one SIEM index ingesting from several wardynd
+// instances/environments (staging vs prod, cluster A vs B) tell them apart
+// without a per-sink config. Set once at boot (cmd/wardynd) before any sink
+// starts emitting; never mutated after.
+var Source string
+
+// marshalEvent serializes ev exactly as json.Marshal(ev) would, except that
+// when Source is set it is merged in as an additional "source" field — every
+// sink (file, syslog, webhook) calls this instead of json.Marshal directly so
+// the stamp is applied uniformly rather than once per sink.
+func marshalEvent(ev types.AuditEvent) ([]byte, error) {
+	if Source == "" {
+		return json.Marshal(ev)
+	}
+	return json.Marshal(struct {
+		types.AuditEvent
+		Source string `json:"source"`
+	}{ev, Source})
 }
 
 // SyslogConfig is the JSON-serialisable counterpart of SyslogSink fields.

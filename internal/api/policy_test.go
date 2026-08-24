@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -405,5 +406,71 @@ func TestLoadPolicySpecDefaultExample(t *testing.T) {
 	}
 	if _, err := LoadPolicySpec(path); err != nil {
 		t.Errorf("shipped default policy invalid: %v", err)
+	}
+}
+
+// TestValidatePolicySpec_UIApps covers the ui_apps write-time gate. The name is
+// the sharp edge: it is interpolated into the launcher path the gateway execs
+// inside the sandbox (/usr/local/bin/wardyn-ui-<name>) and into the enter URL's
+// query, so a slash, a space, a shell metacharacter or ".." must be impossible
+// HERE — every policy ingest funnels through validatePolicySpec, and nothing
+// downstream sanitises the value again.
+func TestValidatePolicySpec_UIApps(t *testing.T) {
+	spec := func(apps ...types.UIApp) types.RunPolicySpec {
+		return types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: apps}
+	}
+	cases := []struct {
+		name string
+		spec types.RunPolicySpec
+		ok   bool
+	}{
+		{"no apps is the default", spec(), true},
+		{"one app", spec(types.UIApp{Name: "code", Port: 8080}), true},
+		{"path allowed", spec(types.UIApp{Name: "code", Port: 8080, Path: "/?folder=/work"}), true},
+		{"two apps", spec(types.UIApp{Name: "code", Port: 8080}, types.UIApp{Name: "web", Port: 3000}), true},
+		{"empty name", spec(types.UIApp{Port: 8080}), false},
+		{"uppercase name", spec(types.UIApp{Name: "Code", Port: 8080}), false},
+		{"path traversal in name", spec(types.UIApp{Name: "../../etc/x", Port: 8080}), false},
+		{"slash in name", spec(types.UIApp{Name: "a/b", Port: 8080}), false},
+		{"shell metacharacter in name", spec(types.UIApp{Name: "a;rm", Port: 8080}), false},
+		{"space in name", spec(types.UIApp{Name: "a b", Port: 8080}), false},
+		{"trailing dash", spec(types.UIApp{Name: "code-", Port: 8080}), false},
+		{"duplicate name", spec(types.UIApp{Name: "code", Port: 8080}, types.UIApp{Name: "code", Port: 3000}), false},
+		{"duplicate port", spec(types.UIApp{Name: "code", Port: 8080}, types.UIApp{Name: "web", Port: 8080}), false},
+		{"zero port", spec(types.UIApp{Name: "code"}), false},
+		{"port out of range", spec(types.UIApp{Name: "code", Port: 70000}), false},
+		{"relative path", spec(types.UIApp{Name: "code", Port: 8080, Path: "x"}), false},
+		{"protocol-relative path is an open redirect", spec(types.UIApp{Name: "code", Port: 8080, Path: "//evil.example.com/"}), false},
+		{"absolute URL is not a path", spec(types.UIApp{Name: "code", Port: 8080, Path: "https://evil.example.com/"}), false},
+		{"dot-dot path", spec(types.UIApp{Name: "code", Port: 8080, Path: "/../x"}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePolicySpec(tc.spec)
+			if tc.ok && err != nil {
+				t.Fatalf("want accepted, got %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("want rejected, got nil error")
+			}
+		})
+	}
+
+	over := make([]types.UIApp, 0, maxUIAppsPerPolicy+1)
+	for i := range maxUIAppsPerPolicy + 1 {
+		over = append(over, types.UIApp{Name: fmt.Sprintf("app%d", i), Port: 8000 + i})
+	}
+	if err := validatePolicySpec(spec(over...)); err == nil {
+		t.Fatalf("want %d apps rejected (max %d)", len(over), maxUIAppsPerPolicy)
+	}
+}
+
+// TestUIApp_PathOrRoot pins the empty-path default the gateway lands on.
+func TestUIApp_PathOrRoot(t *testing.T) {
+	if got := (types.UIApp{}).PathOrRoot(); got != "/" {
+		t.Fatalf("empty path -> %q, want /", got)
+	}
+	if got := (types.UIApp{Path: "/ide"}).PathOrRoot(); got != "/ide" {
+		t.Fatalf("set path -> %q", got)
 	}
 }

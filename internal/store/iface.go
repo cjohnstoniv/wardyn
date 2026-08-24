@@ -61,6 +61,14 @@ type Store interface {
 	// FULL desired list, replacing rather than merging.
 	SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
 	SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error)
+	// SetWorkspaceOwner replaces ONLY the owned_by column (plus updated_at).
+	// The offboarding path (design decision O6): an admin reassigns a departed
+	// member's workspace to the operator by setting owner "". Scoped for the
+	// same reason SetWorkspaceLLMCred is — it must never replay a stale
+	// snapshot over a concurrently-persisted async scan — and separate from
+	// UpdateWorkspace on purpose: the full-row update deliberately does not
+	// carry owned_by, so no ordinary edit can move ownership.
+	SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error)
 	SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
@@ -148,11 +156,68 @@ type Store interface {
 	// principal (an attempted delete of someone else's key is ErrNotFound, not
 	// a distinguishable 403 — no existence leak). GetSSHKeyByFingerprint is the
 	// gateway's auth-time lookup (unscoped: the caller has not authenticated
-	// yet, that IS what this call resolves).
+	// yet, that IS what this call resolves). RefreshSSHKeyRoles re-stamps
+	// role+role_checked_at (migration 0046) on every key owned by principal —
+	// the OIDC callback's OnLogin hook, bounding the admin-override stamp's
+	// staleness instead of leaving it fixed at registration time forever.
 	AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error)
 	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
+	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
+
+	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
+	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
+	// reason the capability methods below are: GetAPITokenByRaw runs on the
+	// REQUEST PATH of every route in the authenticated group (it is the third
+	// auth branch — see apiTokenAuth in internal/api/apitokens.go), so a
+	// store that cannot answer it must be a COMPILE error, never a
+	// degrade-to-allow type-assert hiding in a test double.
+	//
+	// CreateAPIToken and GetAPITokenByRaw take the PLAINTEXT token and hash it
+	// internally — the raw value never reaches SQL. GetAPITokenByRaw is the
+	// auth-time lookup (unscoped: the caller has not authenticated yet, that IS
+	// what this call resolves) and returns ErrNotFound for unknown, mismatched
+	// AND revoked tokens alike, so the boundary is not an existence oracle.
+	// RevokeAPIToken is principal-scoped when principal is non-empty (the
+	// self-service path; someone else's id is ErrNotFound, not a
+	// distinguishable 403) and revokes ANY token when it is empty (the admin
+	// path). TouchAPIToken is best effort — its error must never fail a request.
+	CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error)
+	GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error)
+	TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) error
+	ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error)
+	ListAPITokens(ctx context.Context) ([]types.APIToken, error)
+	RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error)
+
+	// Capability grants and the per-kind enforcement switch (migration 0042,
+	// store_capabilities.go). These ARE part of Store — unlike RunLayoutStore /
+	// Pager, which stayed out of it precisely so an embedded-nil test double
+	// would not route to a nil interface — because the resolver runs on the
+	// REQUEST PATH of routes every one of those doubles already serves. A
+	// type-assert-and-degrade seam there would mean "this fake does not
+	// implement capabilities, therefore allow", which is a fail-OPEN authz
+	// gate hiding in a test-only branch. Widening Store makes a store that
+	// cannot answer a permission question a COMPILE error instead.
+	UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error)
+	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error
+	ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error)
+	// ListCapabilityGrantsFor returns the grants that could apply to one caller:
+	// the `all` rows plus the `user` rows naming any of users (sub AND email)
+	// plus the `group` rows naming any of groups. Not filtered by capability —
+	// see the implementation's doc comment.
+	ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error)
+	// GetCapabilityEnforcement returns the sparse per-kind switch map; an absent
+	// key means NOT enforced, which is the zero-config back-compat default.
+	GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error)
+	// PutCapabilityEnforcement replaces the WHOLE map (a capability the caller
+	// omits loses its row) and returns the stored result.
+	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
+
+	// Ping proves the store is actually reachable, not just constructed — the
+	// /readyz readiness probe's one call. A live TCP connect with no working
+	// query would otherwise read as healthy forever.
+	Ping(ctx context.Context) error
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the

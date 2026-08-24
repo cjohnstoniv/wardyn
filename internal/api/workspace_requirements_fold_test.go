@@ -116,6 +116,46 @@ func TestApplyWorkspaceRequirements_Egress(t *testing.T) {
 	})
 }
 
+// TestApplyWorkspaceRequirements_EgressTrustBoundary is the #12 regression:
+// RequireOperatorSetEgress applies the SAME provenance gate to a scan_seeded
+// egress requirement that TestApplyWorkspaceRequirements_TrustBoundary pins
+// for secrets — but ONLY when the flag is set. Default (flag unset/false) is
+// the pre-existing behavior: any enabled requirement folds in regardless of
+// provenance (see TestApplyWorkspaceRequirements_Egress).
+func TestApplyWorkspaceRequirements_EgressTrustBoundary(t *testing.T) {
+	wsID := uuid.New()
+	wsWith := func(provenance string) []types.Workspace {
+		return []types.Workspace{{ID: wsID, Requirements: map[string]types.WorkspaceRequirement{
+			"egress:api.stripe.com": {Level: "required", Provenance: provenance},
+		}}}
+	}
+
+	t.Run("flag off: scan_seeded still folds in (today's behavior, unchanged)", func(t *testing.T) {
+		srv := New(Config{})
+		spec := &types.RunPolicySpec{}
+		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("scan_seeded"), nil)
+		if !slices.Contains(spec.AllowedDomains, "api.stripe.com") {
+			t.Errorf("AllowedDomains = %v, want api.stripe.com folded in (gate is off by default)", spec.AllowedDomains)
+		}
+	})
+	t.Run("flag on: scan_seeded is skipped (trust boundary)", func(t *testing.T) {
+		srv := New(Config{RequireOperatorSetEgress: true})
+		spec := &types.RunPolicySpec{}
+		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("scan_seeded"), nil)
+		if slices.Contains(spec.AllowedDomains, "api.stripe.com") {
+			t.Errorf("AllowedDomains = %v, want api.stripe.com NOT folded in (scan_seeded, gate on)", spec.AllowedDomains)
+		}
+	})
+	t.Run("flag on: the SAME key as operator_set DOES fold in", func(t *testing.T) {
+		srv := New(Config{RequireOperatorSetEgress: true})
+		spec := &types.RunPolicySpec{}
+		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("operator_set"), nil)
+		if !slices.Contains(spec.AllowedDomains, "api.stripe.com") {
+			t.Errorf("AllowedDomains = %v, want api.stripe.com folded in (operator_set, gate on)", spec.AllowedDomains)
+		}
+	})
+}
+
 // ─── folding matrix + trust boundary: secret ────────────────────────────────
 
 func TestApplyWorkspaceRequirements_Secret(t *testing.T) {

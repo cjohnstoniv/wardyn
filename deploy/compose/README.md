@@ -148,7 +148,10 @@ default is stack-specific: `WARDYN_SUBSCRIPTION_INJECT=off`, because the
 distroless compose `wardynd` has no `claude` binary, so proxy-side OAuth
 injection would fail-lazily and crash the run's proxy; a run that mounts
 `~/.claude` uses those creds directly instead (stage them with
-`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`).
+`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`). This flag
+covers ONLY that resident-mount path — the separate Wardyn-managed lane (a
+connected managed setup-token, no `~/.claude` mount) still injects proxy-side
+and still MITMs `api.anthropic.com` regardless of this setting.
 
 **CI overlay.** [`docker-compose.ci.yaml`](docker-compose.ci.yaml) layers onto
 the base stack (`docker compose -f docker-compose.yaml -f docker-compose.ci.yaml`)
@@ -245,6 +248,31 @@ Honest limits (by design, not hidden):
 - **Host eBPF is blind inside CC3/Kata guests.** For such runs the sidecar emits
   a one-time `kernel.sensor.blind` event so the gap is visible. Set
   `WARDYN_GROUNDTRUTH_BLIND_RUNS=<run-id>,...` to record it at sidecar boot.
+- **`kernel.network.connect` needs a kernel that reports container egress.**
+  On WSL2 + Docker Desktop (kernel `*-microsoft-standard-WSL2`, Tetragon
+  v1.1.2) the `tcp_connect` kprobe delivers NO event for a connect that leaves
+  a container over its veth — only host-netns and container-loopback connects
+  appear. Measured, not inferred: ~120 real container connects produced zero
+  events while `tetragon_ringbuf_perf_event_lost_total` stayed 0, and it
+  persists with the file kprobe removed entirely. Nothing in Wardyn can fix
+  that from user space, so it is GATED rather than papered over: `/healthz`
+  reports `ebpf_groundtruth.state="partial"` with
+  `missing_kinds:["kernel.network.connect"]`, and every capture/profile carries
+  the matching caveat. Run the ground-truth tier on a normal Linux kernel for
+  connect coverage; on WSL2, treat `partial` as expected, not as a bug.
+- **The shipped policy is loud, and the export keeps only ~50 s.** The
+  host-wide `security_file_permission` kprobe dominates the export (~96% of
+  lines, thousands/s on an idle box), so Tetragon's 10 MB × 5 rotation holds
+  well under a minute of history. An ingest stall longer than that loses ground
+  truth outright. Raise `--export-file-max-size-mb`/`--export-file-max-backups`
+  (or narrow the kprobe) on a busy host.
+- **Correlation covers containers seen in the last 15 minutes.** The sidecar
+  binds kernel events to runs from a `docker events` stream plus a
+  `docker ps -a` reconcile, and keeps a mapping for `containerRetention`
+  (15 min) after the container is gone, because the tail runs behind. An event
+  arriving later than that correlates to nothing and is dropped — counted as
+  `dropped_unmapped` on the heartbeat and named in `/healthz`'s `idle` reason,
+  so a broken correlation can never again read the same as a blind sensor.
 - The token has the identity provider's ~1h TTL. The compose stack keeps it fresh
   AUTOMATICALLY: wardynd's rotator re-mints and rewrites the shared `groundtruth_token`
   file and the sidecar re-reads it on a 401, so ground truth does NOT go blind ~1h in

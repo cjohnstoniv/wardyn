@@ -30,14 +30,25 @@ const attachReadBuf = 32 * 1024
 
 // attachKeepaliveInterval is how often, while a human is attached, the handler
 // bumps the run's updated_at so the idle reaper (which measures idleness by
-// agent_runs.updated_at) does not stop an actively-attached session. Client
-// input ALSO bumps it immediately; the ticker covers a session that is open but
-// momentarily silent (e.g. watching long-running output).
+// agent_runs.updated_at) does not stop an actively-attached session. The ticker
+// is the ONLY input-independent signal and it is enough: it runs for the whole
+// life of the attach, so updated_at is never more than one interval stale and
+// the reaper adds exactly that much slack (lifecycle.TouchDebounce). Touching
+// per inbound PTY frame instead would put a Postgres UPDATE in front of every
+// keystroke and buy nothing the ticker does not already guarantee.
 const attachKeepaliveInterval = 30 * time.Second
 
 // attachWriteTimeout bounds a single server->client frame write so a stuck
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
+
+// attachReadLimit bounds ONE client->server message. It must be set explicitly:
+// coder/websocket's default is 32 KiB, and exceeding the limit does not drop the
+// frame — it CLOSES the socket with StatusMessageTooBig. A terminal paste is a
+// single message, so on the default an operator pasting a >32 KiB patch or log
+// silently lost their whole session. 1 MiB is far above any realistic paste while
+// still bounding what one socket can make the daemon buffer.
+const attachReadLimit = 1 << 20
 
 // resizeMsg is the only control message the client may send out-of-band on the
 // PTY stream: a window-size change. Everything else on the client->server
@@ -68,8 +79,8 @@ type resizeMsg struct {
 //  4. Runner.Attach opens a fresh interactive shell inside the sandbox.
 //  5. Bidirectional pump: client binary frames -> Session.Write; Session.Read
 //     -> client binary frames; client TEXT frames -> resize control.
-//  6. Keepalive: periodically (and on client input) TouchRun so the reaper
-//     leaves an actively-attached run alone.
+//  6. Keepalive: TouchRun on open and every attachKeepaliveInterval so the
+//     reaper leaves an actively-attached run alone.
 //  7. Emit session.attach on open and session.detach on close.
 //
 // SECURITY (invariants 3 & 4):
@@ -131,6 +142,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// handler via it already proves admin (requireOperator gates it).
 	if ta, tok := ticketActorFromContext(ctx); tok {
 		if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
+			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
 			writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 			return
 		}
@@ -178,6 +190,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// without a handshake. A clean close is attempted in the happy path below;
 	// this defer guarantees the socket never leaks on any error return.
 	defer c.CloseNow()
+	// Raise the library's 32 KiB default so a large paste is delivered instead of
+	// killing the connection (see attachReadLimit).
+	c.SetReadLimit(attachReadLimit)
 
 	// Open the interactive shell inside the sandbox. On failure, close the socket
 	// cleanly with a policy-violation status and audit the failed attach.
@@ -265,7 +280,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// base64/hex/narrated secrets are not caught); a secret split across two writes
 	// IS now masked (liveMaskWriter retains a cross-write tail). (3) The cast is buffered in
 	// memory for the session's lifetime and written once at close, which is fine
-	// for human-length interactive sessions but is not a streaming sink.
+	// for human-length interactive sessions but is not a streaming sink — past
+	// maxSessionCastBytes the recording keeps its head and drops the rest, and
+	// says so in the session.recording audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
@@ -282,7 +299,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
 	// masked PTY output for the asciicast. holder is nil for a read-only observer.
-	closeReason := s.attachPump(pumpCtx, c, sess, id, castTee, holder)
+	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
 	cancel()
 
 	// Persist the recording (best-effort) and emit session.recording when one was
@@ -358,7 +375,7 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 // from sending: the client is the one component we do not control. A read-only
 // client still learns its mode from the attach-mode control frame the handler
 // sent on open, so it can grey out its input rather than type into a void.
-func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, id uuid.UUID, castTee io.Writer, holder *attachHolder) string {
+func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, castTee io.Writer, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -412,9 +429,6 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				cancel()
 				return
 			}
-			// Any client traffic counts as activity: keep the session alive.
-			_ = s.cfg.Store.TouchRun(ctx, id)
-
 			switch typ {
 			case websocket.MessageText:
 				// Control channel: only resize is understood. An unparseable or
@@ -494,6 +508,44 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // wardynd until the operator pastes it back, which is strictly AFTER the bytes
 // would have landed in the cast. The gate lives here, not at the call site, so
 // a future second caller cannot miss it.
+// maxSessionCastBytes bounds the asciicast a LIVE attach buffers in the daemon's
+// heap. The cast is held in memory for the whole session and written once at
+// close, so without a bound a single long, chatty terminal grows unopposed
+// inside a control plane deployed with a 512Mi limit — and, worse, the store
+// then REJECTED the result wholesale at its own 64 MiB cap
+// (internal/recording/pgstore.go), so the session's entire evidence was thrown
+// away at exactly the moment it was meant to be persisted.
+//
+// Well under the store cap, so a recorded session is never lost to that reject.
+//
+// ponytail: past the cap the recording keeps its HEAD and drops the rest —
+// smallest thing that keeps a valid, replayable artifact plus an honest
+// truncated:true in the session.recording audit. A ring buffer that keeps the
+// TAIL instead is the upgrade path if operators ask for the end of long
+// sessions; a streaming sink is the one after that.
+const maxSessionCastBytes = 8 << 20
+
+// capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
+// complete JSON line per Write, so refusing a write WHOLE (never partially)
+// leaves the buffer line-aligned and the cast well-formed. A dropped write is
+// reported as accepted: the recording is best-effort provenance and must never
+// break the live terminal.
+//
+// Not independently locked: every write reaches it through liveMaskWriter.Write
+// and every read through finishRecording, both under that writer's mutex.
+type capBuffer struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (b *capBuffer) Write(p []byte) (int, error) {
+	if b.truncated || b.buf.Len()+len(p) > maxSessionCastBytes {
+		b.truncated = true
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
 func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
 	noop := func(context.Context, types.ActorType, string) {}
 	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
@@ -501,7 +553,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	}
 	runID := run.ID
 
-	buf := &bytes.Buffer{}
+	buf := &capBuffer{}
 	cast := recording.NewCastWriter(buf, int(opts.Cols), int(opts.Rows), s.cfg.Now().UTC())
 
 	// Mask the OUTPUT before it lands in the cast, RE-SNAPSHOTTING the registry on
@@ -525,7 +577,8 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		mw.flushLocked()
 		had := cast.HadOutput()
 		// Copy under the lock; the pump may keep appending after we release it.
-		snap := append([]byte(nil), buf.Bytes()...)
+		snap := append([]byte(nil), buf.buf.Bytes()...)
+		truncated := buf.truncated
 		mw.mu.Unlock()
 
 		// Skip persisting a header-only (no output) cast: an attach that produced
@@ -538,6 +591,11 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		err := s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), sessionID, bytes.NewReader(snap))
 		outcome := "success"
 		data := map[string]any{"session": sessionID, "key": key, "bytes": len(snap)}
+		if truncated {
+			// Say so in the trail rather than let a short cast pass for a whole one.
+			data["truncated"] = true
+			data["limit_bytes"] = maxSessionCastBytes
+		}
 		if err != nil {
 			outcome = "failure"
 			data["error"] = err.Error()

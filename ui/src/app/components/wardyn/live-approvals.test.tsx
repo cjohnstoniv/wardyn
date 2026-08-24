@@ -59,6 +59,30 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
+  // W19-S1-3 / W20-hold-fsm-2: the proxy's real hold times out at 30s
+  // (defaultHoldTimeout) while the approval row stays PENDING for up to 24h —
+  // isHeld must stop claiming a live hold once that window has passed.
+  it("stops flagging a wait_for_review request as held once the proxy's 30s hold has elapsed", async () => {
+    const stale = new Date(Date.now() - 31_000).toISOString();
+    listApprovalsMock.mockResolvedValue([
+      pending({ id: "stale", requested_scope: { host: "stale.example", mode: "wait_for_review" }, requested_at: stale }),
+    ]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText("stale.example")).toBeInTheDocument();
+    expect(within(panel).queryByText("waiting")).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
+  });
+
+  // W20-hold-fsm-5: a poll failure must not render the same affirmative
+  // "Watching for…" text a confirmed-empty poll gets.
+  it("shows a poll-error state instead of the idle hint when listApprovals rejects with nothing pending", async () => {
+    listApprovalsMock.mockRejectedValue(new Error("network error"));
+    render(<LiveApprovals runId="r1" />);
+    expect(await screen.findByTestId("live-approvals-poll-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("live-approvals-idle")).not.toBeInTheDocument();
+  });
+
   // {host,secret_name} with no header/format classifies as git_pat under the
   // credentialKind heuristic (copy.ts) — a resident, agent-readable PAT whose
   // blast-radius card (TTL, "the agent's process can read this") is the whole
@@ -331,6 +355,22 @@ describe("LiveApprovals", () => {
         scope: "until",
         until: new Date("2030-01-01T17:00").toISOString(),
       });
+    });
+  });
+
+  // D7: a pending row whose host is the agent CLI's known telemetry endpoint
+  // gets an identification tag; an ordinary off-policy host does not.
+  describe("D7 — known-telemetry tag", () => {
+    it("tags a row matching the known telemetry host, and only that row", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "telemetry", requested_scope: { host: "http-intake.logs.us5.datadoghq.com" } }),
+        pending({ id: "other", requested_scope: { host: "api.internal.acme.com" } }),
+      ]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const rows = within(panel).getAllByTestId("live-approval-row");
+      expect(within(rows[0]).getByText("Agent telemetry")).toBeInTheDocument();
+      expect(within(rows[1]).queryByText("Agent telemetry")).not.toBeInTheDocument();
     });
   });
 });

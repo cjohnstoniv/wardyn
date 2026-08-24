@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ScrollText,
   Search,
@@ -47,6 +47,7 @@ import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
+import { useOperator } from "../wardyn/operator-context";
 
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
@@ -254,10 +255,21 @@ function groupByDay(events: AuditEvent[]): DayGroup[] {
 
 export function AuditScreen() {
   const navigate = useNavigate();
+  const operator = useOperator();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
-  const [runFilter, setRunFilter] = React.useState("");
+  // W25-W25.2-3: the run filter lives in the URL (?run_id=), not component
+  // state. A member's ONLY reachable trail is a run they own (the server 200s
+  // an empty list for any unfiltered /audit query), so the filter has to be
+  // reachable from outside this screen — run-detail's "open full Audit" link
+  // carries the run into it. Deep-linkable and survives a reload for free.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const runFilter = searchParams.get("run_id") ?? "";
+  const setRunFilter = React.useCallback(
+    (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
+    [setSearchParams],
+  );
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
@@ -473,7 +485,23 @@ export function AuditScreen() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {noFiltersActive ? (
+          {noFiltersActive && !operator ? (
+            // W25-W25.2-3: a member's global feed (no run_id) is ALWAYS empty —
+            // handleQueryAudit scopes members to a run they own and requires
+            // ?run_id= to do it (internal/api/audit.go). "The trail starts with
+            // your first run" is false here: the member may well have runs with
+            // events, they're just not reachable from this unfiltered view.
+            <EmptyState
+              icon={ScrollText}
+              title="The full audit feed is admin-only."
+              description="You can still see a run's own trail: open the run and use its Audit tab — its “open full Audit” link brings that run's events here."
+              action={
+                <Button variant="outline" onClick={() => navigate("/runs")}>
+                  Open Runs
+                </Button>
+              }
+            />
+          ) : noFiltersActive ? (
             <EmptyState
               icon={ScrollText}
               title="The trail starts with your first run."

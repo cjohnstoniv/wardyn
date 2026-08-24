@@ -51,7 +51,7 @@ func routeFamilies() map[string][]string {
 		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "KillRun", "SynthesizeProfile", "GetRecording"},
 		"runs.list":   {"ListRuns"},
 		"approvals":   {"ListApprovals", "Approve", "Deny"},
-		"policies":    {"CreatePolicy", "GetPolicy", "ListPolicies", "UpdatePolicy", "DeletePolicy"},
+		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
@@ -60,6 +60,7 @@ func routeFamilies() map[string][]string {
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
+		"sessions":    {"RevokeSessions"},
 	}
 }
 

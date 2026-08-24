@@ -70,6 +70,22 @@ func TestValidateInlineSecretRefs_GitPAT(t *testing.T) {
 	if code, err := h.srv.validateInlineSecretRefs(ctx, reserved); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("reserved git_pat secret: code=%d err=%v, want (422,err)", code, err)
 	}
+
+	// The UI-relay cookie's HMAC key is a platform key like the two above: it
+	// must be unlistable, unwritable, undeletable through the generic secrets
+	// API and unresolvable at every credential sink. It was omitted from
+	// reservedSecretNames when the second listener shipped.
+	if !secretsAPIReserved("wardyn-ui-session-key") || !sinkReservedSecret("wardyn-ui-session-key") {
+		t.Fatal("wardyn-ui-session-key must be reserved at the secrets API and at every sink")
+	}
+
+	// Same omission, same class: the SSH gateway's ed25519 host key. The broker
+	// has refused it since W12-B-1, but this side did not — so GET /secrets
+	// listed it and PUT/DELETE clobbered it, which regenerates the gateway host
+	// key at next boot and breaks every pinned fingerprint.
+	if !secretsAPIReserved("wardyn-ssh-host-key") || !sinkReservedSecret("wardyn-ssh-host-key") {
+		t.Fatal("wardyn-ssh-host-key must be reserved at the secrets API and at every sink")
+	}
 }
 
 // TestADOEgressDomains asserts the ADO egress-bundle mapping used by the

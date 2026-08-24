@@ -1,0 +1,554 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn 0.6 — Permissions mock</title>
+<!--
+  Wardyn 0.6 · WS-A stage A-A · static mock for owner review.
+  Every visible string is verbatim from ui/src/app/lib/permissions-copy.ts
+  (frozen table: docs/design/permissioning-prompt.md §7). No build, no deps,
+  no fetch — open the file. Tokens mirror ui/src/styles/theme.css.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+/* ---- mock page chrome (NOT part of the design — the review scaffold) ---- */
+.sheet{max-width:1120px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+
+/* ---- console primitives ---- */
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.fact{display:flex;gap:8px;margin-top:14px;font-size:13px;color:var(--muted-foreground);max-width:82ch}
+.fact svg{flex:none;margin-top:3px;color:var(--muted-foreground)}
+.sectitle{font-size:14px;margin-top:0}
+.secsub{font-size:13px;color:var(--muted-foreground);margin-top:2px}
+hr.rule{border:0;border-top:1px solid var(--border);margin:0}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.chip.danger{background:var(--danger-subtle);color:var(--danger)}
+.chip.info{background:var(--info-subtle);color:var(--info)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:transparent}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn.amber{background:var(--warning);color:var(--background);border-color:transparent}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.sm{font-size:12px;padding:4px 10px}
+.linkbtn{background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
+  cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0}
+
+.sw{position:relative;width:36px;height:20px;border-radius:999px;background:var(--border-strong);
+  flex:none;transition:background .12s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:999px;
+  background:var(--card);transition:transform .12s}
+.sw.on{background:var(--primary)}
+.sw.on::after{transform:translateX(16px)}
+
+/* enforcement rows */
+.kinds{display:grid;gap:0}
+.kind{display:grid;grid-template-columns:1fr auto;gap:14px 18px;align-items:start;
+  padding:16px 24px;border-top:1px solid var(--border)}
+.kind:first-child{border-top:0}
+.kind .head{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.kind .head h4{font-size:13.5px}
+.kind .blurb{font-size:12.5px;color:var(--muted-foreground);margin-top:2px}
+.kind .conseq{margin-top:8px;font-size:13px;max-width:76ch}
+.kind .conseq.off{color:var(--muted-foreground)}
+.note{margin-top:9px;display:flex;gap:8px;align-items:flex-start;border-radius:9px;padding:8px 11px;
+  font-size:12.5px;max-width:78ch}
+.note.amber{background:var(--warning-subtle);color:var(--warning)}
+.note.red{background:var(--danger-subtle);color:var(--danger)}
+.note.plain{background:var(--surface-2);color:var(--muted-foreground)}
+
+/* grants table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;font-weight:500;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted-foreground);padding:10px 24px;border-bottom:1px solid var(--border)}
+tbody td{padding:11px 24px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr.deny{background:var(--danger-subtle)}
+td .who{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:2px}
+.right{text-align:right}
+
+/* empty state */
+.empty{padding:34px 24px;text-align:center}
+.empty h4{font-size:13.5px}
+.empty p{font-size:12.5px;color:var(--muted-foreground);margin-top:5px;max-width:52ch;
+  margin-left:auto;margin-right:auto}
+
+/* add form */
+.form{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 16px;padding:18px 24px}
+.form .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.form label{font-size:12px;font-weight:500}
+.form .ctl{border:1px solid var(--border-strong);border-radius:8px;background:var(--background);
+  padding:7px 10px;font-size:13px;color:var(--foreground);min-height:34px;display:flex;align-items:center;
+  justify-content:space-between;gap:8px}
+.form .ctl.ph{color:var(--muted-foreground)}
+.form .hint{font-size:11.5px;color:var(--muted-foreground)}
+.form .actions{grid-column:1/-1;display:flex;gap:10px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg span{padding:6px 11px;font-size:12.5px;color:var(--muted-foreground);border-left:1px solid var(--border)}
+.seg span:first-child{border-left:0}
+.seg span.sel{background:var(--surface-2);color:var(--foreground);font-weight:500}
+.seg span.sel.deny{background:var(--danger-subtle);color:var(--danger)}
+
+/* dialog */
+.dlg{max-width:470px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
+  background:var(--card);padding:20px 22px;box-shadow:0 12px 34px rgba(0,0,0,.22)}
+.dlg h3{font-size:15px}
+.dlg p{margin-top:9px;font-size:13px;color:var(--muted-foreground)}
+.dlg .row{margin-top:18px;display:flex;gap:10px;justify-content:flex-end}
+.dlgwrap{background:var(--surface-2);padding:28px 20px}
+
+/* member deltas */
+.card{border:1px solid var(--border);border-radius:12px;padding:15px 16px;background:var(--card)}
+.card.warn{border-color:color-mix(in srgb,var(--warning) 40%,transparent);
+  background:color-mix(in srgb,var(--warning) 6%,var(--card))}
+.card .top{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.card .title{font-size:13.5px;font-weight:600}
+.banner{margin-top:11px;border:1px solid var(--border);border-radius:9px;background:var(--background);
+  padding:9px 11px;font-size:12.5px}
+.banner .k{font-weight:600}
+.banner .m{color:var(--muted-foreground)}
+.acts{margin-top:12px;padding-top:11px;border-top:1px solid var(--border);
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.reason{font-size:12.5px;color:var(--muted-foreground);margin-top:9px;max-width:72ch}
+.pick{border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-top:9px;background:var(--card)}
+.pick.off{opacity:.72}
+.pick .r1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pick .r2{font-size:12.5px;color:var(--muted-foreground);margin-top:4px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:860px){.form{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}
+  .kind{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Permissions — mock, 0.6 WS-A</h1>
+    <div class="sub">Strings verbatim from <code>ui/src/app/lib/permissions-copy.ts</code>. Static: nothing here is wired.</div>
+  </div>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ============ STATE 1 — fresh install ============ -->
+<section class="state">
+  <div class="tag"><span>State 1</span><b>Fresh install — four kinds off, zero grants</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h2 style="font-size:19px">Permissions</h2>
+      <p class="lead">Grant members and groups specific Wardyn capabilities. Each capability is enforced on its own — until you enforce one, nothing about it changes.</p>
+      <div class="fact"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant.</span></div>
+      <div class="fact"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>Admins, the admin token, and local mode are never bounded by these rules.</span></div>
+      <div class="note plain" style="margin-top:16px">Nothing is enforced yet. Members have exactly the powers they had before this screen existed, and adding a grant on its own changes nothing.</div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0">
+      <h3 class="sectitle">Enforcement</h3>
+      <p class="secsub">Turn a capability on to start refusing what isn't granted.</p>
+    </div>
+    <div class="kinds" style="margin-top:14px">
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Egress hosts</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which hosts a member may approve for their own run.</div>
+          <div class="conseq off">Members can approve any host their own run asks for, and add any host to a run they launch.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Secrets</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which stored secrets a member's run may reference.</div>
+          <div class="conseq off">Members can reference any stored secret their run's ceiling already allows.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Workspaces</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which workspaces a member may launch a run against.</div>
+          <div class="conseq off">Members can launch a run against any workspace.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Base images</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which base images a member may name on a run of their own.</div>
+          <div class="conseq off">Members can't name their own base image at all. Runs use what the workspace carries.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:6px"><h3 class="sectitle">Grants</h3></div>
+    <div class="empty">
+      <h4>No grants yet</h4>
+      <p>Add a grant, then enforce its capability. Enforcing with nothing granted refuses everything.</p>
+      <button class="btn primary" style="margin-top:14px" type="button">Add grant</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATE 4 + 2 + 3 + 9 — mixed, the steady state ============ -->
+<section class="state">
+  <div class="tag"><span>States 2 · 3 · 4 · 9</span><b>Mixed — advisory, enforced, widening, and a deny row</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:0">
+      <h3 class="sectitle">Enforcement</h3>
+      <p class="secsub">Turn a capability on to start refusing what isn't granted.</p>
+    </div>
+    <div class="kinds" style="margin-top:14px">
+      <!-- 3: enforced, narrowing -->
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Egress hosts</h4><span class="chip warning"><i class="dot"></i>Enforced</span></div>
+          <div class="blurb">Which hosts a member may approve for their own run.</div>
+          <div class="conseq">A member can only approve hosts granted to them. A host they add to a run they launch is dropped before it starts, with a warning naming it.</div>
+        </div>
+        <div class="sw on" aria-hidden="true"></div>
+      </div>
+      <!-- 2: grants exist, kind off -> advisory + the deny exception -->
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Secrets</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which stored secrets a member's run may reference.</div>
+          <div class="conseq off">Members can reference any stored secret their run's ceiling already allows.</div>
+          <div class="note plain">Advisory until enforced. These grants are recorded and shown here, but nothing is refused while this capability is off.</div>
+          <div class="note red">A deny applies even while this capability is not enforced — you can block one host for one person without bounding everyone.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+      <!-- off, no grants -->
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Workspaces</h4><span class="chip neutral"><i class="dot"></i>Not enforced</span></div>
+          <div class="blurb">Which workspaces a member may launch a run against.</div>
+          <div class="conseq off">Members can launch a run against any workspace.</div>
+        </div>
+        <div class="sw" aria-hidden="true"></div>
+      </div>
+      <!-- 3: enforced, WIDENING kind -->
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Base images</h4><span class="chip warning"><i class="dot"></i>Enforced</span></div>
+          <div class="blurb">Which base images a member may name on a run of their own.</div>
+          <div class="conseq">A member can name an image granted to them. Every other ref is still refused.</div>
+        </div>
+        <div class="sw on" aria-hidden="true"></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:10px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <h3 class="sectitle">Grants</h3>
+        <button class="btn primary sm" style="margin-left:auto" type="button">Add grant</button>
+      </div>
+      <p class="secsub" style="margin-top:8px">Every allow below is something a member can reach that they otherwise couldn't.</p>
+      <div class="note plain">A deny always wins — over an allow on the same person, over a group they're in, and over this capability being unenforced.</div>
+    </div>
+    <table>
+      <thead><tr><th>Who</th><th>Capability</th><th>Value</th><th>Effect</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="who"><span class="chip neutral">Group</span><span class="mono">Wardyn.Contractors</span></div></td>
+          <td>Egress hosts</td><td class="mono">*.github.com</td>
+          <td><span class="chip warning">Allow</span></td>
+          <td style="color:var(--muted-foreground)">3 days ago</td>
+          <td class="right"><button class="linkbtn" type="button">Remove</button></td>
+        </tr>
+        <tr class="deny">
+          <td><div class="who"><span class="chip neutral">User</span><span class="mono">dana@corp.example</span>
+            <span class="sub">Signed in before Wardyn recorded groups, so group grants can't reach them. Grant their user directly, or ask them to sign in again.</span></div></td>
+          <td>Egress hosts</td><td class="mono">registry.npmjs.org</td>
+          <td><span class="chip danger">Deny</span></td>
+          <td style="color:var(--muted-foreground)">yesterday</td>
+          <td class="right"><button class="linkbtn" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="who"><span class="chip neutral">Everyone signed in</span></div></td>
+          <td>Secrets</td><td class="mono">GITHUB_TOKEN</td>
+          <td><span class="chip warning">Allow</span></td>
+          <td style="color:var(--muted-foreground)">3 days ago</td>
+          <td class="right"><button class="linkbtn" type="button">Remove</button></td>
+        </tr>
+        <tr class="deny">
+          <td><div class="who"><span class="chip neutral">Group</span><span class="mono">Wardyn.Contractors</span></div></td>
+          <td>Secrets</td><td class="mono">STRIPE_LIVE_KEY</td>
+          <td><span class="chip danger">Deny</span></td>
+          <td style="color:var(--muted-foreground)">3 days ago</td>
+          <td class="right"><button class="linkbtn" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="who"><span class="chip neutral">User</span><span class="mono">alice@corp.example</span></div></td>
+          <td>Base images</td><td class="mono">ghcr.io/acme/agent-cuda:2026.08</td>
+          <td><span class="chip warning">Allow</span></td>
+          <td style="color:var(--muted-foreground)">1 hour ago</td>
+          <td class="right"><button class="linkbtn" type="button">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ STATE 11 — enforced with nothing granted ============ -->
+<section class="state">
+  <div class="tag"><span>State 11</span><b>Enforced, nothing granted — the dangerous cell</b></div>
+  <div class="frame">
+    <div class="kinds">
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Workspaces</h4><span class="chip warning"><i class="dot"></i>Enforced</span></div>
+          <div class="blurb">Which workspaces a member may launch a run against.</div>
+          <div class="conseq">A member can only launch against workspaces granted to them. The rest stay listed — a run against one is refused at launch, with the reason.</div>
+          <div class="note red">There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.</div>
+        </div>
+        <div class="sw on" aria-hidden="true"></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="empty">
+      <h4>No grants yet</h4>
+      <p>Add a grant, then enforce its capability. Enforcing with nothing granted refuses everything.</p>
+      <button class="btn primary" style="margin-top:14px" type="button">Add grant</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATE 8 + 10 — add form ============ -->
+<section class="state">
+  <div class="tag"><span>States 8 · 10</span><b>Add a grant — per-kind value hint, and the duplicate upsert</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:0"><h3 class="sectitle">Add a grant</h3></div>
+    <div class="form">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <div class="hint">A group or app-role name exactly as your identity provider sends it in the token.</div>
+      </div>
+      <div class="f">
+        <label>Capability</label>
+        <div class="ctl">Egress hosts <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="hint">&nbsp;</div>
+      </div>
+      <div class="f">
+        <label>Value</label>
+        <div class="ctl ph mono">*.github.com</div>
+        <div class="hint">A host, or *.suffix for a domain and everything under it. Use * for every host.</div>
+      </div>
+      <div class="f">
+        <label>Effect</label>
+        <div class="seg"><span class="sel">Allow</span><span>Deny</span></div>
+        <div class="hint">&nbsp;</div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" type="button">Add grant</button>
+        <span class="chip info">That grant already exists — its effect was updated.</span>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad">
+      <div class="two">
+        <div>
+          <div class="hint" style="font-size:12px;font-weight:500;color:var(--foreground)">Who = User</div>
+          <p class="secsub">An email address or the sign-in subject id. Either one matches the same person.</p>
+        </div>
+        <div>
+          <div class="hint" style="font-size:12px;font-weight:500;color:var(--foreground)">Who = Everyone signed in</div>
+          <p class="secsub">Every signed-in member. Admins are exempt.</p>
+        </div>
+      </div>
+      <div class="note plain" style="margin-top:14px">
+        <span><b>Other value hints —</b>
+        Secrets: <i>The exact secret name. Use * for every secret.</i> ·
+        Workspaces: <i>One workspace. Use * for every workspace.</i> ·
+        Base images: <i>The exact image ref, registry and tag included. Use * for every image.</i></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATES 5 · 6 · 7 — the switch dialogs ============ -->
+<section class="state">
+  <div class="tag"><span>States 5 · 6 · 7</span><b>Enforcement confirms — count, lockout guard, and turning off</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Enforce Egress hosts?</h3>
+        <p>4 members are bounded by the grants below from their next request. Anything not granted starts being refused.</p>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn amber" type="button">Enforce</button></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Enforce Workspaces?</h3>
+        <p>1 member is bounded by the grants below from their next request. Anything not granted starts being refused.</p>
+        <div class="note red" style="max-width:none">There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.</div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn danger" type="button">Enforce</button></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="kinds">
+      <div class="kind">
+        <div>
+          <div class="head"><h4>Secrets</h4><span class="chip warning"><i class="dot"></i>Enforced</span></div>
+          <div class="blurb">Which stored secrets a member's run may reference.</div>
+          <div class="conseq">A member's run can only reference secrets granted to them. Ungranted names are dropped before launch, and the Secrets page lists only what they hold.</div>
+        </div>
+        <div class="sw on" aria-hidden="true"></div>
+      </div>
+    </div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Enforce Secrets?</h3>
+        <p>Members go back to the powers they had before this capability was enforced. Denies still apply.</p>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Stop enforcing</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATE 12 — group snapshot ============ -->
+<section class="state">
+  <div class="tag"><span>State 12</span><b>Group snapshot ceiling — stale and truncated</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h3 class="sectitle">Groups are read at sign-in</h3>
+      <p class="secsub" style="max-width:80ch">Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request.</p>
+      <div class="note amber">This member signed in before Wardyn recorded groups, so group grants can't reach them. Grant their user directly, or ask them to sign in again.</div>
+      <div class="note amber">This member is in more groups than fit in their session. Grants on the groups shown work; prefer granting an app role or their user directly.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MEMBER MOMENTS ============ -->
+<section class="state">
+  <div class="tag"><span>Member</span><b>Why denied — inline only, no member permissions screen</b></div>
+
+  <div class="frame">
+    <div class="pad">
+      <div class="secsub" style="margin-bottom:9px">Approvals · pending card, <code>egress_host</code> enforced</div>
+      <div class="card warn">
+        <div class="top">
+          <span class="chip warning">egress domain</span>
+          <span class="title">Reach registry.npmjs.org</span>
+        </div>
+        <div class="banner">
+          <p><span class="k">What this allows:</span> outbound HTTPS to <span class="mono">registry.npmjs.org</span> for this run.</p>
+          <p class="m"><span class="k" style="color:var(--foreground)">Blast radius:</span> this run only, until it ends.</p>
+        </div>
+        <div class="acts">
+          <button class="btn primary" type="button" disabled>Approve</button>
+          <button class="btn" type="button" disabled>Deny</button>
+          <span class="chip neutral">Not a host you're granted</span>
+        </div>
+        <p class="reason">registry.npmjs.org isn't in the hosts granted to you, so you can't decide this one. An admin can approve it, or grant you the host.</p>
+        <p class="reason">Always is admin-only, even for a host you're granted.</p>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <div class="secsub" style="margin-bottom:2px">New Run · workspace step, <code>workspace</code> enforced — the list is <b>not</b> narrowed</div>
+      <div class="pick">
+        <div class="r1"><b style="font-size:13.5px">payments-api</b><span class="chip info">Ready</span></div>
+        <div class="r2">2 sources · 3 hosts · 1 secret</div>
+      </div>
+      <div class="pick off">
+        <div class="r1"><b style="font-size:13.5px">billing-core</b><span class="chip neutral">Not granted</span></div>
+        <div class="r2">A run against this workspace is refused at launch. Ask an admin to grant it to you.</div>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <div class="secsub" style="margin-bottom:9px">New Run · base image step, <code>image</code> not granted</div>
+      <div class="pick off">
+        <div class="r1"><b style="font-size:13.5px">Bring your own image</b><span class="chip neutral">Not granted</span></div>
+        <div class="r2">You can't name your own base image. Ask an admin to grant the exact image ref.</div>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <div class="secsub" style="margin-bottom:9px">Preflight / Review · the warning lane that already exists — the run still launches</div>
+      <div class="note amber">2 secrets aren't granted to you and won't be attached. Whatever needs them will fail at that point.</div>
+      <div class="note amber">1 host you added isn't granted to you and was removed from this run. Hosts this workspace already carries are unaffected.</div>
+      <div class="note amber" style="margin-top:14px">1 secret isn't granted to you and won't be attached. Whatever needs it will fail at that point.</div>
+      <div class="note amber">3 hosts you added aren't granted to you and were removed from this run. Hosts this workspace already carries are unaffected.</div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <div class="secsub" style="margin-bottom:9px">Secrets (member view) · and the stale-session hint</div>
+      <div class="note plain">Only secrets granted to you are listed.</div>
+      <div class="note plain">You signed in before Wardyn started recording your groups. If a permission looks missing, sign out and back in.</div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>

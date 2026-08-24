@@ -73,6 +73,22 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
+	getDefault := &cobra.Command{
+		Use:   "default",
+		Short: "Show the control plane's configured default (ceiling) policy",
+		Long: "Show the control plane's configured default policy — the ceiling applied to any run\n" +
+			"created without a policy_id, and the same ceiling a member's inline policy is clamped\n" +
+			"against (W14-S1-6: previously unexposed by UI, CLI or API).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			spec, err := client().GetDefaultPolicy(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return emitJSON(spec)
+		},
+	}
+
 	var createFile, createName string
 	var createJSON bool
 	create := &cobra.Command{
@@ -148,7 +164,7 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(list, get, create, update, del, policyRenderCmd())
+	cmd.AddCommand(list, get, getDefault, create, update, del, policyRenderCmd())
 	return cmd
 }
 

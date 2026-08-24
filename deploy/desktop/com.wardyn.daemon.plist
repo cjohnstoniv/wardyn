@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  com.wardyn.daemon — launchd LaunchDaemon for the desktop tier. Does not run
+  wardynd itself: it runs wardyn-desktop.sh, which brings up the compose
+  stack (wardynd's own container carries `restart: unless-stopped`, so Docker
+  keeps IT alive across a container crash on its own). This job's only work is
+  making sure the STACK is up — once at boot/login (RunAtLoad) and on a
+  StartInterval tick after that, the same "re-assert, don't assume" posture
+  MDM uses for the files it owns, and the same shape a not-yet-authenticated
+  wardyn.env / missing age.key failure gets retried against rather than left
+  wedged.
+
+  __WARDYN_DESKTOP_SH__ is a placeholder — install.sh renders this file to
+  /Library/LaunchDaemons with it replaced by wardyn-desktop.sh's real,
+  absolute install path. Committed as-is (with the placeholder) it is still
+  valid, parseable plist XML — see scripts/test-desktop-profile.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.wardyn.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__WARDYN_DESKTOP_SH__</string>
+    <string>up</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>/var/log/wardyn/desktop.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/wardyn/desktop.log</string>
+</dict>
+</plist>

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -159,7 +160,8 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 //     can discriminate nothing);
 //  2. the MEMBER GATE, unchanged and unconditional;
 //  3. the scope rules, which read the approval / run / workspace;
-//  4. Decide(), then the durable `always` write-back.
+//  4. the optional second-human gate (rule 8, requireSecondHuman);
+//  5. Decide(), then the durable `always` write-back.
 //
 // Step 2 must stay ahead of step 3. Run rule 4 (a scope on a non-egress_domain
 // kind -> 400) before the ownership check and a member can distinguish "a
@@ -232,12 +234,31 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		}
 		haveAP = true
 	}
-	// Rule 4 — only egress_domain decisions carry a scope. A credential mints
-	// exactly once by construction (minted_jti) and a tool_call is bounded by
-	// the clamp, so a scope on either is a stored field that grants nothing.
+	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
+	// two kinds differ in what "something" is.
+	//
+	// tool_call is bounded by the clamp, so no scope changes anything: refused.
+	//
+	// credential USED to be in the same bucket ("a credential mints exactly once
+	// by construction"), and for once/until/always it still is. `run` is the one
+	// exception, and it is the whole of B2's per-run credential lease
+	// (docs/adoption/corp-network-onboarding-findings.md): a git_pat installs a
+	// STANDING credential helper git invokes on every operation, so single-use
+	// forced the operator to choose between a click per git op and standing
+	// auto-issue of a real personal credential. A run-scoped decision is the
+	// middle ground — one approval, re-mintable for this run's lifetime — and the
+	// broker reads it RAW (leaseCoversRemint) so no legacy decision becomes one.
+	//
+	// Deliberately NOT narrowed to git_pat here: decide holds no grant, so
+	// checking the kind would cost a load on the approval's grant_id for a rule
+	// the broker already enforces at the only place a lease can be spent. A `run`
+	// scope on another credential kind is recorded and simply leases nothing.
 	if needAP && ap.Kind != types.ApprovalEgressDomain {
-		writeError(w, http.StatusBadRequest, "decision_scope is only valid on an egress_domain approval")
-		return
+		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
+			writeError(w, http.StatusBadRequest,
+				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
+			return
+		}
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by
@@ -247,6 +268,14 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		if target, ok = s.resolveAlwaysTarget(w, r, ap, run, haveRun, approve); !ok {
 			return
 		}
+	}
+
+	// Rule 8 — the optional SECOND-HUMAN gate on egress decisions. Last of the
+	// pre-Decide() rules for the same reason they are all pre-Decide(): PENDING
+	// -> decided is one-way. It loads what it needs (and nothing when the switch
+	// is off), so a deployment that has not opted in pays no round trip.
+	if !s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun) {
+		return
 	}
 
 	decidedByType, decidedBy := actorFromRequest(r)
@@ -352,6 +381,9 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 // approval and an OWNED non-egress approval read identically (both 404, no
 // existence oracle either way) — not audited: this is a foreign-shaped 404, not
 // a distinct reachable-surface denial (see THREAT-MODEL.md).
+//
+// Then, and only then, the 0.6 egress_host capability: which hosts a member may
+// decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
 func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
 		ap  types.ApprovalRequest
@@ -379,7 +411,123 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 		}
 		return ap, run, false, false
 	}
+
+	// The egress_host capability, LAST — after kind and ownership are both
+	// proven, so it can never become the existence oracle the two 404s above
+	// exist to deny: a member who reaches this line already knows the approval
+	// is theirs and which host it asks for. That is also why the refusal is a
+	// 403 rather than another byte-identical 404, exactly as resolveAlwaysTarget
+	// argues for its own operator-only refusal.
+	//
+	// The host is the approval's OWN RequestedScope — never anything the client
+	// sent — so a member cannot pick which value gets checked. An absent or
+	// malformed scope resolves to "", which no allow can cover unless the admin
+	// wrote a `*` grant: fail closed on a shape nobody should be deciding.
+	//
+	// `always` is unaffected: it stays operator-only (rule 6), so a grant here
+	// never promotes a member's decision into durable workspace config.
+	host := approvalHost(ap)
+	allowed, cerr := s.capSeamAllowed(r.Context(), capEgressHost, host)
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+		return ap, run, false, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "you are not granted egress host "+host+
+			" — an admin decides this one, or can grant it to you")
+		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", id.String(), "denied", mustJSON(map[string]any{
+				"reason": "capability_" + capEgressHost, "host": host,
+			})))
+		return ap, run, false, false
+	}
 	return ap, run, true, true
+}
+
+// envEgressSecondHuman opts a deployment IN to four-eyes on egress approvals:
+// the human who DECIDES an egress_domain approval must not be the human who
+// created the run. DEFAULT OFF — turning it on unprompted would deadlock every
+// single-operator deployment, which is most of them.
+const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
+
+// requireSecondHuman is decide's rule 8: under envEgressSecondHuman, refuse an
+// egress_domain decision whose decider IS the run's creator. It returns false
+// having already written its own 4xx/5xx, exactly like the other rule helpers.
+//
+// THE ADMIN-TOKEN PRINCIPAL BYPASSES IT, and that is stated here, in
+// docs/OPERATIONS.md and in the threat model's residual list rather than left
+// for someone to discover. A bare WARDYN_ADMIN_TOKEN caller is attributed
+// system/admin-token (actorFromRequest, FIX #10) precisely because a shared
+// token carries NO per-human identity — there is no second human to compare it
+// against, and X-Wardyn-Principal is ignored off LocalMode specifically so a
+// token bearer cannot forge one. Refusing the token instead would lock an
+// operator out of their own approval queue the moment SSO breaks, which is when
+// they need it most, so the bypass is the deliberate break-glass. It is NOT
+// silent: each one writes approval.second_human.bypass, beside the
+// actor_type=system approval.decide the decision itself emits. A deployment
+// that wants the gate to actually bind must therefore treat the admin token as
+// the break-glass credential it is — SSO configured, token held out of band.
+//
+// LocalMode is the same story with a different label: the injected operator IS a
+// verified human there, so a local:alice deciding local:alice's own run is
+// refused like any other self-decision. On that single-dev machine the switch is
+// simply not something to turn on.
+//
+// A run with an EMPTY created_by (system-created follow-on runs) has no human
+// creator to be the same as, so the rule cannot apply and passes. Said out loud
+// because a reader could reasonably expect empty to fail closed; here "closed"
+// would mean refusing every decision on a run nobody authored, which no second
+// human can ever unblock.
+func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) bool {
+	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
+		return true
+	}
+	actorType, principal := actorFromRequest(r)
+	if actorType == types.ActorSystem && principal == adminTokenPrincipal {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, principal,
+			"approval.second_human.bypass", id.String(), "success", mustJSON(map[string]any{
+				"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
+			})))
+		return true
+	}
+	if !haveAP {
+		var err error
+		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return false
+		}
+	}
+	if ap.Kind != types.ApprovalEgressDomain {
+		return true // the switch is scoped to egress decisions
+	}
+	if !haveRun {
+		// Fail CLOSED on BOTH ways the run can be unavailable — a read error, and
+		// a backend that has no run store at all (test wiring only; wardynd always
+		// wires PG). Without the run we cannot prove the decider is not its
+		// creator, and this gate exists for deployments that will not accept
+		// "probably a different human". A nil Store must not read as a pass.
+		var err error
+		if s.cfg.Store == nil {
+			err = errors.New("no run store configured")
+		} else {
+			run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		}
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable,
+				envEgressSecondHuman+" is set, but this approval's run could not be read to verify a second human decided it")
+			return false
+		}
+	}
+	if run.CreatedBy == "" || run.CreatedBy != principal {
+		return true
+	}
+	writeError(w, http.StatusForbidden, envEgressSecondHuman+
+		" is set: a second human must decide this — you created this run, so someone else approves or denies its egress")
+	s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorType, principal,
+		"authz.denied", id.String(), "denied", mustJSON(map[string]any{
+			"reason": "second_human_required", "host": approvalHost(ap),
+		})))
+	return false
 }
 
 // validateDecisionScope is scope rules 1–3 — the ones that read ONLY the body.
@@ -487,13 +635,8 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// no picker: a documented default beats a new wire field plus a new control
 	// for a case that is rare and reversible via the
 	// denied-egress/approved-egress PUTs.
-	var target uuid.UUID
-	switch {
-	case len(run.WorkspaceIDs) > 0:
-		target = run.WorkspaceIDs[0]
-	case run.WorkspaceID != nil:
-		target = *run.WorkspaceID
-	default:
+	target := primaryWorkspace(run)
+	if target == uuid.Nil {
 		// "no recorded workspace link", not "references no workspace": a run
 		// created before migration 0041 has a NULL workspace_ids even when it
 		// referenced one — the server only knows what was recorded.
@@ -536,6 +679,78 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		return uuid.Nil, false
 	}
 	return target, true
+}
+
+// primaryWorkspace is an `always` decision's target workspace: WorkspaceIDs[0]
+// (the documented PRIMARY — referencedWorkspaces builds it in a stable order,
+// mounts then repos, deduped, and it also drives image selection), else the
+// trusted scan/verify/record WorkspaceID, else uuid.Nil when the run records no
+// workspace link. Shared by resolveAlwaysTarget's live write-back and
+// ReconcileWorkspaceEgressDecisions' boot heal so both resolve the same target.
+func primaryWorkspace(run types.AgentRun) uuid.UUID {
+	switch {
+	case len(run.WorkspaceIDs) > 0:
+		return run.WorkspaceIDs[0]
+	case run.WorkspaceID != nil:
+		return *run.WorkspaceID
+	default:
+		return uuid.Nil
+	}
+}
+
+// ReconcileWorkspaceEgressDecisions re-applies every decided `always`-scoped
+// egress decision to its run's primary workspace, healing D28: the post-Decide
+// write-back (persistWorkspaceEgressDecision) is not atomic with Decide, so a PG
+// blip there dropped a permanent allow/deny behind a 200 with only a failure
+// audit row — future runs then never inherited the operator's decision.
+// AddWorkspaceEgressDecision is idempotent (an upsert that also clears the mirror
+// list), so re-applying an already-persisted decision is a no-op and a dropped one
+// is recreated. Returns the count re-applied, for the boot log.
+//
+// This is the SMALLER of the two options the finding names (a boot/periodic
+// reconcile vs threading one tx through Decide + the workspace write, which spans
+// two service interfaces the api layer does not share a tx across). It runs once
+// at boot (cmd/wardynd). ponytail: boot-only heals on the next restart; a periodic
+// tick would heal sooner on a laptop that rarely reboots — add one if that window
+// proves too wide. The scan reads all decided egress approvals; decided rows are
+// never deleted, so on a very long-lived deployment cap this with a marker-keyed
+// incremental reconcile.
+func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, error) {
+	if s.cfg.Store == nil || s.cfg.Approvals == nil {
+		return 0, nil
+	}
+	reconciled := 0
+	for _, state := range []types.ApprovalState{types.ApprovalApproved, types.ApprovalDenied} {
+		aps, err := s.cfg.Approvals.List(ctx, state)
+		if err != nil {
+			return reconciled, err
+		}
+		allow := state == types.ApprovalApproved
+		for _, ap := range aps {
+			if ap.Kind != types.ApprovalEgressDomain || ap.DecisionScope.Normalize() != types.ScopeAlways {
+				continue
+			}
+			host := approvalHost(ap)
+			if host == "" || !hostrules.ValidApprovedHost(host) {
+				continue
+			}
+			run, err := s.cfg.Store.GetRun(ctx, ap.RunID)
+			if err != nil {
+				continue // run gone; nothing to persist onto
+			}
+			target := primaryWorkspace(run)
+			if target == uuid.Nil {
+				continue
+			}
+			// Best-effort, exactly like the live write-back: a deleted workspace or a
+			// cap-reached list is skipped, not fatal to the rest of the reconcile.
+			if _, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, target, host, allow, maxApprovedEgress); err != nil {
+				continue
+			}
+			reconciled++
+		}
+	}
+	return reconciled, nil
 }
 
 // approvalHost extracts an egress_domain approval's lowercased host from its
@@ -681,21 +896,33 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	// package already warns about, and it deserves the same visibility: an
 	// operator who clicked Always and got a green UI must be able to find out
 	// from the audit stream that nothing was written.
+	//
+	// Every emit below stamps the O5 cross-user marker (auditWorkspaceDataFor).
+	// Deciding an approval is owner-OR-ADMIN (routes.go), so this is the most
+	// common path on which an admin durably rewrites a MEMBER-owned workspace —
+	// an `always` on someone else's run — and "which member's data did this
+	// admin touch" has to stay a query here too, not just on the workspace
+	// routes. The owner comes from the write's own returned row where there is
+	// one, and from a marker-only re-read on the give-up paths.
 	if s.cfg.Store == nil || host == "" {
 		reason := "no store configured"
 		if s.cfg.Store != nil {
 			reason = "approval carries no host in requested_scope"
 		}
 		data["detail"] = reason
-		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure", mustJSON(data)))
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure",
+			auditWorkspaceDataFor(by, s.workspaceOwner(ctx, wsID), data)))
 		return
 	}
-	if _, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, wsID, host, allow, maxApprovedEgress); err != nil {
+	ws, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, wsID, host, allow, maxApprovedEgress)
+	if err != nil {
 		data["detail"] = err.Error()
-		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure", mustJSON(data)))
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure",
+			auditWorkspaceDataFor(by, s.workspaceOwner(ctx, wsID), data)))
 		return
 	}
-	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "success", mustJSON(data)))
+	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "success",
+		auditWorkspaceDataFor(by, ws.OwnedBy, data)))
 }
 
 // learnVerifyEgress is the verify loop's write-back, hooked at the ONE
@@ -736,23 +963,36 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	}
 	host := strings.ToLower(strings.TrimSpace(scope.Host))
 	if host == "" || !hostrules.ValidApprovedHost(host) {
+		// W19-W19b-5: this guard used to fail silent, unlike the merge-failure
+		// path below it — an operator who approved a request whose requested_scope
+		// carried an empty or malformed host got a green UI and no durable write,
+		// with nothing in the audit trail to explain why the workspace never
+		// learned the host.
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
+				"source": "verify:" + ap.RunID.String(), "detail": "invalid or empty host in requested_scope",
+			})))
 		return
 	}
 	key := "egress:" + host
-	if _, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{
+	// Same O5 marker as the deny·always write-back beside it, and reachable the
+	// same way: a record run an ADMIN launched on a member-owned workspace ends
+	// with the admin approving a host into that member's requirements contract.
+	ws, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{
 		key: {Level: "required", Provenance: "operator_set"},
-	}); err != nil {
+	})
+	if err != nil {
 		// The approval stands either way; the contract write is audited as the
 		// miss it is (cap hit / workspace gone) so the operator can add the row
 		// on Reach instead of wondering why the replay still denies the host.
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
-			run.WorkspaceID.String(), "failure", mustJSON(map[string]any{
+			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
 				"key": key, "source": "verify:" + ap.RunID.String(), "detail": err.Error(),
 			})))
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
-		run.WorkspaceID.String(), "success", mustJSON(map[string]any{
+		run.WorkspaceID.String(), "success", auditWorkspaceDataFor(by, ws.OwnedBy, map[string]any{
 			"key": key, "source": "verify:" + ap.RunID.String(),
 		})))
 }
