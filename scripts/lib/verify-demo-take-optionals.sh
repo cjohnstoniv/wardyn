@@ -36,11 +36,13 @@ _vopt_stub() {
   else
     bad "no narration timeline at ${tl}"
   fi
-  bad "no checks yet — the episode's spec ships them"
+  bad "no checks yet — the episode's lane ships them"
 }
 
-check_video_02b() { _vopt_stub 02b "the desktop deck (desktop)"; }
-check_video_02c() { _vopt_stub 02c "one command to a cluster (cloud)"; }
-check_video_04b() { _vopt_stub 04b "a member's own workspace (members)"; }
-check_video_04c() { _vopt_stub 04c "permissions — who may do what (admin)"; }
-check_video_12b() { _vopt_stub 12b "admin operations (admin)"; }
+# A lane's own scripts/lib/verify-demo-take-<id>.sh wins, whatever the glob order:
+# this file sorts last, so an unconditional definition here would shadow it.
+declare -F check_video_02b >/dev/null || check_video_02b() { _vopt_stub 02b "the desktop deck (desktop)"; }
+declare -F check_video_02c >/dev/null || check_video_02c() { _vopt_stub 02c "one command to a cluster (cloud)"; }
+declare -F check_video_04b >/dev/null || check_video_04b() { _vopt_stub 04b "a member's own workspace (members)"; }
+declare -F check_video_04c >/dev/null || check_video_04c() { _vopt_stub 04c "permissions — who may do what (admin)"; }
+declare -F check_video_12b >/dev/null || check_video_12b() { _vopt_stub 12b "admin operations (admin)"; }

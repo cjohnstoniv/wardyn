@@ -29,7 +29,7 @@ cd "${REPO_ROOT}" || exit 1
 # Per-episode arms live out of line — this file is within ~20 lines of
 # scripts/check-file-size.sh's 1000-line threshold, so an inline arm breaks
 # `make lint`. Globbed: a new episode's lane drops a lib in, adds only its arm.
-for _f in "${REPO_ROOT}"/scripts/lib/verify-demo-take-*.sh; do . "${_f}"; done
+for _f in "${REPO_ROOT}"/scripts/lib/verify-demo-take-*.sh; do [[ "${_f}" == *_test.sh ]] || . "${_f}"; done
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
 VIDEO="${1:-}"
@@ -916,8 +916,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03d) check_video_03d ;;
   02|05|07) head_ "Video ${WARDYN_DEMO_VIDEO}"; printf '    video-specific checks TBD by spec\n' ;;
   02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
-  *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------

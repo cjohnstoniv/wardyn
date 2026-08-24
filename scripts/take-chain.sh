@@ -56,14 +56,10 @@ done
 FF="${WARDYN_DEMO_FFMPEG:-$(command -v ffmpeg.exe 2>/dev/null || ls /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe 2>/dev/null | head -1)}"
 [[ -n "${FF}" ]] || { echo "no Windows ffmpeg — winget.exe install Gyan.FFmpeg (or set WARDYN_DEMO_FFMPEG)" >&2; exit 1; }
 
-# Where record-demo.sh puts the finished mp4 — same rule, so the chain can find
-# what it just shot and hand it to the verifier.
+# Where the finished mp4 lands — resolved INSIDE the loop, through the live
+# socket (the parent shell's is the dead one on the nights this chain exists
+# for), and handed down to record-demo.sh so the two cannot disagree.
 OUT_DIR="${WARDYN_DEMO_OUT_DIR:-}"
-if [[ -z "${OUT_DIR}" ]]; then
-  WIN_VIDEOS="$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("MyVideos")' 2>/dev/null | tr -d '\r')"
-  [[ -n "${WIN_VIDEOS}" ]] && OUT_DIR="$(wslpath -u "${WIN_VIDEOS}" 2>/dev/null)"
-fi
-OUT_DIR="${OUT_DIR:-${REPO_ROOT}/local/demo}"
 
 # A socket that runs a real Windows binary AND reports the capture device.
 probe() {
@@ -97,12 +93,23 @@ while :; do
   live="$(wait_socket)" || { echo "NO_SOCKET after ${SOCKET_TRIES} tries — wsl --shutdown is the owner's fix"; ledger "no-socket" "not run"; exit 1; }
   echo "=== take ${VIDEO} attempt ${attempt} $(date +%T) socket=${live} ==="
 
-  WSL_INTEROP="${live}" "${REPO_ROOT}/scripts/record-demo.sh" --video "${VIDEO}" "${REC_ARGS[@]}"
+  if [[ -z "${OUT_DIR}" ]]; then
+    WIN_VIDEOS="$(WSL_INTEROP="${live}" powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("MyVideos")' 2>/dev/null | tr -d '\r')"
+    [[ -n "${WIN_VIDEOS}" ]] && OUT_DIR="$(wslpath -u "${WIN_VIDEOS}" 2>/dev/null)"
+    OUT_DIR="${OUT_DIR:-${REPO_ROOT}/local/demo}"
+  fi
+  t0=$(date +%s)
+  WSL_INTEROP="${live}" WARDYN_DEMO_OUT_DIR="${OUT_DIR}" "${REPO_ROOT}/scripts/record-demo.sh" --video "${VIDEO}" "${REC_ARGS[@]}"
   rc=$?
   echo "TAKE_RC=${rc} video=${VIDEO} attempt=${attempt}"
 
-  # The newest take of THIS id — record-demo.sh names it wardyn-<id>-<slug>-<stamp>.mp4.
+  # The newest take of THIS id — record-demo.sh names it wardyn-<id>-<slug>-<stamp>.mp4 —
+  # and it must be NEWER than this attempt, or it is the previous take wearing this id.
   MP4="$(ls -t "${OUT_DIR}"/wardyn-"${VIDEO}"-*.mp4 2>/dev/null | head -1)"
+  [[ -n "${MP4}" && "$(stat -c %Y "${MP4}")" -ge "${t0}" ]] || MP4=""
+  if [[ "${rc}" -eq 0 && -z "${MP4}" ]]; then
+    ledger "${rc}" "FAIL" "—"; echo "NO_MP4 ${VIDEO} — exit 0 but nothing new under ${OUT_DIR}"; break
+  fi
 
   if [[ "${rc}" -eq 0 ]]; then
     WARDYN_DEMO_VIDEO="${VIDEO}" "${REPO_ROOT}/scripts/verify-demo-take.sh" "${MP4}"
