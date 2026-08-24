@@ -102,7 +102,7 @@ test("V03c act 1 — authorized, not issued", async () => {
   await chapter(page, "The same law, five ways", "How a credential is kept depends on the protocol");
   // [OWNER SLOT — drafted] The detour's own opener — the card above moved here
   // from the rest-api-token act, so the ladder is named before its first rung.
-  await caption(page, "A secret can be authorized without ever being issued to the run. Two of the five ways here — a header, then a pipe. The three that can't use either come next.");
+  await caption(page, "You've seen a key ride in a header the run never held. Here that grant gets an approval gate and a time limit, then a real third-party call — and then a second way in entirely: a Git token issued straight into a pipe. The three kinds that can use neither are the next detour.");
   await beat(page, PACE.read);
 
   await caption(page, "Same permission, one field different.");
@@ -110,16 +110,15 @@ test("V03c act 1 — authorized, not issued", async () => {
   await caption(page, "This one requires approval before that one-time use can be authorized.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "authorized-not-issued", "eligible_grants",
-    "A new section appears: eligible_grants. This is where a run is authorized to USE a secret.");
+    "The same eligible grants section as the core.");
   await walkPolicyKey(page, card, "authorized-not-issued", "kind",
-    "The kind — an API key, attached to outbound requests as a header.");
+    "Same kind — an API key, in a header.");
   await walkPolicyKey(page, card, "authorized-not-issued", "scope",
-    "And the scope: which host, which header — and the secret's NAME.",
-    "Not the secret itself. The value never appears in the policy, and never enters the box.");
+    "Same scope — that host, that header, and the secret's name; never its value.");
   await walkPolicyKey(page, card, "authorized-not-issued", "requires_approval",
-    "Two lines changed in the grant. Requires-approval is now true — a human decides at the moment it's minted.");
+    "Two lines changed in the grant. Requires approval is now true — a human decides at the moment it's minted, that is, issued.");
   await walkPolicyKey(page, card, "authorized-not-issued", "ttl_seconds",
-    "And a ttl: the credential lives five minutes, then expires on its own.");
+    "And a time to live: once minted, the proxy's injection rule lasts five minutes, then expires on its own. Spent means one mint — a third ask is refused as already minted — and the time limit caps how long that one mint stays usable.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "authorized-not-issued");
@@ -202,8 +201,7 @@ test("V03c act 2 — a bearer token for a real API", async () => {
   await caption(page, "It carries Authorization: Bearer, where the token is a Wardyn secret the box never holds.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "rest-api-token", "scope",
-    "The scope changed: a real host, the Authorization header, and Bearer formatting.",
-    "Same mechanism as before — a header attached at the boundary — now wired to a standard third-party API.");
+    "The scope changed: a real host, the Authorization header, and Bearer formatting.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "rest-api-token");
@@ -223,9 +221,10 @@ test("V03c act 2 — a bearer token for a real API", async () => {
   await frameRun(page, "rest-api-token");
   await typeInTerminal(page, await pillCmd(card, 0), card);
   await pollScreen(screen, /HTTP\/[\d.]+ \d\d\d/, "the third-party call never got a response line");
-  await caption(page, "The request left this box without an Authorization header. The proxy added one before forwarding it.");
+  await caption(page, "The request left this box without an Authorization header; the proxy stitched one on at the boundary, after the sandbox had already sent it.");
   await beat(page, PACE.read);
-  await caption(page, "The proxy stitched it on at the boundary, after the sandbox had already sent it.");
+  // [OWNER SLOT — drafted]
+  await caption(page, "It can do that because this request is plain, unencrypted web traffic — the proxy reads it and edits it. Encrypted traffic Wardyn opens for two kinds of host only: the model providers, and a corporate mirror you configured with its own token. Every other encrypted connection is a tunnel the proxy can't read.");
   await beat(page, PACE.read);
 
   await typeInTerminal(page, await pillCmd(card, 1), card);
@@ -239,8 +238,6 @@ test("V03c act 2 — a bearer token for a real API", async () => {
   await beat(page, PACE.read);
   await caption(page, "Nothing resident on disk either — not the value, not the config that names it.");
   await beat(page, PACE.read);
-  await caption(page, "Invisible from inside the box is the point, not a gap in the demo.");
-  await beat(page, BEAT_SHORT + 400);
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
 
@@ -259,12 +256,12 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
   await spotlight(page, page.getByTestId("demo-policy-pat-stdout-only"));
   await caption(page, "A Git clone is different: the proxy can't inspect the credential exchange inside the Git connection.");
   await beat(page, PACE.read);
-  await caption(page, "So the PAT is issued only when Git asks — straight into Git's pipe, and nowhere else.");
+  await caption(page, "So the personal access token — the PAT — is issued only when Git asks: straight into Git's pipe, and nowhere else.");
   await beat(page, PACE.read);
-  await caption(page, "And first the helper makes the caller prove who it is.");
+  await caption(page, "And first, Git's credential helper makes the caller prove who it is.");
   await beat(page, BEAT_SHORT + 400);
   await walkPolicyKey(page, card, "pat-stdout-only", "kind",
-    "The kind is different now: git_pat, not api_key.",
+    "The kind is different now: git PAT, not API key.",
     "No header to inject — Git's exchange is opaque — so the token goes straight into Git's pipe instead.");
   await spotlight(page, null);
 
@@ -283,6 +280,9 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
   await beat(page, PACE.read);
   await caption(page, "That's the gate deciding — not an error.");
   await beat(page, BEAT_SHORT);
+  // [OWNER SLOT — drafted]
+  await caption(page, "The gate stops a caller that doesn't hold the run's own secret. It doesn't stop the run — that's what the grant is for. What the run gets is the token on a pipe at the moment Git asks, and every mint is on the record.");
+  await beat(page, PACE.read);
 
   // Step 1: present the gate token.
   await typeInTerminal(page, await pillCmd(card, 1), card);
@@ -334,7 +334,7 @@ test("V03c conclusion", async () => {
 
   await chapter(page, "Back to the main path", "");
   // [OWNER SLOT — drafted]
-  await caption(page, "Two ways in — a header, or a pipe. The other three can't use either. That's the next detour.");
+  await caption(page, "Two ways — a header the run never sees, and a pipe it reads once. Three kinds can use neither; that's the next detour, if you want it. Otherwise the main path picks up at episode four: a workspace.");
   await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 04: Add a workspace");

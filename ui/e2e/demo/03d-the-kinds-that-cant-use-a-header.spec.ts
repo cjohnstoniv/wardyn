@@ -102,23 +102,23 @@ test("V03d act 1 — the one that touches disk", async () => {
 
   await chapter(page, "The kinds that can't use a header", "Resident briefly, brokered, or refused");
   // [OWNER SLOT — drafted] The detour's own opener.
-  await caption(page, "Three credential kinds that can't be injected as a header — and what the proxy does instead.");
+  await caption(page, "Three credential kinds that can't be injected as a header — and what Wardyn does instead. One we can replay here; one stays gated until you configure a GitHub App; one is refused before a sandbox exists — and that refusal is the lesson.");
   await beat(page, PACE.read);
 
   await spotlight(page, page.getByTestId("demo-policy-ssh-briefly-resident"));
   await caption(page, "One kind can't be kept out of the box at all — the ssh client reads its key from a file.");
   await beat(page, PACE.read);
-  await caption(page, "So Wardyn narrows the window instead of pretending it isn't there: written just before the clone, shredded right after.");
+  await caption(page, "So Wardyn narrows the window instead of pretending it isn't there: written just before the clone, removed right after.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "ssh-briefly-resident", "min_confinement_class",
-    "The barrier: CC1, Fence — the lightest sandbox tier, the wall between this run and your host.");
+    "Same barrier as the core — Fence.");
   await walkPolicyKey(page, card, "ssh-briefly-resident", "auto_stop_after_sec",
-    "A dead-man's switch: if nothing else stops it, the run halts itself after fifteen minutes.");
+    "Same fifteen-minute idle stop.");
   await walkPolicyKey(page, card, "ssh-briefly-resident", "eligible_grants",
-    "A new section appears: eligible_grants. This is where a run is authorized to USE a secret.");
+    "The eligible grants section is back; the kind is what's different.");
   await walkPolicyKey(page, card, "ssh-briefly-resident", "kind",
-    "kind: ssh_key — the one exception that touches disk.",
-    "Every other kind stays out of the box entirely; this one is written 0400 and shredded, on the narrowest window Wardyn can hold.");
+    "kind: SSH key — the one kind that is ever written to a file.",
+    "No other kind is ever written down. This one is written owner-read-only — mode 0400, agent-owned — and removed the moment the clone is done.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "ssh-briefly-resident");
@@ -130,7 +130,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "On a real run the whole window opens and closes at startup, before you can attach.");
   await beat(page, PACE.read);
-  await caption(page, "The key was here. Startup minted it, wrote it, and shredded it. You're looking at the after.");
+  await caption(page, "The key was here. Startup minted it — issued it fresh — wrote it, and removed it. You're looking at the after.");
   await beat(page, PACE.read);
 
   const auditRows = card.getByTestId("demo-audit-rows");
@@ -141,7 +141,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   await spotlight(page, auditRows);
   await caption(page, "That startup mint is the window you could never have watched.");
   await beat(page, PACE.read);
-  await caption(page, "From here, it's replayed by hand — the same local route, the same file.");
+  await caption(page, "From here, it's replayed by hand — the same local route, the same kind of file, in the same place.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -151,7 +151,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   // Step 2 (pill index 1): the node re-mint → 0400 file.
   await typeInTerminal(page, await pillCmd(card, 1), card);
   await beat(page, PACE.read);
-  await caption(page, "This kind of grant can be requested again, so the same route can provide another temporary key.");
+  await caption(page, "This kind of grant can be requested again — there's no cap on that — so the same route can provide another key. Every mint is a row in the record.");
   await beat(page, PACE.read);
 
   // Step 3 (pill index 2): ls -l — the resident 0400 file.
@@ -159,7 +159,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   await pollScreen(screen, /id_wardyn_demo/, "the re-minted key file never appeared");
   await caption(page, "There it is: read-only, agent-owned.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "For the length of a clone, and only then, a private key is a real file. Wardyn doesn't claim otherwise.");
+  await caption(page, "For the length of a clone, a private key is a real file — and code running as the agent can read it. Wardyn doesn't claim otherwise.");
   await beat(page, PACE.read);
 
   // Step 4 (pill index 3): the ssh attempt — refused (fake key), narrow reach.
@@ -175,7 +175,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   await pollScreen(screen, /\.ssh/, "the shred step never echoed the empty listing");
   await caption(page, "And gone.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The exception is bounded, documented, and the only one there is.");
+  await caption(page, "The exception is narrow by construction, documented, and the only one there is — and every mint of it is on the record.");
   await beat(page, PACE.read + 400);
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
@@ -191,7 +191,7 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
   const page = stage();
 
   const card = await openDemo(page, "github-app-broker", "A token the sandbox never even sees");
-  await caption(page, "One step further out. The PAT is delivered through Git's pipe; this token never enters the sandbox at all.");
+  await caption(page, "One step further out. Git can be handed a token on a pipe — but this kind never enters the sandbox at all, in any form.");
   await beat(page, PACE.read);
 
   await spotlight(page, card.getByTestId("demo-policy-github-app-broker"));
@@ -199,11 +199,11 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "It mints a short-lived, repo-scoped token from the live GitHub API and attaches it on its own outbound leg.");
   await beat(page, PACE.read);
-  await caption(page, "Ask for it from inside, and you're refused by name.");
+  await caption(page, "Ask for it by name from inside, and you're refused.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "github-app-broker", "kind",
-    "kind: github_token — scoped to a repo and a permission.",
-    "One step past the PAT: this token never enters the box even as a pipe. It's attached on the proxy's outbound leg alone.");
+    "kind: GitHub token — scoped to one repo and one permission. Anything in the box can reach that broker route; it only ever yields this repo, with this permission.",
+    "One step past a pipe: this token never enters the box in any form. It's attached on the proxy's outbound leg alone.");
   await spotlight(page, null);
 
   // The gate is the demo here: Start is disabled and the gate copy explains
@@ -219,7 +219,7 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
   await spotlight(page, card.getByTestId("demo-needs-github-app"));
   await caption(page, "And because that token comes from the live GitHub API, there's nothing to fake.");
   await beat(page, PACE.read);
-  await caption(page, "Without a configured App, Start stays closed — and the card teaches the lane instead of pretending.");
+  await caption(page, "Without a GitHub App configured, Start stays disabled — and the screen tells you what to set up rather than faking a run.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
@@ -236,15 +236,15 @@ test("V03d act 3 — no identity, no credential", async () => {
   const page = stage();
 
   const card = await openDemo(page, "sts-fail-closed", "No identity, no credential");
-  await caption(page, "The last rung is the one where nothing is handed out at all.");
+  await caption(page, "The last kind is the one where nothing is handed out at all.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByTestId("demo-policy-sts-fail-closed"));
-  await caption(page, "The last kind uses a cloud identity to request short-lived credentials from STS.");
+  await caption(page, "It uses a cloud identity to request short-lived credentials from the cloud's token service — STS.");
   await beat(page, PACE.read);
-  await caption(page, "So it only means anything when something is actually attesting.");
+  await caption(page, "So it only means anything when the machine can prove a real cloud identity — when something is attesting.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "sts-fail-closed", "kind",
-    "kind: cloud_sts — and the scope is empty, because there's no identity here to fill it.",
+    "kind: cloud STS — and the scope is empty, because there's no identity here to fill it.",
     "Which is the whole point of the last demo: with nothing attesting, the run is refused before it ever starts.");
   await spotlight(page, null);
 
@@ -264,7 +264,7 @@ test("V03d act 3 — no identity, no credential", async () => {
   await noteDemoRun(page, "sts-fail-closed");
   await centerInFrame(refused);
   await spotlight(page, refused);
-  await caption(page, "It fires at run-create. No sandbox is ever built.");
+  await caption(page, "It fires the moment the run is created. No sandbox is ever built.");
   await beat(page, PACE.read);
   await caption(page, "Read which gate refused — it's named right here on the card.");
   await beat(page, PACE.read);
@@ -283,7 +283,7 @@ test("V03d conclusion", async () => {
   const page = stage();
 
   await chapter(page, "Back to the main path", "");
-  await caption(page, "Five credential types, five different boundaries — because the protocol determines what safe use looks like.");
+  await caption(page, "That's the last of five credential kinds, each with its own boundary — because the protocol decides what safe use can even look like. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. Back on the main path: episode four gives a run something real to work on. A workspace.");
   await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 04: Add a workspace");
