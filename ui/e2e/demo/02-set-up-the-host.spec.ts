@@ -207,7 +207,9 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
   await act(page, page.getByRole("button", { name: /^Get started/ }), "So let's see what it does with it.");
-  await expect(page.getByText(/^Step 1 of 10$/)).toBeVisible({ timeout: 30_000 });
+  // The step COUNT is dynamic now (the demos phase lists the whole catalog and
+  // needsModel/needsSecret steps drop out per status) — pin only "Step 1 of".
+  await expect(page.getByText(/^Step 1 of \d+$/)).toBeVisible({ timeout: 30_000 });
 
   // --- B3 · the barrier -----------------------------------------------------
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });

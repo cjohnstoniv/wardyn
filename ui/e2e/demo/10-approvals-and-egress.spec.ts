@@ -379,7 +379,10 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // a host this workspace wants for good. No caption owns the swap; it is not
   // in the owner's dialog.
   const card = page.getByTestId("demo-card-held-at-the-door");
-  await expect(card.getByRole("heading", { name: "Held at the door" })).toBeVisible({
+  // The step TITLE renders above the card wrapper (DemoDetail's testid wraps
+  // the body, not the h2 — rehearsal-proven), so the heading is asserted at
+  // page level, episode 03's idiom; everything interactive stays card-scoped.
+  await expect(page.getByRole("heading", { name: "Held at the door", level: 2 })).toBeVisible({
     timeout: 60_000,
   });
 

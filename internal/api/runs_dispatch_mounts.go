@@ -123,11 +123,18 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"WARDYN_RUN_ID":    run.ID.String(),
 		"WARDYN_PROXY_URL": proxyURL,
 		// Standard proxy env: agents using HTTP_PROXY-aware clients route
-		// through the wardyn-proxy automatically (L2 enforcement).
+		// through the wardyn-proxy automatically (L2 enforcement). BOTH cases:
+		// curl (and others, post-httpoxy) deliberately IGNORE uppercase
+		// HTTP_PROXY for plain-http URLs and honor only the lowercase form —
+		// without it, an http:// fetch bypasses the proxy, fails DNS in the
+		// sandbox, and the header-injection path never fires.
 		"HTTP_PROXY":  proxyURL,
 		"HTTPS_PROXY": proxyURL,
+		"http_proxy":  proxyURL,
+		"https_proxy": proxyURL,
 		// Exclude the proxy itself and loopback from proxy traversal.
 		"NO_PROXY": "wardyn-proxy,localhost,127.0.0.1,::1",
+		"no_proxy": "wardyn-proxy,localhost,127.0.0.1,::1",
 		// Git commit attribution: carry the sub/act delegation chain into the commit
 		// graph so an agent's commits are traceable to the governed run — AUTHOR is
 		// the human who authorized the run (sub), COMMITTER is the agent run (act).
