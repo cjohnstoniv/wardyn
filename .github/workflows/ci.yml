@@ -372,6 +372,84 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: docker compose config (validate)
         run: make compose-config
+      # Daemon-free shell regression suite (scripts/test-*.sh, incl.
+      # test-desktop-profile.sh) — was genuinely absent from every workflow;
+      # this job is the natural home, already daemon-free and already named
+      # for exactly this kind of static/config check.
+      - name: Shell regression tests (scripts/test-*.sh)
+        run: make test-scripts
+
+  # ── desktop tier: envelope boots, and the ceiling actually holds ───────────
+  # Boots the SAME compose stack every other single-host deployment uses
+  # (deploy/desktop/docker-compose.yaml `include:`s
+  # deploy/compose/docker-compose.yaml unmodified, adding only the
+  # MDM-managed-directory mount) with this commit's
+  # deploy/desktop/wardyn.env.example as the envelope, then proves three
+  # things docs/DESKTOP.md claims: the control plane actually serves the
+  # managed policy as its default, a run that names no policy resolves to
+  # that ceiling (not something wider), and Recording Mode's synthesized
+  # profile is clamped to it too (composer.Clamp's the same call whichever
+  # caller reaches it — see internal/api/profile.go). CI-side only: nothing
+  # here runs against a real device, and nothing in the install lane
+  # (install.sh, the plist) executes — those are macOS/launchd-only and stay
+  # covered by scripts/test-desktop-profile.sh's static checks above.
+  desktop-envelope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build wardynd (this commit)
+        run: docker compose -f deploy/compose/docker-compose.yaml build wardynd
+      - name: Lay down a CI-local managed envelope at /etc/wardyn
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /etc/wardyn
+          KEY="$(docker run --rm wardyn/wardynd:local -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1)"
+          [ -n "${KEY}" ] || { echo "::error::-gen-age-key produced no key"; exit 1; }
+          printf '%s\n' "${KEY}" | sudo tee /etc/wardyn/age.key >/dev/null
+          sudo chmod 0600 /etc/wardyn/age.key
+          # examples/policies/demo.json is the SAME ceiling the base compose
+          # file falls back to on its own (CC1, works with no gVisor) — using
+          # it here means "managed ceiling" and "what a plain runner enforces"
+          # are the same file, so a real difference is a real bug, not a
+          # CI-environment artifact.
+          sudo cp examples/policies/demo.json /etc/wardyn/policy.json
+          sed -e 's/\$UPN/ci-operator@example.com/' -e 's/\$SERIALNUMBER/CI0000/' \
+            deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
+      - name: Boot the desktop compose profile
+        run: |
+          docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml \
+            -p wardyn-desk-ci up -d --no-build postgres wardynd
+      - name: Wait for healthz
+        run: |
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
+          docker compose -p wardyn-desk-ci logs wardynd
+          echo "::error::wardynd did not become healthy"; exit 1
+      - name: Assert /policies/default equals the managed file
+        run: |
+          diff <(jq -S . /etc/wardyn/policy.json) <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | jq -S .)
+      - name: Assert a no-policy run resolves to the ceiling (dry-run preflight)
+        run: |
+          out=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
+            --task-mode exec --dry-run --json)
+          echo "${out}" | jq -e '.enforced_confinement_class == "CC1"' >/dev/null \
+            || { echo "::error::preflight enforced_confinement_class != the managed ceiling's CC1: ${out}"; exit 1; }
+      - name: Launch a run and assert its synthesized profile is clamped (warnings non-empty)
+        run: |
+          run_json=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
+            --task-mode exec --wait --timeout 3m --json)
+          run_id=$(echo "${run_json}" | jq -r .id)
+          [ -n "${run_id}" ] && [ "${run_id}" != "null" ] || { echo "::error::no run id in: ${run_json}"; exit 1; }
+          prof=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn record synthesize "${run_id}" --json)
+          echo "${prof}" | jq -e '(.warnings // []) | length > 0' >/dev/null \
+            || { echo "::error::synthesized profile carried no clamp/coverage warnings: ${prof}"; exit 1; }
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose -p wardyn-desk-ci -f deploy/desktop/docker-compose.yaml down -v || true
 
   # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
   # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged
