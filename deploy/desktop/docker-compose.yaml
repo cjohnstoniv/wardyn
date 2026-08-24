@@ -1,0 +1,32 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Desktop-tier entrypoint. The desktop tier is a CONFIGURATION of the same
+# compose stack every other single-host deployment uses (docs/DESKTOP.md "It
+# is a configuration, not a build"), never a separate stack — `include:`
+# pulls in deploy/compose/docker-compose.yaml unmodified, and the one thing
+# added here is the MDM-managed directory.
+#
+# WARDYN_DEFAULT_POLICY in the desktop envelope
+# (deploy/desktop/wardyn.env.example) is a HOST path — /etc/wardyn/policy.json
+# — that wardynd reads directly off disk at boot (cmd/wardynd/boot_flags.go
+# "path to the default RunPolicy spec JSON"). For the containerized wardynd
+# this compose stack runs to see it, the managed directory has to be visible
+# INSIDE the container at that same path — the same same-path-both-sides
+# convention the included file already uses for WARDYN_WORKSPACES_ROOT and
+# WARDYN_BEDROCK_AWS_DIR.
+#
+# Read-only: nothing in wardynd ever writes back into the MDM-managed
+# directory. age.key is deliberately NOT read from here — wardyn-desktop.sh
+# reads its content into WARDYN_AGE_KEY itself (docs/DESKTOP.md "Why age.key
+# never rides in an MDM payload"), so the container never needs the file.
+#
+# Run FROM this directory: `docker compose --env-file wardyn.env.example
+# -p <name> config` (no -f needed — this IS the entrypoint compose file).
+include:
+  - path: ../compose/docker-compose.yaml
+
+services:
+  wardynd:
+    volumes:
+      - /etc/wardyn:/etc/wardyn:ro

@@ -331,6 +331,7 @@ header comments in `scripts/up.sh`.
 | `WARDYN_IMPORT_SCM` | bool | (unset = ask, default no) | import host SCM credentials during setup |
 | `WARDYN_FORCE_RESET` | bool | (unset = ask) | answer the destructive-reset confirmation non-interactively |
 | `WARDYN_DEFAULT_POLICY_AUTO` | bool | (unset) | **not operator-settable — an internal marker, not a knob.** `scripts/up.sh` writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen. Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand — including a model path `host_llm_key_present` cannot see in THIS process's env at all (a subscription connected in a prior `up`, or a key added through the UI): `up` asks the running daemon's own `/setup/status` `llm_ready` for that, not just its own env |
+| `WARDYN_INSTALL_IMAGE` | string | `ghcr.io/cjohnstoniv/wardynd:latest` | `deploy/desktop/install.sh` only: the `wardynd` image it runs `-gen-age-key` against to mint a new device's `age.key`. Set it to a pinned digest or a corporate mirror ref; the desktop tier's compose stack itself still resolves its own image from `WARDYN_WARDYND_IMAGE` in the managed `wardyn.env` (`wardyn-desktop.sh` defaults that one too — see [docs/DESKTOP.md](DESKTOP.md)) |
 
 ## Four variables that need more than a table cell
 
