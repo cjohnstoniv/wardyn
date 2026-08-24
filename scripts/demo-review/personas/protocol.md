@@ -155,6 +155,31 @@ Timestamped think-aloud (bullet per moment worth a note), then the four
 closing sections. Cite frames by filename. Severity is implicit in your
 reaction — say it like a person, not like a linter.
 
+## Frames rounds
+
+A frames round reviews a SHOT take instead of a script. The viewer gets contact
+sheets and nothing else: `sheets.md` first (the index and the reading order),
+then `sheet-01.png`, `sheet-02.png` … in order. Each sheet is six frames in time
+order, and every tile carries its number, timestamp and the narration line
+spoken over it — the transcript is interleaved with the picture rather than
+handed over beside it (a leading `…` on a caption means that line had already
+finished, so the frame is silence). The frames themselves and `transcript.txt`
+are not read separately; the sheets ARE the viewing.
+
+What the shot take adds is the pairing: judge the words and the picture
+together, and flag every tile where the screen does not match the line spoken
+over it, where the spotlight sits on something other than what is being talked
+about, or where text is too small to read at the moment it matters. "Say it
+aloud" still applies — those captions are the narration as spoken.
+
+Cite by sheet and tile — `sheet-04.png #3` — the way a script round quotes a
+line. Everything else is unchanged: the same fidelity rules, the same
+think-aloud, the same four closing sections, the same lane verdict.
+
+Corpora are built with `scripts/demo-review/build-corpus.py TAKE.mp4
+TIMELINE.json DIR` (the timeline shape follows the picture — see that script)
+and tiled with `scripts/demo-review/tile-sheets.py DIR`.
+
 ## Revisions
 
 - 2026-08-20: initial protocol (persona library round 1).
@@ -172,3 +197,7 @@ reaction — say it like a person, not like a linter.
   lanes are independent acceptance conditions (PASS / FAIL / NOT-WATCHED, never
   averaged); red-team as a pass, not a persona; Jordan parked — external
   persona-library review, owner directive.
+- 2026-08-24 (c): `## Frames rounds` — the viewing form for a shot take (6-up
+  labeled contact sheets, cited by sheet and tile). One frame per read cost
+  ~150k context per turn and burned two session-limit windows; the sheets are
+  ~11 reads for a ten-minute take.
