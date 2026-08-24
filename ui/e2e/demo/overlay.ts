@@ -22,7 +22,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
-import { NARRATION_DIR, narrationZero, narrationZeroMs, speak } from "./narrator";
+import { NARRATION_DIR, narrationZero, narrationZeroMs, nowMs, speak } from "./narrator";
 
 const MOUNT = "__wardyn_demo_overlay";
 
@@ -147,14 +147,17 @@ async function call(page: Page, fn: string, ...args: unknown[]): Promise<void> {
     });
 }
 
-// Wall-clock instant the current spoken line finishes. beat() and act() wait it
-// out, which is what makes the hold `max(existing beat, audio)` without any
-// caller — or walkthrough.spec.ts — having to know narration exists.
+// Instant the current spoken line finishes, on narrator.ts's nowMs() clock —
+// every time measured in this lane is on that one clock, picture included. See
+// the nowMs() comment: mixing it with Date.now() is what drifted take 10.
+// beat() and act() wait it out, which is what makes the hold
+// `max(existing beat, audio)` without any caller — or walkthrough.spec.ts —
+// having to know narration exists.
 let speechUntil = 0;
 
 /** Hold until the current line has finished speaking. No-op when silent. */
 async function awaitSpeech(page: Page): Promise<void> {
-  const remaining = speechUntil - Date.now();
+  const remaining = speechUntil - nowMs();
   speechUntil = 0;
   if (remaining > 0) await page.waitForTimeout(remaining);
 }
@@ -164,7 +167,7 @@ export async function caption(page: Page, text: string): Promise<void> {
   await call(page, "caption", text);
   // +300ms so the next visual does not start on the last syllable.
   const durMs = await speak(text);
-  if (durMs > 0) speechUntil = Date.now() + durMs + 300;
+  if (durMs > 0) speechUntil = nowMs() + durMs + 300;
 }
 
 /*
@@ -194,7 +197,7 @@ let ffwdFrom = -1;
 /** Begin a fast-forwarded span. Say nothing until ffwdEnd. */
 export async function ffwdStart(page: Page): Promise<void> {
   narrationZero(); // a --silent take never calls speak(), so the clock may not be running yet
-  ffwdFrom = Date.now() - narrationZeroMs();
+  ffwdFrom = nowMs() - narrationZeroMs();
   await call(page, "caption", "▸▸ fast-forward — the agent is working");
 }
 
@@ -202,7 +205,7 @@ export async function ffwdStart(page: Page): Promise<void> {
 export async function ffwdEnd(page: Page): Promise<void> {
   await call(page, "caption", "");
   if (ffwdFrom < 0) return; // ffwdEnd without a start — nothing to compress
-  spans.push({ startMs: ffwdFrom, endMs: Date.now() - narrationZeroMs() });
+  spans.push({ startMs: ffwdFrom, endMs: nowMs() - narrationZeroMs() });
   ffwdFrom = -1;
   try {
     // Rewritten after every span, for narrator.flush()'s reason: a take that

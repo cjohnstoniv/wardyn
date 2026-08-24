@@ -233,6 +233,19 @@ mattering: see "The video is captured from TWO sources" below.
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
 | Host-shell beats (V11, V12) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
+**Two sources means two picture clocks, and each lane's cues must be stamped on
+its own.** The console lane's timeline is built from Chromium's frame-swap
+stamps (CLOCK_MONOTONIC), so `narrator.ts` stamps its cues with `nowMs()`
+(`performance.now()`, the same monotonic clock) — never `Date.now()`. The
+terminal lane is a Windows ffmpeg grabbing the desktop against the Windows wall
+clock, so `demo-typist.sh` times its cues from `WARDYN_DEMO_CAPTURE_ZERO`
+(`date +%s%3N`, realtime) — and that one is right as it stands. Crossing them is
+not a rounding error: under WSL2 monotonic and realtime run **3% apart** (this
+box: 90.00s monotonic per 86.95s realtime, because WSL2 keeps slewing realtime
+back to the Windows host), and take 10 on 2026-08-24 shipped with the caption
+bubble 6.4s behind its own narration by the end. `scripts/demo-drift.py`
+measures it and `verify-demo-take.sh` now fails a take that does it again.
+
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot
 be made safe (below). It has ruined two takes — one recorded six minutes of a
@@ -380,6 +393,7 @@ narration slides that fraction of elapsed time late (take 10 measured 1.0320 —
 `narration.json`: `demo-ffwd.py` re-times cues and picture together, so a
 fast-forwarded pair hides nothing but proves nothing either. `--strip <t>` dumps
 a filmstrip PNG around a picture time to confirm a row by eye.
+`verify-demo-take.sh` runs the same check on every take.
 
 ## When there is no model quota: `WARDYN_DEMO_SHELL_ACT5=1`
 

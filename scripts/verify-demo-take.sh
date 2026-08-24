@@ -26,8 +26,9 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 . "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
-# Episode 03's four arms live out of line — this file is within ~20 lines of
-# scripts/check-file-size.sh's 1000-line threshold.
+# Episode 03's four arms live out of line — this file is within a few lines of
+# scripts/check-file-size.sh's 1000-line threshold. The next check that needs
+# more than a line or two goes in scripts/lib/ too.
 . "${REPO_ROOT}/scripts/lib/verify-demo-take-03.sh"
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
@@ -969,6 +970,16 @@ for w in sorted(warns):
 sys.exit(0 if (c and ov == 0) else 1)
 PY
   [[ $? -eq 0 ]] && ok "timeline complete, no overlapping lines" || bad "narration timeline has overlaps or is empty"
+  # The picture's clock too: a cue is stamped when its caption goes on screen,
+  # so the caption must CHANGE at that tMs. Take 10 shipped 3% slow (narrator.ts).
+  WEBM="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video}/console.webm"
+  if [[ -s "${WEBM}" ]]; then
+    DRIFT="$(python3 "${REPO_ROOT}/scripts/demo-drift.py" --quiet --video "${WEBM}" --timeline "${TL}" 2>&1)"; RC=$?
+    printf '%s\n' "${DRIFT}" | sed 's/^/  /'
+    case "${RC}" in 0) ok "picture and narration on the same clock" ;;
+      1) bad "capture clock drift — the narration slides late" ;;
+      *) printf '    (unmeasurable — skipped)\n' ;; esac
+  fi
 else
   bad "no narration timeline — the take is silent"
 fi
