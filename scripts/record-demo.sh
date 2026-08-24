@@ -19,6 +19,9 @@
 #   scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 #                                        # film host-shell beats instead of (or
 #                                        # before) the browser ones
+#   WARDYN_DEMO_SKIP_MODEL=1 scripts/record-demo.sh --video 02c
+#                                        # leave the install's model access alone
+#                                        # (a kind quickstart is not this box's stack)
 #
 # THE SERIES. --video <nn> records a single video instead of the whole
 # walkthrough: it picks ui/e2e/demo/<nn>-*.spec.ts as the only spec to run and
@@ -132,14 +135,16 @@ if [[ -n "${VIDEO}" && "${VIDEO}" != "02" && "${RESET_EXPLICIT}" == 0 ]]; then
   DO_RESET=0
 fi
 
-# Video 01 (the primer) is a slides-lane take: a local HTML deck over file://,
-# recorded like any console take but touching NO product surface. It needs no
-# stack, no workspace, no model token — and it must never gate on (or mutate)
-# whatever happens to be answering :8080, which is not necessarily the series
-# stack (a quickstart squatting the port with bearer auth killed a rehearsal
-# at the subscription-connect step for a video that never uses the model).
+# Videos 01 (the primer) and 02b (the desktop deck) are slides-lane takes: a
+# local HTML deck over file://, recorded like any console take but touching NO
+# product surface. They need no stack, no workspace and no model token — 02b's
+# one non-deck act replays the owner's asciicast of a Mac install, which is a
+# file. And they must never gate on (or mutate) whatever happens to be answering
+# :8080, which is not necessarily the series stack (a quickstart squatting the
+# port with bearer auth killed a rehearsal at the subscription-connect step for
+# a video that never uses the model).
 STACKLESS=0
-[[ "${VIDEO}" == "01" ]] && STACKLESS=1
+[[ "${VIDEO}" == "01" || "${VIDEO}" == "02b" ]] && STACKLESS=1
 [[ "${STACKLESS}" == 1 ]] && DO_RESET=0
 
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }
@@ -297,7 +302,8 @@ fi
 # Model access. The token is read from a file and piped, so it is never an
 # argument, never in the environment of a child we do not control, and never
 # rendered on camera. A stackless take uses no model at all.
-if [[ "${STACKLESS}" == 0 && -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
+if [[ "${STACKLESS}" == 0 && "${WARDYN_DEMO_SKIP_MODEL:-}" != 1 \
+      && -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
   die "no Claude subscription token. Run:  claude setup-token > ${TOKEN_FILE}   (or export WARDYN_SUBSCRIPTION_TOKEN)"
 fi
 
@@ -466,6 +472,15 @@ else
   log "(pass --reset to rebuild, which is what video 02 does)"
 fi
 
+# WARDYN_DEMO_SKIP_MODEL=1 leaves the stack's model access alone. Set it for a
+# take against an install that is not this box's compose stack — 02c and 13 film
+# the kind quickstart, where `subscription connect` would either fail on bearer
+# auth or write the operator's token into someone else's cluster. (The CLI picks
+# up WARDYN_ADMIN_TOKEN from the environment on its own — main.go's --token
+# default — so an exported token reaches every ./wardyn call below.)
+if [[ "${WARDYN_DEMO_SKIP_MODEL:-}" == 1 ]]; then
+  step "Act 0 · Model access skipped (WARDYN_DEMO_SKIP_MODEL=1)"
+else
 step "Act 0 · Model access"
 log "connecting the Claude subscription (token piped from a file — never printed, never an argument)"
 if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
@@ -476,6 +491,7 @@ else
     || die "subscription connect failed"
 fi
 ./wardyn setup status || true
+fi # WARDYN_DEMO_SKIP_MODEL
 fi # STACKLESS
 
 # --- the terminal beats -----------------------------------------------------

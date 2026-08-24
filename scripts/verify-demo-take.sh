@@ -26,9 +26,10 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 . "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
-# Episode 03's four arms live out of line — this file is within ~20 lines of
-# scripts/check-file-size.sh's 1000-line threshold.
-. "${REPO_ROOT}/scripts/lib/verify-demo-take-03.sh"
+# Per-episode arms live out of line — this file is within ~20 lines of
+# scripts/check-file-size.sh's 1000-line threshold, so an inline arm breaks
+# `make lint`. Globbed: a new episode's lane drops a lib in, adds only its arm.
+for _f in "${REPO_ROOT}"/scripts/lib/verify-demo-take-*.sh; do [[ "${_f}" == *_test.sh ]] || . "${_f}"; done
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
 VIDEO="${1:-}"
@@ -913,18 +914,26 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03b) check_video_03b ;;
   03c) check_video_03c ;;
   03d) check_video_03d ;;
-  02|05|07)
-    head_ "Video ${WARDYN_DEMO_VIDEO}"
-    printf '    video-specific checks TBD by spec\n'
-    ;;
-  *) head_ "Video ${WARDYN_DEMO_VIDEO}"
-     bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
+  02|05|07) head_ "Video ${WARDYN_DEMO_VIDEO}"; printf '    video-specific checks TBD by spec\n' ;;
+  02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
 
 head_ "Narration"
-TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video}/narration.json"
+# Per-video by default, exactly as record-demo.sh resolves DEMO_OUT_DIR — a bare
+# demo-video/ is the no---video walkthrough's directory and nothing else's.
+TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video${WARDYN_DEMO_VIDEO:+-${WARDYN_DEMO_VIDEO}}}/narration.json"
+# A video with no ui/e2e/demo/<nn>-*.spec.ts has no browser lane and no
+# narration.json to have — its cues are the terminal lane's. Same rule
+# record-demo.sh resolves RUN_DRIVER=0 by, so the two cannot drift. Anything
+# WITH a spec keeps being checked against narration.json: a hybrid take whose
+# browser half went silent must still fail, and V09/V10 assert their terminal
+# timeline separately for exactly that reason.
+if [[ -n "${WARDYN_DEMO_VIDEO:-}" ]] && ! compgen -G "${REPO_ROOT}/ui/e2e/demo/${WARDYN_DEMO_VIDEO}-*.spec.ts" >/dev/null; then
+  TL="${TL%/narration.json}/narration-terminal.json"
+fi
 if [[ -s "${TL}" ]]; then
   python3 - "${TL}" <<'PY'
 import json, sys
@@ -943,7 +952,8 @@ print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard
 # caption speaks that has NO mapping there yet, so the gap is seen before a
 # viewer hears it. Warnings, not failures: a human decides the pronunciation.
 import re
-KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
+# Keep equal to narrate-server.py's _SAY plus what Kokoro reads right unmapped (PAT/STS/TTL joined _SAY 2026-08-24; "npm" is lowercase and never matches the regex).
+KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "PAT", "STS", "TTL", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
 # Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
 EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
 MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",

@@ -50,6 +50,8 @@ scripts/record-demo.sh               # no --video: the end-to-end walkthrough, u
 With no `--video` nothing is filtered at all: the `demo` project's own
 `testMatch` decides, exactly as it did before the series existed.
 
+Shooting from a fresh worktree? `local/bootstrap-worktree.sh <path>` (untracked, in `local/`) links `ui/node_modules`, `./wardyn` and `./wardynd` from the primary checkout and copies the gitignored `local/` demo files across — the harness needs all four and git tracks none of them.
+
 The shared code the series specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
 (the browser, the recorded context, the one page — importing it registers a
 spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`)
@@ -61,8 +63,9 @@ headed browser at a developer's live stack and starts clicking Launch.
 
 ### The clean slate belongs to video 02
 
-`reset-all` runs for **video 02 and the no-flag walkthrough only** (video 01 is
-stackless — it never touches the stack, not even under `--reset`). Every other `--video` implies
+`reset-all` runs for **video 02 and the no-flag walkthrough only** (videos 01 and
+02b are stackless — a slides deck each, they never touch the stack, not even
+under `--reset`). Every other `--video` implies
 `--no-reset`; `--reset` overrides that, `--no-reset` opts 02 out.
 
 This is not a speed optimisation. The series is shot in an order where each
