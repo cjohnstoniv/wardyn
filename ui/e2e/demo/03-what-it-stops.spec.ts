@@ -203,6 +203,8 @@ async function startAndBoot(page: Page, card: Locator, id: string): Promise<Loca
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up; typing here eats the first characters.
   await beat(page, PACE.read);
+  // Cockpit framing: policy at the top, terminal + audit below, all in one frame.
+  await frameRun(page, id);
   return card.locator(".xterm-screen").first();
 }
 
@@ -249,6 +251,51 @@ async function silentCard(page: Page, text: string): Promise<void> {
   await page.waitForTimeout(PACE.chapter);
   await set("");
   await page.waitForTimeout(400);
+}
+
+/** The policy card renders as YAML through tintLines, which makes EACH source
+ *  line its own <div> under <pre><code> (see wardyn/code-block.tsx). So a single
+ *  key/value is a targetable line: ring it to teach exactly what changed. The
+ *  key is anchored at a line boundary (indent or the "- " list lead) so a nested
+ *  "host:" inside a scope never collides with a top-level key. */
+function policyLine(card: Locator, id: string, key: string): Locator {
+  return card
+    .getByTestId(`demo-policy-${id}`)
+    .locator("pre code > div")
+    .filter({ hasText: new RegExp(`(^|\\s)${key}:`) });
+}
+
+/** Frame the run cockpit: scroll the policy to the top of the viewport so the
+ *  policy, the terminal, and the audit panel below it are all in one frame while
+ *  commands run. Relies on the demos-step layout (policy directly above the
+ *  runner) and the 36vh terminal keeping the trio in view — so a later
+ *  typeInTerminal, whose terminal is already visible, does not re-scroll it off. */
+async function frameRun(page: Page, id: string): Promise<void> {
+  await page
+    .evaluate((testid) => {
+      document.querySelector(`[data-testid="${testid}"]`)?.scrollIntoView({ block: "start" });
+    }, `demo-policy-${id}`)
+    .catch(() => {});
+  await page.waitForTimeout(500);
+}
+
+/** Ring one policy line and narrate it — the diff device: the first demo walks
+ *  every line, each later demo highlights only what changed and why. */
+async function walkPolicyKey(page: Page, card: Locator, id: string, key: string, ...lines: string[]): Promise<void> {
+  const el = policyLine(card, id, key).first();
+  // Assert the line EXISTS before ringing it — spotlight() silently rings
+  // nothing on a missing locator, which would ship a take that narrates a key
+  // with no highlight. A rename in demo-catalog.ts fails the rehearsal here.
+  await expect(el, `policy key "${key}" not rendered on demo ${id} — did the catalog spec change?`).toBeVisible({
+    timeout: 30_000,
+  });
+  await centerInFrame(el).catch(() => {});
+  await spotlight(page, el);
+  for (const l of lines) {
+    await caption(page, l);
+    await beat(page, PACE.read);
+  }
+  await spotlight(page, null);
 }
 
 test.beforeAll(async () => {
@@ -379,10 +426,43 @@ test("V03 act 2 — four ways the boundary holds", async () => {
     // picks this demo back up mid-scene (the held-at-the-door tail below).
     await spotlight(page, null);
 
+    // THE POLICY, LINE BY LINE. The first demo walks every key/value; each later
+    // demo highlights ONLY the line that changed and why. sealed-box is the
+    // baseline the whole episode diffs against.
+    const policyCard = page.getByTestId(`demo-card-${demo.id}`);
+    await policyCard.getByTestId(`demo-policy-${demo.id}`).scrollIntoViewIfNeeded().catch(() => {});
+    if (demo.id === "sealed-box") {
+      await caption(page, "Before it runs, look at the policy — the whole contract, four lines.");
+      await beat(page, PACE.read);
+      await walkPolicyKey(page, policyCard, demo.id, "min_confinement_class",
+        "The barrier: CC1, Fence — the lightest sandbox tier, the wall between this run and your host.");
+      await walkPolicyKey(page, policyCard, demo.id, "auto_stop_after_sec",
+        "A dead-man's switch: if nothing else stops it, the run halts itself after fifteen minutes.");
+      await walkPolicyKey(page, policyCard, demo.id, "allowed_domains",
+        "The allowlist — empty. Not one destination is permitted.");
+      await walkPolicyKey(page, policyCard, demo.id, "first_use_approval",
+        "And for anything not listed: always deny. Refused the instant it's dialed — no prompt, no wait.");
+    } else if (demo.id === "fail-then-approve") {
+      await walkPolicyKey(page, policyCard, demo.id, "first_use_approval",
+        "One line changed. Always-deny became deny-with-review.",
+        "Now an unlisted host isn't silently refused — it's refused, but you're asked, and you can let it through.");
+    } else if (demo.id === "held-at-the-door") {
+      await walkPolicyKey(page, policyCard, demo.id, "first_use_approval",
+        "Same line again — now wait-for-review.",
+        "The request is held in flight while it waits for you. The command doesn't fail; it pauses.");
+    } else if (demo.id === "lines-that-cant-be-crossed") {
+      await walkPolicyKey(page, policyCard, demo.id, "allow_all_egress",
+        "This one throws the door open — allow-all-egress, true. Every public host is permitted.",
+        "And yet some destinations are still refused — link-local and private addresses are denied beneath the policy, whatever it says.",
+        "Those are the lines that can't be crossed.");
+    }
+
     // No caption on the click — "starting the sandbox" narrates itself.
     await act(page, page.getByTestId(`demo-start-${demo.id}`));
     await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
     await beat(page, PACE.read);
+    // Cockpit framing: policy at the top, terminal + audit below, one frame.
+    await frameRun(page, demo.id);
 
     for (const [i, cmd] of demo.cmds.entries()) {
       if (demo.approve && i === 1) {
@@ -569,6 +649,10 @@ test("V03 act 3 — the agent in the box", async () => {
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
+  await walkPolicyKey(page, card, "agent-in-the-box", "allowed_domains",
+    "The change is the allowlist: two entries now — Anthropic's API.",
+    "That's the whole network contract. The agent can reach the model, and no other host.");
+
   const screen = await startAndBoot(page, card, "agent-in-the-box");
 
   // Step 1 — the agent task. In -p mode Claude Code writes the file and exits.
@@ -623,6 +707,10 @@ test("V03 act 3b — record a policy", async () => {
   await caption(page, "Instead of guessing an allowlist upfront, run wide open once and let Wardyn watch.");
   await beat(page, PACE.read);
   await spotlight(page, null);
+
+  await walkPolicyKey(page, card, "record-a-policy", "allow_all_egress",
+    "The allowlist is empty, but allow-all-egress is true — wide open on purpose.",
+    "You can't record what a policy already blocks.");
 
   // Boots the sandbox; the record-a-policy proof reads the audit panel, not the
   // terminal, so the screen locator is not needed here.
@@ -687,6 +775,10 @@ test("V03 act 3c — once, or for good", async () => {
   await caption(page, "Every approval so far stuck around for the rest of the run. Once is narrower.");
   await beat(page, PACE.read);
   await spotlight(page, null);
+
+  await walkPolicyKey(page, card, "once-or-for-good", "first_use_approval",
+    "The policy is back to deny-with-review — so a request is held for you.",
+    "What's new isn't the policy line. It's how you answer: once, or for the whole run.");
 
   const screen = await startAndBoot(page, card, "once-or-for-good");
 
@@ -817,8 +909,14 @@ test("V03 act 5 — write-only, proved from inside", async () => {
   });
   await caption(page, "This sandbox has no permission to use a secret.");
   await beat(page, BEAT_SHORT);
+  // The policy is the sealed box again — and crucially, no eligible_grants. The
+  // absence IS the point here, so ring the whole block rather than one line.
+  await spotlight(page, card.getByTestId("demo-policy-write-only-by-design"));
+  await caption(page, "The policy is the sealed box again — and there's no eligible_grants section at all.");
+  await beat(page, PACE.read);
   await caption(page, "Nothing was ever going to hand it our secret.");
   await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
   await act(page, start, "Start the demo.");
 
   await beat(page, 200);
@@ -829,6 +927,8 @@ test("V03 act 5 — write-only, proved from inside", async () => {
     await ffwdEnd(page);
   }
   await beat(page, PACE.read);
+  // Cockpit framing: policy at the top, terminal + audit below, one frame.
+  await frameRun(page, "write-only-by-design");
 
   const screen = card.locator(".xterm-screen").first();
   await typeInTerminal(page, "printenv | sort", card);
@@ -876,13 +976,17 @@ test("V03 act 6 — the key that never enters the box", async () => {
 
   const card = await openDemo(page, "key-never-in-the-box", "The key that never enters the box");
 
-  await spotlight(page, page.getByTestId("demo-policy-key-never-in-the-box"));
   await caption(page, "This demo gives the run permission to use one secret by name.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "One host, one header to attach, and the name of the secret.");
   await beat(page, PACE.read);
-  await caption(page, "Not the secret itself.");
-  await beat(page, BEAT_SHORT + 400);
+  // The secrets group adds a whole new section to the policy — walk it once,
+  // the way sealed-box walked the egress lines. Later secrets demos diff it.
+  await walkPolicyKey(page, card, "key-never-in-the-box", "eligible_grants",
+    "A new section appears: eligible_grants. This is where a run is authorized to USE a secret.");
+  await walkPolicyKey(page, card, "key-never-in-the-box", "kind",
+    "The kind — an API key, attached to outbound requests as a header.");
+  await walkPolicyKey(page, card, "key-never-in-the-box", "scope",
+    "And the scope: which host, which header — and the secret's NAME.",
+    "Not the secret itself. The value never appears in the policy, and never enters the box.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "key-never-in-the-box");
@@ -963,9 +1067,12 @@ test("V03 act 7 — authorized, not issued", async () => {
 
   await caption(page, "Same permission, one field different.");
   await beat(page, BEAT_SHORT);
-  await spotlight(page, page.getByTestId("demo-policy-authorized-not-issued"));
   await caption(page, "This one requires approval before that one-time use can be authorized.");
   await beat(page, PACE.read);
+  await walkPolicyKey(page, card, "authorized-not-issued", "requires_approval",
+    "Two lines changed in the grant. Requires-approval is now true — a human decides at the moment it's minted.");
+  await walkPolicyKey(page, card, "authorized-not-issued", "ttl_seconds",
+    "And a ttl: the credential lives five minutes, then expires on its own.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "authorized-not-issued");
@@ -1055,6 +1162,9 @@ test("V03 act 8 — a bearer token for a real API", async () => {
   await beat(page, PACE.read);
   await caption(page, "It carries Authorization: Bearer, where the token is a Wardyn secret the box never holds.");
   await beat(page, PACE.read);
+  await walkPolicyKey(page, card, "rest-api-token", "scope",
+    "The scope changed: a real host, the Authorization header, and Bearer formatting.",
+    "Same mechanism as before — a header attached at the boundary — now wired to a standard third-party API.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "rest-api-token");
@@ -1111,6 +1221,9 @@ test("V03 act 9 — a PAT that only ever exists in a pipe", async () => {
   await beat(page, PACE.read);
   await caption(page, "And first the helper makes the caller prove who it is.");
   await beat(page, BEAT_SHORT + 400);
+  await walkPolicyKey(page, card, "pat-stdout-only", "kind",
+    "The kind is different now: git_pat, not api_key.",
+    "No header to inject — Git's exchange is opaque — so the token goes straight into Git's pipe instead.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "pat-stdout-only");
@@ -1188,6 +1301,9 @@ test("V03 act 10 — the one that touches disk", async () => {
   await beat(page, PACE.read);
   await caption(page, "So Wardyn narrows the window instead of pretending it isn't there: written just before the clone, shredded right after.");
   await beat(page, PACE.read);
+  await walkPolicyKey(page, card, "ssh-briefly-resident", "kind",
+    "kind: ssh_key — the one exception that touches disk.",
+    "Every other kind stays out of the box entirely; this one is written 0400 and shredded, on the narrowest window Wardyn can hold.");
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "ssh-briefly-resident");
@@ -1267,6 +1383,9 @@ test("V03 act 11 — a token the sandbox never sees", async () => {
   await beat(page, PACE.read);
   await caption(page, "Ask for it from inside, and you're refused by name.");
   await beat(page, PACE.read);
+  await walkPolicyKey(page, card, "github-app-broker", "kind",
+    "kind: github_token — scoped to a repo and a permission.",
+    "One step past the PAT: this token never enters the box even as a pipe. It's attached on the proxy's outbound leg alone.");
   await spotlight(page, null);
 
   // The gate is the demo here: Start is disabled and the gate copy explains
@@ -1303,6 +1422,9 @@ test("V03 act 12 — no identity, no credential", async () => {
   await beat(page, PACE.read);
   await caption(page, "So it only means anything when something is actually attesting.");
   await beat(page, PACE.read);
+  await walkPolicyKey(page, card, "sts-fail-closed", "kind",
+    "kind: cloud_sts — and the scope is empty, because there's no identity here to fill it.",
+    "Which is the whole point of the last demo: with nothing attesting, the run is refused before it ever starts.");
   await spotlight(page, null);
 
   const start = card.getByTestId("demo-start-sts-fail-closed");
