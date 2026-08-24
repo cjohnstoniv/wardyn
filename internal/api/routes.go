@@ -194,6 +194,12 @@ func (s *Server) routes() chi.Router {
 			r.Get("/policies/{id}", s.handleGetPolicy)
 			operatorOnly.Put("/policies/{id}", s.handleUpdatePolicy)
 			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
+			// Policy risk grade: the deterministic composer.Grade assessment for a
+			// bare spec, with no run attached and nothing persisted — the policy
+			// panel's live safety meter. Member-accessible like the reads above
+			// (mirrors /runs/preflight), not operator-only: a member may see the
+			// risk of a spec they cannot necessarily save.
+			r.Post("/policies/grade", s.handleGradePolicy)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token);
