@@ -14,9 +14,13 @@
  * deliberately overridden on camera), what the new workspace remembers (its
  * own allowed/denied-hosts ledger, empty for now and honest about it), and
  * write-only secrets — values a run can borrow by name but that no one,
- * including the operator, can ever read back. No run is launched; running
- * against this workspace is episode 04, and this episode ending with the
- * workspace ready is the seam between them.
+ * including the operator, can ever read back. That last claim is then PROVED
+ * rather than asserted: beat 5 drives the funnel's own `write-only-by-design`
+ * demo (Getting Started → Secrets demos, `/setup?step=write-only-by-design`),
+ * where a real sandbox shows an environment with no secret in it and the
+ * store's read-back route 404s for the very secret just saved on camera. No
+ * agent run is launched; running against this workspace is episode 05, and
+ * this episode ending with the workspace ready is the seam between them.
  *
  * THE DIALOG IS THE OWNER'S, VERBATIM — local/episodes-03-12-scripts-current.md
  * ("# Episode 03 — Add a workspace"). Every blank-line stanza there is exactly
@@ -49,7 +53,8 @@
  * never on screen. At the paste the DOM value necessarily holds the
  * plaintext (asserted MASKED, not absent); from the save onward this file
  * asserts at every beat that could leak it that the sentinel appears
- * NOWHERE in the page.
+ * NOWHERE in the page — including beat 5's demo terminal, where the same grep
+ * runs against a screen that has just asked the store for that exact name.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
  * when to advance; a failure here means the recording is wrong, not that the
@@ -63,7 +68,18 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { WORKSPACE_NAME, WORKSPACE_PATH } from "./task";
-import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./overlay";
+import {
+  act,
+  beat,
+  caption,
+  centerInFrame,
+  chapter,
+  ffwdEnd,
+  ffwdStart,
+  PACE,
+  spotlight,
+  typeInTerminal,
+} from "./overlay";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
@@ -94,6 +110,11 @@ const SENTINEL = "WARDYN-V02-CANARY-9K2QN";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;
+
+// Product ceilings for beat 5's demo sandbox — pacing comes from overlay.ts,
+// never from these. A demo sandbox is a real container: minutes, not seconds.
+const SANDBOX_UP = 240_000;
+const COMMAND_ECHOES = 60_000;
 
 /** Same bearer shape funnel.ts's clearWorkspace() and every sibling video use. */
 function apiHeaders(): Record<string, string> | undefined {
@@ -483,6 +504,149 @@ test("V04 beat 4 — write-only secrets", async () => {
   await page.keyboard.press("Escape");
   await spotlight(page, null);
   await assertSentinelAbsent(page, "Secrets screen, row menu open");
+});
+
+// ---------------------------------------------------------------------------
+// Beat 5 — write-only, proved from inside a sandbox
+//
+// The masked write above is Wardyn's own promise about itself. This beat is
+// the receipt: it drives the funnel's `write-only-by-design` demo (demo-
+// catalog.ts, secrets section) — no grant, no egress, nothing to approve — so
+// a real sandbox comes up, its environment is empty, and the store's read-back
+// route 404s for the SAME secret the viewer just watched go in.
+//
+// TWO DELIBERATE DEVIATIONS from the card's printed steps, neither narrated
+// (the unnarrated-mechanics rule episode 10 already films demos under):
+//   1. The probe names THIS episode's secret (deploy-webhook-token), not the
+//      catalog's `wardyn-demo-key`: a 404 for a name that was never stored
+//      proves nothing, while a 404 for the one just saved on camera is the
+//      whole claim.
+//   2. `curl -i`, so the 404 STATUS LINE is on screen. The card's copy says
+//      "404", but a bare `curl -sS` prints only the body.
+// ---------------------------------------------------------------------------
+
+test("V04 beat 5 — write-only, proved from inside", async () => {
+  test.setTimeout(600_000);
+  const page = stage();
+
+  // The row's chip carries the product's one honest sentence for what
+  // write-only means (secrets.tsx's WRITE_ONLY_TOOLTIP). Located BY that
+  // sentence, so a reworded tooltip fails the take here instead of letting the
+  // narration quietly outlive the product's own words.
+  const row = page.getByRole("row", { name: new RegExp(SECRET_NAME) });
+  const writeOnlyChip = row.getByTitle(/never read back — not even by you/);
+  await centerInFrame(writeOnlyChip);
+  await spotlight(page, writeOnlyChip);
+  await caption(page, "Every row in this store says the same thing.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Write-only — you can replace it, you can delete it, you can never read it.");
+  await beat(page, PACE.read);
+  await caption(page, "But that's Wardyn describing itself.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Let's make it prove it, from inside a sandbox.");
+  await beat(page, BEAT_SHORT + 400);
+  await spotlight(page, null);
+
+  // Off-camera staging, not a claim: /setup renders the welcome hero until
+  // wardyn-onboarding-seen is set (onboarding-screen.tsx's GettingStarted) and
+  // stage.ts hands every take a fresh browser profile, so without this the
+  // `?step=` deep link below lands on the hero instead of the demo. The flag is
+  // per-BROWSER; this host's operator walked that welcome in episode 02.
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem("wardyn-onboarding-seen", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
+  // Demos live on ONE surface now: Getting Started. Demo steps are exempt from
+  // the deep-link corrector (setup-screen.tsx), so this opens the demo itself
+  // rather than bouncing to the corp-network step — and write-only-by-design
+  // needs no stored secret of its own to be offered (no `needsSecret`).
+  await page.goto("/setup?step=write-only-by-design");
+  await expect(page.getByRole("heading", { name: "Write-only, even for you", level: 2 })).toBeVisible({
+    timeout: 30_000,
+  });
+  const card = page.getByTestId("demo-card-write-only-by-design");
+
+  const start = card.getByTestId("demo-start-write-only-by-design");
+  // The barrier gate, named: without a ready barrier this button is disabled
+  // and act() parks on it for the full action timeout, which on camera is
+  // indistinguishable from the app hanging.
+  await expect(start, "the demo Start button is disabled — this stack has no ready barrier").toBeEnabled({
+    timeout: 60_000,
+  });
+  await caption(page, "This sandbox is given no grant at all.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Nothing was ever going to hand it our secret.");
+  await beat(page, BEAT_SHORT);
+  await act(page, start, "Start the demo.");
+
+  // FAST-FORWARD the boot: 30s-3min of a spinner nobody needs to sit through.
+  // beat(200) first — opening a span over a still-speaking caption puts that
+  // speech inside compressed footage and lands every later cue early.
+  await beat(page, 200);
+  await ffwdStart(page);
+  try {
+    await expect(card.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+  } finally {
+    // Real time resumes the instant the terminal is on screen — even on a
+    // failed take, so the encoder gets a span this run actually spent.
+    await ffwdEnd(page);
+  }
+  // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
+  // is up; typing here eats the first characters and the shell reports
+  // "command not found" on camera.
+  await beat(page, PACE.read);
+
+  const screen = card.locator(".xterm-screen").first();
+  await typeInTerminal(page, "printenv | sort", card);
+  // expect.poll over innerText, NEVER toContainText: the xterm locator starves
+  // inside a take while the same text is demonstrably on screen (episode 09/10
+  // both burned rehearsals on it). innerText is the exact signal the viewer
+  // sees. WARDYN_PROXY_URL is the "output landed" signal AND the variable the
+  // next command spends.
+  await expect
+    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
+      timeout: COMMAND_ECHOES,
+      message: "printenv never echoed inside the demo sandbox",
+    })
+    .toMatch(/WARDYN_PROXY_URL=/);
+  // The ABSENCE is the claim — asserted only after output demonstrably landed,
+  // or an empty screen satisfies it trivially (episode 06's rule).
+  const envText = await screen.innerText();
+  expect(envText.includes(SENTINEL), "the stored secret's VALUE printed inside the demo sandbox").toBe(false);
+  expect(
+    envText.includes(SECRET_NAME),
+    `"${SECRET_NAME}" reached the demo sandbox's environment — this demo's policy carries no grant, so nothing should have injected it`,
+  ).toBe(false);
+  await caption(page, "The proxy's address is in there. Our secret isn't.");
+  await beat(page, PACE.read);
+
+  await caption(page, "So ask Wardyn for it directly — by name, from inside the box.");
+  await beat(page, PACE.read);
+  await typeInTerminal(page, `curl -sS -i --noproxy '*' "$WARDYN_PROXY_URL/wardyn/v1/secrets/${SECRET_NAME}"`, card);
+  await expect
+    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), {
+      timeout: COMMAND_ECHOES,
+      message: "the read-back probe never answered — expected a 404 from the proxy's brokered routes",
+    })
+    .toMatch(/404|unknown brokered route/);
+  // Same page-wide grep as every beat since the paste: a 404 that still echoed
+  // the value would be the worst possible frame for this line.
+  await assertSentinelAbsent(page, "the demo terminal, after the read-back probe");
+  await caption(page, "Four-oh-four.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Not 'forbidden'. There is no route to read a secret back.");
+  await beat(page, PACE.read);
+  await caption(page, "Not for the agent, not for the API, not for the person who stored it.");
+  await beat(page, PACE.read);
+  await caption(page, "Write-only isn't a permission you could escalate past — it's the only door there is.");
+  await beat(page, PACE.read + 400);
+  await spotlight(page, null);
+  // Silent: nothing to teach in the teardown, and a demo left running would
+  // carry a live sandbox into the next episode's chrome.
+  await act(page, card.getByRole("button", { name: "End demo" }));
 });
 
 // ---------------------------------------------------------------------------

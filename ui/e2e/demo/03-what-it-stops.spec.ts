@@ -4,26 +4,31 @@
  */
 
 /*
- * Video 05 of the series — "What it stops".
+ * Episode 03 of the series — "What it stops".
  *
- * INTERIM FILENAME. This file is "05a-what-it-stops.spec.ts", not
- * "05-what-it-stops.spec.ts": the current 05-autonomous-agent.spec.ts still
- * holds that number until the 12-episode series renumber (a separate,
- * mechanical commit) lands. record-demo.sh's --video flag validates
- * `^[0-9]{2}$`, so "05a" cannot be passed to it yet — this file is not
- * launchable until that renumber frees the real "05". That is by design, not
- * an oversight.
+ * WHERE IT SITS. Third in the series' operations order — 03 the demos, 04 add
+ * a workspace, 05 your first run — and driven by `scripts/record-demo.sh
+ * --video 03`, which globs this exact filename. (This file spent one week
+ * under an interim "05a-" name while the 12-episode renumber was pending;
+ * that renumber landed, and nothing about this episode is provisional.)
  *
- * WHAT THIS FILMS. The four keyless guardrail demos that used to close out
- * "Getting started" (01-getting-started.spec.ts) — the sealed box, fail-then-
- * approve, held-at-the-door, and lines-that-can't-be-crossed, including the
- * 169.254.169.254 metadata probe inside the last one — now as their own
- * episode. This is the payoff video: 01 proved a barrier, a network path and
- * a secret store; this one proves what having them actually buys you. It is a
- * refusals episode — every beat is the boundary hurting something on purpose,
- * on camera, under a policy the viewer can read. The fifth original demo,
- * once-or-for-good, is CUT here: its caret-scope beat belongs to the
- * approval-scopes episode (old 07), which owns that whole subject.
+ * WHAT THIS FILMS. The four keyless guardrail demos — the sealed box, fail-
+ * then-approve, held-at-the-door, and lines-that-can't-be-crossed, including
+ * the 169.254.169.254 metadata probe inside the last one — as their own
+ * episode. This is the payoff video: 01/02 proved a barrier, a network path
+ * and a secret store; this one proves what having them actually buys you. It
+ * is a refusals episode — every beat is the boundary hurting something on
+ * purpose, on camera, under a policy the viewer can read. The fifth original
+ * demo, once-or-for-good, is CUT here: its caret-scope beat belongs to
+ * episode 10, "Approvals and egress", which owns that whole subject.
+ *
+ * WHERE THE DEMOS LIVE NOW. There is ONE demos surface: Getting Started. The
+ * /demos route is gone (App.tsx redirects it into the funnel), each demo is a
+ * sub-step of the "Egress demos" phase reachable at `/setup?step=<demo-id>`,
+ * and setup-screen's deep-link corrector exempts demo steps so a cold session
+ * opens the demo instead of bouncing to the corp-network step. That is why
+ * act 1 below cold-opens straight on `/setup?step=sealed-box`, and why the
+ * per-demo ring anchors on `demo-card-<id>` — the testid DemoDetail carries.
  *
  * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from
  * local/episodes-03-12-scripts-current.md's "Episode 05 — What it stops"
@@ -44,8 +49,8 @@
  * refusal actually lands on screen.
  *
  * SPLIT PROVENANCE (2026-08-20, owner-approved). This is an extraction of
- * 01-getting-started.spec.ts's pre-split act 3 (itself moved from
- * walkthrough.spec.ts act 3 before that), not a rewrite: the per-demo
+ * the retired 01-getting-started.spec.ts's pre-split act 3 (itself moved from
+ * walkthrough.spec.ts act 3 before that; both live in git history), not a rewrite: the per-demo
  * choreography, the arithmetic waiting out each curl, and the post-approval
  * payoff assertions are all proven on camera and moved verbatim. What's new
  * is act 1 (getting back to this point in a fresh browser session — see
@@ -108,12 +113,12 @@ test.describe.configure({ mode: "serial" });
 //
 // FUNNEL_DEMOS (task.ts) is the shared definition — same ids, same commands,
 // same captions the walkthrough proved. once-or-for-good is filtered out: its
-// caret-scope beat belongs to the approval-scopes episode (old 07), which
-// owns that whole subject.
+// caret-scope beat belongs to episode 10, "Approvals and egress", which owns
+// that whole subject.
 //
 // The spoken dialogue for each of the owner's four tests is inlined directly
-// in the V05a act 2 loop below rather than kept in a per-demo table: the
-// owner's rewrite doesn't split evenly into "intro" / "property" / "policy
+// in the act 2 loop below rather than kept in a per-demo table: the owner's
+// rewrite doesn't split evenly into "intro" / "property" / "policy
 // line" buckets per demo (Test 4's own dialogue, for instance, spans the tail
 // of the held-at-the-door iteration and the body of the lines-that-cant-be-
 // crossed one — see the file header). The policy block is still SHOWN (a
@@ -156,7 +161,7 @@ const STOP_DEMOS: StopDemo[] = FUNNEL_DEMOS.filter((d) => d.id !== "once-or-for-
  * read, and overlay.ts's chapter() always speaks what it renders. Rather than
  * widen a module every other video in the series imports, drive the same
  * overlay primitive directly for this one card — the same pattern
- * 01-getting-started.spec.ts uses for its own outro.
+ * the retired 01-getting-started.spec.ts used for its own outro.
  */
 async function silentCard(page: Page, text: string): Promise<void> {
   const set = (t: string) =>
@@ -187,6 +192,19 @@ test("V03 act 1 — open on the demos", async () => {
   // renders the identical DemoDetail markup the old catalog card did — same
   // DemoRunControls, same testids/headings — episode 10 films here for
   // exactly this reason: it needs no wizard state to reach.
+  // A fresh take context has never seen the welcome hero — /setup renders
+  // OnboardingScreen until wardyn-onboarding-seen is set, and the ?step= deep
+  // link lands on the hero instead of the demo (the live take-killer episode
+  // 04's beat 5 documents). Seed it the way that beat does: this host's
+  // operator walked the welcome in episode 02.
+  await page.goto("/");
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem("wardyn-onboarding-seen", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
   await page.goto("/setup?step=sealed-box");
   await page.bringToFront();
 
@@ -203,8 +221,8 @@ test("V03 act 1 — open on the demos", async () => {
 
 // ---------------------------------------------------------------------------
 // Act 2 — the four demos. Every wait in this loop is load-bearing and every
-// one of them is moved verbatim from 01-getting-started.spec.ts's pre-split
-// act 3. Read the comments before touching the arithmetic: each one records a
+// one of them is moved verbatim from the retired 01-getting-started.spec.ts's
+// pre-split act 3. Read the comments before touching the arithmetic: each one records a
 // specific way a take went green while the terminal on screen showed the
 // opposite.
 // ---------------------------------------------------------------------------

@@ -341,6 +341,19 @@ test("beats 0-5 — held at the door, and the scope ladder", async () => {
   // the now-stale premise this retarget doesn't resolve (episode re-anchoring
   // is a separate phase); the assertions below hold either way, since
   // `demo-card-held-at-the-door` (H4) is the only demo card on this step.
+  // A fresh take context has never seen the welcome hero — /setup renders
+  // OnboardingScreen until wardyn-onboarding-seen is set, and the ?step= deep
+  // link lands on the hero instead of the demo (the live take-killer episode
+  // 04's beat 5 documents). Seed it the way that beat does: this host's
+  // operator walked the welcome in episode 02.
+  await page.goto("/");
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem("wardyn-onboarding-seen", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
   await page.goto("/setup?step=held-at-the-door");
   await page.bringToFront();
 
