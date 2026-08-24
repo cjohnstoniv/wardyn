@@ -25,6 +25,8 @@
  * mixes them onto the finished video at those offsets. Zero is set when
  * installOverlay runs, which is a few tens of ms after the context (and so
  * recordVideo) starts — small enough not to matter for lines held for seconds.
+ * The offsets are measured on nowMs(), the monotonic clock, for the reason
+ * spelled out there: the picture is timed on that clock and not on Date.now().
  *
  * FAILURE POSTURE: narration is cosmetic and must never be able to fail a
  * recording. A missing model, a dead renderer, a bad line — every one of them
@@ -57,6 +59,31 @@ export interface Cue {
   text: string;
 }
 
+/**
+ * The take's clock — MONOTONIC, deliberately NOT Date.now().
+ *
+ * The browser lane's picture is Playwright's recordVideo webm, whose timeline is
+ * built frame by frame from Chromium's frame-swap timestamps, which come off
+ * CLOCK_MONOTONIC. Date.now() is CLOCK_REALTIME. Under WSL2 those two run at
+ * different RATES — this box measured +3.50% (90.00s monotonic per 86.95s
+ * realtime), because WSL2 keeps slewing realtime back to the Windows host while
+ * monotonic free-runs — so a cue stamped on realtime slides progressively LATE
+ * against a picture stamped on monotonic.
+ *
+ * Take 10 (2026-08-24) shipped exactly that way: the caption for a cue landed
+ * +0.0s at t=20s and +6.4s at t=213s (rate 1.032), and its 226.04s webm covered
+ * 218.4s of realtime. Nothing downstream was wrong — narrate-mux.py lays each
+ * clip at exactly tMs, demo-ffwd.py re-times cues and picture together to
+ * within 6ms — the two clocks were simply not the same clock.
+ *
+ * performance.now() is uv_hrtime, the same monotonic clock the browser's frame
+ * stamps ride on. EVERY elapsed measurement in this lane (here and in
+ * overlay.ts) uses it, and none of them may go back to Date.now().
+ * scripts/demo-drift.py measures the result; verify-demo-take.sh fails a take
+ * that drifts again.
+ */
+export const nowMs = (): number => Math.round(performance.now());
+
 const on = () => process.env.WARDYN_DEMO_VOICE === "1";
 
 let proc: ChildProcessWithoutNullStreams | undefined;
@@ -74,7 +101,7 @@ const cues: Cue[] = [];
  * the clock has to run even when nothing will ever be spoken.
  */
 export function narrationZero(): void {
-  if (zero === 0) zero = Date.now();
+  if (zero === 0) zero = nowMs();
 }
 
 /** The instant every timeline in this take is measured from. 0 before install. */
@@ -144,7 +171,7 @@ export async function speak(text: string): Promise<number> {
   if (!p) return 0;
   if (zero === 0) narrationZero();
 
-  const tMs = Date.now() - zero;
+  const tMs = nowMs() - zero;
   const reply = await new Promise<Record<string, unknown>>((resolve) => {
     // A hung renderer must not hang the take.
     const timer = setTimeout(() => {

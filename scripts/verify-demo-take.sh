@@ -979,6 +979,7 @@ for w in sorted(warns):
 sys.exit(0 if (c and ov == 0) else 1)
 PY
   [[ $? -eq 0 ]] && ok "timeline complete, no overlapping lines" || bad "narration timeline has overlaps or is empty"
+  check_take_drift
 else
   bad "no narration timeline — the take is silent"
 fi
