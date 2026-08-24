@@ -170,7 +170,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
 test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed)
 	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
-	./scripts/test-report.sh docker -tags docker ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh docker -tags docker ./...
 
 # The whole tree under -tags k8s, so the k8s confinement substrate
 # (internal/runner/k8s) and the wardynd wiring that calls it — none of which
@@ -180,7 +180,7 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
 test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed)
 	@echo "Running k8s-tagged suite with reports (fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	./scripts/test-report.sh k8s -tags k8s ./...
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -tags k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
