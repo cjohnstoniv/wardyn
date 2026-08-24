@@ -18,6 +18,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../../scripts/lib/common.sh
+# shellcheck disable=SC1091 # source= above is relative to this file, not resolvable from CWD
 . "${REPO_ROOT}/scripts/lib/common.sh"  # log/warn/die, wait_healthy, wardyn_pick_docker_host
 
 case "${1:-up}" in
