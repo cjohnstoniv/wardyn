@@ -279,6 +279,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // honest on-screen event. See local/light-episodes-dialog-flags.md.
   await spotlight(page, page.getByLabel("Spec (JSON)"));
   await caption(page, "Add api.anthropic.com.");
+  await beat(page, BEAT_SHORT);
   await caption(page, "That's the entire network contract for this run.");
   await beat(page, PACE.read);
   await spotlight(page, null);
