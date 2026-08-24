@@ -26,6 +26,9 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 . "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
+# Episode 03's four arms live out of line — this file is within ~20 lines of
+# scripts/check-file-size.sh's 1000-line threshold.
+. "${REPO_ROOT}/scripts/lib/verify-demo-take-03.sh"
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
 VIDEO="${1:-}"
@@ -906,7 +909,11 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the
   # meantime). Left defined, unused, for whoever writes 05's real checks to
   # borrow from.
-  02|03a|03b|03c|03d|05|07)
+  03a) check_video_03a ;;
+  03b) check_video_03b ;;
+  03c) check_video_03c ;;
+  03d) check_video_03d ;;
+  02|05|07)
     head_ "Video ${WARDYN_DEMO_VIDEO}"
     printf '    video-specific checks TBD by spec\n'
     ;;

@@ -518,6 +518,13 @@ stop_capture
 # narration.json's fix. Unconditional: --silent takes fast-forward too.
 rm -f "${DEMO_OUT_DIR}/speedups.json"
 
+# Same reason, same fix: demo-runs.json is the {demo-id: run-id} map the take
+# hands verify-demo-take.sh (noteDemoRun, ui/e2e/demo/demos.ts). It MERGES, so
+# a stale entry from an earlier take would silently grade tonight's episode
+# against yesterday's run — the exact "green over a dishonest video" class this
+# whole verify path exists to catch.
+rm -f "${DEMO_OUT_DIR}/demo-runs.json"
+
 # Warm the narration cache first: an unrendered line otherwise renders INLINE
 # during the take, leaving the caption on screen in silence for ~1.5s — dead air
 # in the finished video, once per line.

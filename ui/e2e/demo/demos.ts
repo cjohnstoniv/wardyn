@@ -25,6 +25,9 @@
  * the rest of the suite: a copy change breaks the takes loudly and in one place.
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
 import { expect, type Locator, type Page } from "@playwright/test";
 import { act, beat, caption, centerInFrame, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
 
@@ -77,6 +80,57 @@ export async function putSecret(page: Page, name: string, value: string): Promis
 /** DELETE /api/v1/secrets/{name}. Best-effort. */
 export async function deleteSecret(page: Page, name: string): Promise<void> {
   await page.request.delete(`/api/v1/secrets/${encodeURIComponent(name)}`, { headers: apiHeaders() }).catch(() => {});
+}
+
+/**
+ * Record which RUN this demo card just launched, for scripts/verify-demo-take.sh.
+ *
+ * A demo run carries no title, no task and no workspace (demo-runner.tsx posts
+ * {interactive, inline_policy, task_mode:"exec"} and nothing else), so the
+ * grader has no way to tell six anonymous interactive runs apart — and "the
+ * newest one" is wrong the moment two episodes rehearse in one evening. The
+ * runner already keeps {demoId: runId} in localStorage as its reload-resume
+ * seam; this lifts that entry out to ${WARDYN_DEMO_WORK_DIR}/demo-runs.json,
+ * merging so each demo of an episode appends to the same map.
+ *
+ * NEVER fails a take: bookkeeping for the grader is not a beat, and a take that
+ * died here would cost a real recording session. A warning is the whole penalty.
+ */
+export async function noteDemoRun(page: Page, id: string): Promise<void> {
+  const dir = process.env.WARDYN_DEMO_WORK_DIR;
+  if (!dir) {
+    console.warn(`noteDemoRun(${id}): WARDYN_DEMO_WORK_DIR unset — the grader gets no run map`);
+    return;
+  }
+  try {
+    const runId = await page.evaluate(
+      (key: string): string => {
+        try {
+          const m = JSON.parse(localStorage.getItem("wardyn-demo-runs") ?? "{}") as Record<string, string>;
+          return (m && typeof m === "object" ? m[key] : "") ?? "";
+        } catch {
+          return "";
+        }
+      },
+      id,
+    );
+    if (!runId) {
+      console.warn(`noteDemoRun(${id}): no run id in localStorage["wardyn-demo-runs"] — nothing recorded`);
+      return;
+    }
+    const file = path.join(dir, "demo-runs.json");
+    let map: Record<string, string> = {};
+    try {
+      map = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+    } catch {
+      /* first demo of the episode — no file yet */
+    }
+    map[id] = runId;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, `${JSON.stringify(map, null, 2)}\n`);
+  } catch (e) {
+    console.warn(`noteDemoRun(${id}): ${String(e)}`);
+  }
 }
 
 /** /setup renders the welcome hero until this flag is set (onboarding-screen),
@@ -155,6 +209,9 @@ export async function startAndBoot(page: Page, card: Locator, id: string): Promi
     // failed take, so the encoder gets a span this run actually spent.
     await ffwdEnd(page);
   }
+  // The run exists the moment the terminal does — hand its id to the grader
+  // before anything can go wrong on camera.
+  await noteDemoRun(page, id);
   // .xterm-screen renders when AttachTerminal MOUNTS, before the PTY websocket
   // is up; typing here eats the first characters.
   await beat(page, PACE.read);

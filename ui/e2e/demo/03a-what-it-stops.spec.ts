@@ -95,6 +95,7 @@ import {
   DEMO_KEY_VALUE,
   deleteSecret,
   frameRun,
+  noteDemoRun,
   openDemo,
   openEpisode,
   pollScreen,
@@ -267,6 +268,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
     } finally {
       await ffwdEnd(page);
     }
+    await noteDemoRun(page, demo.id);
     await beat(page, PACE.read);
     // Cockpit framing: policy at the top, terminal + audit below, one frame.
     await frameRun(page, demo.id);
@@ -529,6 +531,7 @@ test("V03a act 4 — write-only, proved from inside", async () => {
   } finally {
     await ffwdEnd(page);
   }
+  await noteDemoRun(page, "write-only-by-design");
   await beat(page, PACE.read);
   // Cockpit framing: policy at the top, terminal + audit below, one frame.
   await frameRun(page, "write-only-by-design");
