@@ -29,7 +29,7 @@ import { lsGet, lsSet } from "../../../lib/storage";
 // Durable set of demo ids the operator has launched at least once (per browser) —
 // powers the per-demo completion checkmark in the Getting-Started funnel. It lives
 // in this pure, xterm-free module so setup-screen can read it without pulling the
-// terminal-heavy demo-screen graph into the setup chunk.
+// terminal-heavy demo-runner graph into the setup chunk.
 const LAUNCHED_KEY = "wardyn-demos-launched";
 export function loadLaunchedDemos(): string[] {
   try {
@@ -55,8 +55,28 @@ export interface DemoStep {
   text: string;
 }
 
+// Every demo id, in catalog order, as a CONST-ASSERTED tuple. This is what
+// keeps setup/steps.ts's `SetupStepId` a literal union: Getting Started lists
+// the whole catalog as sub-steps, and `DEMOS.map((d) => d.id)` alone would
+// widen to `string[]` and take the union with it. `Demo.id: DemoId` below ties
+// the two together, so an entry can never carry an id this tuple doesn't name;
+// setup/steps.test.ts pins the reverse (same ids, same order as DEMOS).
+export const DEMO_IDS = [
+  "sealed-box",
+  "fail-then-approve",
+  "held-at-the-door",
+  "lines-that-cant-be-crossed",
+  "agent-in-the-box",
+  "record-a-policy",
+  "once-or-for-good",
+  "write-only-by-design",
+  "key-never-in-the-box",
+  "authorized-not-issued",
+] as const;
+export type DemoId = (typeof DEMO_IDS)[number];
+
 export interface Demo {
-  id: string;
+  id: DemoId;
   title: string;
   /** One-line "what this proves" shown under the title. */
   teaches: string;
@@ -72,16 +92,17 @@ export interface Demo {
   steps: DemoStep[];
   /** How you'd set up a sandbox like this yourself, on the New run page. */
   setupUi: string[];
-  /** True only for the harness demo — needs a connected model; demo-screen.tsx
-   *  hides the card entirely (and gates Start) until llmReady. Like every demo it
-   *  comes up idle for the operator to drive — here they run the agent CLI in the
-   *  attached terminal (which is what makes "watch it live" honest). */
+  /** True only for the harness demo — needs a connected model. Its funnel
+   *  sub-step is filtered out of the walk until llmReady (setup/steps.ts's
+   *  stepOrder), which IS the gate. Like every demo it comes up idle for the
+   *  operator to drive — here they run the agent CLI in the attached terminal
+   *  (which is what makes "watch it live" honest). */
   needsModel?: boolean;
   /** Set only on a demo whose policy carries an api_key grant referencing this
    *  secret NAME (validateInlineSecretRefs collects api_key secrets regardless
    *  of requires_approval) — a missing secret 422s at run-create. Gated the
-   *  same shape as needsModel; the Getting-Started step filtering that hides
-   *  an unmet step is phase-2 work (setup/steps.ts), not this catalog. */
+   *  same shape as needsModel: stepOrder drops the sub-step until the secret
+   *  is in `SetupStatus.secrets.present`. */
   needsSecret?: string;
 }
 

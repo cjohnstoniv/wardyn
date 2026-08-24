@@ -33,8 +33,9 @@ const SETUP_POLL_MS = 5000;
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
 // there) so it stays eager — lazying it would only add a load waterfall to the
 // first paint. Everything else is fetched on navigation, which keeps the heavy
-// terminal deps out of the entry chunk: xterm rides on run-detail/demos/
-// workspaces/setup, asciinema-player on run-detail/recordings. Rollup hoists
+// terminal deps out of the entry chunk: xterm rides on run-detail/workspaces/
+// setup (the demo steps' own lazy chunk), asciinema-player on
+// run-detail/recordings. Rollup hoists
 // what several lazy routes share into its own chunk automatically.
 const NewRunScreen = React.lazy(() =>
   import("./components/screens/new-run/new-run-screen").then((m) => ({ default: m.NewRunScreen })),
@@ -68,9 +69,6 @@ const RecordingScreen = React.lazy(() =>
 );
 const SSHKeysScreen = React.lazy(() =>
   import("./components/screens/ssh-keys").then((m) => ({ default: m.SSHKeysScreen })),
-);
-const DemoScreen = React.lazy(() =>
-  import("./components/screens/demos/demo-screen").then((m) => ({ default: m.DemoScreen })),
 );
 // The guided Getting Started funnel — an operator-chosen route, not a gate:
 // no redirect anywhere sends anyone here (see setup-gate.ts). Handles its own
@@ -255,14 +253,12 @@ export default function App() {
             />
           }
         >
-          <Route
-            path="/demos"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <DemoScreen />
-              </React.Suspense>
-            }
-          />
+          {/* /demos is gone — Getting Started IS the demos surface now, one
+              step per demo, so a second page listing the same catalog would be
+              a page inside a page. Same redirect precedent /integrations
+              carries below: bookmarks, the account menu and the Runs empty
+              state all pointed here. `sealed-box` is the first demo step. */}
+          <Route path="/demos" element={<Navigate to="/setup?step=sealed-box" replace />} />
           {/* Reachable four ways, none of them a gate: a fresh install's "/"
               (FirstRunLanding), the account menu's "Getting started" entry, the
               Runs empty state's guided-tour link, or the URL. onDone lands back

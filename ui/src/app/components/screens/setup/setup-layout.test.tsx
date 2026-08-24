@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SetupLayout } from "./setup-layout";
-import { OPTIONAL_STEPS, STEP_ORDER } from "./steps";
+import { OPTIONAL_STEPS, STEP_ORDER, type SetupStepId } from "./steps";
 
 function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {}) {
   const props: ComponentProps<typeof SetupLayout> = {
@@ -182,6 +182,52 @@ describe("SetupLayout", () => {
     renderLayout({ current: "workspaces" });
     expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
+  });
+});
+
+// MEDIUM-2: nextGate is produced only ON corp_network, so every step AFTER it
+// that the orchestrator's crossing guard still refuses used to render a live
+// Next whose click silently no-op'd. The shell asks the same predicate the
+// guard uses and disables the button, with the gate's reason as its title.
+describe("refuseNext — a refused forward move renders a DISABLED Next, not a dead-enabled one", () => {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+  it("disables Next and titles it with the refusal reason", async () => {
+    const onSelect = vi.fn();
+    renderLayout({
+      current: "sealed-box",
+      onSelect,
+      refuseNext: () => "Connectivity isn't proven yet.",
+    });
+    const next = screen.getByRole("button", { name: /^next:/i });
+    expect(next).toBeDisabled();
+    expect(next).toHaveAttribute("title", "Connectivity isn't proven yet.");
+    await user.click(next);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("undefined means allowed — Next stays enabled and untitled", () => {
+    renderLayout({ current: "sealed-box", refuseNext: () => undefined });
+    const next = screen.getByRole("button", { name: /^next:/i });
+    expect(next).toBeEnabled();
+    expect(next).not.toHaveAttribute("title");
+  });
+});
+
+// M3: the shell walks stepOrder(status), not the full contract — a filtered-out
+// conditional demo is neither counted in "Step N of M" nor stepped through.
+describe("order — the walked steps, not the whole contract", () => {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+  it("counts and steps through only the given order", async () => {
+    const onSelect = vi.fn();
+    const order: SetupStepId[] = ["environment", "corp_network", "integrations", "sealed-box", "review"];
+    renderLayout({ current: "sealed-box", order, onSelect });
+    expect(screen.getByText("Step 4 of 5")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next: review$/i }));
+    expect(onSelect).toHaveBeenCalledWith("review");
+    await user.click(screen.getByRole("button", { name: /^back$/i }));
+    expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 });
 

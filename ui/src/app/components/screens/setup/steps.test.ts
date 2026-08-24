@@ -18,8 +18,10 @@ import {
   corpNetworkGate,
   stepBadges,
   stepDone,
+  stepOrder,
   type CorpNetworkState,
 } from "./steps";
+import { DEMOS } from "../demos/demo-catalog";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
@@ -178,7 +180,12 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
+      ["agent-in-the-box", "The agent in the box"],
+      ["record-a-policy", "Record a policy"],
       ["once-or-for-good", "Once, or for good"],
+      ["write-only-by-design", "Write-only, even for you"],
+      ["key-never-in-the-box", "The key that never enters the box"],
+      ["authorized-not-issued", "Authorized, not issued"],
       // "Your work" is just the one workspace step — the tier-1/2 library
       // steps (Directories & repos, Base images) retired with
       // sources-library.tsx/image-catalog.tsx.
@@ -190,7 +197,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.integrations).toBe("Secrets");
   });
 
-  it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {
+  it("pins STEP_ORDER to the phase walk (essentials -> egress demos -> secrets demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
       "corp_network",
@@ -199,18 +206,74 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "agent-in-the-box",
+      "record-a-policy",
       "once-or-for-good",
+      "write-only-by-design",
+      "key-never-in-the-box",
+      "authorized-not-issued",
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(10);
+    expect(STEP_ORDER).toHaveLength(15);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
-    // The five Demos sub-steps ARE the demos phase, in catalog order.
-    expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
+    // Getting Started is the ONE demos surface: every catalog demo is a
+    // sub-step, in catalog order, split into the two sections by `Demo.section`
+    // alone — never a hand-kept list that can drift from the catalog.
+    expect(DEMO_STEP_IDS).toEqual(DEMOS.map((d) => d.id));
+    expect([
+      ...(PHASES.find((p) => p.id === "demos_egress")?.steps ?? []),
+      ...(PHASES.find((p) => p.id === "demos_secrets")?.steps ?? []),
+    ]).toEqual([...DEMO_STEP_IDS]);
+    expect(PHASES.find((p) => p.id === "demos_secrets")?.label).toBe("Secrets demos");
+    // write-only-by-design leads the secrets section: it is how the operator
+    // stores the secret the other two demos gate on.
+    expect(PHASES.find((p) => p.id === "demos_secrets")?.steps[0]).toBe("write-only-by-design");
   });
 
   it("corp_network is required, not optional — proof of internet access gates Next", () => {
     expect(OPTIONAL_STEPS.has("corp_network")).toBe(false);
+  });
+});
+
+// stepOrder(status) — the WALK, as opposed to STEP_ORDER's full contract.
+describe("stepOrder — conditional demo steps drop out of the walk when unmet", () => {
+  const secretName = DEMOS.find((d) => d.needsSecret)!.needsSecret!;
+  const withSecret = (names: string[]) => baseStatus({ secrets: { present: names, github_app: false } });
+
+  it("null status (pre-load) returns the FULL order — the ?step= initializer validates against it", () => {
+    expect(stepOrder(null)).toEqual(STEP_ORDER);
+  });
+
+  it("drops the needsModel step without a model and the needsSecret steps without the secret", () => {
+    const order = stepOrder(baseStatus());
+    expect(order).not.toContain("agent-in-the-box");
+    expect(order).not.toContain("key-never-in-the-box");
+    expect(order).not.toContain("authorized-not-issued");
+    // The unconditional demos, and everything outside the demos, always stay.
+    expect(order).toContain("write-only-by-design");
+    expect(order).toContain("record-a-policy");
+    // A filter, not a re-order: what survives keeps STEP_ORDER's sequence.
+    expect(order).toEqual(STEP_ORDER.filter((id) => order.includes(id)));
+  });
+
+  it("restores the granted secrets demos once the secret is stored", () => {
+    const order = stepOrder(withSecret([secretName]));
+    expect(order).toContain("key-never-in-the-box");
+    expect(order).toContain("authorized-not-issued");
+    // …and still not the harness demo: a secret is not a model.
+    expect(order).not.toContain("agent-in-the-box");
+  });
+
+  it("a different secret name doesn't unlock them — the ref is by NAME", () => {
+    expect(stepOrder(withSecret(["some-other-key"]))).not.toContain("key-never-in-the-box");
+  });
+
+  it("restores the harness demo once a model is connected", () => {
+    const order = stepOrder(
+      baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+    );
+    expect(order).toContain("agent-in-the-box");
   });
 });
 

@@ -374,6 +374,7 @@ export function RunsScreen() {
         <RunsFirstRun
           readiness={readiness}
           confinementClasses={confinementClasses}
+          secretNames={setupStatus?.secrets.present ?? []}
           onNewRun={() => navigate("/runs/new")}
         />
       ) : noMatches ? (

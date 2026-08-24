@@ -57,7 +57,7 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
 vi.mock("../../../lib/api/runs", () => ({
-  // The Demos step's DemoRunner calls getRun (reload re-attach) + killRun (end) in
+  // The demo step's useDemoRuns calls getRun (reload re-attach) + killRun (end) in
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
   runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
@@ -74,6 +74,7 @@ vi.mock("../../wardyn/live-approvals", () => ({
 }));
 
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
+import { DEMOS } from "../demos/demo-catalog";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
@@ -173,16 +174,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all ten funnel steps and Next/Back move within bounds", async () => {
+  it("walks the whole funnel and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
-    // Back-ish verb. STEP_ORDER: essentials [environment, corp_network,
-    // integrations] → demos (five sub-steps) → your work [workspaces] → finish
-    // [review]. Review is the LAST step: the Launch step was cut, because its
-    // "Example — not live config" card showed a fabricated task against a repo
-    // that may never have been onboarded.
+    // Back-ish verb. The walk is stepOrder(status), not the full STEP_ORDER:
+    // essentials [environment, corp_network, integrations] → Egress demos →
+    // Secrets demos → your work [workspaces] → finish [review]. This fixture
+    // has no model and no stored secret, so the three conditional demo steps
+    // (agent-in-the-box, key-never-in-the-box, authorized-not-issued) are
+    // filtered OUT — 12 walked of the 15 that exist. Review is the LAST step:
+    // the Launch step was cut, because its "Example — not live config" card
+    // showed a fabricated task against a repo that may never have been
+    // onboarded.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -204,8 +209,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
 
-    // The five Demos sub-steps — each renders one demo (heading = its title). The
-    // first also proves the lazily-loaded detail body mounts (its setup section).
+    // Egress demos — each renders one demo (heading = its title). The first also
+    // proves the lazily-loaded detail body mounts (its setup section).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
     expect(await screen.findByText(/set up a sandbox like this yourself/i)).toBeInTheDocument();
@@ -217,8 +222,16 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
     ).toBeInTheDocument();
+    // The harness demo sits HERE in catalog order — and is skipped straight
+    // over, because no model is connected in this fixture.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /record a policy/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /once, or for good/i })).toBeInTheDocument();
+
+    // Secrets demos — only the ungranted one is walkable without the secret.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /write-only, even for you/i })).toBeInTheDocument();
 
     // your work: the one workspace step (AddWorkspaceDialog + a simple list).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
@@ -263,6 +276,74 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("a ?step= deep link past the unproven corp_network gate is corrected back to it", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=integrations");
     expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
+  });
+
+  // H3/H-1/HIGH-1 — the corp gate is CROSSING-based, and demo targets are
+  // exempt. /demos redirects into a demo step and every episode cold-opens on
+  // one: if the corrector bounced those to Network, a shared demo link would
+  // never open its demo. Nothing unsafe opens — a demo gates its own Start on
+  // barrierReady, which this fixture's no_runner host fails anyway.
+  describe("the crossing gate — demo links open, click-past still can't happen", () => {
+    it("a cold ?step=<demo> deep link opens the demo instead of bouncing to Network", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
+      expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
+      // The gate is genuinely still unproven — this is an exemption, not a pass.
+      expect(screen.queryByRole("heading", { name: /^network$/i })).not.toBeInTheDocument();
+    });
+
+    // MEDIUM-2: nextGate is produced only ON corp_network, so the last demo's
+    // Next used to render ENABLED and its click bare-return into nothing. The
+    // shell asks the same predicate selectStep does, so it renders disabled and
+    // says why.
+    it("the last demo's Next is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=write-only-by-design");
+      await screen.findByRole("heading", { name: /write-only, even for you/i });
+      const next = screen.getByRole("button", { name: /^next: workspaces$/i });
+      expect(next).toBeDisabled();
+      expect(next.getAttribute("title")).toMatch(/one probe/i);
+    });
+
+    it("HIGH-1: from a demo, Back into Integrations works while Workspaces stays gated", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
+      await screen.findByRole("heading", { name: /the sealed box/i });
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = within(navs[navs.length - 1]);
+
+      // Forward past the gate is still refused — the part that matters.
+      await user.click(nav.getByRole("button", { name: /^workspaces/i }));
+      expect(screen.getByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
+
+      // Backwards is free (the accepted trade: Integrations is optional, and a
+      // target-index-based gate would dead-end the operator on this demo).
+      await user.click(nav.getByRole("button", { name: /^secrets/i }));
+      expect(await screen.findByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
+    });
+  });
+
+  // M3/M-D — the walk is stepOrder(status): a demo whose needsSecret is unmet
+  // is not a step, so the rail can't offer it and a link to it can't strand the
+  // operator on a step no consumer can find an index for.
+  describe("conditional demo steps — the walk follows the stored secret", () => {
+    const granted = DEMOS.find((d) => d.needsSecret)!;
+
+    it("a ?step= link to an unmet needsSecret demo re-corrects to the nearest surviving step", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, `/setup?step=${granted.id}`);
+      // Falls BACK, never forward: write-only-by-design is the step that tells
+      // the operator how to store the very secret this one is waiting on.
+      expect(await screen.findByRole("heading", { name: /write-only, even for you/i })).toBeInTheDocument();
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      expect(within(navs[navs.length - 1]).queryByRole("button", { name: new RegExp(granted.title, "i") })).toBeNull();
+    });
+
+    it("with the secret stored, the same link opens the demo and the rail offers it", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        baseStatus({ secrets: { present: [granted.needsSecret!], github_app: false } }),
+      );
+      renderScreen(<SetupScreen onDone={() => {}} />, `/setup?step=${granted.id}`);
+      expect(
+        await screen.findByRole("heading", { name: new RegExp(granted.title, "i") }),
+      ).toBeInTheDocument();
+    });
   });
 
   // UI-SETUP-1: recheck() used to refresh status+site-config only — secret
@@ -636,11 +717,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (the last step, 10 of 10) — checks live there, not on the
+    // walk to Review (the last step, 12 of 12 — three conditional demo steps
+    // are filtered out of this fixture's walk) — checks live there, not on the
     // barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -690,7 +772,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

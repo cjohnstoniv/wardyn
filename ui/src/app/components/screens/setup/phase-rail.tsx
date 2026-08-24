@@ -31,17 +31,23 @@ export function PhaseRail({
   badges,
   done,
   onSelect,
+  order = STEP_ORDER,
 }: {
   current: SetupStepId;
   badges: Record<SetupStepId, StepBadge>;
   done: Record<SetupStepId, boolean>;
   onSelect: (step: SetupStepId) => void;
+  // The steps actually walkable right now (steps.ts's stepOrder(status)) — a
+  // demo whose precondition is unmet is dropped from it, and the rail must not
+  // offer a step whose Start is closed. Defaults to the full contract order,
+  // which is also what the selector returns before status lands.
+  order?: SetupStepId[];
 }) {
   return (
     <>
       {/* Compact icon rail — visible lg only (56px column) */}
       <nav aria-label="Setup steps" className="hidden lg:flex xl:hidden flex-col gap-2 items-center">
-        {STEP_ORDER.map((stepId) => {
+        {order.map((stepId) => {
           const badge = badges[stepId];
           const isDone = done[stepId];
           // A4: visited-without-configuring (see setup-screen's Skipped override)
@@ -85,12 +91,17 @@ export function PhaseRail({
           band), back at xl+. */}
       <nav aria-label="Setup steps" className="flex flex-col gap-5 lg:hidden xl:flex">
         {PHASES.map((phase) => {
+          // Only the walkable members (see `order`). A phase left with none —
+          // Secrets demos on a host with no demo secret stored — renders
+          // nothing at all rather than an empty group heading with a 0/0.
+          const steps = phase.steps.filter((id) => order.includes(id));
+          if (steps.length === 0) return null;
           // A phase made only of optional steps reads "all optional" instead of a
           // progress counter: credentials is done-pinned false (honesty law in
           // steps.ts), so "Your work" would show a counter that structurally can
           // never reach N/N. Per-step dots still track real progress inside it.
-          const allOptional = phase.steps.every((id) => OPTIONAL_STEPS.has(id));
-          const doneCount = phase.steps.filter((id) => done[id]).length;
+          const allOptional = steps.every((id) => OPTIONAL_STEPS.has(id));
+          const doneCount = steps.filter((id) => done[id]).length;
 
           return (
             <div key={phase.id}>
@@ -99,12 +110,12 @@ export function PhaseRail({
                   {phase.label}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {allOptional ? "all optional" : `${doneCount}/${phase.steps.length}`}
+                  {allOptional ? "all optional" : `${doneCount}/${steps.length}`}
                 </span>
               </div>
 
               <ul className="flex flex-col gap-1">
-                {phase.steps.map((stepId) => {
+                {steps.map((stepId) => {
                   const badge = badges[stepId];
                   const isDone = done[stepId];
                   // A4: see the compact rail above for what this means.

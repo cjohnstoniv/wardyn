@@ -7,8 +7,10 @@ import { describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhaseRail } from "./phase-rail";
-import { STEP_LABEL, type SetupStepId, type StepBadge } from "./steps";
+import { STEP_LABEL, STEP_ORDER, type SetupStepId, type StepBadge } from "./steps";
 
+// Exhaustive over SetupStepId (the compiler enforces it) — the ten demo
+// sub-steps included, since Getting Started absorbed the whole catalog.
 const BADGES: Record<SetupStepId, StepBadge> = {
   environment: { text: "Ready · 2 of 3 barriers", tone: "success" },
   corp_network: { text: "Optional", tone: "neutral" },
@@ -17,7 +19,12 @@ const BADGES: Record<SetupStepId, StepBadge> = {
   "fail-then-approve": { text: "Optional", tone: "neutral" },
   "held-at-the-door": { text: "Optional", tone: "neutral" },
   "lines-that-cant-be-crossed": { text: "Optional", tone: "neutral" },
+  "agent-in-the-box": { text: "Optional", tone: "neutral" },
+  "record-a-policy": { text: "Optional", tone: "neutral" },
   "once-or-for-good": { text: "Optional", tone: "neutral" },
+  "write-only-by-design": { text: "Optional", tone: "neutral" },
+  "key-never-in-the-box": { text: "Optional", tone: "neutral" },
+  "authorized-not-issued": { text: "Optional", tone: "neutral" },
   workspaces: { text: "In progress", tone: "info" },
   review: { text: "Review what's left", tone: "neutral" },
 };
@@ -30,7 +37,12 @@ const DONE: Record<SetupStepId, boolean> = {
   "fail-then-approve": false,
   "held-at-the-door": false,
   "lines-that-cant-be-crossed": false,
+  "agent-in-the-box": false,
+  "record-a-policy": false,
   "once-or-for-good": false,
+  "write-only-by-design": false,
+  "key-never-in-the-box": false,
+  "authorized-not-issued": false,
   workspaces: false,
   review: false,
 };
@@ -66,11 +78,33 @@ describe("PhaseRail", () => {
     expect(within(btn).getByText("Ready · 2 connected")).toBeInTheDocument();
   });
 
-  it("renders all 10 frozen labels as buttons in the full rail", () => {
+  it("renders every step label as a button in the full rail", () => {
     const rail = renderRail("environment");
     for (const label of Object.values(STEP_LABEL)) {
-      expect(rail.getByRole("button", { name: new RegExp(label, "i") })).toBeInTheDocument();
+      // Titles contain regex metacharacters ("Lines that can't be crossed"),
+      // and one demo title is a prefix of nothing else — escape, don't anchor.
+      expect(
+        rail.getByRole("button", { name: new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }),
+      ).toBeInTheDocument();
     }
+  });
+
+  // The rail offers only what stepOrder(status) says is walkable: a demo whose
+  // needsModel/needsSecret precondition is unmet is not a step you can open,
+  // and a PHASE left with no surviving steps renders nothing — never an empty
+  // group heading over a 0/0 counter.
+  it("omits filtered-out steps, and drops a phase left with none of them", () => {
+    cleanup();
+    const order = STEP_ORDER.filter(
+      (id) => !["agent-in-the-box", "write-only-by-design", "key-never-in-the-box", "authorized-not-issued"].includes(id),
+    );
+    render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} order={order} />);
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const rail = within(navs[navs.length - 1]);
+    expect(rail.getByText("Egress demos")).toBeInTheDocument();
+    expect(rail.queryByText("Secrets demos")).not.toBeInTheDocument();
+    expect(rail.queryByRole("button", { name: /the agent in the box/i })).toBeNull();
+    expect(rail.getByRole("button", { name: /record a policy/i })).toBeInTheDocument();
   });
 
   // The 13->9 collapse folded the old corporate-network steps (Host Proxy / SCM
@@ -100,10 +134,11 @@ describe("PhaseRail", () => {
 
   it('all-optional phases read "all optional", never a counter that cannot fill', () => {
     const rail = renderRail("environment");
-    // Two phases are made only of optional steps and so read "all optional":
-    // Demos, and "Your work" (now just workspaces). Essentials no longer
-    // qualifies: it contains the one hard requirement (environment).
-    expect(rail.getAllByText("all optional")).toHaveLength(2);
+    // Three phases are made only of optional steps and so read "all optional":
+    // the two demo phases (Egress demos, Secrets demos) and "Your work" (now
+    // just workspaces). Essentials no longer qualifies: it contains the one
+    // hard requirement (environment).
+    expect(rail.getAllByText("all optional")).toHaveLength(3);
     // Finish is one step now (Review) — the Launch step was cut, so its counter
     // is 0/1, not 0/2.
     expect(rail.getByText("0/1")).toBeInTheDocument();

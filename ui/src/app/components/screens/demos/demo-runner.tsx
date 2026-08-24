@@ -3,44 +3,44 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DemoScreen (/demos) — hands-on demo sandboxes. Each card launches an
-// interactive, workspace-free, LLM-free CC1 sandbox via the existing
-// POST /api/v1/runs (interactive + inline_policy), embeds the same AttachTerminal
-// + LiveApprovals the import Record step uses, and lets a brand-new user PROVE
-// Wardyn's egress confinement before onboarding any repo or key. Pure
-// composition — no backend changes. The keyless demos are gated on barrierReady
-// ONLY (never llmReady, never workspaces) — they run the sandbox, not an agent,
-// so no model is needed. The one needsModel demo is simply hidden until llmReady
-// — that visibility filter IS the gate.
+// The demo RUNNER — the reusable machinery behind a hands-on demo sandbox:
+// launch/poll/re-attach (`useDemoRuns`), the Start / starting / live-terminal /
+// terminated controls (`DemoRunControls`), the inline decisions panel
+// (`DemoAuditPanel`), the numbered command walkthrough (`StepList`) and the
+// open-egress danger note (`DemoCaution`). Each demo runs an interactive,
+// workspace-free CC1 sandbox via the existing POST /api/v1/runs (interactive +
+// inline_policy) and embeds the same AttachTerminal + LiveApprovals the import
+// Record step uses, so a brand-new user can PROVE Wardyn's confinement before
+// onboarding any repo or key. Pure composition — no backend changes.
 //
-// Once a demo run terminates (any outcome, not just FAILED), its card offers
-// "Turn this into a policy" — the SAME runId-driven ProfileReview sheet
-// workspace-detail.tsx mounts for a recorded session (POST /runs/{id}/profile
-// synthesizes a least-privilege policy from whatever the sandbox actually did).
-// ProfileReview itself needs zero changes for this — it only needs a runId.
+// This was demo-screen.tsx, the /demos page. That page is gone (App.tsx
+// redirects /demos into the funnel): Getting Started is the ONE demos surface,
+// and setup/demos-step.tsx's DemoDetail is the single renderer these pieces
+// compose into. What lived here purely to draw the grid — DemoScreen, its
+// DemoRunner list and the per-demo DemoCard — went with the route; DemoDetail
+// carries the `demo-card-<id>` testid the cards used to own.
 //
-// Reusable pieces: the `useDemoRuns` hook (launch/poll/store), the
-// `DemoRunControls` run UI, and `StepList`.
+// Gating: the keyless demos need barrierReady ONLY (never llmReady, never
+// workspaces) — they run the sandbox, not an agent. The conditional ones
+// (needsModel / needsSecret) are dropped from the funnel walk until their
+// precondition is met (setup/steps.ts's stepOrder), and that IS their gate.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Loader2, Play, ScrollText, ShieldAlert, Sparkles, Square, TriangleAlert } from "lucide-react";
+import { Loader2, Play, ScrollText, ShieldAlert, Sparkles, Square } from "lucide-react";
 import { toast } from "sonner";
 import { runs as api } from "../../../lib/api/runs";
 import { HttpError } from "../../../lib/api/core";
-import { setup as setupApi } from "../../../lib/api/setup";
 import { audit, demoAuditRows, egressFromAudit, type DemoAuditRow } from "../../../lib/api/audit";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
-import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
-import { deriveReadiness } from "../../../lib/readiness";
+import { isTerminalRunState, type AuditEvent, type RunState } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { CopyPill } from "../workspace-detail/record-pane";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
-import { ProfileReview } from "../profile-review";
-import { DEMOS, markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";
+import { markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";
 
 // Resume seam: {demoId: runId} of demos the operator started, so a page reload
 // re-attaches to a still-RUNNING sandbox instead of orphaning it.
@@ -67,8 +67,9 @@ function forgetStored(demoId: string): void {
 type TrackedRun = { id: string; state: RunState };
 
 // useDemoRuns — owns the live-run map, the reload re-attach, the poll, and
-// start/end for the demo sandboxes. Shared by the /demos grid and the
-// Getting-Started per-demo steps. `onStarted(demoId)` fires when a demo is
+// start/end for the demo sandboxes. Keyed by demo id (not scoped to one demo)
+// so the resume seam still re-attaches a sandbox started from a DIFFERENT
+// demo's step in this browser. `onStarted(demoId)` fires when a demo is
 // successfully launched (the wizard step marks itself done + records the launch).
 export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const [runs, setRuns] = React.useState<Record<string, TrackedRun>>({});
@@ -200,164 +201,6 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   return { runs, starting, start, end };
 }
 
-export function DemoScreen() {
-  const [status, setStatus] = React.useState<SetupStatus | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  // "Turn this into a policy" (once a demo run has terminated) opens the SAME
-  // runId-driven ProfileReview sheet workspace-detail.tsx mounts for a
-  // recorded session — local open-state only, ProfileReview needs no changes.
-  const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
-
-  // Mount: readiness probe (the barrier gate). The runner owns its own re-attach.
-  React.useEffect(() => {
-    let active = true;
-    setupApi
-      .getSetupStatus()
-      .then((s) => active && setStatus(s))
-      .catch(() => {
-        /* leave readiness unknown — the gate defaults closed */
-      })
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const readiness = status ? deriveReadiness(status) : null;
-  const barrierReady = readiness?.barrierReady ?? false;
-  const llmReady = readiness?.llmReady ?? false;
-  // Keyless demos always show; the harness demo only once a model is connected.
-  const visibleDemos = DEMOS.filter((d) => !d.needsModel || llmReady);
-
-  return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
-      <header className="mb-6">
-        <h1>Demo sandboxes</h1>
-        <p className="mt-1 text-muted-foreground">
-          Prove Wardyn's confinement hands-on — a throwaway sandbox with no repo or workspace. Start
-          one, run the commands in the attached terminal, and watch the policy hold. The keyless
-          demos need no model; the agent demo (shown once you connect one) runs a real Claude Code
-          agent under the same policy, its model injected proxy-side.
-        </p>
-      </header>
-
-      {!loading && !barrierReady && (
-        <div
-          className="mb-6 flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning"
-          data-testid="demos-not-ready"
-        >
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>
-            Demos need the sandbox runner — set up a barrier under{" "}
-            {/* TODO(stage-4): /settings */}
-            <Link to="/integrations" className="font-medium underline underline-offset-2">
-              Settings
-            </Link>{" "}
-            first.
-          </p>
-        </div>
-      )}
-
-      <DemoRunner
-        barrierReady={barrierReady}
-        loading={loading}
-        demos={visibleDemos}
-        onTurnIntoPolicy={setProfileRunId}
-      />
-
-      <ProfileReview runId={profileRunId} onClose={() => setProfileRunId(null)} />
-    </div>
-  );
-}
-
-// DemoRunner — the /demos grid: renders a DemoCard per demo, driven by the shared
-// hook. `demos` defaults to the full catalog (override to render a subset).
-export function DemoRunner({
-  barrierReady,
-  loading = false,
-  onStarted,
-  onTurnIntoPolicy,
-  demos = DEMOS,
-}: {
-  barrierReady: boolean;
-  loading?: boolean;
-  onStarted?: (demoId: string) => void;
-  // Opens the ProfileReview sheet for a terminated demo run's id. Optional —
-  // omitted entirely hides the "Turn this into a policy" action.
-  onTurnIntoPolicy?: (runId: string) => void;
-  demos?: Demo[];
-}) {
-  const { runs, starting, start, end } = useDemoRuns(onStarted);
-  return (
-    <div className="space-y-4">
-      {demos.map((demo) => (
-        <DemoCard
-          key={demo.id}
-          demo={demo}
-          run={runs[demo.id]}
-          starting={starting === demo.id}
-          barrierReady={barrierReady}
-          loading={loading}
-          onStart={() => start(demo)}
-          onEnd={(runId) => end(demo, runId)}
-          onTurnIntoPolicy={onTurnIntoPolicy}
-        />
-      ))}
-    </div>
-  );
-}
-
-function DemoCard({
-  demo,
-  run,
-  starting,
-  barrierReady,
-  loading,
-  onStart,
-  onEnd,
-  onTurnIntoPolicy,
-}: {
-  demo: Demo;
-  run?: TrackedRun;
-  starting: boolean;
-  barrierReady: boolean;
-  loading: boolean;
-  onStart: () => void;
-  onEnd: (runId: string) => void;
-  onTurnIntoPolicy?: (runId: string) => void;
-}) {
-  const running = run?.state === "RUNNING";
-
-  return (
-    <div className="rounded-xl border border-border p-4" data-testid={`demo-card-${demo.id}`}>
-      <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="text-lg font-semibold text-foreground">{demo.title}</h2>
-        {running && (
-          <Chip tone="success" dot pulse className="ml-auto">
-            Live
-          </Chip>
-        )}
-      </div>
-      <p className="mt-1 text-sm text-muted-foreground">{demo.teaches}</p>
-
-      {demo.caution && <DemoCaution text={demo.caution} />}
-
-      <StepList steps={demo.steps} runId={run?.id} />
-
-      <DemoRunControls
-        demo={demo}
-        run={run}
-        starting={starting}
-        barrierReady={barrierReady}
-        loading={loading}
-        onStart={onStart}
-        onEnd={onEnd}
-        onTurnIntoPolicy={onTurnIntoPolicy}
-      />
-    </div>
-  );
-}
-
 // DemoCaution — the honest CC1-open-egress danger note (demo 4).
 export function DemoCaution({ text }: { text: string }) {
   return (
@@ -371,8 +214,12 @@ export function DemoCaution({ text }: { text: string }) {
   );
 }
 
-// DemoRunControls — the Start / pending / running-terminal / failed block. Shared
-// by the /demos DemoCard and the Getting-Started per-demo step.
+// DemoRunControls — the Start / pending / running-terminal / failed block, and
+// the "Turn this into a policy" payoff a terminated run offers (the SAME
+// runId-driven ProfileReview sheet workspace-detail.tsx mounts for a recorded
+// session — POST /runs/{id}/profile synthesizes a least-privilege policy from
+// whatever the sandbox actually did). Without `onTurnIntoPolicy` that button
+// simply doesn't render, so its owner is whoever can host the sheet.
 export function DemoRunControls({
   demo,
   run,

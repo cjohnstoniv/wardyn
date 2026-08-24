@@ -491,9 +491,11 @@ function TopBar({
               </Link>
             </DropdownMenuItem>
             {/* Demos has no server-side role gate (routes.go), so it's offered
-                here for every role — same reasoning the old sidebar carried. */}
+                here for every role — same reasoning the old sidebar carried.
+                It points into Getting Started's first demo step: the funnel is
+                the one demos surface now, /demos only redirects here. */}
             <DropdownMenuItem asChild>
-              <Link to="/demos">
+              <Link to="/setup?step=sealed-box">
                 <FlaskConical className="size-4" /> Demos
               </Link>
             </DropdownMenuItem>

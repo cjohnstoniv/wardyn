@@ -67,10 +67,15 @@ export function NoBarrierBanner({ onRecheck }: { onRecheck: () => void }) {
 export function RunsFirstRun({
   readiness,
   confinementClasses,
+  secretNames,
   onNewRun,
 }: {
   readiness: Readiness | null;
   confinementClasses: ConfinementClass[];
+  // Stored secret NAMES (SetupStatus.secrets.present) — the same list the demo
+  // steps' own gate reads, so a card can't offer a "Run it" for a demo whose
+  // step isn't in the funnel walk. See the needsSecret line in the grid below.
+  secretNames: string[];
   onNewRun: () => void;
 }) {
   const barrierLabels = CC_ORDER.filter((cc) => confinementClasses.includes(cc)).map((cc) => CC_META[cc].label);
@@ -141,7 +146,7 @@ export function RunsFirstRun({
             <Plus className="size-4" /> New run
           </Button>
           <Button variant="outline" asChild>
-            <Link to="/demos">Try it without a repo</Link>
+            <Link to="/setup?step=sealed-box">Try it without a repo</Link>
           </Button>
         </div>
 
@@ -164,10 +169,16 @@ export function RunsFirstRun({
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {DEMOS.map((demo) => {
-            // The flagship agent demo needs a connected model — same gate
-            // demo-screen.tsx itself uses (deriveReadiness's llmReady), so this
-            // card can never promise a "Run it" the demo screen would refuse.
+            // The flagship agent demo needs a connected model — the same gate
+            // the funnel's own walk applies (steps.ts's stepOrder drops the
+            // step until llmReady), so this card can never link to a step that
+            // isn't there.
             const needsModel = demo.needsModel && !llmReady;
+            // Its mirror for the granted secrets demos: without the secret
+            // stored, run-create 422s on the unresolvable api_key ref and the
+            // step is filtered out of the walk — so name the missing secret
+            // instead of linking to nothing.
+            const needsSecret = demo.needsSecret && !secretNames.includes(demo.needsSecret);
             return (
               <div
                 key={demo.id}
@@ -183,11 +194,19 @@ export function RunsFirstRun({
                       Connect →
                     </Link>
                   </p>
+                ) : needsSecret ? (
+                  <p className="text-xs text-muted-foreground">
+                    Needs the <code className="font-mono">{demo.needsSecret}</code> secret ·{" "}
+                    <Link to="/secrets" className="font-medium text-primary hover:underline">
+                      Add it →
+                    </Link>
+                  </p>
                 ) : (
                   // Secondary/outline — a teal fill is reserved for the one
-                  // primary action on the page ("New run" above).
+                  // primary action on the page ("New run" above). Per-card: the
+                  // funnel step for THIS demo, not a catalog page to hunt in.
                   <Button variant="outline" size="sm" className="self-start" asChild>
-                    <Link to="/demos">Run it</Link>
+                    <Link to={`/setup?step=${demo.id}`}>Run it</Link>
                   </Button>
                 )}
               </div>

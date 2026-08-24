@@ -10,8 +10,8 @@
 // case below). No React here by design — data/derivation only.
 import type { EgressRedirect, SetupStatus, Workspace } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
-import { Readiness } from "../../../lib/readiness";
-import { DEMOS } from "../demos/demo-catalog";
+import { deriveReadiness, Readiness } from "../../../lib/readiness";
+import { DEMOS, DEMO_IDS, type Demo, type DemoId } from "../demos/demo-catalog";
 import { isUsable } from "../../../lib/workspace-status";
 import { T } from "../../../lib/integrations";
 
@@ -19,17 +19,21 @@ import { T } from "../../../lib/integrations";
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
 // for the step contract; the orchestrator imports these rather than redefining.
 // ------------------------------------------------------------
-// The five hands-on demos are each their own funnel sub-step under "Demos" (so
-// they render as separate items in the rail). Ids mirror the demo catalog so the
-// orchestrator resolves a step's demo by id. FROZEN with the rest of the contract.
-export const DEMO_STEP_IDS = [
-  "sealed-box",
-  "fail-then-approve",
-  "held-at-the-door",
-  "lines-that-cant-be-crossed",
-  "once-or-for-good",
-] as const;
-export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
+// EVERY hands-on demo is its own funnel sub-step (so they render as separate
+// items in the rail). Getting Started is now the ONE demos surface — /demos is
+// a redirect — so this is the whole catalog, not a hand-kept subset of it.
+// DERIVED from the catalog's own const-asserted id tuple rather than retyped
+// here: a literal tuple is what keeps SetupStepId below a literal union
+// (`DEMOS.map((d) => d.id)` would widen to string[]), and deriving it means a
+// new demo can never be added to the catalog and forgotten in the funnel.
+export const DEMO_STEP_IDS = DEMO_IDS;
+export type DemoStepId = DemoId;
+
+// Catalog order, scoped to one sub-section — the two demo PHASES below are
+// each exactly this, so a demo's `section` field is the only thing that
+// decides which group it appears in.
+const demoStepsIn = (section: Demo["section"]): DemoStepId[] =>
+  DEMOS.filter((d) => d.section === section).map((d) => d.id);
 
 // 13 -> 9 collapse: `provider` (the two-level harness picker), `host_proxy`,
 // `scm_provider`, `artifact_repo`, and `credentials` are GONE — their
@@ -45,19 +49,21 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // and Base images their own steps (`sources`, `images`) alongside `workspaces`
 // under "Your work". Both retired with sources-library.tsx/image-catalog.tsx —
 // `workspaces` (now backed by the single AddWorkspaceDialog, not the retired
-// wizard) is "Your work" again on its own. Current total: 10 (3 essentials + 5
-// demos + 1 your-work + 1 finish — PHASES below is the count to trust, not
-// this history).
+// wizard) is "Your work" again on its own.
+//
+// 10 -> 15: /demos died and Getting Started absorbed it, so the funnel lists
+// the WHOLE catalog (10 demos across two phases) instead of five. 15 is the
+// full order; stepOrder(status) is the order actually walked — see it below
+// for the conditional steps that drop out. PHASES is the count to trust, not
+// this history.
 export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
-// labels + headings, so they can't drift from what the demo pages show). Scoped
-// to the FROZEN five funnel demo steps — the catalog also carries the harness
-// demo (agent-in-the-box, /demos-only, gated on a connected model), which is NOT
-// a Getting-started step and must never enter STEP_LABEL/STEP_HEADING/STEP_ORDER.
-const DEMO_TITLES = Object.fromEntries(
-  DEMOS.filter((d) => (DEMO_STEP_IDS as readonly string[]).includes(d.id)).map((d) => [d.id, d.title]),
-) as Record<DemoStepId, string>;
+// labels + headings, so they can't drift from what the demo pages show). No
+// filter any more: every demo is a step, including the conditional ones — a
+// step that isn't currently walkable still needs a label, because stepOrder
+// drops it from the WALK, not from the contract.
+const DEMO_TITLES = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Record<DemoStepId, string>;
 
 // id→label lookup — the rail and the layout footer both need it; export once
 // here instead of each rebuilding the same map (F5).
@@ -110,18 +116,57 @@ export interface PhaseDef {
 // itself still carries the model/SCM-host picker; it no longer owns host proxy
 // or egress redirection — those moved to Corporate network (T.EMBED_SCOPE_NOTE
 // on the embedded list explains the split to anyone who visited it before).
+//
+// The demos are TWO phases, not one grouped list inside a single step: egress
+// governance (a destination) and secrets governance (a value) are different
+// subjects, and folding the second into the first would be satisfying "add a
+// section" by embedding it. Each phase's membership is derived from the
+// catalog's own `section` field.
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
-  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
+  { id: "demos_egress", label: "Egress demos", steps: demoStepsIn("egress") },
+  { id: "demos_secrets", label: "Secrets demos", steps: demoStepsIn("secrets") },
   { id: "work", label: "Your work", steps: ["workspaces"] },
   { id: "finish", label: "Finish", steps: ["review"] },
 ];
 
+// The FULL contract order — every step that can exist. What is actually walked
+// is stepOrder(status) below; this is the superset the rest of the module
+// (labels, headings, badges) is exhaustive over.
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
+
+// THE walk order for a given readiness. A demo whose precondition isn't met
+// (`needsModel` without a connected model, `needsSecret` without that secret
+// stored) is DROPPED, because its Start is closed: offering the step would put
+// a dead end in the rail, and its run-create would 422 on the missing secret
+// ref anyway.
+//
+// A SELECTOR, deliberately — not a mutated module const: STEP_ORDER has to
+// stay the stable superset the labels/badges/persisted visited-set are keyed
+// by, and status arrives asynchronously.
+//
+// `null` (status not loaded yet) returns the FULL order: at mount the ?step=
+// deep link is validated against this, and refusing an unmet step before the
+// answer is known would bounce a legitimate link on every cold load. The
+// orchestrator re-corrects once status lands (setup-screen.tsx).
+export function stepOrder(status: SetupStatus | null): SetupStepId[] {
+  if (!status) return STEP_ORDER;
+  const { llmReady } = deriveReadiness(status);
+  const present = status.secrets.present;
+  const unmet = new Set<string>(
+    DEMOS.filter(
+      (d) => (d.needsModel && !llmReady) || (d.needsSecret && !present.includes(d.needsSecret)),
+    ).map((d) => d.id),
+  );
+  return STEP_ORDER.filter((id) => !unmet.has(id));
+}
 
 // Steps that render an "Optional" chip in the shell (everything outside the
 // three Essentials and two Finish steps). Exported so the layout and its test
-// share one list instead of each hardcoding the same membership.
+// share one list instead of each hardcoding the same membership. Keyed to the
+// FULL STEP_ORDER, not the walked one: it's only ever asked `.has(current)`
+// about a step that is on screen, so a superset costs nothing and one list
+// beats a second status-aware selector.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // Corporate network is NOT optional (see corpNetworkGate below):
   // proof of internet access gates Next, on the theory that everything after

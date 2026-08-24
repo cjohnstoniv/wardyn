@@ -41,7 +41,9 @@ import {
   corpNetworkGate,
   stepBadges,
   stepDone,
+  stepOrder,
   type CorpGateActionKind,
+  type CorpNetworkGate,
   type CorpNetworkState,
   type SetupStepId,
 } from "./steps";
@@ -61,7 +63,7 @@ import {
 
 // Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
 // Lazy-load it so that terminal-heavy graph stays out of the setup chunk until
-// the operator opens a demo step (same reasoning as the /demos route). The pure
+// the operator opens a demo step (the reasoning the deleted /demos route had). The pure
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
 
@@ -77,7 +79,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [searchParams] = useSearchParams();
   const [stepId, setStepId] = React.useState<SetupStepId>(() => {
     const want = searchParams.get("step");
-    return want && (STEP_ORDER as string[]).includes(want) ? (want as SetupStepId) : "environment";
+    // Validated against the FULL order — status (and so which conditional demo
+    // steps survive) isn't known yet at mount, which is exactly what
+    // stepOrder(null) returns. An unmet step that slips through here is pulled
+    // back by the re-correct effect below the moment status lands.
+    return want && (stepOrder(null) as string[]).includes(want) ? (want as SetupStepId) : "environment";
   });
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [rechecking, setRechecking] = React.useState(false);
@@ -157,29 +163,67 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // marks the same per-browser decision the old explicit control did and the
   // step reads Skipped with its checkmark. Backing off it decides nothing.
   const integrationsCountRef = React.useRef(0);
-  // corpNetworkGate's latest `.on` (steps.ts) — read by selectStep below so a
-  // rail jump (or the ?step= deep-link init effect further down) obeys the
+  // corpNetworkGate's latest verdict (steps.ts) — read by refuseSelect below so
+  // a rail jump (or the ?step= deep-link init effect further down) obeys the
   // SAME rule as the footer's Next button: "There is no click-past" (steps.ts's
   // own stated invariant) means every forward jump past Corporate network from
   // ANYWHERE, not just a Next click while that step is the one on screen —
   // W2-S1-2: the guard used to be scoped to `stepId === "corp_network"` and
-  // this ref reset to `true` on every render taken off that step, so a rail
+  // this ref reset to open on every render taken off that step, so a rail
   // jump (or deep link) FROM an earlier step straight past it never saw the
   // real gate at all. Updated unconditionally wherever corpNetwork itself is
   // computed (below); defaults open so a rail click is never blocked before
-  // that first computation lands.
-  const corpGateOnRef = React.useRef(true);
+  // that first computation lands. The whole gate, not just `.on`: a refused
+  // Next renders disabled with the gate's own `reason` as its title.
+  const corpGateRef = React.useRef<CorpNetworkGate>({ on: true });
+
+  // THE crossing predicate — why a move to `next` is refused, or undefined
+  // when it's allowed. Shared by selectStep (rail clicks, in-step jumps, the
+  // footer's Next) and by SetupLayout, which renders a refused Next DISABLED
+  // with this reason instead of a live button whose click silently no-ops.
+  //
+  // CROSSING-based, not target-index-based. A "is the target past
+  // corp_network?" test looks equivalent and isn't: `integrations` also
+  // indexes past it, so that version dead-ends the operator ON a demo — no way
+  // back to Integrations, and every rail click refused. What the gate actually
+  // forbids is CROSSING it, so three cases are always free:
+  //  - anything at or before where you already are (Back, and re-entering a
+  //    step you've reached, decide nothing new);
+  //  - any demo step — a shared demo link has to open the demo. Demos gate
+  //    their own Start on barrierReady, so nothing unsafe opens; the accepted
+  //    trade is that a cold session can reach a demo and Back into the
+  //    optional Integrations step without the network proof;
+  //  - anything at or before corp_network itself.
+  // Workspaces and Review stay gated, which is the part that matters.
+  const refuseSelect = React.useCallback(
+    (next: SetupStepId, from: SetupStepId = stepId): string | undefined => {
+      const gate = corpGateRef.current;
+      if (gate.on) return undefined;
+      const order = stepOrder(status);
+      if (order.indexOf(next) <= order.indexOf(from)) return undefined;
+      if (DEMOS.some((d) => d.id === next)) return undefined;
+      if (order.indexOf(next) <= order.indexOf("corp_network")) return undefined;
+      return gate.reason;
+    },
+    [stepId, status],
+  );
+  const canSelect = React.useCallback(
+    (next: SetupStepId) => refuseSelect(next) === undefined,
+    [refuseSelect],
+  );
+
   const selectStep = React.useCallback(
     (next: SetupStepId) => {
-      if (STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("corp_network") && !corpGateOnRef.current) {
+      if (!canSelect(next)) {
         return; // same block the footer's Next enforces — no click-past via the rail either
       }
       if (next !== stepId) {
         markStepVisited(stepId);
         setVisitedSteps((s) => (s.has(stepId) ? s : new Set(s).add(stepId)));
+        const order = stepOrder(status);
         if (
           stepId === "integrations" &&
-          STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("integrations") &&
+          order.indexOf(next) > order.indexOf("integrations") &&
           integrationsCountRef.current === 0
         ) {
           markIntegrationsSkipped();
@@ -188,7 +232,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       }
       setStepId(next);
     },
-    [stepId],
+    [stepId, status, canSelect],
   );
 
   // Read-only fetch — the orchestrator only needs SiteConfig to derive the
@@ -253,15 +297,36 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // above) — correct it the first time the gate becomes knowable. Runs once
   // (the ref latch): after that, staying on/returning to a later step is
   // legitimate forward progress, not a link to re-validate.
+  //
+  // Evaluated from the funnel's START, not from the current step: the crossing
+  // predicate treats "where you already are" as free, and here the link IS
+  // where you are — asking it about a cold landing means asking whether
+  // walking to it from step one would have been allowed.
   const initialDeepLinkCheckedRef = React.useRef(false);
   React.useEffect(() => {
     if (initialDeepLinkCheckedRef.current || !status) return;
     initialDeepLinkCheckedRef.current = true;
-    if (STEP_ORDER.indexOf(stepId) > STEP_ORDER.indexOf("corp_network") && !corpGateOnRef.current) {
-      setStepId("corp_network");
-    }
+    if (refuseSelect(stepId, "environment")) setStepId("corp_network");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+
+  // …and the OTHER correction, deliberately its own effect and deliberately
+  // UN-LATCHED: a conditional demo step can leave the walk at any time (the
+  // operator deletes the demo secret on /secrets, a model disconnects), not
+  // just at mount. If the step on screen is no longer in stepOrder(status),
+  // indexOf(current) === -1 and the shell's "Step N of M"/prev/next and the
+  // rail's active state all quietly break. Fall BACK to the nearest surviving
+  // step — never forward, which would advance the operator past something they
+  // hadn't finished. Folding this into the latched effect above reproduces
+  // exactly the breakage it exists to prevent (it would fire once and never
+  // again), which is why they stay two.
+  React.useEffect(() => {
+    if (!status) return;
+    const order = stepOrder(status);
+    if (order.includes(stepId)) return;
+    const before = STEP_ORDER.slice(0, STEP_ORDER.indexOf(stepId));
+    setStepId([...before].reverse().find((id) => order.includes(id)) ?? order[0]);
+  }, [status, stepId]);
 
   const finish = React.useCallback(() => {
     dismissSetup();
@@ -350,11 +415,16 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     redirectCount: corpRedirects.length,
     ...corpGate,
   };
-  // Unconditional (not gated on `stepId === "corp_network"`): selectStep and the
-  // deep-link init effect below both need the REAL gate state no matter which
-  // step is on screen right now (see corpGateOnRef's declaration for why the
+  // Unconditional (not gated on `stepId === "corp_network"`): refuseSelect and the
+  // deep-link init effect above both need the REAL gate state no matter which
+  // step is on screen right now (see corpGateRef's declaration for why the
   // old stepId-scoped version was the bug).
-  corpGateOnRef.current = corpNetworkGate(corpNetwork, corpRedirects).on;
+  corpGateRef.current = corpNetworkGate(corpNetwork, corpRedirects);
+  // The steps actually walkable against THIS readiness — a demo whose
+  // needsModel/needsSecret precondition is unmet is dropped, so neither the
+  // rail nor the footer offers a step whose Start is closed. badges/done stay
+  // keyed by the full STEP_ORDER: a dropped step just never gets rendered.
+  const walkOrder = stepOrder(status);
   const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
   const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
@@ -435,7 +505,17 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     <>
       <SetupLayout
         current={stepId}
-        rail={<PhaseRail current={stepId} badges={badges} done={done} onSelect={selectStep} />}
+        order={walkOrder}
+        refuseNext={refuseSelect}
+        rail={
+          <PhaseRail
+            current={stepId}
+            badges={badges}
+            done={done}
+            onSelect={selectStep}
+            order={walkOrder}
+          />
+        }
         checking={rechecking}
         lastCheckedLabel={lastCheckedLabel(lastCheckedAt)}
         onRecheck={recheck}

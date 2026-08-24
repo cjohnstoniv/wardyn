@@ -92,7 +92,12 @@ describe("RunsScreen — first-run empty state", () => {
     // hardcoded string.
     expect(await screen.findByText("Fence, Wall available on this host.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /new run/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /try it without a repo/i })).toHaveAttribute("href", "/demos");
+    // /demos is gone — Getting Started IS the demos surface, so both the
+    // headline link and every card point at a funnel step.
+    expect(screen.getByRole("link", { name: /try it without a repo/i })).toHaveAttribute(
+      "href",
+      "/setup?step=sealed-box",
+    );
     // The guided funnel is one unobtrusive link, not a competing button.
     expect(screen.getByRole("link", { name: /guided tour/i })).toHaveAttribute("href", "/setup");
     for (const d of DEMOS) {
@@ -104,8 +109,18 @@ describe("RunsScreen — first-run empty state", () => {
         // setup status carries no model provider.
         expect(card.queryByRole("link", { name: "Run it" })).toBeNull();
         expect(card.getByText(/needs a model provider/i)).toBeInTheDocument();
+      } else if (d.needsSecret) {
+        // Its mirror: no secret stored in this mock's status, so the card names
+        // the missing one instead of linking to a step that isn't in the walk.
+        expect(card.queryByRole("link", { name: "Run it" })).toBeNull();
+        expect(card.getByText(/needs the/i)).toBeInTheDocument();
+        expect(card.getByText(d.needsSecret)).toBeInTheDocument();
       } else {
-        expect(card.getByRole("link", { name: "Run it" })).toHaveAttribute("href", "/demos");
+        // Per-card deep link: THIS demo's step, not a catalog page to hunt in.
+        expect(card.getByRole("link", { name: "Run it" })).toHaveAttribute(
+          "href",
+          `/setup?step=${d.id}`,
+        );
       }
     }
   });

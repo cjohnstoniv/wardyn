@@ -3,21 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DemoDetail — one Getting-Started "Demos" sub-step: a single demo shown in full.
+// DemoDetail — one Getting-Started demo sub-step: a single demo shown in full.
 // It teaches BOTH what the sandbox does (overview + command walkthrough + a live,
 // runnable sandbox) AND how you'd set one up yourself (the exact policy Wardyn
-// runs, plus the New Run wizard steps). Reuses the /demos runner pieces so the
-// launch/terminal/approvals behave identically. Default-exported so setup-screen
-// can React.lazy() it and keep xterm out of the main setup chunk.
-import type { ReactNode } from "react";
+// runs, plus the New Run wizard steps). Composes the shared runner pieces
+// (../demos/demo-runner) so launch/terminal/approvals behave identically.
+// Default-exported so setup-screen can React.lazy() it and keep xterm out of
+// the main setup chunk.
+//
+// THE single demo renderer since /demos died — which is why it carries two
+// things that used to live only on that page's DemoCard:
+//  - the `demo-card-<id>` testid on its wrapper, so a demo is still addressable
+//    by the same selector after the URL swap (funnel.ts documents that trap);
+//  - the "Turn this into a policy" payoff: DemoRunControls only renders that
+//    button when given `onTurnIntoPolicy`, and the ProfileReview sheet it opens
+//    was mounted by the deleted DemoScreen. record-a-policy's own steps still
+//    tell the operator to click it, so it moved here with the renderer.
+import { useState, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import {
   DemoCaution,
   DemoRunControls,
   StepList,
   useDemoRuns,
-} from "../demos/demo-screen";
+} from "../demos/demo-runner";
 import { type Demo } from "../demos/demo-catalog";
+import { ProfileReview } from "../profile-review";
 import { YamlBlock } from "../../wardyn/code-block";
 import type { SetupStepId } from "./steps";
 
@@ -42,9 +53,11 @@ export default function DemoDetail({
   onDemoLaunched: (demoId: string) => void;
 }) {
   const { runs, starting, start, end } = useDemoRuns(onDemoLaunched);
+  // Local open-state only — ProfileReview needs nothing but a runId.
+  const [profileRunId, setProfileRunId] = useState<string | null>(null);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid={`demo-card-${demo.id}`}>
       <p className="text-sm leading-relaxed text-muted-foreground">{demo.overview}</p>
 
       {demo.caution && <DemoCaution text={demo.caution} />}
@@ -70,7 +83,12 @@ export default function DemoDetail({
       )}
 
       <Section title="What you'll run">
-        <StepList steps={demo.steps} />
+        {/* runId matters: a cmd carrying the literal "{grant_id}" token renders
+            it as-is in this pre-launch preview and substitutes the run's real
+            grant id once one is live. The dead /demos DemoCard was the only
+            renderer passing it, so without this the authorized-not-issued mint
+            command would hand the operator a command that cannot work. */}
+        <StepList steps={demo.steps} runId={runs[demo.id]?.id} />
       </Section>
 
       <Section title="The policy Wardyn runs">
@@ -105,8 +123,11 @@ export default function DemoDetail({
           loading={false}
           onStart={() => start(demo)}
           onEnd={(runId) => end(demo, runId)}
+          onTurnIntoPolicy={setProfileRunId}
         />
       </Section>
+
+      <ProfileReview runId={profileRunId} onClose={() => setProfileRunId(null)} />
     </div>
   );
 }

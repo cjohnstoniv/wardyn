@@ -103,7 +103,7 @@ export function RunDetailScreen() {
   // "Make a policy from this run" — the honest home of "write the policy from
   // what actually happened", now that /runs/new's Record radio (which only ever
   // set allow_all_egress) is gone. Same runId-driven ProfileReview sheet
-  // workspace-detail.tsx and demo-screen.tsx already mount: it POSTs
+  // workspace-detail.tsx and setup/demos-step.tsx already mount: it POSTs
   // /runs/{id}/profile, renders the proposal's inline_policy verbatim, and its
   // own "Save as policy" persists it via POST /policies. Local open-state only.
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);

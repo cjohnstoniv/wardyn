@@ -35,6 +35,8 @@ export function SetupLayout({
   onFinish,
   nextGate,
   backOverride,
+  order = STEP_ORDER,
+  refuseNext,
   children,
 }: {
   current: SetupStepId;
@@ -74,12 +76,24 @@ export function SetupLayout({
   // previous step — the mirror of nextGate.onNext (Egress redirection's Back
   // returns to Host proxy).
   backOverride?: () => void;
+  // The steps actually walkable right now (steps.ts's stepOrder(status)) —
+  // drives "Step N of M" and the prev/next pair, so a filtered-out conditional
+  // demo is neither counted nor stepped through. Defaults to the full order.
+  order?: SetupStepId[];
+  // Why a forward move to `next` would be REFUSED by the orchestrator's own
+  // navigation guard, or undefined when it's allowed — the SAME predicate its
+  // selectStep consults (setup-screen.tsx's canSelect). Without this the
+  // footer renders a live Next whose click silently no-ops, because the only
+  // gate that produces a `nextGate` is corp_network's own step; every step
+  // AFTER it that a crossing rule still refuses had a dead-enabled button.
+  refuseNext?: (next: SetupStepId) => string | undefined;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
-  const idx = STEP_ORDER.indexOf(current);
-  const prev = idx > 0 ? STEP_ORDER[idx - 1] : null;
-  const next = idx < STEP_ORDER.length - 1 ? STEP_ORDER[idx + 1] : null;
+  const idx = order.indexOf(current);
+  const prev = idx > 0 ? order[idx - 1] : null;
+  const next = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
+  const refusal = next ? refuseNext?.(next) : undefined;
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
@@ -127,7 +141,7 @@ export function SetupLayout({
             className="mb-6"
           />
           <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-            Step {idx + 1} of {STEP_ORDER.length}
+            Step {idx + 1} of {order.length}
           </div>
           <div className="mb-4 flex items-baseline gap-3">
             <h2>{STEP_HEADING[current]}</h2>
@@ -180,8 +194,8 @@ export function SetupLayout({
                 ) : (
                   <Button
                     onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
-                    disabled={!!nextGate?.blocked}
-                    title={nextGate?.blocked ? nextGate.reason : undefined}
+                    disabled={!!nextGate?.blocked || !!refusal}
+                    title={nextGate?.blocked ? nextGate.reason : refusal}
                   >
                     {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
                     <ArrowRight className="size-4" aria-hidden />
