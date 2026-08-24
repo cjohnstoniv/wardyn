@@ -496,7 +496,8 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
 // "invalid_admin_token"); it is overridden by a more specific
-// oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session")
+// oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session"/
+// "revoked_session"/"session_revocation_unavailable")
 // when a session cookie was ALSO presented and rejected on this same
 // request — that is the more actionable signal of the two. Data is
 // content-free by construction: a closed reason enum, the request path, and

@@ -1607,3 +1607,82 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
 	}
 }
+
+// TestCallbackDeniedLoginNeverInvokesOnLogin: a role-map miss with no
+// DefaultRole denies the login (see TestCallbackRoleNoMatchNoDefaultDenied) —
+// OnLogin must not fire for a login that never actually happened.
+func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
+	env := newIdPEnv(t)
+	calls := 0
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: env.httpSrv.URL + "/token",
+		replacedToken: env.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	auth, err := writoidc.New(ctx, writoidc.Config{
+		IssuerURL:    env.httpSrv.URL,
+		ClientID:     env.clientID,
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/auth/callback",
+		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
+		OnLogin:      func(context.Context, string, string) { calls++ },
+	}, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+
+	const stateVal, nonceVal = "state-denied", "nonce-denied"
+	env.buildIDToken(t, "sub-denied", "denied@example.com", nonceVal, time.Now().Add(time.Hour))
+	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=code", nil)
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: "verifier"})
+	w := httptest.NewRecorder()
+	auth.CallbackHandler(w, r)
+
+	if calls != 0 {
+		t.Errorf("OnLogin called %d times for a denied login, want 0", calls)
+	}
+}
+
+// #19a x D16: the two Middleware revocation branches must surface an
+// audit-visible reason, exactly like the expired/invalid cookie branches.
+func TestMiddlewareRevocationBranchesSurfaceReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fake   *fakeSessionRevocations
+		reason string
+	}{
+		{"revoked", &fakeSessionRevocations{revoked: true}, "revoked_session"},
+		{"store error fails closed", &fakeSessionRevocations{err: errors.New("pg down")}, "session_revocation_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			auth := env.newAuth(t, nil)
+			writoidc.SetRevocationsForTest(auth, tc.fake)
+			cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+				Sub: "sub-x", Email: "x@example.com", Role: writoidc.RoleAdmin,
+				Expiry: time.Now().Add(time.Hour), IssuedAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("EncodeSessionForTest: %v", err)
+			}
+			var principalSet bool
+			var got string
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				principalSet = writoidc.PrincipalFromContext(r.Context()) != ""
+				got = writoidc.SessionRejectedFromContext(r.Context())
+			})
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.AddCookie(cookie)
+			auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+			if principalSet {
+				t.Error("must not authenticate")
+			}
+			if got != tc.reason {
+				t.Errorf("SessionRejectedFromContext = %q, want %q", got, tc.reason)
+			}
+		})
+	}
+}

@@ -78,9 +78,9 @@ func (s *Server) routes() chi.Router {
 			// later-added Use applies to r's routes but silently NOT to these.
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 25 direct registrations below +
+			// has gone stale before, W7-S1-1): 26 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 32. Five workspace routes (create/update/delete/scan/
+			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 33. Five workspace routes (create/update/delete/scan/
 			// build) LEFT this group in 0048 for the owner-or-admin tier — the
 			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit

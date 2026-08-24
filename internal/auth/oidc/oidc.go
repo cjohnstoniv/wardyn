@@ -548,13 +548,17 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 						// indistinguishable from "not revoked" on a security
 						// gate checked on every authenticated request. The
 						// caller falls through with NO principal set, exactly
-						// like an invalid/expired cookie.
-						next.ServeHTTP(w, r)
+						// like an invalid/expired cookie — and, like them, with
+						// an audit-visible reason (#19a) so the SIEM sees the
+						// gate degrade rather than a silent 401.
+						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "session_revocation_unavailable")))
 						return
 					}
 					if revoked {
 						clearCookie(w, sessionCookieName)
-						next.ServeHTTP(w, r)
+						// Post-revocation use is THE event "revoke a human now"
+						// exists to make visible: surface it by name.
+						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
 						return
 					}
 				}
@@ -590,7 +594,9 @@ func withSessionRejected(ctx context.Context, reason string) context.Context {
 
 // SessionRejectedFromContext returns why Middleware rejected a presented
 // session cookie on this request ("invalid_session" for a
-// tampered/malformed cookie, "expired_session" for a valid-but-expired
+// tampered/malformed cookie, "expired_session" for a valid-but-expired,
+// "revoked_session" for a valid cookie the revocation store has cut off, and
+// "session_revocation_unavailable" when that store errored (fail-closed) — the last two only when Revocations is wired;
 // one), or "" when no session cookie was presented at all (the ordinary
 // non-browser-client case) or the session decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {

@@ -632,6 +632,10 @@ role, and it is revocable on its own.
 | `GET /api/v1/tokens` | admin | every token in the deployment |
 | `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
 
+Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
+revokes every unrevoked token that principal holds — a token is their session in
+another form, so the incident lever covers both in one call.
+
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
 admin/member gate and capability grants all resolve to the owning human — so a
