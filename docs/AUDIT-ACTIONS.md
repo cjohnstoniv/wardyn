@@ -86,7 +86,7 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:431` | internal |
 | `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:557` | internal |
 | `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:871` | internal |
-| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725` | internal |
+| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725`, `internal/api/source_scan.go:288,329,346` | internal |
 | `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:887` | internal |
 | `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:971` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
@@ -115,10 +115,14 @@ string — and it is what makes cross-user admin access QUERYABLE rather than
 merely present in the log: filter `?actor=<admin>` and keep the rows where
 `workspace_owner` is set and differs.
 
-Two events in this section are the deliberate exception: `workspace.scan` and
-`workspace.record` are emitted by `wardynd` itself once a run settles, with no
-acting human to compare the owner against, so they never stamp. The human who
-launched that run is recorded on the run, not on these events.
+The deliberate exception is two EMIT SITES, not two actions: the `wardynd`-actor
+emits that settle a governed run — `reconcileWorkspaceRun`'s `workspace.scan` and
+`reconcileRecordRun`'s `workspace.record`, both in `internal/api/workspace_run.go`
+— have no acting human to compare the owner against, so they never stamp. The
+human who launched that run is recorded on the run, not on these events. The
+`workspace.scan` ACTION is not exempt: emitted from `scanAttachedSources`
+(`internal/api/source_scan.go`) it carries the requesting human as actor and
+stamps `workspace_owner` like every other row above.
 
 The actor is never rewritten to match. An admin acting on a member's workspace
 is recorded as the ADMIN — there is no impersonation anywhere on this path, and
