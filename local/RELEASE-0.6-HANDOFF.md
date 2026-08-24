@@ -302,14 +302,14 @@ Documented, deliberate, and shipping as-is.
   containers, CI-tagged images `wardyn/*:kind-test`, **and this cut's `wardyn-helm-test` kind
   cluster** (`kind delete cluster --name wardyn-helm-test` — deletion is deny-listed for the
   agent session, so it is yours). `kubectl current-context` now points at `kind-wardyn-helm-test`.
-- **G1 hygiene — FOUR files are tracked under `/local/`.** `.gitignore:64` is `/local/`, yet
+- **G1 hygiene — FIVE files are tracked under `/local/`.** `.gitignore:64` is `/local/`, yet
   `local/gt-diagnosis.md`, `local/ponytail-audit-0.6.md`, `local/enterprise-poc-review/REGISTER.md`
   (the 35-finding discovery register, added during the enterprise-POC campaign) and
-  `local/RELEASE-0.6-HANDOFF.md` (this file) are tracked on `prep/v0.6`; an ignore rule does not
+  `local/RELEASE-0.6-HANDOFF.md` (this file) and `local/VIDEO-SERIES-0.6-HANDOFF.md` (the GA video-series planning brief) are tracked on `prep/v0.6`; an ignore rule does not
   untrack what is already indexed. `main` tracks nothing under `local/`, so the merge carries all
   four onto `main` and into the release tag. Keep them as release provenance, or drop them before
   the merge — owner's discretion:
-  `git rm --cached local/gt-diagnosis.md local/ponytail-audit-0.6.md local/enterprise-poc-review/REGISTER.md local/RELEASE-0.6-HANDOFF.md`.
+  `git rm --cached local/gt-diagnosis.md local/ponytail-audit-0.6.md local/enterprise-poc-review/REGISTER.md local/RELEASE-0.6-HANDOFF.md local/VIDEO-SERIES-0.6-HANDOFF.md`.
 - **gitleaks**: `.gitleaksignore:64` carries the sentinel fingerprint
   `81c0984168857a706ed2884b7f8cf22bd80df4fd:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556`.
   The value spells `wardyn-inert-sentinel` and is not a credential, but `gitleaks git` scans **every
