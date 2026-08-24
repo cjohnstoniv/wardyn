@@ -220,6 +220,11 @@ describe("NewRunScreen — the form matches the run mode", () => {
   });
 });
 
+// D33's pin MOVED to policy-panel.test.tsx ("first_use_approval states what
+// each mode does, and bounds the hold"). The Confined card whose body it pinned
+// died with the custom form — this screen now authors the spec through the
+// shared PolicyPanel, whose helper rail carries the canon string instead.
+
 // Before this, the screen had NO client-side validation at all: an empty form
 // launched, and the server's answer arrived after the fact.
 describe("NewRunScreen — Launch says what it is waiting for", () => {

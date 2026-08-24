@@ -50,7 +50,7 @@ export interface EvidenceRow {
 // All rows worth showing, in the mock's own order. NO_PROXY is evidence too
 // (T.NOPROXY_NOTE explains why it never gets a "Use this") — everything else
 // is a real candidate proxy value.
-export function evidenceRows(d?: HostProxyDetection): EvidenceRow[] {
+function evidenceRows(d?: HostProxyDetection): EvidenceRow[] {
   if (!d) return [];
   const rows: EvidenceRow[] = [];
   const push = (key: string, s?: HostProxySetting) => {
@@ -65,7 +65,7 @@ export function evidenceRows(d?: HostProxyDetection): EvidenceRow[] {
   return rows;
 }
 
-export function proxyCandidateValues(d?: HostProxyDetection): string[] {
+function proxyCandidateValues(d?: HostProxyDetection): string[] {
   const values = evidenceRows(d)
     .map((r) => r.useValue)
     .filter((v): v is string => !!v);

@@ -20,6 +20,7 @@
 //	  GET  /metrics                   (Prometheus text exposition)
 //	Anonymous:
 //	  GET  /healthz
+//	  GET  /readyz
 //	Internal (run-token bearer, identity.Provider.Verify aud="wardyn-internal"):
 //	  POST /api/v1/internal/decisions
 //	  POST /api/v1/internal/approvals ; GET /api/v1/internal/approvals/{id}
@@ -32,8 +33,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"sync"
 	"time"
@@ -172,6 +175,11 @@ type Config struct {
 	// spooling chain) the spool drain replays into. It must bypass the spool to
 	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
 	AuditDrainRecorder audit.Recorder
+	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
+	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
+	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
+	// sinks configured has nothing to report. See D2.
+	AuditSinkDrops func() map[string]int64
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// AdminToken gates the public API (constant-time bearer compare). Empty
@@ -217,6 +225,13 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
+	// SessionRevocations (D16) is the write side of the revoke-a-human-now
+	// lever: handleRevokeSessions calls RevokeSub/RevokeAll on it.
+	// oidc.Middleware holds the matching READ side (Config.Revocations, wired
+	// by the same cmd/wardynd adapter) — this field is nil exactly when OIDC
+	// is unconfigured, and the revoke-sessions route only mounts when it is
+	// set (see routes.go).
+	SessionRevocations oidc.SessionRevocations
 	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
 	// internal/api no longer reads this field directly: requireOperator/isOperator
 	// (http.go) gate on the session's B1-derived Role instead. The list still
@@ -228,6 +243,15 @@ type Config struct {
 	// need the raw configured list for display (e.g. an admin-facing settings page),
 	// never to gate a request.
 	OperatorEmails []string
+	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
+	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
+	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
+	// — the default — means a member may not onboard a host directory at all
+	// (repos and operator-owned workspaces are unaffected), which is the
+	// fail-closed posture the section-(c) threat model requires. It bounds ONLY
+	// mounts on a member-OWNED workspace; an operator's mounts are never
+	// narrowed by it. See internal/runner/member_mount.go.
+	MemberMounts runner.MemberMountPolicy
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
 	// builds (the request degrades to the convention image).
@@ -354,6 +378,16 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, default
+	// false), when true, makes applyWorkspaceRequirements apply the SAME
+	// provenance gate to a scan_seeded EGRESS requirement that it already
+	// applies to a scan_seeded SECRET requirement (runs_create.go): only an
+	// operator_set requirement is auto-added at launch, and a scan_seeded one
+	// (the workspace scanner reading untrusted repo content) is skipped.
+	// Default off preserves today's behavior — every enabled egress
+	// requirement is auto-added regardless of provenance — so flipping the
+	// default would silently narrow egress for existing workspaces on upgrade.
+	RequireOperatorSetEgress bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -403,6 +437,38 @@ type Config struct {
 	// SSHListenAddr is set, so a deployment with SSH off never even mints this
 	// secret).
 	SSHHostKey ed25519.PrivateKey
+	// SSHRoleTTL is WARDYN_SSH_ROLE_TTL: how stale a key's role_checked_at
+	// (migration 0046) may be before sshAuth's admin-override path refuses it
+	// — the bound on the OIDC-login re-check, since SSH itself has no live
+	// session to read a current role from. Zero defaults to a sensible 24h in
+	// New (matching the flag's own default), so a Config built without going
+	// through cmd/wardynd's flags — every test harness, notably — gets the
+	// same posture production does rather than an accidental zero-tolerance
+	// TTL that fails every override.
+	SSHRoleTTL time.Duration
+	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
+	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
+	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
+	// content is sandbox-authored, and the second listener IS the origin
+	// separation that keeps it away from the console's storage (boot refuses —
+	// cmd/wardynd's validateUISandboxConfig).
+	UIListenAddr string
+	// UIAdvertiseURL is WARDYN_UI_SANDBOX_ADVERTISE: the externally-reachable
+	// base URL of that listener (e.g. "https://wardyn-ui.example.com"), used to
+	// build the enter-URL template /healthz publishes. Advisory copy, like
+	// SSHAdvertiseAddr — the gateway binds UIListenAddr, never this.
+	UIAdvertiseURL string
+	// UIOriginTemplate is WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE: an optional PER-RUN
+	// origin (e.g. "https://run-{run}.ui.example.com") for deployments with
+	// wildcard DNS. Set, it gives every run its own browser origin — closing the
+	// shared-origin residual path mode leaves — and the gateway then REFUSES an
+	// enter served on any other host. Empty = shared path-mode origin, where one
+	// run's page is separated from another's only by the path-scoped cookie.
+	UIOriginTemplate string
+	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
+	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
+	// cookie that cannot be signed must never be issued.
+	UISessionKey []byte
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -459,12 +525,39 @@ type Server struct {
 	// promote to a PG advisory lock (gt_rotator.go's pattern) if
 	// allowMultiReplica ever becomes real.
 	siteConfigMu sync.Mutex
+	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
+	// replace this package added If-Match/ETag optimistic concurrency to
+	// (etag.go): PUT /permissions/enforcement reads the current enforcement
+	// map to check If-Match against, then writes the new one, and this mutex
+	// is what keeps that check-then-write atomic against a second overlapping
+	// PUT on the same process — same reasoning as siteConfigMu above (single
+	// replica by construction), just a second lock because the two documents
+	// live in different tables and a writer on one must never block a writer
+	// on the other. Zero value is ready to use.
+	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
+	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
+	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
+	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
+	// the single shared reverse proxy + exec-lane transport built on first use.
+	// All process-local, like sshSessions and lastTouch above and correct for
+	// the same reason (replicas>1 is refused by construction). Zero values are
+	// ready to use.
+	uiConnsMu   sync.Mutex
+	uiConns     map[uuid.UUID]int
+	uiReadyMu   sync.Mutex
+	uiReady     map[string]time.Time
+	uiProxyOnce sync.Once
+	uiProxy     *httputil.ReverseProxy
+	// authFailedLimiter rate-bounds the auth.failed audit emit (see
+	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
+	// append-only log. Zero value is ready to use.
+	authFailedLimiter authFailedLimiter
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -474,6 +567,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RunnerTarget == "" {
 		cfg.RunnerTarget = "docker"
+	}
+	if cfg.SSHRoleTTL <= 0 {
+		cfg.SSHRoleTTL = defaultSSHRoleTTL
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
@@ -541,6 +637,28 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleReadyz is the READINESS probe: unlike /healthz (liveness — "is the
+// process up"), it proves the store is actually reachable. /healthz alone
+// reported "ok" unconditionally, so a dead/unreachable Postgres still read
+// healthy — a dead DB never took the pod out of the Service's endpoint list.
+// Deliberately anonymous like /healthz (discloses nothing beyond up/down) and
+// deliberately a SEPARATE endpoint from /healthz rather than teaching it to
+// fail: liveness/startup also point at /healthz in the chart, and a DB blip
+// must not restart-loop a pod that is otherwise fine.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	defer cancel()
+	if s.cfg.Store == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+	if err := s.cfg.Store.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error", "postgres": "unreachable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // handleHealthz reports liveness plus the identity provider name so the trust
@@ -614,6 +732,13 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// disabled — the smallest honest wire change: no new endpoint, one
 		// field a deployment without SSH simply omits populating.
 		"ssh": s.sshGatewayHealthz(),
+		// ui_sandbox discloses the UI-sandbox gateway's presence and the ONE
+		// field the console needs to open a declared app: the enter-URL
+		// template on the gateway's own origin (the console must never build
+		// that origin itself — a different origin is the whole point). nil
+		// (JSON null) when the gateway is off, the same "a deployment without
+		// it simply omits the block" shape as ssh above.
+		"ui_sandbox": s.uiSandboxHealthz(),
 	})
 }
 
@@ -630,9 +755,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 // A live heartbeat alone only proves the sidecar PROCESS is alive; "healthy"
 // additionally requires observed kernel events, so the "we have eBPF ground
 // truth" overclaim is structurally impossible. last_heartbeat is the RFC3339
-// time of the most recent beat (omitted if none). dropped_total/observed_total
-// are the sensor-reported counts carried on the heartbeat's data (0 when
-// absent). When no Store is wired (tests), reports unavailable.
+// time of the most recent beat (omitted if none). dropped_total/observed_total/
+// dropped_unmapped are the sensor-reported counts carried on the heartbeat's
+// data (0 when absent); dropped_unmapped separates a blind sensor from a broken
+// correlation — see the idle branch. When no Store is wired (tests), reports
+// unavailable.
 func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	out := map[string]any{"state": "unavailable", "dropped_total": uint64(0)}
 	if s.cfg.Store == nil {
@@ -647,15 +774,17 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	// dropped_total and observed_total are published by the sensor on the
 	// heartbeat data when available; tolerate their absence.
 	var hb struct {
-		DroppedTotal   uint64            `json:"dropped_total"`
-		ObservedTotal  uint64            `json:"observed_total"`
-		ObservedByKind map[string]uint64 `json:"observed_by_kind"`
+		DroppedTotal    uint64            `json:"dropped_total"`
+		ObservedTotal   uint64            `json:"observed_total"`
+		DroppedUnmapped uint64            `json:"dropped_unmapped"`
+		ObservedByKind  map[string]uint64 `json:"observed_by_kind"`
 	}
 	if len(ev.Data) > 0 {
 		_ = json.Unmarshal(ev.Data, &hb)
 	}
 	out["dropped_total"] = hb.DroppedTotal
 	out["observed_total"] = hb.ObservedTotal
+	out["dropped_unmapped"] = hb.DroppedUnmapped
 	if len(hb.ObservedByKind) > 0 {
 		out["observed_by_kind"] = hb.ObservedByKind
 	}
@@ -668,8 +797,16 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// sensor is blind (Tetragon dead / wrong export path / no TracingPolicy)
 		// or the run is genuinely idle. Either way there is no ground truth yet,
 		// so report "idle" with a reason rather than the "healthy" overclaim.
+		//
+		// The two idle causes are NOT the same failure and must not read the
+		// same: dropped_unmapped>0 means the sensor saw kernel events and could
+		// not bind ANY of them to a run (correlation broken — the 0.6 frozen-
+		// counter defect), which no amount of waiting fixes.
 		out["state"] = "idle"
 		out["reason"] = "no kernel events observed"
+		if hb.DroppedUnmapped > 0 {
+			out["reason"] = fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped)
+		}
 	default:
 		// W20-W20-groundtruth-mapper-4: "healthy" used to be one aggregate over
 		// every kernel event kind — a sensor seeing only process.exec (a

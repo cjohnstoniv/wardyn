@@ -97,6 +97,15 @@ ssh:
   port: 2222
   advertiseHost: ssh.example.com
 
+# UI-sandbox gateway, the "other side" of ITS off-by-default switch: a third
+# port, on its OWN hostname (never the console's — that separation is the
+# whole control), plus the per-run origin template's wildcard-DNS mode.
+uiSandbox:
+  enabled: true
+  port: 8081
+  advertiseURL: https://wardyn-ui.example.com
+  originTemplate: https://run-{run}.ui.example.com
+
 podAnnotations:
   prometheus.io/scrape: "true"
 

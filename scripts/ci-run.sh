@@ -23,7 +23,7 @@
 #   WARDYN_CI_POLICY_FILE RunPolicySpec JSON path                    [examples/policies/ci.json]
 #   WARDYN_CI_SECRETS     name=value[,name=value...] seeded pre-run  [optional]
 #   WARDYN_CI_TIMEOUT     wardyn run --wait timeout                  [30m]
-#   WARDYN_CI_OUT         artifact dir (run.json, audit.json)        [./ci-artifacts]
+#   WARDYN_CI_OUT         artifact dir (run.json, audit.json, .cast) [./ci-artifacts]
 #   WARDYN_CI_KEEP        1 = leave the stack up for debugging       [unset]
 #   WARDYN_CI_SKIP_BUILD  1 = reuse existing local images            [unset]
 #   WARDYN_ADMIN_TOKEN    admin bearer token                         [demo-admin-token]
@@ -154,19 +154,39 @@ cleanup() {
     # compose down only reaps objects compose itself created. The docker runner
     # mints the agent + proxy containers and the per-run internal network
     # directly via the Docker API (internal/runner/docker/naming.go), so they
-    # are invisible to compose and survive `down` untouched. Remove them by
-    # their deterministic names before the network they share endpoints on
-    # goes away, or every CI run leaks a sandbox.
-    if [[ -n "${run_id:-}" ]]; then
-      docker rm -f "wardyn-proxy-${run_id}" "wardyn-agent-${run_id}" >/dev/null 2>&1 || true
-      docker network rm "wardyn-int-${run_id}" >/dev/null 2>&1 || true
-    fi
+    # are invisible to compose and survive `down` untouched. Remove them before
+    # the network they share endpoints on goes away, or every CI run leaks a
+    # sandbox.
+    # A cancel that lands while `run --wait` is still blocked leaves run_id
+    # unset (it is parsed only after the wait returns), so a name-only removal
+    # misses exactly the sandbox a cancel is most likely to hit. Reap by label
+    # instead, scoped to THIS job's control-plane network: the proxy is the only
+    # Wardyn-minted container attached to it and carries the run-id label every
+    # sibling object is named after, so a concurrent job's sandbox — on its own
+    # ${WARDYN_NS}-internal — is never touched. run_id is still appended for the
+    # one case the selector misses (proxy already gone, agent lingering).
+    for _rid in $(docker ps -a --filter "label=wardyn.managed=true" \
+      --filter "network=${WARDYN_NS}-internal" \
+      --format '{{.Label "wardyn.run-id"}}' 2>/dev/null) "${run_id:-}"; do
+      [[ -n "${_rid}" ]] || continue
+      docker rm -f "wardyn-proxy-${_rid}" "wardyn-agent-${_rid}" >/dev/null 2>&1 || true
+      docker network rm "wardyn-int-${_rid}" >/dev/null 2>&1 || true
+    done
     "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
     rm -rf "${TOOLS_DIR}"
   fi
   exit "${code}"
 }
+# W16-S1-5: EXIT alone never fires on a hard job-cancel (SIGTERM, the signal a
+# CI runner sends to abort a job) — the sandbox + control-plane network it
+# started leaks past the job. `exit` inside a signal handler still fires the
+# EXIT trap (bash re-enters it exactly once with the handler's own exit code),
+# so TERM/INT just need to exit — cleanup itself stays registered only on
+# EXIT, never running twice. SIGKILL still cannot be trapped by any process;
+# nothing short of a reaper outside this shell recovers from that one.
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # Ephemerality is load-bearing, not hygiene: a reused postgres volume holds
 # secrets age-encrypted to a PREVIOUS boot's ephemeral key, and wardynd fails
@@ -254,7 +274,33 @@ run_id="$(jq -r '.id' "${run_json}" 2>/dev/null || sed -n 's/.*"id"[^"]*"\([0-9a
 # ── collect artifacts ────────────────────────────────────────────────────────
 if [[ -n "${run_id}" ]]; then
   log "Collecting artifacts for run ${run_id} -> ${OUT_DIR}"
-  wardyn run get "${run_id}" --json >"${run_json}" 2>/dev/null || warn "run get failed"
+  # W16-S1-4: `>"${run_json}"` truncates the file the moment the shell sets up
+  # redirection — BEFORE `wardyn run get` runs — so a failed refetch destroyed
+  # the run.json already captured from the --wait launch above. Refetch into a
+  # temp file and only replace run.json once the call actually succeeded.
+  run_json_tmp="$(mktemp)"
+  if wardyn run get "${run_id}" --json >"${run_json_tmp}" 2>/dev/null; then
+    mv "${run_json_tmp}" "${run_json}"
+  else
+    warn "run get failed — keeping the run.json captured at launch"
+    rm -f "${run_json_tmp}"
+  fi
+
+  # The terminal recording is an artifact too: exec runs are recorded exactly
+  # like harness ones (agent-run-lib.sh), and the teardown below drops the
+  # recordings volume — uncollected means gone for good. Best-effort; a run
+  # that died before writing a cast simply has none to fetch. Note the cast
+  # comes back on STDOUT, not via `-o`: the wardyn shim runs the CLI inside the
+  # wardynd container, so `-o` would write the file into that container and the
+  # artifact dir would stay empty. Temp-then-move for the same reason run.json
+  # does it — a failed fetch must not leave a 0-byte "recording" behind.
+  cast_tmp="$(mktemp)"
+  if wardyn run recording "${run_id}" >"${cast_tmp}" 2>/dev/null && [[ -s "${cast_tmp}" ]]; then
+    mv "${cast_tmp}" "${OUT_DIR}/session.cast"
+  else
+    rm -f "${cast_tmp}"
+    warn "no terminal recording collected for run ${run_id}"
+  fi
 
   # The per-run audit trail truncates at 1000 events (oldest-first) unless
   # paged (W16-S1-2) — a run with more tool calls/egress decisions than that
@@ -280,7 +326,15 @@ if [[ -n "${run_id}" ]]; then
     rm -f "${audit_jsonl}"
   else
     warn "jq not found: collecting a single (possibly truncated) audit page"
-    wardyn audit "${run_id}" --json >"${OUT_DIR}/audit.json" 2>/dev/null || warn "audit fetch failed"
+    # Same temp-then-move as run.json above: a direct `>audit.json` would leave
+    # an empty artifact that reads as "this run had no audit events".
+    audit_tmp="$(mktemp)"
+    if wardyn audit "${run_id}" --json >"${audit_tmp}" 2>/dev/null; then
+      mv "${audit_tmp}" "${OUT_DIR}/audit.json"
+    else
+      rm -f "${audit_tmp}"
+      warn "audit fetch failed"
+    fi
   fi
 else
   warn "no run id parsed from output; skipping artifact collection"

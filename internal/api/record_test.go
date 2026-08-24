@@ -465,7 +465,7 @@ func TestReconcileRecordRun_OpenEntryGetsNoCleanStamp(t *testing.T) {
 func TestReconcileRecordRun_StampsEbpfGroundtruthCaveat(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()
-	hb := groundtruth.HeartbeatEventWithDropped(0, 9, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
+	hb := groundtruth.HeartbeatEventWithDropped(0, 9, 0, map[string]uint64{groundtruth.ActionProcessExec: 9}) // partial: 2 kinds never arrived
 	hb.Time = time.Now()
 	fake := &recordStore{
 		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record",

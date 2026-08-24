@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -50,6 +51,12 @@ var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 // this exact value; both names alias the one sentinel in internal/types.
 var ErrDuplicatePending = types.ErrDuplicatePendingApproval
 
+// Ping proves the pool can actually reach Postgres (a live query round-trip,
+// not just a constructed pool).
+func (s PG) Ping(ctx context.Context) error {
+	return s.Pool.Ping(ctx)
+}
+
 // ─── AgentRun ────────────────────────────────────────────────────────────────
 
 // CreateRun inserts a new run and returns the persisted row.
@@ -60,7 +67,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint`
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
@@ -75,7 +82,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -175,6 +182,25 @@ func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) 
 	return nil
 }
 
+// SetRunFailureHint scoped-writes ONLY the failure_hint column — the one-line
+// operator reason a run FAILED before its agent started (D9). Mirrors
+// SetRunImage/SetRunAgentExecID: the hint is known only at the failure site
+// (failAndRevoke), after the row exists, so it is a scoped update, not a
+// CreateRun value. Best-effort at the call site; ErrNotFound when no row matched.
+func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`,
+		hint, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set run failure hint: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // TouchRun bumps a run's updated_at to now() without changing any other field.
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
@@ -202,7 +228,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
-		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs,
+		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &r.FailureHint,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -217,7 +243,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 
 // ─── RunPolicy ───────────────────────────────────────────────────────────────
 
-// CreatePolicy inserts a policy and returns the persisted row.
+// CreatePolicy inserts a policy and returns the persisted row. Returns
+// ErrConflict when the name's UNIQUE constraint (run_policies.name) rejects a
+// duplicate — the caller maps that to 409, never the raw driver error (W20-S1-3).
 func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
@@ -227,7 +255,15 @@ func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolic
 		INSERT INTO run_policies (id, name, created_at, updated_at, spec)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, created_at, updated_at, spec`
-	return scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.RunPolicy{}, ErrConflict
+		}
+		return types.RunPolicy{}, err
+	}
+	return out, nil
 }
 
 // GetPolicy returns the policy for id, or ErrNotFound.
@@ -443,20 +479,45 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 
 // InsertAuditEvent appends a single audit event. Implements audit.Recorder.
 // The Postgres trigger blocks UPDATE/DELETE; this function only ever INSERTs.
-func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev types.AuditEvent) error {
+//
+// ev is taken by POINTER so the hash chain (migration 0047) can be handed back:
+// on success ev.PrevHash/ev.RowHash carry the values Postgres computed, and
+// ev.RowHash IS the chain head at that instant. cmd/wardynd's fanoutRecorder
+// emits that same value to the audit sinks, which is how an external SIEM ends
+// up holding a head hash Wardyn cannot later disown.
+//
+// It runs in a transaction for ONE reason: pg_advisory_xact_lock must be held
+// across the INSERT so the identity default (seq) and 0047's head read happen
+// under the same lock, keeping seq order and chain order identical. See
+// db.AuditChainLockKey.
+func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)
 	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: begin audit tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on the failure path
+	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+		return fmt.Errorf("store: lock audit chain: %w", err)
+	}
+	// COALESCE: the genesis row's prev_hash is SQL NULL, which will not scan
+	// into a string. Empty string and NULL both mean "nothing before this row".
 	const q = `
 		INSERT INTO audit_events
 			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if _, err := pool.Exec(ctx, q,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	); err != nil {
+	).Scan(&ev.PrevHash, &ev.RowHash); err != nil {
 		return fmt.Errorf("store: insert audit event: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit audit event: %w", err)
 	}
 	return nil
 }

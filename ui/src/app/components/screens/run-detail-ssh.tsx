@@ -19,18 +19,24 @@
 // terminal. So the CLI lane is always shown, and SSH is the second lane: rich
 // when enabled, one honest line about what turns it on when not.
 //
-// Still owner-only, matching the server rather than merely hiding a control it
-// would refuse (sshgateway.go's sshAuth; attach.go's own owner-or-admin gate),
-// and still absent when the run isn't RUNNING — there is nothing to attach to.
+// Shown to the run's OWNER or to an admin, matching the server rather than
+// merely hiding a control it would refuse — all three lanes are owner-or-admin
+// there (attach_ticket.go's isOperator, uigateway.go's ta.role check, and
+// sshgateway.go's sshAuth admin arm since migration 0043). It stays absent for
+// everyone else, and when the run isn't RUNNING — there is nothing to attach
+// to. (The ui-sandboxes mock's "non-owner -> null" predates those admin arms;
+// see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { KeyRound } from "lucide-react";
-import type { AgentRun, SSHPublicKey } from "../../lib/types";
+import type { AgentRun, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
+import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
-import { usePrincipal } from "../wardyn/operator-context";
+import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { useOperator, usePrincipal } from "../wardyn/operator-context";
 import { SectionCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
@@ -38,7 +44,10 @@ import { cn } from "../ui/utils";
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
 export function ConnectSSHCard({ run }: { run: AgentRun }) {
   const principal = usePrincipal();
-  const owned = !!principal && run.created_by === principal;
+  const operator = useOperator();
+  // Owner OR admin: the same two-armed gate every lane's server handler uses.
+  // Both hooks run unconditionally — `||` on a hook CALL would reorder them.
+  const mayAttach = (!!principal && run.created_by === principal) || operator;
   const running = run.state === "RUNNING";
 
   const [ssh, setSSH] = React.useState<{
@@ -51,11 +60,25 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   // arrives).
   const [keys, setKeys] = React.useState<SSHPublicKey[] | null>(null);
 
+  // UI apps lane (docs/design/ui-sandboxes-prompt.md): a third, independent
+  // sub-affordance under the same owner+running gate as SSH/CLI above — no
+  // second fetch effect, it rides the same healthz call.
+  const [uiSandbox, setUISandbox] = React.useState<{
+    enabled?: boolean;
+    enter_url_template?: string;
+  } | null>(null);
+  // Which declared app's ticket-mint/open is in flight, and the last failure
+  // (scoped to one app — the other rows stay untouched per the mock's S5).
+  const [openingApp, setOpeningApp] = React.useState<string | null>(null);
+  const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
+
   React.useEffect(() => {
-    if (!owned || !running) return; // nothing to show either way — skip the fetch
+    if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
     healthApi.health().then((h) => {
-      if (alive) setSSH(h.ssh ?? null);
+      if (!alive) return;
+      setSSH(h.ssh ?? null);
+      setUISandbox(h.ui_sandbox ?? null);
     });
     sshKeysApi
       .listKeys()
@@ -72,9 +95,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     return () => {
       alive = false;
     };
-  }, [owned, running]);
+  }, [mayAttach, running]);
 
-  if (!owned || !running) return null;
+  if (!mayAttach || !running) return null;
 
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
@@ -88,6 +111,42 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
   const sshOn = !!ssh?.enabled;
+  const uiApps: UIApp[] = run.ui_apps ?? [];
+  const uiSandboxOn = !!uiSandbox?.enabled;
+
+  // Mints a single-use attach ticket (the SAME endpoint the terminal lanes
+  // use) and opens the app on the UI-sandbox origin in a new tab. A failed
+  // mint renders inline under that app's row (S5); a destination-side
+  // failure (e.g. the BYOI missing-launcher 502) happens after navigation, in
+  // the new tab itself — unobservable here across origins, so "the new tab is
+  // the feedback" for that case, exactly as the mock's step 4 says.
+  //
+  // window.open's return is deliberately NOT checked: with "noopener" the spec
+  // requires it to return null even when the tab opened fine, so a `!win`
+  // branch showed a popup-blocked error on EVERY successful Open. A blocked
+  // popup is undetectable from here, and the mock lists no such state.
+  async function openApp(app: UIApp) {
+    setAppError(null);
+    setOpeningApp(app.name);
+    try {
+      const ticket = await runsApi.attachTicket(run.id);
+      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) puts {run} in the HOST
+      // *and* the query — "https://run-{run}.ui.example.com/__wardyn/enter?run=
+      // {run}&app={app}&ticket={ticket}" — so a single String.replace fills the
+      // host and leaves `?run={run}` literal, which uuid.Parse rejects on every
+      // Open. split/join replaces every occurrence (replaceAll is ES2021; this
+      // tsconfig's lib is ES2020).
+      const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
+        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+        uiSandbox?.enter_url_template ?? "",
+      );
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setOpeningApp(null);
+    }
+  }
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
@@ -144,6 +203,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       {sshOn && (
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
         <CodeBlock text={command} />
+        <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          Or skip retyping it: <Mono className="text-foreground">wardyn ssh {run.id}</Mono>
+        </p>
 
         <details className="mt-2.5">
           <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">
@@ -183,8 +245,96 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
           Manage SSH keys
         </Link>
       )}
+
+      {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)
+          orders the card CLI -> SSH (heading + command) -> UI apps. */}
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-[0.75rem] font-medium text-foreground">{UI_APPS_LANE.title}</p>
+        {!uiSandboxOn && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
+          </p>
+        )}
+        {uiSandboxOn && uiApps.length === 0 && (
+          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            {monoTokens(UI_APPS_LANE.noApps, "ui_apps")}
+          </p>
+        )}
+        {uiSandboxOn && uiApps.length > 0 && (
+          <>
+            <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+              {UI_APPS_LANE.intro}
+            </p>
+            {uiApps.map((app) => (
+              <div key={app.name} className="mt-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[0.75rem] font-medium text-foreground">{app.name}</p>
+                    <Mono className="text-[0.7188rem] text-muted-foreground">
+                      {UI_APPS_LANE.appSub(app.port, app.path || "/")}
+                    </Mono>
+                  </div>
+                  <Button size="sm" disabled={openingApp === app.name} onClick={() => openApp(app)}>
+                    {openingApp === app.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta(app.name)}
+                  </Button>
+                </div>
+                {appError?.app === app.name && (
+                  <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+                    <p className="text-[0.75rem] font-medium text-foreground">
+                      {UI_APPS_LANE.errorTitle(appError.app)}
+                    </p>
+                    {appError.message.startsWith(UI_APPS_LAUNCHER_MISSING_PREFIX) && (
+                      <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+                        {monoTokens(
+                          UI_APPS_LANE.errorLauncher(app.name),
+                          `/usr/local/bin/wardyn-ui-${app.name}`,
+                          "deploy/images/vscode/",
+                        )}
+                      </p>
+                    )}
+                    <p className="mt-1.5 font-mono text-[0.7188rem] leading-relaxed text-muted-foreground">
+                      {appError.message}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+            <p className="mt-3 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            <p className="mt-2 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+          </>
+        )}
+      </div>
     </SectionCard>
   );
+}
+
+// monoTokens renders one frozen copy string with its env-var / policy-field /
+// file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
+// SSH lane right above, which wraps WARDYN_SSH_LISTEN the same way). The
+// strings stay whole and frozen in copy.ts — this only splits them at render,
+// so the rendered text content still byte-matches the canonical table.
+function monoTokens(text: string, ...tokens: string[]): (string | React.ReactElement)[] {
+  let key = 0;
+  let parts: (string | React.ReactElement)[] = [text];
+  for (const token of tokens) {
+    parts = parts.flatMap((part) =>
+      typeof part !== "string"
+        ? [part]
+        : part
+            .split(token)
+            .flatMap((seg, i) =>
+              i === 0
+                ? [seg]
+                : [
+                    <Mono key={`t${key++}`} className="text-foreground">
+                      {token}
+                    </Mono>,
+                    seg,
+                  ],
+            ),
+    );
+  }
+  return parts;
 }
 
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)
@@ -196,7 +346,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 // needs the brackets stripped, not just the last colon split off, and the
 // latter has no port to split at all (naive lastIndexOf would carve a
 // fragment off the address itself).
-export function splitHostPort(addr: string): [host: string, port: string] {
+function splitHostPort(addr: string): [host: string, port: string] {
   const bracketed = addr.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketed) return [bracketed[1], bracketed[2] ?? ""];
   // More than one colon, unbracketed: a bare IPv6 literal (always has 2+

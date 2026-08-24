@@ -177,3 +177,67 @@ func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
 		t.Fatalf("admin-role ticket was refused by the ticket-role check: %s", w.Body.String())
 	}
 }
+
+// TestAttachWS_TicketDenialsAreAudited: the ?ticket= lane is the only route to a
+// live PTY that never runs humanOrAdminAuth, and it audited NONE of its own
+// refusals — so probing it left no trace at all, where the sibling SSH gateway
+// records every rejection under ssh.auth. Both refusals in the lane (a ticket
+// that does not resolve, and a ticket that resolves but does not authorize the
+// run it names) must now land in the trail, with the principal named only when
+// the ticket actually proved one.
+func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+
+	run := uuid.New()
+	ast.mu.Lock()
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+
+	denials := func() []types.AuditEvent {
+		var out []types.AuditEvent
+		for _, ev := range h.audit.events {
+			if ev.Action == "session.attach" && ev.Outcome == "failure" {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+
+	// (1) a ticket that does not resolve at all.
+	if w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket=deadbeef", "", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("bogus ticket: code = %d, want 403", w.Code)
+	}
+	got := denials()
+	if len(got) != 1 {
+		t.Fatalf("a rejected attach ticket produced %d session.attach failures, want 1 — the lane is unaudited", len(got))
+	}
+	if got[0].Actor != "unknown" {
+		t.Errorf("actor = %q, want \"unknown\": the caller proved no principal", got[0].Actor)
+	}
+	if got[0].RunID == nil || *got[0].RunID != run {
+		t.Errorf("denial not attributed to the run being probed: %v", got[0].RunID)
+	}
+
+	// (2) a ticket that resolves but does not authorize this run.
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	if w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("non-owner ticket: code = %d, want 403", w.Code)
+	}
+	got = denials()
+	if len(got) != 2 {
+		t.Fatalf("the ticket-role refusal produced %d session.attach failures total, want 2", len(got))
+	}
+	if got[1].Actor != "mallory" {
+		t.Errorf("actor = %q, want mallory: this ticket DID prove a principal", got[1].Actor)
+	}
+	if !strings.Contains(string(got[1].Data), "does not authorize this run") {
+		t.Errorf("denial data = %s, want the refusal reason", got[1].Data)
+	}
+}

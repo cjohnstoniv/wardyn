@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -337,6 +339,32 @@ func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 	err = s.KillSandbox(ctx, ref)
 	o.forget(ctx, ref, err == nil)
 	return err
+}
+
+// SweepOrphanedSandboxes forwards the control plane's crash-orphan sandbox sweep
+// (api.SandboxOrphanSweeper, D13) to every substrate that implements it, summing
+// the counts. A substrate without the optional capability (a future non-OCI VMM,
+// a test fake) is skipped — the docker substrate is the one that owns per-run
+// containers keyed by the wardyn.run-id label. This makes the Orchestrator, the
+// runner.Runner the control plane holds, satisfy the sweeper interface even
+// though the concrete implementation is build-tagged behind a substrate.
+func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	var total int
+	var errs []error
+	for _, s := range o.substrates {
+		sw, ok := s.(interface {
+			SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
+		})
+		if !ok {
+			continue
+		}
+		n, err := sw.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
+		total += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return total, errors.Join(errs...)
 }
 
 // forget drops the in-memory route and, when the sandbox was actually torn

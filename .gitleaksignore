@@ -35,3 +35,49 @@ a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
 # "-----BEGIN OPENSSH PRIVATE KEY-----" armor line — a hint string, no key
 # material (same class as the test-fixture entries above).
 8f553056d6f614c06aa568975fbdb86622a7e462:ui/src/app/components/screens/settings/connection-cards.tsx:private-key:509
+
+# A LOG LINE quoted in the k8s day-2 runbook: wardynd's ephemeral-age-identity
+# warning prints the PUBLIC recipient (age1…, not AGE-SECRET-KEY-…), which is
+# public by construction — that is what a recipient is for. Kept verbatim so an
+# operator can match the message they actually see.
+fb3117ab9f1a4b4f2c037ce22a29c38ab195d1e6:docs/OPERATIONS.md:generic-api-key:1377
+
+# The Helm chart's age-key preflight FAIL MESSAGE quotes the values flag that
+# opts out of it — `secrets.allowEphemeralAgeKey=true` — as remediation text an
+# operator can copy. It is a chart value NAME in a template comment, not key
+# material; the message is the whole point of the guard (an ephemeral age
+# identity against a persistent Postgres crash-loops on the second boot).
+cabdaf793a0c628f3be6abfba613ae3efbeee554:deploy/helm/wardyn/templates/secret.yaml:generic-api-key:53
+
+# The k8s day-2 runbook now QUOTES that same chart fail message (the paragraph
+# explaining that the age-key reset is refused at render). Same finding, same
+# reasoning as the entry above — a values-flag name inside remediation copy.
+cd72049ecaaa91d7d7d3797d6901c2d149e13868:docs/OPERATIONS.md:generic-api-key:1422
+
+# V10's demo beat types a deliberately INERT sentinel token at the camera: the
+# string a sandbox holds INSTEAD of a credential (the proxy injects the live
+# one; the value spells out "wardyn-inert-sentinel"). The beat's whole point is
+# that curling with it from outside the boundary answers 401 — it is not a key,
+# it is the demo's evidence.
+# Reachable only from main, but `gitleaks git` scans every ref, so the gate
+# needs the entry regardless of which branch the commit sits on.
+81c0984168857a706ed2884b7f8cf22bd80df4fd:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556
+
+# D31's masker regression test needs a fixture SHAPED like an OpenSSH private
+# key (JSON-escaping only bites on realistic multi-line PEM values); the body
+# is the literal marker "distinctivEKEYline" padded with base64 alphabet — it
+# was never a key. History-scan flags the introducing commit, so pin it here.
+18607e555faed35c206d9d21e2915e0c76a9adec:cmd/wardynd/adapters_test.go:private-key:279
+
+# The demos-restructure specs plant CANARY strings and then prove they never
+# reach the sandbox: `WARDYN-V03-KEY-CANARY-8Q4ZR7` is the value the key-never-
+# in-the-box demo writes to a secret and greps the run's own environment for,
+# and `WARDYN-V0{6,7}-CANARY-4T7RM` are the interactive-run equivalents. The
+# assertion IS "this string is absent", so the literal has to be in the spec —
+# it authenticates to nothing. Introduced on main's demo commits; `gitleaks
+# git` scans every ref, so the fingerprints are pinned here regardless of which
+# branch the commits sit on.
+ac54c5b4894c60ebd3a5bcfed09e48c2216c88d7:ui/e2e/demo/demos.ts:generic-api-key:53
+181f6440284bcbb4d9add1e6a652a4af14346f0c:ui/e2e/demo/03-what-it-stops.spec.ts:generic-api-key:124
+2bd5671d26e937ff2f4993094676b51366c8cb33:ui/e2e/demo/07-interactive-runs.spec.ts:generic-api-key:128
+e8faade340cba6a05325197665a7b628136a194b:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128

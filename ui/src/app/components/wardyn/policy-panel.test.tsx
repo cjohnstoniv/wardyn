@@ -144,6 +144,23 @@ describe("PolicyPanel — helper rail", () => {
     expect(FIELD_HELP.llm_inspection.values).toMatch(/workspace_secret_values is REFUSED/);
   });
 
+  // Was network-dialog.test.tsx's "each card states what actually happens, not
+  // the mode name". The dialog and the run wizard's Confined card both died with
+  // the custom form; this rail is the one surviving surface that describes the
+  // three modes, so the canon strings (ui-batch2-mock.md D33 + D8) pin here.
+  it("first_use_approval states what each mode does, and bounds the hold (D33 + D8)", () => {
+    const v = FIELD_HELP.first_use_approval.values;
+    expect(v).toContain(
+      "Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through.",
+    );
+    expect(v).toContain(
+      "The connection waits, live, for the standard 30-second window. Decide in time and it goes through; miss it and it's refused — the approval itself stays open for you to decide.",
+    );
+    expect(v).toContain("no prompt, no wait");
+    // The bound is the point: an open-ended promise is what D8 removed.
+    expect(v).not.toMatch(/until you approve or deny it/);
+  });
+
   it("auto_stop_after_sec documents -1 as explicit never-reap intent, same as absent", () => {
     expect(FIELD_HELP.auto_stop_after_sec.values).toMatch(/ABSENT = never reaped/);
     expect(FIELD_HELP.auto_stop_after_sec.values).toMatch(/-1 = never reaped, stated explicitly/);

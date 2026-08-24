@@ -19,6 +19,7 @@ function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {
     onRecheck: vi.fn(),
     onSelect: vi.fn(),
     onFinish: vi.fn(),
+    operator: true,
     children: <div>step body</div>,
     ...overrides,
   };
@@ -97,6 +98,27 @@ describe("SetupLayout", () => {
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       expect(onAction).toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    // W13-S1-8: the action button stands in for corp-network-egress.tsx's
+    // inline Test/Test-all buttons, which are already disabled={!operator} —
+    // this shared footer button had no such check.
+    it("blocked WITH an action, a non-operator: the button is disabled and never fires", async () => {
+      const onAction = vi.fn();
+      renderLayout({
+        current: "environment",
+        operator: false,
+        nextGate: {
+          blocked: true,
+          head: "Connectivity isn't proven yet",
+          reason: "One probe.",
+          action: { label: "Test connectivity", onClick: onAction },
+        },
+      });
+      const button = screen.getByRole("button", { name: /^test connectivity$/i });
+      expect(button).toBeDisabled();
+      await user.click(button);
+      expect(onAction).not.toHaveBeenCalled();
     });
 
     it("an ENABLED gate with a head/reason renders them as a neutral standing note beside a working Next", async () => {

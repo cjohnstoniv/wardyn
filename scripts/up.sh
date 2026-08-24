@@ -312,7 +312,14 @@ report() {  # report LEVEL MESSAGE
 
 cmd_doctor() {
   DOCTOR_BLOCKED=0
-  log "Wardyn doctor — read-only preflight"
+  # "read-only" means doctor changes nothing about this host's Wardyn setup —
+  # no volume, container, image or config of yours is created or touched. The
+  # ONE thing it runs is the socket-mountability probe below: a throwaway
+  # `alpine:3.20 test -S`, --pull=never so it can never reach the network or
+  # write to your image store, skipped entirely when that image isn't already
+  # local. Keep that flag: without it, `make doctor` on a fresh box silently
+  # pulled an image, which is exactly the surprise the claim rules out.
+  log "Wardyn doctor — read-only preflight (nothing on this host is created or changed)"
 
   _kind=$(os_kind)
   case "${_kind}" in
@@ -362,10 +369,11 @@ cmd_doctor() {
   else
     report ok "port ${_port} free."
   fi
-  if port_in_use 5432; then
-    report warn "port 5432 already in use — postgres may fail to bind (an existing wardyn-postgres container already holding it is fine)."
+  _pg_port="${WARDYN_PG_PORT:-5432}"
+  if port_in_use "${_pg_port}"; then
+    report warn "port ${_pg_port} already in use — postgres may fail to bind (an existing wardyn-postgres container already holding it is fine). Override with WARDYN_PG_PORT=<port>, or free the port."
   else
-    report ok "port 5432 free."
+    report ok "port ${_pg_port} free."
   fi
   # registry: auto-started via postgres/dex/wardynd's depends_on, so it binds
   # even on a plain `make setup` — not opt-in like the SSO/groundtruth profiles.
@@ -382,6 +390,13 @@ cmd_doctor() {
     report warn "port ${_ssh_port} already in use — wardynd's SSH gateway mapping may fail to bind. Override with WARDYN_SSH_PORT=<port>, or free the port."
   else
     report ok "port ${_ssh_port} free."
+  fi
+  # Same story for the UI-sandbox gateway mapping (docs/UI-SANDBOXES.md).
+  _ui_sandbox_port="${WARDYN_UI_SANDBOX_PORT:-8081}"
+  if port_in_use "${_ui_sandbox_port}"; then
+    report warn "port ${_ui_sandbox_port} already in use — wardynd's UI-sandbox gateway mapping may fail to bind. Override with WARDYN_UI_SANDBOX_PORT=<port>, or free the port."
+  else
+    report ok "port ${_ui_sandbox_port} free."
   fi
 
   if [ -e /dev/kvm ]; then
@@ -430,10 +445,11 @@ cmd_doctor() {
     _sock="${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}"
     if [ -S "${_sock}" ]; then
       report ok "docker socket ${_sock} present on host (bind-mountable)."
-    elif docker run --rm -v "${_sock}:/probe.sock" alpine:3.20 test -S /probe.sock >/dev/null 2>&1; then
+    elif docker image inspect alpine:3.20 >/dev/null 2>&1 &&
+      docker run --rm --pull=never -v "${_sock}:/probe.sock" alpine:3.20 test -S /probe.sock >/dev/null 2>&1; then
       report ok "docker socket ${_sock} is bind-mountable by the daemon (in-VM path, e.g. Rancher Desktop)."
     else
-      report warn "chosen docker socket ${_sock} is neither present on the host nor bind-mountable by the daemon — the compose wardynd can't create sandboxes. On Rancher Desktop set WARDYN_DOCKER_SOCK=/var/run/docker.sock (the in-VM path); otherwise check the path and permissions."
+      report warn "chosen docker socket ${_sock} is not present on the host, and the in-VM mountability probe did not confirm it (it is skipped rather than pulled when alpine:3.20 isn't already local — \`docker pull alpine:3.20\` and re-run to test it). The compose wardynd may not be able to create sandboxes. On Rancher Desktop set WARDYN_DOCKER_SOCK=/var/run/docker.sock (the in-VM path); otherwise check the path and permissions."
     fi
     unset _sock
   fi

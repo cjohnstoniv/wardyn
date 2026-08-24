@@ -38,7 +38,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
-import { OperatorOnlyHint, SectionLabel } from "./primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "./primitives";
 import { useOperator } from "./operator-context";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -47,6 +47,7 @@ import {
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
   OPERATOR_ONLY_REASON,
+  TELEMETRY_TAG,
   UNTIL_PRESETS,
   credentialKind,
   denyDialogCopy,
@@ -65,8 +66,23 @@ interface DenyTarget {
   until?: string;
 }
 
-// A held request is a wait_for_review first-use approval — the proxy carries the
-// mode in the approval's requested_scope so the UI can flag the live hold.
+// The proxy's hold (ResolveWait, internal/egress/proxy/approvals.go) parks a
+// wait_for_review connection for defaultHoldTimeout (30s) and then fails the
+// request closed — the approval row itself stays PENDING for up to 24h
+// (approvalExpiryAfter), so nothing server-side flips the mode once the real
+// hold has already timed out.
+// ponytail: hardcoded mirror of the server constant, not a config read —
+// production always calls configureHold with timeout<=0 (keeps this
+// default), so there is nothing to read yet; wire it through if the hold
+// timeout ever becomes operator-configurable.
+const HOLD_TIMEOUT_MS = 30_000;
+
+// A held request is a wait_for_review first-use approval whose live hold has
+// not yet timed out — the proxy carries the mode in the approval's
+// requested_scope so the UI can flag it, but PENDING alone doesn't mean
+// "still holding the sandbox": the connection fails closed at
+// HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
+// afterward (W20-hold-fsm-2).
 //
 // Exported because the run cockpit's command bar states the same fact ("N
 // waiting · sandbox held") one row above this strip. Two copies of the
@@ -74,7 +90,10 @@ interface DenyTarget {
 // disagreement would read as "nothing is holding the sandbox" while the
 // sandbox is, in fact, held.
 export function isHeld(a: ApprovalRequest): boolean {
-  return String((a.requested_scope?.mode as string) ?? "") === "wait_for_review";
+  if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
+  const requestedAt = Date.parse(a.requested_at);
+  if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
+  return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
 
 // rowLabel is the row's identity line: the host for an egress hold, the tool
@@ -86,6 +105,18 @@ function rowLabel(a: ApprovalRequest): string {
     .map((v) => (typeof v === "string" ? v.trim() : ""))
     .filter(Boolean);
   return parts.join(": ") || "a tool call";
+}
+
+// D7 — the agent CLI's own known telemetry endpoints (DATA-FLOW.md:27,
+// DEMO-SCRIPT.md:664). Client-side recognition only — this is identification
+// for the tag, not a policy; the row still decides through the normal
+// Approve/Deny controls.
+const KNOWN_TELEMETRY_HOSTS = ["http-intake.logs.us5.datadoghq.com"];
+
+function isKnownTelemetryHost(host: string): boolean {
+  return KNOWN_TELEMETRY_HOSTS.some((known) =>
+    known.startsWith("*.") ? host === known.slice(2) || host.endsWith(known.slice(1)) : host === known,
+  );
 }
 
 const STRIP_LABEL_MAX = 72;
@@ -125,6 +156,12 @@ export function LiveApprovals({
   // audit log) — but Approve's non-default scopes (picked from the caret)
   // decide immediately too, same reasoning, one click either way.
   const [denyTarget, setDenyTarget] = React.useState<DenyTarget | null>(null);
+  // W20-hold-fsm-5: a failed poll used to fall silently back to the last
+  // snapshot, which for an empty snapshot renders the SAME affirmative
+  // "Watching for…" idle text as a confirmed-empty poll — the one state where
+  // silence is indistinguishable from "nothing pending." Tracked separately
+  // from `pending` so a transient failure doesn't clear rows already shown.
+  const [pollError, setPollError] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -155,8 +192,11 @@ export function LiveApprovals({
               (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
         ),
       );
+      setPollError(false);
     } catch {
-      /* transient poll error — keep the last snapshot */
+      // transient poll error — keep the last pending snapshot, but flag it so
+      // the idle render doesn't claim a confirmed-empty poll.
+      setPollError(true);
     }
   }, [runId]);
 
@@ -205,6 +245,13 @@ export function LiveApprovals({
   };
 
   if (pending.length === 0) {
+    if (pollError) {
+      return (
+        <p className="text-[0.6875rem] text-warning" data-testid="live-approvals-poll-error">
+          Couldn't check for pending approvals — retrying…
+        </p>
+      );
+    }
     return (
       <p className="text-[0.6875rem] text-muted-foreground" data-testid="live-approvals-idle">
         {idleHint}
@@ -236,6 +283,7 @@ export function LiveApprovals({
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
         const scoped = a.kind === "egress_domain";
+        const telemetry = scoped && isKnownTelemetryHost(label);
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
             {held ? (
@@ -246,6 +294,11 @@ export function LiveApprovals({
             <Mono className="flex-1 text-foreground" title={label}>
               {clip(label)}
             </Mono>
+            {telemetry && (
+              <Chip tone="neutral" className="h-5 shrink-0 px-1.5" title={TELEMETRY_TAG.title}>
+                {TELEMETRY_TAG.label}
+              </Chip>
+            )}
             {held && <span className="text-[0.625rem] uppercase tracking-wide text-warning">waiting</span>}
             {/* Split button: the bare click is "This run" (scope's default,
                 unchanged from before this feature existed) — the caret opens

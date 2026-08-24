@@ -302,6 +302,7 @@ func TestDeriveSetupItems_RepoCredentialGitPATPresentAbsent(t *testing.T) {
 		t.Errorf("git_pat repo_credential w/o secret = %+v, want missing + add_secret(ado-pat)", got)
 	}
 }
+
 const workspaceWithProfilePath = "/home/me/proj"
 
 func workspaceWithProfile(t *testing.T, egressDomains ...string) types.Workspace {

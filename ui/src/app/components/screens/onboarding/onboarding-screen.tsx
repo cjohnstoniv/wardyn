@@ -147,7 +147,14 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
     let active = true;
     api
       .getSetupStatus()
-      .then((s) => active && setStatus(s))
+      .then((s) => {
+        // getSetupStatus() resolves (never rejects) to the synthetic
+        // READY_FALLBACK on a failed/unreachable probe — its empty
+        // confinement_classes would otherwise render as a real "Barrier:
+        // needs setup" for a host we simply couldn't reach. Leave readiness
+        // unknown instead, same as a thrown error below.
+        if (active && !s.unreachable) setStatus(s);
+      })
       .catch(() => {
         /* leave readiness unknown — never block the welcome on a failed probe */
       })

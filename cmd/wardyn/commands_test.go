@@ -11,12 +11,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -657,6 +659,100 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 	}
 }
 
+// TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
+// actually uses the server's ?run_id= filter (W19-S1-4 / W20-hold-fsm-7)
+// instead of silently discarding it.
+func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
+	runID := uuid.New()
+	if err := execCmd(t, "approvals", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	q, err := url.ParseQuery(srv.last().query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", srv.last().query, err)
+	}
+	if got := q.Get("run_id"); got != runID.String() {
+		t.Errorf("run_id query = %q, want %s", got, runID)
+	}
+}
+
+// TestApprovalsListCmd_PrintsHostAndHoldHint pins the HOST and HOLD columns:
+// a live wait_for_review egress hold must show its requested host and a
+// "time left" hint, not the pre-fix blank cells that left the CLI decide
+// loop unable to tell a live 30s hold from an ordinary up-to-24h pendency.
+func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
+		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedAt: time.Now(),
+		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
+	}})
+	got := captureStdout(t, func() {
+		if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok"); err != nil {
+			t.Fatalf("approvals list returned error: %v", err)
+		}
+	})
+	if !strings.Contains(got, "pkg.example.com") {
+		t.Errorf("output = %q, want it to contain the requested host", got)
+	}
+	if !strings.Contains(got, "left") {
+		t.Errorf("output = %q, want a live-hold time-left hint", got)
+	}
+}
+
+// TestApprovalsGetCmd_RequiresRunFlag: `approvals get` has no server-side
+// get-by-id endpoint to fall back on, so --run is mandatory, not optional.
+func TestApprovalsGetCmd_RequiresRunFlag(t *testing.T) {
+	if err := execCmd(t, "approvals", "get", uuid.New().String(), "--token", "tok"); err == nil {
+		t.Error("expected error when --run is missing, got nil")
+	}
+}
+
+// TestApprovalsGetCmd_FindsByIDWithinRun exercises the actual lookup: the
+// server has no GET /approvals/{id}, so `get` must list --run's approvals
+// and find the matching ID itself.
+func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
+	runID := uuid.New()
+	wantID := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: runID, State: types.ApprovalPending},
+		{ID: wantID, RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+			RequestedScope: json.RawMessage(`{"host":"api.example.com"}`)},
+	})
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals get returned error: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, wantID.String()) || !strings.Contains(got, "api.example.com") {
+		t.Errorf("output = %q, want it to name %s and its host", got, wantID)
+	}
+
+	q, err := url.ParseQuery(srv.last().query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", srv.last().query, err)
+	}
+	if got := q.Get("run_id"); got != runID.String() {
+		t.Errorf("run_id query = %q, want %s", got, runID)
+	}
+}
+
+// TestApprovalsGetCmd_NotFound: the ID isn't in --run's approvals.
+func TestApprovalsGetCmd_NotFound(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
+	})
+	err := execCmd(t, "approvals", "get", uuid.New().String(), "--run", uuid.New().String(),
+		"--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Error("expected error for an approval id not found in --run, got nil")
+	}
+}
+
 // approve/deny take exactly one positional arg.
 func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
 	if err := execCmd(t, "approve", "--token", "tok"); err == nil {
@@ -866,6 +962,149 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "truncated") || !strings.Contains(errBuf.String(), "--offset=1") {
 		t.Errorf("stderr = %q, want a truncation warning naming --offset=1", errBuf.String())
+	}
+}
+
+// --------------------------------------------------------------------------
+// logTail (W22-S1-4: `wardyn logs`)
+// --------------------------------------------------------------------------
+
+// TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
+// exists to prevent: the server's Since filter round-trips through RFC3339
+// (1-second resolution), so re-polling with since=<last event's second> can
+// legitimately return that same event again. filter must drop it, not
+// re-print it, while still admitting a genuinely new event landing in that
+// same second.
+func TestLogTail_Filter_DedupesSameSecondBoundary(t *testing.T) {
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	e1 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.dispatch"}
+	e2 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.allow"} // same second, different event
+
+	var tail logTail
+	first, tail := tail.filter([]types.AuditEvent{e1})
+	if len(first) != 1 || first[0].ID != e1.ID {
+		t.Fatalf("first poll = %v, want just e1", first)
+	}
+
+	// Re-poll returns the server's whole since-inclusive page: e1 again
+	// (same second) plus the genuinely new e2.
+	second, tail := tail.filter([]types.AuditEvent{e1, e2})
+	if len(second) != 1 || second[0].ID != e2.ID {
+		t.Fatalf("second poll = %v, want just the new event e2 (e1 must be deduped)", second)
+	}
+
+	// A third poll with nothing new yields nothing.
+	third, _ := tail.filter([]types.AuditEvent{e1, e2})
+	if len(third) != 0 {
+		t.Errorf("third poll = %v, want no events (both already seen)", third)
+	}
+}
+
+// TestLogTail_Filter_AdvancesPastSecondBoundary: a later-second event resets
+// the dedup set to just that event, so an even-later re-poll of the SAME
+// later event is also correctly deduped (not just the original second).
+func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Second)
+	e1 := types.AuditEvent{ID: uuid.New(), Time: t0}
+	e2 := types.AuditEvent{ID: uuid.New(), Time: t1}
+
+	var tail logTail
+	_, tail = tail.filter([]types.AuditEvent{e1, e2})
+	if !tail.since.Equal(t1) {
+		t.Fatalf("tail.since = %v, want %v (the later event's time)", tail.since, t1)
+	}
+	again, _ := tail.filter([]types.AuditEvent{e1, e2})
+	if len(again) != 0 {
+		t.Errorf("re-poll of the same page = %v, want nothing new", again)
+	}
+}
+
+// TestLogsCmd_FollowStopsAtTerminalState drives the real cobra command: two
+// audit-event polls plus a run whose state flips to COMPLETED must print
+// both events, exactly once each, and return without hanging.
+func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var pollN int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			mu.Lock()
+			n := pollN
+			pollN++
+			mu.Unlock()
+			if n == 0 {
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{{ID: uuid.New(), Time: t0, Action: "run.dispatch", Outcome: "success"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+		case strings.Contains(r.URL.Path, "/api/v1/runs/"):
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
+	if !strings.Contains(out, "run.dispatch") {
+		t.Errorf("logs output = %q, want it to contain the dispatched event", out)
+	}
+	if got := strings.Count(out, "run.dispatch"); got != 1 {
+		t.Errorf("run.dispatch printed %d times, want exactly 1 (no duplicate re-poll)", got)
+	}
+}
+
+// TestLogsCmd_UnknownRunErrorsInsteadOfHanging: the audit endpoint answers
+// 200 [] for a run id it has never seen, so an unknown/typo'd id — or an
+// unauthorized caller, or a persistently 5xx-ing server — only ever surfaces
+// through GetRun. Swallowing that error left the follow loop polling an empty
+// trail forever with nothing printed and no exit.
+func TestLogsCmd_UnknownRunErrorsInsteadOfHanging(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "run not found"})
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	}); err == nil {
+		t.Fatal("logs returned nil for an unknown run id, want the GetRun 404 propagated")
+	}
+}
+
+// runCmdWithTimeout builds rootCmd(), lets configure set its args/flags, and
+// executes it with output captured (logsCmd writes via cmd.OutOrStdout()).
+// It doubles as the timeout backstop for a follow loop that fails to exit.
+func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (string, error) {
+	t.Helper()
+	root := rootCmd()
+	configure(root)
+	out := &strings.Builder{}
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	done := make(chan error, 1)
+	go func() { done <- root.Execute() }()
+	select {
+	case err := <-done:
+		return out.String(), err
+	case <-time.After(5 * time.Second):
+		t.Fatal("command did not return within 5s — follow loop likely never exited")
+		return "", nil
 	}
 }
 
@@ -1454,5 +1693,162 @@ func TestWorkspaceCreateCmd(t *testing.T) {
 	}
 	if body["name"] != "/home/you/svc" {
 		t.Errorf("name = %v, want it defaulted to --source", body["name"])
+	}
+}
+
+// TestApprovalsGetCmd_PagesPastTheFirstPage: `approvals get` has no
+// server-side get-by-id, so it scans --run's approvals — and an unparameterised
+// list is ONE server-default page (200). An approval past that read as "not
+// found on run", which a long-running run with a busy egress lane reaches
+// easily. The scan pages until it finds the row or the page comes back short.
+func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
+	runID := uuid.New()
+	wantID := uuid.New()
+	// 201 approvals: a full first page, then the one we are looking for.
+	all := make([]types.ApprovalRequest, 0, 201)
+	for range 200 {
+		all = append(all, types.ApprovalRequest{ID: uuid.New(), RunID: runID, State: types.ApprovalPending})
+	}
+	all = append(all, types.ApprovalRequest{
+		ID: wantID, RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"host":"api.example.com"}`),
+	})
+
+	var offsets []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		offsets = append(offsets, q.Get("offset"))
+		off, _ := strconv.Atoi(q.Get("offset"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		if limit == 0 {
+			limit = 200
+		}
+		page := []types.ApprovalRequest{}
+		if off < len(all) {
+			page = all[off:min(off+limit, len(all))]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals get returned error: %v (offsets requested: %v)", err, offsets)
+	}
+	if !strings.Contains(out.String(), wantID.String()) {
+		t.Errorf("output = %q, want it to name %s", out.String(), wantID)
+	}
+	if len(offsets) < 2 {
+		t.Errorf("requested offsets = %v, want a second page to have been fetched", offsets)
+	}
+}
+
+// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` used to skip
+// GetRun entirely, so a typo'd run id printed nothing and exited 0 — the audit
+// endpoint answers 200 [] for an id that does not exist. Both modes now check
+// the run first, so an unknown or unauthorized id is an error in both.
+func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "run not found"})
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+	}); err == nil {
+		t.Fatal("logs --follow=false returned nil for an unknown run id, want the GetRun 404 propagated")
+	}
+}
+
+// TestLogsCmd_NonFollowFollowsTruncatedPages: the per-run audit page caps at
+// 1000 events server-side. --follow recovers from that for free on its next
+// poll (`since` has advanced); one-shot mode returned after the first page and
+// printed a silently cut-off log.
+func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var pollN int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			n := pollN
+			pollN++
+			if n == 0 {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+					{ID: uuid.New(), Time: t0, Action: "run.dispatch", Outcome: "success"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+				{ID: uuid.New(), Time: t0.Add(time.Second), Action: "run.complete", Outcome: "success"},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
+	if !strings.Contains(out, "run.dispatch") || !strings.Contains(out, "run.complete") {
+		t.Errorf("logs output = %q, want both the truncated page and the one after it", out)
+	}
+}
+
+// TestLogsCmd_FollowDrainsAuditsAfterTerminal: the completion watcher flips the
+// run terminal BEFORE run.complete is written, and the revoke/teardown audits
+// land after that again. Returning on the first terminal read dropped exactly
+// the completion line the command's help promises.
+func TestLogsCmd_FollowDrainsAuditsAfterTerminal(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	var mu sync.Mutex
+	var pollN int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			mu.Lock()
+			n := pollN
+			pollN++
+			mu.Unlock()
+			if n == 1 { // lands only AFTER the state has already flipped
+				_ = json.NewEncoder(w).Encode([]types.AuditEvent{
+					{ID: uuid.New(), Time: t0.Add(time.Second), Action: "run.complete", Outcome: "success"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]types.AuditEvent{})
+		default:
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunCompleted})
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("logs returned error: %v", err)
+	}
+	if !strings.Contains(out, "run.complete") {
+		t.Errorf("logs output = %q, want the completion line written after the state flip", out)
 	}
 }

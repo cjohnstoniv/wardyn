@@ -28,6 +28,7 @@ import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
+import { useOperator } from "../../wardyn/operator-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -71,6 +72,7 @@ const DemoDetail = React.lazy(() => import("./demos-step"));
 // SetupScreen
 // ------------------------------------------------------------
 export function SetupScreen({ onDone }: { onDone: () => void }) {
+  const operator = useOperator();
   // ?step=<id> deep-links a specific step — the Integrations page's
   // proxy-detected banner uses it to hand off to Corporate network, now the
   // only place a proxy is configured. Read once at mount (an unknown or
@@ -536,6 +538,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onFinish={finish}
         nextGate={nextGate}
         backOverride={stepId === "corp_network" && corpTab === "egress" ? () => setCorpTab("proxy") : undefined}
+        operator={operator}
       >
         {stepId === "environment" && (
           <EnvironmentStep

@@ -1,7 +1,5 @@
 # Wardyn CI — governed sandboxes in your pipeline
 
-[Watch — CI & headless (2:00–2:30)](README.md#v09--ci--headless)
-
 Run a sandboxed job from a CI/CD pipeline (GitHub Actions, Azure DevOps, or
 anything with a docker daemon) with **no pre-running Wardyn, no UI, and no
 human**. One script brings up a fresh control plane, launches one governed
@@ -47,7 +45,7 @@ scripts/ci-run.sh
 | `WARDYN_CI_SECRETS` | `name=value[,name=value...]` seeded into the secret store pre-run | unset |
 | `WARDYN_SUBSCRIPTION_TOKEN` | a `claude setup-token` connected pre-run (harness mode; proxy-injected, never resident) | unset |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
-| `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`) | `./ci-artifacts` |
+| `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
 | `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
@@ -234,6 +232,39 @@ oversight — do not wire them into `.github/workflows/ci.yml`:
   subscription proxy-injection proof. It needs a real operator
   `claude setup-token`; no repository secret carries one. Run by hand before a
   release that touches the credential path.
+- **`scripts/run-e2e-ui-sandbox.sh`** (`make test-e2e-ui-sandbox`) — live
+  UI-sandbox relay proof: the ticket → enter → cookie → code-server handoff on
+  the second origin, the `ui.*` audit rows (and the `session.attach` row that
+  must NOT appear), the header strips both ways, and the pooled-exec baseline.
+  It brings up its own uniquely-named compose stack on its own ports and tears
+  it down on every exit path, and it builds `wardyn/agent-vscode:local`
+  (`make agent-image-vscode`, +~228 MiB) if that image is not already local —
+  which is why it is a by-hand lane and not a CI job. Needs Docker;
+  self-skips unless `WARDYN_TEST_DOCKER=1`.
+- **`scripts/run-e2e-ssh-k8s.sh`** (`make test-e2e-ssh-k8s`) — the SSH
+  gateway proven against a **Pod** rather than a container: the run's sandbox
+  confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec
+  lane, a nonzero exit code surviving that lane's out-of-band status channel,
+  the interactive shell reaching tmux, the `ssh.exec` /
+  `session.attach{transport:ssh}` rows for both, and both authorization arms —
+  a second principal's `member` key refused on a run it does not own (audited
+  `ssh.auth` failure) and a third principal's `admin` key reaching that same
+  run with `data.override=true`. Those two principals go in through
+  `kubectl exec deploy/postgres`, because the API only ever stamps the
+  *caller's* key and this install has one credential. It does **not** create or
+  delete a cluster — it runs against the one `make kind-quickstart` leaves
+  behind, and cleans up only its own run and the keys it registered. Needs
+  `kubectl` and a real `ssh` client; self-skips unless `WARDYN_TEST_K8S=1`.
+- **`deploy/kind/quickstart.sh`** (`make kind-quickstart`, `make kind-down`) —
+  not a test at all: it builds `wardynd`, creates a `kind` cluster with a
+  pinned Calico CNI and the k8s runner substrate on, `helm install`s the
+  chart, waits for a healthy control plane, and prints the URL and admin token
+  it minted. CI proves the same install path through its own
+  `helm-install-test` and `conformance-k8s` jobs rather than by running this
+  target; an operator runs it to get the cluster the lane above needs, and to
+  rehearse the day-2 commands in
+  [OPERATIONS.md](OPERATIONS.md#kubernetes-day-2). It binds `127.0.0.1:8080`,
+  so a leftover compose stack on that port fails it loudly at cluster-create.
 
 ## Driving an existing control plane instead
 

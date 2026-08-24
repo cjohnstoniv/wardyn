@@ -38,11 +38,12 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: vi.fn(),
   },
 }));
+const listAuditMock = vi.fn().mockResolvedValue([]);
 // Settable so the exec-labeling test below can flip the run's task mode;
 // undefined = a harness run (the default every other test wants).
 const auditMocks = vi.hoisted(() => ({ taskMode: undefined as string | undefined }));
 vi.mock("../../lib/api/audit", () => ({
-  audit: { listAudit: vi.fn().mockResolvedValue([]) },
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
   exitCodeFromAudit: () => undefined,
   taskModeFromAudit: () => auditMocks.taskMode,
@@ -67,6 +68,8 @@ beforeEach(() => {
   getRunMock.mockReset();
   listApprovalsMock.mockReset();
   listApprovalsMock.mockResolvedValue([]);
+  listAuditMock.mockReset();
+  listAuditMock.mockResolvedValue([]);
 });
 
 const RUN = {
@@ -243,5 +246,82 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
     const always = await screen.findByRole("button", { name: /^Always/ });
     expect(always).toBeDisabled();
     expect(screen.getByText(/isn't attached to one/i)).toBeInTheDocument();
+  });
+});
+
+// D9: a pre-agent-start failure (mount failure, etc.) never gets an exit code
+// at all — failure_hint is the only place that run says why. Bare server
+// text, no prefix (the state badge already says "Failed").
+describe("RunDetailScreen — D9 failure-hint chip", () => {
+  it("a FAILED run with failure_hint shows the bare server text", async () => {
+    renderRun({ ...RUN, state: "FAILED", failure_hint: "image not found on daemon" });
+    expect(await screen.findByText("image not found on daemon")).toBeInTheDocument();
+  });
+
+  it("a FAILED run without failure_hint shows no hint chip", async () => {
+    renderRun({ ...RUN, state: "FAILED" });
+    await screen.findByText("Failed");
+    expect(screen.queryByText("image not found on daemon")).not.toBeInTheDocument();
+  });
+});
+
+// W17-S1-3: the run-detail Audit tab's own fetch is capped at LIST_LIMIT
+// (server: auditPerRunDefaultLimit) and returned oldest-first — a chatty run's
+// later events can silently fall off the end. A capped page must say so; a
+// page under the cap must not.
+// 15s suite default, not vitest's 5s: the capped case renders a 1000-row audit
+// list and then drives a userEvent click through it — under a second alone, but
+// deterministically over the 5s ceiling when all 79 files run in parallel.
+// Same rationale (and the same 1000-row feed) as audit.test.tsx's suite timeout.
+describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, () => {
+  function auditEvent(i: number) {
+    return {
+      id: `e${i}`,
+      time: new Date().toISOString(),
+      actor_type: "agent",
+      actor: "spiffe://wardyn/agent",
+      action: "kernel.process.exec",
+      outcome: "success",
+      run_id: "run-1",
+    };
+  }
+
+  it("shows a truncation cue when the per-run window hits the 1000 cap", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: string) =>
+      Promise.resolve(action ? [] : Array.from({ length: 1000 }, (_, i) => auditEvent(i))),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByText(/truncated, oldest-first/i)).toBeInTheDocument();
+  });
+
+  it("shows no truncation cue under the cap", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: string) =>
+      Promise.resolve(action ? [] : [auditEvent(1)]),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    await screen.findByText(/1 event for this run/i);
+    expect(screen.queryByText(/truncated, oldest-first/i)).not.toBeInTheDocument();
+  });
+});
+
+// W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
+// so the Audit tab's "open full Audit" link must carry the run — a bare /audit
+// drops a member on a feed that can never fill.
+describe("RunDetailScreen — open full Audit link", () => {
+  it("carries the run id into /audit", async () => {
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByRole("link", { name: /open full audit/i })).toHaveAttribute(
+      "href",
+      "/audit?run_id=run-1",
+    );
   });
 });

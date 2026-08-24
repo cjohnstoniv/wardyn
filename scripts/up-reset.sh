@@ -12,6 +12,33 @@
 # file): REPO_ROOT, ENV_FILE, COMPOSE_FILE, compose(), _confirm(),
 # _confirm_host_stop(), cmd_up(), plus log/warn/die from scripts/lib/common.sh.
 
+# _capture_hint — the site-config/secrets half of what a volume wipe destroys,
+# plus the command that captures it. Shared by BOTH reset paths: this warning
+# used to exist only on reset-all, so plain `make reset` named "Postgres and
+# recordings" and took the corporate baseline with them unannounced — the stack
+# comes back up looking healthy with sandbox egress silently unconfigured.
+#
+# The capture command is only printed when something can ANSWER it. `wardyn
+# site-config get` runs INSIDE the wardynd container (containerized setup ships
+# no host-side wardyn binary — it lives in the image, and nothing in the
+# Makefile builds bin/), so on a stack that is already down the old
+# unconditional hint handed the operator a command that could only print a
+# connection error. Name a command that EXISTS and RESOLVES: this box may run a
+# second dockerd, and wardyn_pick_docker_host already resolved which one, so
+# echo it in rather than let a bare `docker compose` hit the default socket.
+_capture_hint() {
+  printf '  site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) go too — they live in the Postgres volume.\n'
+  if [ -n "$(compose ps -q --status running wardynd 2>/dev/null)" ]; then
+    printf '  Capture first if this host needs them back:\n'
+    printf '    %sdocker compose -f %s exec -T wardynd wardyn site-config get > corp-baseline.json\n' \
+      "${DOCKER_HOST:+DOCKER_HOST=${DOCKER_HOST} }" "${COMPOSE_FILE#"${REPO_ROOT}/"}"
+  else
+    printf '  wardynd is NOT running, so nothing here can read them back — start the stack\n'
+    printf '  (make compose-up) and capture before wiping, or accept the loss.\n'
+  fi
+  printf '  (host mode / built CLI:  wardyn site-config get > corp-baseline.json)\n'
+}
+
 # reset — deliberate clean slate. `down` keeps the named volumes (postgres_data,
 # recordings, audit) so runs + the append-only audit log survive a restart, which
 # is what you want normally. reset REMOVES them, so the following `up` starts with
@@ -28,6 +55,7 @@
 cmd_reset() {
   warn "reset REMOVES the compose volumes: Postgres (ALL runs + the append-only audit log) and recordings."
   warn "This is irreversible. Plain \`make compose-down\` keeps them; use that if you only want to stop the stack."
+  _capture_hint
   _host_pid="$(cat "${HOME}/.wardyn/host-wardynd.pid" 2>/dev/null || true)"
   if [ -n "${_host_pid}" ] && kill -0 "${_host_pid}" 2>/dev/null; then
     warn "Host-mode wardynd is running (PID ${_host_pid}) — the containerized wardynd this brings up needs its :8080."
@@ -180,17 +208,7 @@ cmd_reset_all() {
   # HERE, while the operator can still capture it: otherwise the stack comes back
   # up looking healthy and sandbox egress is silently unconfigured.
   if [ -n "${_ra_volumes}" ]; then
-    printf '  [destroy] site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) — they live in the Postgres volume.\n'
-    # Name a command that EXISTS and RESOLVES on the flagship path. Two traps:
-    # containerized setup ships no host-side wardyn binary (it lives in the
-    # wardynd image, and nothing in the Makefile builds bin/), and this box may
-    # run a second dockerd — wardyn_pick_docker_host already resolved which one,
-    # so echo it into the hint rather than let a bare `docker compose` hit the
-    # default socket and report the stack as not running.
-    printf '            Capture first if this host needs them back:\n'
-    printf '              %sdocker compose -f %s exec -T wardynd wardyn site-config get > corp-baseline.json\n' \
-      "${DOCKER_HOST:+DOCKER_HOST=${DOCKER_HOST} }" "${COMPOSE_FILE#"${REPO_ROOT}/"}"
-    printf '            (host mode / built CLI:  wardyn site-config get > corp-baseline.json)\n'
+    _capture_hint
   fi
   if [ "${_ra_net}" = 1 ]; then
     _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"

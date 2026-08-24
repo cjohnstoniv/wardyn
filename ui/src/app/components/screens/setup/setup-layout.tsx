@@ -24,6 +24,7 @@ import {
 } from "./steps";
 import { StatusChip } from "../../wardyn/status-chip";
 import { HowItWorksStrip, IntroBlurb } from "../onboarding/intro";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 export function SetupLayout({
   current,
@@ -37,6 +38,7 @@ export function SetupLayout({
   backOverride,
   order = STEP_ORDER,
   refuseNext,
+  operator,
   children,
 }: {
   current: SetupStepId;
@@ -87,6 +89,11 @@ export function SetupLayout({
   // gate that produces a `nextGate` is corp_network's own step; every step
   // AFTER it that a crossing rule still refuses had a dead-enabled button.
   refuseNext?: (next: SetupStepId) => string | undefined;
+  // W13-S1-8: nextGate.action is the one control on the step with no operator
+  // check — it stands in for the inline Test/Test-all buttons it replaces
+  // (corp-network-egress.tsx), which are already `disabled={!operator}`. This
+  // shell has no idea of the role otherwise, so the caller passes it once.
+  operator: boolean;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -190,7 +197,13 @@ export function SetupLayout({
                   </div>
                 )}
                 {nextGate?.blocked && nextGate.action ? (
-                  <Button onClick={nextGate.action.onClick}>{nextGate.action.label}</Button>
+                  <Button
+                    onClick={nextGate.action.onClick}
+                    disabled={!operator}
+                    title={!operator ? OPERATOR_ONLY_REASON : undefined}
+                  >
+                    {nextGate.action.label}
+                  </Button>
                 ) : (
                   <Button
                     onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}

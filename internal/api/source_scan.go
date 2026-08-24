@@ -285,7 +285,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			data["scan_run_ids"] = launched
 		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-			"workspace.scan", ws.ID.String(), "failure", mustJSON(data)))
+			"workspace.scan", ws.ID.String(), "failure", auditWorkspaceData(r, ws.OwnedBy, data)))
 	}
 	for _, id := range sourceIDs {
 		src, found := sources[id]
@@ -326,7 +326,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 
 	if len(launched) > 0 {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-			"workspace.scan", ws.ID.String(), "success", mustJSON(map[string]any{
+			"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{
 				"sources": len(sourceIDs), "scan_run_ids": launched,
 			})))
 		writeJSON(w, http.StatusAccepted, map[string]any{
@@ -343,6 +343,6 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-		"workspace.scan", ws.ID.String(), "success", mustJSON(map[string]any{"sources": len(sourceIDs)})))
+		"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{"sources": len(sourceIDs)})))
 	writeJSON(w, http.StatusOK, json.RawMessage(fresh.Profile))
 }

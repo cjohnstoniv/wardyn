@@ -156,14 +156,22 @@ type WorkspaceSource struct {
 type WorkspaceBaseImage struct {
 	// Kind is "recommended" (Wardyn's own convention image for the detected
 	// stack), "registry" (an operator-picked published image, named by Image),
-	// "custom" (Image is a base, Steps layers Dockerfile lines on top), or
-	// "byo" (Image is used verbatim, no layering).
+	// "custom" (Image is a base; see Steps below for what actually happens to
+	// it), or "byo" (Image is used verbatim).
 	Kind string `json:"kind"`
 	// Image is the base image reference. Meaning depends on Kind: the FROM for
 	// "custom", the image itself for "registry"/"byo", unused for "recommended".
 	Image string `json:"image,omitempty"`
-	// Steps are additional Dockerfile RUN/ENV/ARG lines layered on Image.
-	// "custom" only.
+	// Steps are additional Dockerfile RUN/ENV/ARG lines an operator can attach
+	// to a "custom" base image. NOT CURRENTLY APPLIED: no build path layers
+	// them onto Image (resolveWorkspaceImage, internal/api/workspace_run_image.go
+	// wraps Image verbatim, same as "byo") — running operator-authored RUN
+	// lines would execute on the HOST Docker daemon during that wrap, outside
+	// every confinement tier, the same host-RCE class assertWrapSafeBase
+	// (internal/envbuild/builder.go) refuses a hostile ONBUILD trigger for.
+	// Steps is accepted and persisted on the base-image catalog row so it
+	// round-trips, but today a "custom" image builds and runs identically to
+	// "byo": Image verbatim, Steps silently inert.
 	Steps []string `json:"steps,omitempty"`
 }
 
@@ -309,10 +317,26 @@ type Workspace struct {
 	// picks this workspace inherits it (refs/names only). Nil => no binding.
 	// Folded into the run policy at create (applyWorkspaceCreds); written only
 	// via the scoped SetWorkspaceLLMCred, mirroring ApprovedEgress.
-	LLMCred   *WorkspaceLLMCred `json:"llm_cred,omitempty"`
-	Status    WorkspaceStatus   `json:"status"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	LLMCred *WorkspaceLLMCred `json:"llm_cred,omitempty"`
+	// OwnedBy is the MEMBER who created this workspace (their lowercased OIDC
+	// sub or email — the same dual-key identity a capability_grants `user`
+	// subject carries). EMPTY means OPERATOR-OWNED, which is every workspace an
+	// admin creates and every workspace that existed before migration 0048: an
+	// operator-owned row stays member-READABLE and admin-writable exactly as it
+	// always was, so an upgrade changes nothing until a member creates their
+	// first owned workspace.
+	//
+	// A non-empty value is the ownership relation ownsWorkspaceOrAdmin keys on:
+	// only that member (or an admin) may read or write the row, and a foreign
+	// member gets the byte-identical 404 a missing workspace gets — no existence
+	// oracle, the posture AgentRun.CreatedBy already has for runs. Set ONLY by
+	// handleCreateWorkspace from the authenticated session; never accepted from
+	// a request body, and never rewritten by an edit (UpdateWorkspace does not
+	// carry the column).
+	OwnedBy   string          `json:"owned_by,omitempty"`
+	Status    WorkspaceStatus `json:"status"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a
@@ -334,8 +358,8 @@ const (
 	// harness.go's reasonXAzureHarness). A stored row of the old kind now fails
 	// closed at validateIntegrationWrite like any other unknown kind, and an
 	// azure-openai-key secret is left untouched but inert.
-	IntegrationKindGitHubApp             = "github_app"
-	IntegrationKindGitHost               = "git_host"
+	IntegrationKindGitHubApp = "github_app"
+	IntegrationKindGitHost   = "git_host"
 )
 
 // ClosedIntegrationKinds is the closed kind set — the kinds with bespoke

@@ -23,25 +23,57 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 > below) to make wardynd create/manage sandboxes as pods in THIS cluster
 > instead (`internal/runner/k8s`, a `-tags k8s` build).
 
+## Quickstart
+
+`make kind-quickstart` runs [`deploy/kind/quickstart.sh`](../../kind/quickstart.sh):
+one command, a throwaway [kind](https://kind.sigs.k8s.io/) cluster, and a real
+install of this chart with the Kubernetes runner substrate ON (sandboxes are
+pods in that cluster). It builds `wardynd`/`wardyn-proxy` locally, `kind
+load`s them, installs Calico pinned to exactly what CI's `conformance-k8s`
+job pins (the substrate refuses to boot on a CNI that doesn't enforce
+NetworkPolicy — this script never works around that refusal), and prints the
+URL, admin token, and pod list once `/healthz` answers through the published
+NodePort:
+
+```
+$ make kind-quickstart
+...
+Wardyn is up.
+
+  URL:    http://127.0.0.1:8080
+  Token:  <printed>
+  SSH:    ssh -p 2222 <run-id>@127.0.0.1   (docs/SSH.md)
+```
+
+`make kind-down` deletes the cluster. It is demo-grade, not a production
+recipe (single-pod Postgres, no PVC, inline admin token) — read on for a real
+install.
+
 ## What it renders
 
 `helm install wardyn ./deploy/helm/wardyn` (plus the required auth flag from
 [Installation](#installation)) renders:
 
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all
-  capabilities dropped, `RuntimeDefault` seccomp; liveness/readiness/startup
-  probes on `/healthz`; `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from
-  Secrets.
+  capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes
+  on `/healthz`, readiness on `/readyz` (which additionally pings Postgres, so
+  a dead DB actually takes the pod out of the Service — `/readyz` is 0.6+, so an
+  older image needs `readinessProbe.path` pinned back, see
+  [Installation](#installation)); `WARDYN_PG_DSN` and
+  `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
-  [Split SSH exposure](#split-ssh-exposure) to expose it differently).
+  [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
+  port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see
+  [UI sandbox gateway](#ui-sandbox-gateway)).
 - **ServiceAccount** (dedicated identity; token auto-mount off on the pod by
   default, so it also holds when you bring your own ServiceAccount —
   `k8s.enabled` requires flipping this to `true`, see below).
 - **Secret** — only in the inline/demo modes (DSN and/or admin token, see
   below); skipped for whichever credential you supply as an external Secret.
 - **NetworkPolicy** — default-deny ingress/egress (Wardyn's L0 egress posture),
-  re-opening DNS, Postgres egress, HTTP (+ SSH, when enabled) ingress from this
+  re-opening DNS, Postgres egress, HTTP (+ SSH and + the UI-sandbox gateway,
+  when enabled) ingress from this
   namespace, and (`k8s.enabled`) API-server egress plus an ingress peer for a
   separate `k8s.runsNamespace`.
 - **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only) —
@@ -126,8 +158,17 @@ helm install wardyn ./deploy/helm/wardyn \
   --set image.repository="$REGISTRY/wardynd" \
   --set image.tag="$TAG" \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
+
+(`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see
+[Database (DSN)](#database-dsn--two-modes) below. **The chart refuses to render
+without this pairing**, because skipping it is not a trade-off: the default age
+identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what
+boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows
+unrecoverable. `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a
+throwaway install.)
 
 The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
 (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
@@ -136,6 +177,18 @@ on one of those, add
 `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`). To use a
 different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 `/examples/policies/` (`demo.json`, ...).
+
+**Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
+targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
+`image.tag` resolves to `.Chart.AppVersion`, now `0.6.0`, so a stock install
+needs nothing here. It still matters if you **pin an image at or below
+`0.5.0`** — those predate `/readyz`, so the probe 404s forever, the pod never
+becomes Ready, and the `rollout status` below hangs with no other symptom
+(nothing crashes, nothing logs an error). On any such image, pin the probe
+back: `--set readinessProbe.path=/healthz`, accepting that version's ceiling —
+a dead Postgres reads healthy again, which is exactly what `/readyz` exists to
+fix. CI never sees this: `helm-install-test` and the kind quickstart both build
+`wardynd` from source, so their image always has `/readyz`.
 
 The chart **refuses to render** without an admin token or an OIDC issuer: an
 install with neither brings up a pod that passes its `/healthz` probe and 401s
@@ -161,13 +214,24 @@ the chart at it (the default `postgres.dsn.secretRef.name` is `wardyn-postgres-d
 ```bash
 kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
+  --from-literal=age-key="$(docker run --rm "$REGISTRY/wardynd:$TAG" -gen-age-key)" \
   -n wardyn
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-The DSN never appears in the rendered manifests or Helm release history.
+The DSN never appears in the rendered manifests or Helm release history. The
+`age-key` entry is the secret-store identity, and `secrets.ageKeyFromSecret=true`
+is what points wardynd at it. **The chart fails the render if you skip it**
+(`templates/secret.yaml`): without it the install succeeds, the first boot
+works, and the pod crash-loops on its second restart — the default identity is
+ephemeral, so it cannot decrypt what the previous boot wrote to a real Postgres,
+and setting the key afterwards does not recover those rows. Wiring the identity
+yourself through `env.WARDYN_AGE_KEY`/`extraEnv` satisfies the check too, and
+`secrets.allowEphemeralAgeKey=true` is the deliberate opt-out for a throwaway
+install where losing every stored secret on restart is genuinely fine.
 
 **2. Inline (demo only).** Clear `secretRef.name` and pass the DSN; the chart
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
@@ -213,6 +277,7 @@ extraEnv:
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   -f rbac-values.yaml   # the snippet above
 ```
@@ -233,10 +298,33 @@ path — a completely separate confinement substrate (L1, NetworkPolicy-backed,
 proven live by a boot-time egress canary) from the Compose stack's L0
 (structural, no-default-route) one.
 
+**Boot-time canary trap: a pre-existing default-deny NetworkPolicy in
+`k8s.runsNamespace`.** The canary's phase A applies no NetworkPolicy of its
+own — it exists only to prove the cluster is reachable at all before phase B
+proves Wardyn's own deny-all rule takes effect. If the namespace already
+carries a default-deny NetworkPolicy from something else (a cluster-wide
+baseline, another operator's policy), phase A is blocked too, and wardynd
+refuses to boot with an INDETERMINATE verdict — indistinguishable from a
+genuinely broken cluster, even though per-run confinement would work fine
+once Wardyn's own allow-rules are in place. Use a namespace with no ambient
+default-deny for `k8s.runsNamespace`, or **exempt Wardyn's pods from the
+existing policy's own `podSelector`** — e.g. a `matchExpressions` entry with
+`key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`, so the ambient
+policy simply stops selecting them and Wardyn's per-run policies are the only
+ones that apply.
+
+**Do NOT instead add a separate allow policy for `wardyn.managed=true`.**
+NetworkPolicy allows are purely additive and every sandbox pod (agent *and*
+proxy) carries that label, so such a policy would widen every run's egress
+past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's
+phase B to "CNI does not enforce", inviting
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
+
 ```bash
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set secrets.ageKeyFromSecret=true \
   --set serviceAccount.automount=true \
   --set k8s.enabled=true \
   --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"
@@ -303,7 +391,7 @@ wardynd never reads one back); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name).
 
-### Known gaps (v0.5)
+### Known gaps (v0.6)
 
 The k8s substrate is not yet at parity with the Docker Compose one. Fails
 closed with a clear error: **no BYOI/devcontainer image builds**, **no
@@ -321,7 +409,7 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction"). Full detail, including the exact code each
 claim above is checked against: `docs/OPERATIONS.md`'s "Kubernetes: known
-gaps (v0.5)" section.
+gaps (v0.6)" section.
 
 What *is* proven, and what the gaps above are measured against: Wardyn ships
 exactly two deployment paths — `deploy/compose` and this chart — and both run
@@ -359,6 +447,96 @@ spec:
 it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 (what it does once traffic reaches it, session semantics, client setup).
 
+## UI sandbox gateway
+
+`uiSandbox.enabled` relays one policy-declared loopback port inside a run's
+sandbox — a code editor, a dev server — to a browser
+([docs/UI-SANDBOXES.md](../../../docs/UI-SANDBOXES.md)). Like `ssh.*` it adds a
+conditional port to the SAME Service/Deployment, and it is off by default.
+
+**The one thing this chart cannot do for you: give it its own hostname.** What
+the gateway serves is the sandbox's own HTML and JavaScript. On the console's
+origin that code could read the console's session and drive every admin action
+the operator can — so `wardynd` refuses to boot when the two *bind addresses*
+are equal, and it is on you to keep them apart at the *hostname* level too. A
+single ingress hostname routing `/` to the console and something else to the
+gateway re-creates exactly the shared origin the second listener exists to
+prevent.
+
+```yaml
+uiSandbox:
+  enabled: true
+  port: 8081
+  # A DIFFERENT hostname than the console's, with a certificate that covers it.
+  advertiseURL: https://wardyn-ui.example.com
+  # Optional, strongly preferred: one origin per run (wildcard DNS + wildcard
+  # certificate). Unset, every run's apps share one origin, separated only by
+  # a path-scoped cookie — published residual #18 in the threat model.
+  originTemplate: https://run-{run}.ui.example.com
+```
+
+Route it with an Ingress (or its own Service) against the Deployment's named
+`ui` containerPort, the same shape as the "Split SSH exposure" recipe above:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wardyn-ui-sandbox
+spec:
+  rules:
+    # Wildcard host: what originTemplate needs. Drop to a single host only if
+    # you are accepting the shared-origin residual.
+    - host: "*.ui.example.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wardyn
+                port:
+                  name: ui
+  tls:
+    - hosts: ["*.ui.example.com"]
+      secretName: wardyn-ui-sandbox-tls
+```
+
+The gateway relays WebSockets (a browser IDE needs them), so an ingress
+controller in front of it must not buffer or strip the `101` upgrade.
+
+Runs still have to declare `ui_apps` in policy
+([docs/POLICIES.md](../../../docs/POLICIES.md)) and run an image that ships the
+matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on
+its own opens nothing.
+
+### What is actually proven on Kubernetes
+
+The relay is not a new network path: it is `Runner.ExecStream` carrying bytes to
+a port the sandbox is already listening on inside its own netns, so on this
+substrate it needs **no NetworkPolicy change and no new Pod ingress**. That
+claim is gated, not asserted — `test/conformance`'s `ExecStreamLoopbackRelay`
+case dials an in-sandbox loopback listener over `ExecStream` and reads the
+response back with stdin still open (the full-duplex behavior an editor's
+WebSocket needs), and it runs on **both** substrates: `make
+test-conformance-docker` and `make test-conformance-k8s` against a real
+kind + Calico cluster.
+
+What is **not** run on Kubernetes is the browser-level lane. The live e2e
+(`make test-e2e-ui-sandbox`) drives a real ticket → cookie → code-server HTML
+round trip, the `ui.*` audit rows, the 403s and the header strips — and it
+brings up a **compose** stack to do it. There is no k8s equivalent and the
+script does not pretend otherwise: it is Docker-gated and self-skips without
+`WARDYN_TEST_DOCKER=1`. The gap is the harness, not the substrate — the parity
+case above covers the one layer that differs between them, and everything the
+live e2e adds (tickets, cookies, header hygiene, the audit trail) is
+substrate-independent control-plane code.
+
+So on Kubernetes, treat the transport as proven and the *deployment* shape —
+your ingress, your hostname split, your TLS — as the part only your own smoke
+test can confirm. Open one app, and check that the relayed page's origin is not
+the console's.
+
 ## Values
 
 See `values.yaml` for all options. Key settings:
@@ -381,11 +559,19 @@ See `values.yaml` for all options. Key settings:
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
-  **Set one of these against any real (non-inline) Postgres**, even for a quick
-  trial: an ephemeral key does not survive a pod restart, and wardynd's own
-  first-boot secret-store entries (e.g. its internal signing key) are written
-  under whatever key that first boot generated — the NEXT boot generates a
-  different one, can no longer decrypt them, and the pod crash-loops forever.
+  **One of these is REQUIRED against any real (non-inline) Postgres — the chart
+  refuses to render otherwise**, even for a quick trial: an ephemeral key does
+  not survive a pod restart, and wardynd's own first-boot secret-store entries
+  (e.g. its internal signing key) are written under whatever key that first boot
+  generated — the NEXT boot generates a different one, can no longer decrypt
+  them, and the pod crash-loops forever.
+- `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
+  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+- `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
+  Postgres — liveness and startup stay on `/healthz` regardless). The chart's
+  own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
+  you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
+  [Installation](#installation) for what that failure looks like.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see

@@ -22,13 +22,18 @@ import { firstRunLanding } from "./components/screens/setup/setup-gate";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
-import type { AgentRun, SetupStatus } from "./lib/types";
+import type { AgentRun, ConfinementClass, SetupStatus } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
-// How often the setup-status poll refreshes, so the top bar's barrier chip and
-// the "control plane unreachable" banner stay fresh.
-const SETUP_POLL_MS = 5000;
+// How often the reachability heartbeat beats, so the top bar's barrier chip and
+// the "control plane unreachable" banner stay fresh. It hits /healthz, NOT
+// /setup/status: the latter is a full ListRuns plus a host sweep that shells
+// out (host-proxy detection, `git config` for SCM posture), and every authed
+// tab used to run it every 5s forever. /healthz already carries the only two
+// facts the shell needs — liveness and confinement_classes — so the expensive
+// snapshot is now fetched exactly once per session, for the landing decision.
+const HEALTH_POLL_MS = 5000;
 
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
 // there) so it stays eager — lazying it would only add a load waterfall to the
@@ -48,6 +53,9 @@ const ApprovalsScreen = React.lazy(() =>
 );
 const PoliciesScreen = React.lazy(() =>
   import("./components/screens/policies").then((m) => ({ default: m.PoliciesScreen })),
+);
+const PermissionsScreen = React.lazy(() =>
+  import("./components/screens/permissions").then((m) => ({ default: m.PermissionsScreen })),
 );
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({ default: m.SecretsScreen })),
@@ -177,34 +185,50 @@ export default function App() {
   }, [refreshAttention, refreshPending]);
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed");
 
-  // Setup status feeds the top bar's barrier chip (AppShell) and the "control
-  // plane unreachable" banner below. getSetupStatus never rejects except on
-  // 401 (routed through onUnauthorized), so a rejected probe just leaves the
-  // last-known status in place.
+  // Setup status feeds the first-run landing decision ("/" → tour or Runs).
+  // Fetched ONCE per session: it is the expensive endpoint, and nothing in the
+  // shell needs it live. getSetupStatus never rejects except on 401 (routed
+  // through onUnauthorized), and resolves the synthetic READY_FALLBACK rather
+  // than rejecting when the daemon doesn't answer, so the landing decision
+  // still gets made against a broken backend.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
-  // When the daemon last actually answered. getSetupStatus resolves the synthetic
-  // READY_FALLBACK (unreachable:true) rather than rejecting when it doesn't, so
-  // this poll is also the console's ONE reachability signal — every screen's
-  // background refresh swallows its own failures to keep the last-good data on
-  // screen, which without this reads exactly like a healthy quiet fleet (AppShell
-  // renders the banner). ponytail: a build whose /setup/status 404s also reads as
-  // unreachable — the same daemon serves this console, so that means a broken build.
-  const [lastOkAt, setLastOkAt] = React.useState<Date | null>(null);
   const refreshSetupStatus = React.useCallback(() => {
     setupApi
       .getSetupStatus()
-      .then((s) => {
-        setSetupStatus(s);
-        if (!s.unreachable) setLastOkAt(new Date());
-      })
+      .then(setSetupStatus)
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
       });
   }, []);
+
+  // The console's ONE reachability signal, and the barrier chip's source.
+  // Every screen's background refresh swallows its own failures to keep the
+  // last-good data on screen, which without this reads exactly like a healthy
+  // quiet fleet (AppShell renders the banner). health() never rejects — it
+  // resolves {} on a network error or any non-2xx — so a missing status:"ok"
+  // IS the unreachable verdict. ponytail: a build whose /healthz doesn't answer
+  // also reads as unreachable — the same daemon serves this console, so that
+  // means a broken build. Classes are left at their last-known value while
+  // unreachable rather than repainted from a payload we didn't get.
+  const [unreachable, setUnreachable] = React.useState(false);
+  const [lastOkAt, setLastOkAt] = React.useState<Date | null>(null);
+  const [confinementClasses, setConfinementClasses] = React.useState<ConfinementClass[] | undefined>(undefined);
+  const refreshHealth = React.useCallback(() => {
+    void health.health().then((h) => {
+      const ok = h.status === "ok";
+      setUnreachable(!ok);
+      if (!ok) return;
+      setLastOkAt(new Date());
+      setConfinementClasses((h.confinement_classes ?? []) as ConfinementClass[]);
+    });
+  }, []);
   React.useEffect(() => {
-    if (auth === "authed") refreshSetupStatus();
-  }, [auth, refreshSetupStatus]);
-  usePoll(refreshSetupStatus, SETUP_POLL_MS, auth !== "authed");
+    if (auth === "authed") {
+      refreshSetupStatus();
+      refreshHealth();
+    }
+  }, [auth, refreshSetupStatus, refreshHealth]);
+  usePoll(refreshHealth, HEALTH_POLL_MS, auth !== "authed");
 
   if (auth === "checking") {
     return (
@@ -238,8 +262,9 @@ export default function App() {
             <AppShell
               pendingApprovals={pendingApprovals}
               attentionCount={attentionCount}
-              unreachable={!!setupStatus?.unreachable}
+              unreachable={unreachable}
               lastOkAt={lastOkAt}
+              confinementClasses={unreachable ? undefined : confinementClasses}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token
@@ -303,6 +328,14 @@ export default function App() {
             element={
               <React.Suspense fallback={<RouteFallback />}>
                 <PoliciesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/permissions"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <PermissionsScreen />
               </React.Suspense>
             }
           />

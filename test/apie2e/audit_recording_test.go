@@ -129,7 +129,7 @@ func TestAudit_ApprovalDecisionRecorded(t *testing.T) {
 	if err == nil {
 		t.Fatalf("first mint: expected ErrApprovalPending, got nil")
 	}
-	pendings, lerr := h.sdk.ListApprovals(ctx, types.ApprovalPending)
+	pendings, lerr := h.sdk.ListApprovals(ctx, types.ApprovalPending, runID)
 	if lerr != nil {
 		t.Fatalf("ListApprovals: %v", lerr)
 	}

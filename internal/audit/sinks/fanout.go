@@ -125,6 +125,24 @@ func (f *Fanout) Drops(name string) int64 {
 	return -1
 }
 
+// DropsByName returns the total drop count per child sink name, aggregating
+// across children that share a name (an operator may configure two webhooks).
+// It is the prod caller Drops() lacked: cmd/wardynd wires it to the api Server so
+// wardyn_audit_sink_drops_total{sink} surfaces on /metrics — a SIEM sink silently
+// shedding events past its 4096 buffer or after retry exhaustion was visible only
+// in ERROR logs before. Empty when the fanout has no children.
+func (f *Fanout) DropsByName() map[string]int64 {
+	out := make(map[string]int64, len(f.children))
+	for _, cs := range f.children {
+		total := cs.drops.Load()
+		if d, ok := cs.sink.(dropper); ok {
+			total += d.Drops()
+		}
+		out[cs.sink.Name()] += total
+	}
+	return out
+}
+
 // Close closes every child sink that implements io.Closer, returning the first
 // error encountered (after attempting to close all of them). Buffering sinks
 // (webhook, syslog) block in Close until their final batch has been flushed, so

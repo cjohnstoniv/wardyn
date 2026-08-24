@@ -183,9 +183,29 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 			return
 		}
 		if !ok {
+			s.auditAttachDenied(r, id, "unknown", "invalid, expired, or already-used attach ticket")
 			writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))
 	})
+}
+
+// auditAttachDenied records an authorization REFUSAL in the ?ticket= attach
+// lane. The sibling SSH gateway audits every one of its rejections (ssh.auth
+// failure, sshgateway.go) precisely so a scan against it leaves a trail; this
+// lane audited none of its own, so ticket-probing the WebSocket route was
+// invisible in the system of record — the one lane where that matters most,
+// since it is the only route reaching a live PTY without ever running
+// humanOrAdminAuth.
+//
+// actor is the ticket's stamped principal where the ticket resolved and only
+// AUTHORIZATION failed, and "unknown" where the ticket itself did not — the
+// same distinction sshAuditAuthFailure draws, for the same reason: naming a
+// principal the caller never proved is worse than naming none.
+func (s *Server) auditAttachDenied(r *http.Request, runID uuid.UUID, actor, reason string) {
+	ev := s.auditEvent(&runID, types.ActorHuman, actor, "session.attach", runID.String(), "failure",
+		mustJSON(map[string]any{"lane": "ticket", "reason": reason}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
 }

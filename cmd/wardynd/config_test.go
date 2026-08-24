@@ -509,3 +509,159 @@ func TestBedrockAWSProfile_FallsBackToStandardAWSProfile(t *testing.T) {
 		t.Fatalf("bedrockAWSProfile = %q, want wardyn-only (Wardyn-specific must win)", got)
 	}
 }
+
+// ─── validateUISandboxConfig: the second origin must actually be a second one ──
+
+// TestValidateUISandboxConfig is the UI-sandbox gateway's boot contract. The
+// same-address case is the one that matters: the gateway relays the SANDBOX's
+// own pages, and the ONLY thing keeping that code away from the console's
+// session is that it arrives on a different browser origin. Bound to the
+// console's address, the feature's whole security argument would be false — so
+// boot refuses, in terms of what breaks.
+func TestValidateUISandboxConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		uiListen       string
+		listen         string
+		sshListen      string
+		originTemplate string
+		posture        tlsPosture
+		allowPlaintext bool
+		wantErr        string // substring; empty = must succeed
+	}{
+		{name: "off is always fine", listen: ":8080"},
+		{name: "distinct ports", uiListen: ":8081", listen: ":8080"},
+		{name: "distinct hosts and ports", uiListen: "127.0.0.1:8081", listen: "127.0.0.1:8080", sshListen: ":2222"},
+		{
+			name: "identical address refused", uiListen: ":8080", listen: ":8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			// ":8080" and "0.0.0.0:8080" are one bind; the refusal must see
+			// through the spelling, not compare strings.
+			name: "unspecified host still collides", uiListen: "0.0.0.0:8080", listen: ":8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			name:     "unspecified UI bind collides with a specific console bind",
+			uiListen: ":8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			// Two binds, one origin: both listeners come up (different address
+			// families), and http://localhost:8080 then serves the console or
+			// the sandbox depending on whether the resolver answers A or AAAA
+			// first — the same-origin collapse, arrived at sideways.
+			name:     "ipv6 loopback collides with the ipv4 loopback on one port",
+			uiListen: "[::1]:8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			name:     "the localhost name collides with the address it resolves to",
+			uiListen: "localhost:8080", listen: "127.0.0.1:8080",
+			wantErr: "same address as -listen",
+		},
+		{
+			// The carve-out: two SPECIFIC non-loopback hosts on one port really
+			// are two origins (two NICs, two names), so they still boot.
+			name:     "two specific non-loopback hosts on one port stay distinct",
+			uiListen: "192.168.1.5:8080", listen: "192.168.1.6:8080",
+			posture: tlsPosture{tlsEnabled: true, secureCookies: true},
+		},
+		{
+			name: "ssh gateway address collides", uiListen: ":2222", listen: ":8080", sshListen: ":2222",
+			wantErr: "same address as -ssh-listen",
+		},
+		{
+			name:     "origin template without a run placeholder refused",
+			uiListen: ":8081", listen: ":8080", originTemplate: "https://ui.example.com",
+			wantErr: "{run}",
+		},
+		{
+			name: "origin template with a run placeholder", uiListen: ":8081", listen: ":8080",
+			originTemplate: "https://run-{run}.ui.example.com",
+		},
+		{
+			// The console's plaintext gate has to cover THIS listener too: the
+			// relay cookie is an 8h bearer credential for a run, Secure=false
+			// in this posture, and a specific-routable bind puts it on the wire
+			// for every LAN peer. Refusing only -listen left the second
+			// listener serving exactly what the first one refuses to.
+			name:     "plaintext UI gateway on a specific-routable bind is refused",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			wantErr: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+		},
+		{
+			name:     "plaintext UI gateway names its own flag in the refusal",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			wantErr: "-ui-sandbox-listen",
+		},
+		{
+			name:     "routable UI bind is fine with built-in TLS",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			posture: tlsPosture{tlsEnabled: true, secureCookies: true},
+		},
+		{
+			name:     "routable UI bind is fine behind an upstream terminator",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			posture: tlsPosture{secureCookies: true},
+		},
+		{
+			name:     "routable UI bind is fine with the explicit override",
+			uiListen: "192.168.1.5:8081", listen: "127.0.0.1:8080",
+			allowPlaintext: true,
+		},
+		{
+			// Same warn-only carve-outs as the console: compose binds the
+			// unspecified address from inside a container.
+			name:     "unspecified UI bind stays warn-only",
+			uiListen: ":8081", listen: "127.0.0.1:8080",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.posture, tc.allowPlaintext)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want accepted, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("want refused, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateMemberModePosture pins WARDYN_MEMBER_MODE's two preconditions
+// (W-MEMB M1). Member mode asserts a topology — the human at the keyboard is a
+// MEMBER, the operator authority is elsewhere — and the whole value of the flag
+// is that boot REFUSES when the assertion is false. Local mode makes the
+// loopback developer an admin; no OIDC means there is no identity to derive a
+// member role from. Either one silently inverts the posture, so both fail closed.
+func TestValidateMemberModePosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                                  string
+		memberMode, localMode, oidcConfigured bool
+		wantErr                               bool
+	}{
+		{name: "off: nothing asserted, nothing checked", localMode: true},
+		{name: "off with no oidc either", memberMode: false},
+		{name: "on with oidc and no local mode", memberMode: true, oidcConfigured: true},
+		{name: "on with local mode", memberMode: true, localMode: true, oidcConfigured: true, wantErr: true},
+		{name: "on without oidc", memberMode: true, wantErr: true},
+		{name: "on with both wrong", memberMode: true, localMode: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMemberModePosture(tt.memberMode, tt.localMode, tt.oidcConfigured)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateMemberModePosture(member=%v, local=%v, oidc=%v) error = %v, want error: %v",
+					tt.memberMode, tt.localMode, tt.oidcConfigured, err, tt.wantErr)
+			}
+		})
+	}
+}

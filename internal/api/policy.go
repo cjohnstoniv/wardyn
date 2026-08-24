@@ -9,6 +9,7 @@ import (
 	"fmt"
 	neturl "net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -95,6 +96,79 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePolicyWorkspaces(spec); err != nil {
 		return err
 	}
+	if err := validateUIApps(spec.UIApps); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maxUIAppsPerPolicy bounds the declared-app list. A UI app is an operator
+// declaration, not a workload knob — a handful covers "an editor and a dev
+// server"; the bound exists so a policy cannot declare thousands of relay
+// targets (each of which the console renders and the gateway would launch).
+const maxUIAppsPerPolicy = 8
+
+// uiAppNameRE constrains a UI app name to a short lower-case slug. The name is
+// NOT cosmetic: it is interpolated into the launcher path the gateway execs
+// inside the sandbox (/usr/local/bin/wardyn-ui-<name>) and into the enter
+// URL's query. A slash, a space, a shell metacharacter or ".." must be
+// impossible by construction here — validated at every policy ingest, not
+// sanitised later at the exec site.
+var uiAppNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+
+// validateUIApps enforces the structural invariants of ui_apps at every point
+// a policy enters the system (stored policy write, inline run policy,
+// WARDYN_DEFAULT_POLICY file, composer/profile clamp — all four funnel through
+// validatePolicySpec). Fail closed: a malformed entry is a 400 at write time,
+// never a surprise at relay time.
+func validateUIApps(apps []types.UIApp) error {
+	if len(apps) > maxUIAppsPerPolicy {
+		return fmt.Errorf("ui_apps: %d apps exceeds the maximum of %d", len(apps), maxUIAppsPerPolicy)
+	}
+	names, ports := map[string]bool{}, map[int]bool{}
+	for i, a := range apps {
+		if !uiAppNameRE.MatchString(a.Name) {
+			return fmt.Errorf("ui_apps[%d]: invalid name %q (lower-case letters, digits and dashes, 1-32 chars, must start and end alphanumeric)", i, a.Name)
+		}
+		if names[a.Name] {
+			return fmt.Errorf("ui_apps[%d]: duplicate name %q", i, a.Name)
+		}
+		names[a.Name] = true
+		if a.Port < 1 || a.Port > 65535 {
+			return fmt.Errorf("ui_apps[%d]: invalid port %d (want 1-65535)", i, a.Port)
+		}
+		if ports[a.Port] {
+			return fmt.Errorf("ui_apps[%d]: duplicate port %d (two apps cannot share one sandbox port)", i, a.Port)
+		}
+		ports[a.Port] = true
+		if err := validateUIAppPath(a.Path); err != nil {
+			return fmt.Errorf("ui_apps[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateUIAppPath accepts an empty path (meaning "/") or an absolute,
+// same-origin path. A scheme, a host, or a "//" prefix would turn the
+// gateway's post-handoff redirect into an OPEN REDIRECT off the UI origin, so
+// they are refused here rather than defended against at redirect time.
+func validateUIAppPath(p string) error {
+	if p == "" {
+		return nil
+	}
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return fmt.Errorf("invalid path %q (want an absolute path like \"/\" or \"/?folder=/work\")", p)
+	}
+	u, err := neturl.Parse(p)
+	if err != nil {
+		return fmt.Errorf("invalid path %q: %w", p, err)
+	}
+	if u.Scheme != "" || u.Host != "" {
+		return fmt.Errorf("invalid path %q (a scheme or host is not a path)", p)
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("invalid path %q (\"..\" is not allowed)", p)
+	}
 	return nil
 }
 
@@ -103,7 +177,8 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 // function under the gocyclo gate; behavior is identical).
 func validateEligibleGrant(i int, g types.GrantSpec) error {
 	switch g.Kind {
-	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT, types.GrantSSHKey:
+	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT,
+		types.GrantSSHKey, types.GrantEnvSecret:
 	default:
 		return fmt.Errorf("eligible_grants[%d]: unknown kind %q", i, g.Kind)
 	}
@@ -186,6 +261,31 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		}
 		if _, ok := sshOver443Endpoint(host); !ok {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key host %q is not a supported SSH-over-443 provider (github.com / dev.azure.com)", i, host)
+		}
+	}
+	// An env_secret grant puts a STORED SECRET VALUE in the sandbox env for the
+	// whole run (see GrantEnvSecret). Require a portable, non-WARDYN_ env var
+	// name and a secret_name, and reject a reserved platform-internal secret at
+	// WRITE time — the same fail-closed shape git_pat/ssh_key get, and for the
+	// same reason: this kind returns a raw value into the sandbox, so nothing
+	// downstream can un-disclose a wrong one. The dispatch sink
+	// (resolveEnvSecretGrants) re-checks both, defense in depth.
+	//
+	// requires_approval is deliberately NOT honored for this kind and is refused
+	// rather than silently ignored: there is no mint to gate — resolution
+	// happens at dispatch, before any approval could be raised — so accepting
+	// the flag would advertise a human gate that never fires.
+	if g.Kind == types.GrantEnvSecret {
+		_, secretName, derr := envSecretScopeFields(g.Scope)
+		if derr != nil {
+			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, derr)
+		}
+		if sinkReservedSecret(secretName) {
+			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
+		}
+		if g.RequiresApproval {
+			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
+				"not minted, so there is no mint for an approval to gate", i)
 		}
 	}
 	return nil

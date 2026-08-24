@@ -4,12 +4,16 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -116,7 +120,7 @@ func TestRedactPolicyForRead(t *testing.T) {
 			},
 		},
 	}
-	got := redactPolicyForRead(p)
+	got := redactPolicyForRead(p, true)
 	if got.Spec.LLMInspection == nil {
 		t.Fatal("llm_inspection dropped entirely; want it kept (only values redacted)")
 	}
@@ -136,8 +140,132 @@ func TestRedactPolicyForRead(t *testing.T) {
 
 	// A policy with no llm_inspection (or no values) passes through unchanged.
 	plain := types.RunPolicy{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
-	if got := redactPolicyForRead(plain); got.Spec.LLMInspection != nil {
+	if got := redactPolicyForRead(plain, true); got.Spec.LLMInspection != nil {
 		t.Errorf("a policy with no llm_inspection must pass through unchanged, got %+v", got.Spec.LLMInspection)
+	}
+}
+
+// TestGetDefaultPolicy pins W14-S1-6: the control plane's ceiling policy
+// (Config.DefaultPolicy — the same value composer.Clamp bounds a member's
+// inline policy against) is now readable, redacted the same way a stored
+// policy's read path is. "default" is a static route registered ahead of
+// /policies/{id}, so it must never fall into parseIDParam's bad-uuid 400.
+func TestGetDefaultPolicy(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"api.anthropic.com"},
+		LLMInspection: &types.LLMInspectionSpec{
+			Mode: "alert", DetectSecrets: true,
+			WorkspaceSecretValues: []string{"must-never-be-read-back"},
+		},
+	}
+	w := do(t, h.srv, http.MethodGet, "/api/v1/policies/default", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.RunPolicySpec
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.MinConfinementClass != types.CC2 {
+		t.Errorf("min_confinement_class = %q, want CC2", got.MinConfinementClass)
+	}
+	if got.LLMInspection == nil || strings.Contains(got.LLMInspection.WorkspaceSecretValues[0], "must-never-be-read-back") {
+		t.Errorf("W12-S1-1 redaction not applied to the default-policy read: %+v", got.LLMInspection)
+	}
+}
+
+// TestGetDefaultPolicyRedactsForMembers: GET /policies/default is
+// member-reachable (a member is the one clamped by the ceiling), and the
+// ceiling names OPERATOR-only detail — the host paths behind workspace_mounts
+// and the stored-secret names on the eligible grants, the very names the
+// `secret` capability exists to bound. A member sees the shape they are
+// clamped by; an operator still sees the whole thing.
+func TestGetDefaultPolicyRedactsForMembers(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, rbacStore{})
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"api.anthropic.com"},
+		WorkspaceMounts: []types.WorkspaceMount{
+			{Source: "/home/operator/.claude", Target: "/home/agent/.claude"},
+		},
+		EligibleGrants: []types.GrantSpec{
+			{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": "api.anthropic.com", "secret_name": "prod-anthropic-key"})},
+			{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": "deploy-key", "known_hosts_secret_ref": "gh-known-hosts"})},
+		},
+	}
+	srv := New(cfg)
+
+	read := func(t *testing.T, sess *http.Cookie) (types.RunPolicySpec, string) {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/policies/default", sess, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var got types.RunPolicySpec
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got, w.Body.String()
+	}
+
+	member, raw := read(t, ssoSession(t, "sub-pol-member", "dev@corp.example", oidc.RoleMember))
+	for _, leak := range []string{"/home/operator/.claude", "prod-anthropic-key", "deploy-key", "gh-known-hosts"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("member read leaked %q: %s", leak, raw)
+		}
+	}
+	// What a member IS clamped by stays readable — the redaction must not turn
+	// the ceiling into a blank page.
+	if len(member.AllowedDomains) != 1 || member.MinConfinementClass != types.CC2 {
+		t.Errorf("member read lost the ceiling itself: %+v", member)
+	}
+	if len(member.WorkspaceMounts) != 1 || member.WorkspaceMounts[0].Target != "/home/agent/.claude" {
+		t.Errorf("member read lost the mount targets: %+v", member.WorkspaceMounts)
+	}
+	if len(member.EligibleGrants) != 2 || !strings.Contains(string(member.EligibleGrants[0].Scope), "api.anthropic.com") {
+		t.Errorf("member read lost the grant kinds/hosts: %+v", member.EligibleGrants)
+	}
+
+	_, adminRaw := read(t, ssoSession(t, "sub-pol-admin", "admin@corp.example", oidc.RoleAdmin))
+	for _, want := range []string{"/home/operator/.claude", "prod-anthropic-key", "deploy-key", "gh-known-hosts"} {
+		if !strings.Contains(adminRaw, want) {
+			t.Errorf("operator read lost %q: %s", want, adminRaw)
+		}
+	}
+	// The config the server holds for its whole life must not have been
+	// redacted in place by the member's read.
+	if srv.cfg.DefaultPolicy.WorkspaceMounts[0].Source != "/home/operator/.claude" {
+		t.Fatalf("a member read mutated Config.DefaultPolicy: %+v", srv.cfg.DefaultPolicy.WorkspaceMounts)
+	}
+}
+
+// duplicateNamePolicyStore fakes the run_policies.name UNIQUE constraint's
+// 23505 failure that store.PG.CreatePolicy now maps to store.ErrConflict.
+type duplicateNamePolicyStore struct {
+	store.Store
+}
+
+func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (types.RunPolicy, error) {
+	return types.RunPolicy{}, store.ErrConflict
+}
+
+// TestCreatePolicyDuplicateName pins W20-S1-3: a duplicate policy name must
+// surface as a caller-actionable 409, never handleCreatePolicy's former
+// blanket 500 (raw driver error text).
+func TestCreatePolicyDuplicateName(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, duplicateNamePolicyStore{}))
+	w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken,
+		`{"name":"prod","spec":{"min_confinement_class":"CC2"}}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if w.Code == http.StatusInternalServerError {
+		t.Errorf("must never fall through to the raw-500 path")
 	}
 }
 

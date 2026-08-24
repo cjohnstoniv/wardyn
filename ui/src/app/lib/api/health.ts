@@ -105,6 +105,10 @@ export const health = {
   // degraded = stale heartbeat, idle = beating but blind, healthy = fresh beats
   // AND real kernel events. Absent on an older daemon.
   async health(): Promise<{
+    // "ok" iff the daemon actually answered — the {} returned below on a
+    // network error or a non-2xx has none, which is how the shell's heartbeat
+    // (App.tsx) reads "control plane unreachable".
+    status?: string;
     trust_domain?: string;
     identity_provider?: string;
     runner?: string;
@@ -119,6 +123,13 @@ export const health = {
     // false-enabled guess. advertise_addr / host_key_fingerprint are both
     // non-secret (see docs/SSH.md) — the fingerprint is public by design.
     ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
+    // UI-sandbox gateway discovery (run-detail's "UI apps" lane): absent when
+    // the gateway is off (WARDYN_UI_SANDBOX_LISTEN unset) or an older daemon —
+    // both read as "no lane", never a false-enabled guess. enter_url_template
+    // is the ONE field the console reads to build the open URL — it never
+    // composes the UI origin itself, only substitutes {run}/{app}/{ticket}
+    // (internal/api/uigateway.go's uiSandboxHealthz).
+    ui_sandbox?: { enabled?: boolean; enter_url_template?: string; host_mode?: boolean };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). W21-S1-7: recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store
@@ -175,6 +186,16 @@ export const health = {
     operator: boolean;
     role: "admin" | "member";
     email: string;
+    // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
+    // present only for method:"sso". Absent for local/token auth, which has
+    // no session to expire.
+    session_expires_at?: string;
+    // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
+    // /_MAP constraint (e.g. "under /home/agent-projects"). null/absent when
+    // no root applies to this member (member-role-desktop.md §DECISIONS O1).
+    // Never sent as a value to trust — AddWorkspaceDialog shows it as a hint;
+    // ValidateMemberMountSource enforces at bind time.
+    member_local_dir_root?: string | null;
   } | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
@@ -185,6 +206,8 @@ export const health = {
         operator: boolean;
         role: "admin" | "member";
         email: string;
+        session_expires_at?: string;
+        member_local_dir_root?: string | null;
       };
     } catch {
       return null;

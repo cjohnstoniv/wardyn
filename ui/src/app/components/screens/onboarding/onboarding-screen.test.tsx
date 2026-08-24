@@ -78,6 +78,14 @@ describe("OnboardingScreen (welcome hero)", () => {
     expect(screen.queryByText("Needs setup")).not.toBeInTheDocument();
   });
 
+  it("an unreachable daemon (synthetic READY_FALLBACK) reads as unknown, not a real 'needs setup'", async () => {
+    getSetupStatusMock.mockResolvedValue({ ...status(), unreachable: true, runner: { driver: "none", confinement_classes: [] } });
+    render(<OnboardingScreen onGetStarted={() => {}} />);
+    await screen.findByRole("button", { name: /Get started/ });
+    expect(await screen.findAllByText(/Checking…/)).not.toHaveLength(0);
+    expect(screen.queryByText("Barrier: needs setup")).not.toBeInTheDocument();
+  });
+
   it("is a single forward CTA (onGetStarted) — no skip, no demo side-door", async () => {
     const onGetStarted = vi.fn();
     render(<OnboardingScreen onGetStarted={onGetStarted} />);

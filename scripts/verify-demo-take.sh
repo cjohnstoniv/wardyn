@@ -892,12 +892,11 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   # · 06 your first run (was 05) · 07 interactive runs (was 06) · 08 an
   # autonomous agent (was 07) · 09 record a run (unchanged) · 10 approvals &
   # egress (unchanged) · 11 CI & headless (unchanged) · 12 audit & attach
-  # (unchanged). The check_video_NN_* function NAMES below still carry their
-  # OWN older numbering (accumulated across earlier renumbers) — only the case
-  # KEYS re-key to the table above; trust the case label, not the callee name.
-  # 03 is SPLIT (2026-08-24): 03a is the core "what it stops" take; 03b/03c/03d
-  # are optional sub-episodes. A lettered id is a sub-episode of its number and
-  # gets its own arm.
+  # (unchanged) · 13 terminal to the cluster (0.6's terminal-only episode; never
+  # had an old number). The check_video_NN_* function NAMES below still carry
+  # their OWN older numbering — only the case KEYS re-key; trust the case label,
+  # not the callee name. 03 is SPLIT (2026-08-24): 03a is the core take;
+  # 03b/03c/03d are optional sub-episodes — a lettered id gets its own arm.
   ""|08) check_video_02 ;;             # unset legacy walkthrough == the autonomous episode's own checks
   04) check_video_02_workspace ;;
   06) check_video_03_first_run ;;
@@ -905,6 +904,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   10) check_video_07_approvals ;;
   11) check_video_09 ;;
   12) check_video_10 ;;
+  13) check_video_13 ;;
   # check_video_08_policies (the old policies-and-confinement checks) is no
   # longer dispatched: that content retires into the new episode 05
   # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the

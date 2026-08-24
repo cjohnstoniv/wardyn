@@ -26,6 +26,7 @@ func (s *killCASStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error
 func (s *killCASStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
 	return s.casApplied, nil
 }
+func (s *killCASStore) SetRunFailureHint(context.Context, uuid.UUID, string) error { return nil }
 
 func revoked(list []uuid.UUID, id uuid.UUID) bool {
 	for _, x := range list {
@@ -73,7 +74,7 @@ func TestFailAndRevoke_RevokesOnlyWhenTransitionWins(t *testing.T) {
 	srv := New(cfg)
 
 	won := uuid.New()
-	srv.failAndRevoke(context.Background(), won, types.RunStarting)
+	srv.failAndRevoke(context.Background(), won, types.RunStarting, "test: forced failure")
 	if !revoked(h.broker.revoked, won) {
 		t.Fatalf("a won FAILED transition must run the revoke cascade (C003); broker.revoked=%v", h.broker.revoked)
 	}
@@ -81,7 +82,7 @@ func TestFailAndRevoke_RevokesOnlyWhenTransitionWins(t *testing.T) {
 	fake.casApplied = false
 	h.broker.revoked = nil
 	lost := uuid.New()
-	srv.failAndRevoke(context.Background(), lost, types.RunStarting)
+	srv.failAndRevoke(context.Background(), lost, types.RunStarting, "test: forced failure")
 	if len(h.broker.revoked) != 0 {
 		t.Errorf("a lost FAILED transition must NOT revoke (a concurrent kill owns it); broker.revoked=%v", h.broker.revoked)
 	}

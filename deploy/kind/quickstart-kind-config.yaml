@@ -1,0 +1,44 @@
+# kind cluster config for deploy/kind/quickstart.sh (`make kind-quickstart`).
+#
+# Same base as conformance-kind-config.yaml — disableDefaultCNI: true swaps out
+# kind's bundled kindnet, which does NOT enforce NetworkPolicy, so the
+# quickstart's `kubectl apply` of a pinned Calico is what actually installs pod
+# networking. Without it the k8s runner substrate's boot-time egress canary
+# (internal/runner/k8s/canary.go) REFUSES to construct and wardynd crash-loops:
+# an unenforced CNI is not a cluster Wardyn will silently confine runs on.
+#
+# The one addition over the conformance config: extraPortMappings. The
+# conformance suite drives the cluster from the host via client-go and never
+# needs to reach a Service, but the quickstart hands a human a URL. Node-IP
+# routing (http://<node-ip>:<nodePort>) is unreliable on Docker Desktop and on
+# WSL2 — the kind network is not routable from the Windows-side host — so the
+# NodePorts are published on the host instead. quickstart.sh installs the chart
+# with service.type=NodePort and pins these two node ports onto the Service
+# (the chart has no nodePort value; it patches the Service after install).
+#
+# listenAddress pins both publications to loopback. kind's default is 0.0.0.0,
+# which would put an admin-token'd control plane and an SSH gateway on every
+# interface of the operator's machine while the printed URL says 127.0.0.1 —
+# and, worse, a 0.0.0.0 publication does NOT collide with a process already
+# holding 127.0.0.1:8080 (a local compose stack, say): docker binds happily,
+# the loopback-specific socket keeps winning every connection, and the
+# quickstart's own /healthz probe reads 200 from a daemon it did not install.
+# Binding loopback explicitly makes that collision a hard "port is already
+# allocated" at cluster-create time instead.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # wardynd HTTP (API + web UI + /healthz) => http://127.0.0.1:8080
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # wardynd SSH gateway (docs/SSH.md) => ssh -p 2222 <run-id>@127.0.0.1
+      - containerPort: 30022
+        hostPort: 2222
+        listenAddress: "127.0.0.1"
+        protocol: TCP

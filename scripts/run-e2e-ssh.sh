@@ -15,13 +15,24 @@
 #   - the audit rows for each: ssh.exec / ssh.sftp / ssh.forward
 #   - a saved ssh-<session> recording, discovered via the audit trail's
 #     session.recording event and fetched via the recordings API
-#   - a foreign-key denial: a SECOND principal's key (registered directly in
-#     this stack's own Postgres — the same operator mechanism docs/SSH.md's
-#     "Reclaiming a squatted fingerprint" section uses, since there is no
-#     second human/OIDC identity to log in as here) against the first
-#     principal's run
+#   - a foreign-key denial: a SECOND principal's MEMBER-role key (registered
+#     directly in this stack's own Postgres — the same operator mechanism
+#     docs/SSH.md's "Reclaiming a squatted fingerprint" section uses, since
+#     there is no second human/OIDC identity to log in as here) against the
+#     first principal's run
 #   - concurrency: an SFTP transfer while a second session execs, both on the
 #     SAME run
+#   - F1 admin override: a THIRD principal's key, registered with role='admin'
+#     the same direct-Postgres way, reaches the first principal's (member-
+#     owned) run — and the resulting ssh.auth success row carries
+#     data.override=true (internal/api/sshgateway.go's sshVerifiedAuth)
+#
+# NOTE (F1.2, the 0.6 SSH-override lane): the admin-override block below HAS
+# now been exercised against a live stack — 15/15 checks green, both override
+# assertions included, in the 0.6 verification sweep. It needs an image built
+# from THIS tree: the first red run was a stale shared wardyn/wardynd:local
+# that predated migration 0043, so the key registration failed on a missing
+# ssh_public_keys.role column, not on anything this script does.
 #
 # GUARD: Docker-dependent, like the other live lanes. No-op unless
 # WARDYN_TEST_DOCKER=1.
@@ -51,6 +62,12 @@ COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
 API_PORT=18080
 PG_PORT=15432
 SSH_PORT=12222
+# The registry sidecar publishes a host port too, and nothing overrode it: on
+# a shared daemon this stack collided with the operator's own `wardyn-registry`
+# on the 5010 default and `compose up` died with "port is already allocated"
+# before wardynd ever started (observed live). Namespaced like the other three
+# — the one gap docs/ENV.md's WARDYN_REGISTRY_PORT row explicitly warns about.
+REGISTRY_PORT=15010
 
 # Project-unique agent image tag/repo (NOT the shared wardyn/agent-*:local
 # convention every other e2e script trusts): on a box where wardyn_pick_docker_host
@@ -60,14 +77,22 @@ SSH_PORT=12222
 # script: the shared tag briefly resolved to a pre-SSH-gateway image with
 # neither socat nor sftp-server, failing every sftp/-L check with a clean but
 # confusing "executable file not found in $PATH"). A repository name nobody
-# else has any reason to write to removes the collision entirely; wardynd and
-# wardyn-proxy stay on the shared tag (docker-compose.yaml hardcodes
-# `image: wardyn/wardynd:local`, no override knob) and accept the residual risk.
+# else has any reason to write to removes the collision entirely. wardynd and
+# wardyn-proxy now get the same treatment: reusing the shared :local tag meant
+# this lane graded whatever another job last built (observed live: 12 checks
+# passed against a pre-0043 binary, then the override assertions died on a
+# missing `role` column). docker-compose.yaml takes WARDYN_WARDYND_IMAGE /
+# WARDYN_PROXY_IMAGE overrides; both default to the :local names, so no other
+# caller changes.
 AGENT_IMAGE="wardynv05e2e/agent-claude-code:pinned"
+WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
+    WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" \
+    WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_SSH_LISTEN=":2222" WARDYN_SSH_ADVERTISE="127.0.0.1:${SSH_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
@@ -106,14 +131,11 @@ trap teardown EXIT
 compose down --volumes >/dev/null 2>&1 || true
 
 # ── build what we need ────────────────────────────────────────────────────────
-# wardynd/wardyn-proxy: reuse the shared make target, skip if present. NOTE for
-# a shared-daemon box (wardyn_pick_docker_host above may have pointed this at a
-# native dockerd distinct from Docker Desktop's default socket): this trusts
-# the wardyn/*:local TAG, which is per-daemon and mutable — a concurrent build
-# on the SAME daemon (another agent/job) can silently replace its content. If
-# the ssh-enabled check below ever dies unexpectedly, force a rebuild first:
-#   docker compose -f deploy/compose/docker-compose.yaml build wardynd
-docker image inspect wardyn/wardynd:local >/dev/null 2>&1 || make -s compose-build
+# wardynd/wardyn-proxy: always built, to this project's OWN tags — never the
+# shared, mutable wardyn/*:local, which on a shared daemon holds whatever
+# another job last built. The layer cache makes the rebuild near-free.
+compose build wardynd >/dev/null || die "build ${WARDYND_IMAGE} failed"
+compose --profile build-only build proxy-image >/dev/null || die "build ${PROXY_IMAGE} failed"
 # agent-claude-code: build straight to AGENT_IMAGE's project-unique repo (see
 # its definition above) instead of make agent-images-core's shared :local tag.
 docker image inspect "${AGENT_IMAGE}" >/dev/null 2>&1 || \
@@ -135,7 +157,7 @@ for _ in $(seq 1 10); do
 done
 if [[ "${SSH_ENABLED}" != "true" ]]; then
   compose logs wardynd | tail -80
-  die "ssh gateway not enabled per /healthz (WARDYN_SSH_LISTEN wiring broken, OR wardyn/wardynd:local on this daemon predates the SSH gateway/is stale -- see the NOTE above) -- last /healthz body: ${HEALTHZ_RAW}"
+  die "ssh gateway not enabled per /healthz (WARDYN_SSH_LISTEN wiring broken, OR ${WARDYND_IMAGE} was built from a tree without it) -- last /healthz body: ${HEALTHZ_RAW}"
 fi
 pass "stack up, healthy, ssh gateway enabled (${BASE}, /healthz reports ssh.enabled=true)"
 
@@ -331,14 +353,18 @@ else
   fail "concurrency: exec_rc=${concurrent_rc} out=${concurrent_out} sftp_rc=${sftp_rc} ($(cat "${TMPDIR}/concurrent_sftp.log" 2>/dev/null))"
 fi
 
-# ── 9. foreign-key denial: a second principal's key on someone else's run ───
+# ── 9. foreign-key denial: a second principal's MEMBER key on someone else's
+#    run (F1: owner-OR-admin authorization, and this key is neither) ────────
 # No second human/OIDC identity exists in this stack to log in as, so the
 # second principal's key is registered the same way an operator would per
 # docs/SSH.md's "Reclaiming a squatted fingerprint" — directly in this
-# project's OWN Postgres. run.CreatedBy is the admin-bearer principal
-# ("admin-token", internal/api/runs_policy.go's adminTokenPrincipal) that
-# created RUN_ID above; this key is registered under a DIFFERENT principal, so
-# sshAuth's owner-only check (run.CreatedBy == key.Principal) must refuse it.
+# project's OWN Postgres, with the 0043 role column left at its DEFAULT
+# ('member' — see the migration's own doc on why 'admin' is never a safe
+# default). run.CreatedBy is the admin-bearer principal ("admin-token",
+# internal/api/runs_policy.go's adminTokenPrincipal) that created RUN_ID
+# above; this key is registered under a DIFFERENT, non-admin principal, so
+# sshAuth's owner-OR-admin check (run.CreatedBy == key.Principal, OR
+# key.Role == oidc.RoleAdmin) must refuse it on BOTH arms.
 ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/foreign_key" -C "wardyn-e2e-foreign"
 FOREIGN_FP="$(ssh-keygen -lf "${TMPDIR}/foreign_key.pub" | awk '{print $2}')"
 FOREIGN_PUB="$(cat "${TMPDIR}/foreign_key.pub")"
@@ -360,9 +386,47 @@ else
     '[.[] | select(.action=="ssh.auth" and .outcome=="failure" and .target==$fp and .data.reason=="not the run owner")] | length' \
     "${TMPDIR}/resp.json")"
   if [[ "${denial_rc}" -ne 0 && "${denial_out}" != *"should-never-run"* && "${denied_row}" -ge 1 ]]; then
-    pass "foreign-key denial: second principal's key refused (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
+    pass "member-key denial: non-owner, non-admin key refused (rc=${denial_rc}) and audited ssh.auth failure reason=\"not the run owner\""
   else
-    fail "foreign-key denial: rc=${denial_rc} out=${denial_out} audited_denial_rows=${denied_row}"
+    fail "member-key denial: rc=${denial_rc} out=${denial_out} audited_denial_rows=${denied_row}"
+  fi
+fi
+
+# ── 10. F1 admin override: an ADMIN-role key reaches a run it does not own,
+#    audited with data.override=true ──────────────────────────────────────
+# THIRD principal, registered the same direct-Postgres way as step 9's foreign
+# key, but this time with role='admin' explicitly (the column 0043 adds —
+# internal/db/migrations/0043_ssh_key_role.sql). RUN_ID is owned by
+# "admin-token" (see step 9's comment), a DIFFERENT principal than this key's
+# — so success here can only come from sshAuth's admin arm
+# (run.CreatedBy != rec.Principal but rec.Role == oidc.RoleAdmin,
+# internal/api/sshgateway.go), never the owner arm.
+ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/admin_key" -C "wardyn-e2e-admin"
+ADMIN_KEY_FP="$(ssh-keygen -lf "${TMPDIR}/admin_key.pub" | awk '{print $2}')"
+ADMIN_KEY_PUB="$(cat "${TMPDIR}/admin_key.pub")"
+# Same single-quoted-interpolation safety note as step 9's INSERT_SQL: both
+# values are ssh-keygen's own output and cannot contain a single quote.
+# role_checked_at = now(): the 0046 bounded-stale gate refuses an admin
+# override whose stamp is NULL (a never-checked key) or older than
+# WARDYN_SSH_ROLE_TTL — a direct-SQL registration must stamp it, exactly as
+# docs/SSH.md's operator-mechanism note says. (First live run of this arm
+# caught the omission: rc=255, reason "admin override stale".)
+ADMIN_INSERT_SQL="INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, role_checked_at, created_at) VALUES ('${ADMIN_KEY_FP}', 'e2e-admin-principal', 'admin-e2e-key', '${ADMIN_KEY_PUB}', 'admin', now(), now());"
+compose exec -T postgres psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -c "${ADMIN_INSERT_SQL}" \
+  >"${TMPDIR}/admin_insert.log" 2>&1
+if [[ $? -ne 0 ]]; then
+  fail "admin-override setup: could not insert the admin-role key: $(cat "${TMPDIR}/admin_insert.log")"
+else
+  override_out=$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/admin_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "echo wardyn-override-ok" 2>&1)
+  override_rc=$?
+  status=$(api GET "/api/v1/audit?run_id=${RUN_ID}")
+  override_row="$(jq --arg fp "${ADMIN_KEY_FP}" \
+    '[.[] | select(.action=="ssh.auth" and .outcome=="success" and .target==$fp and .data.override==true)] | length' \
+    "${TMPDIR}/resp.json")"
+  if [[ "${override_rc}" -eq 0 && "${override_out}" == *"wardyn-override-ok"* && "${override_row}" -ge 1 ]]; then
+    pass "admin override: admin-role key reached a run it does not own, and ssh.auth success is audited with data.override=true"
+  else
+    fail "admin override: rc=${override_rc} out=${override_out} audited_override_rows=${override_row}"
   fi
 fi
 

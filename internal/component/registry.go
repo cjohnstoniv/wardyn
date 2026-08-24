@@ -54,9 +54,9 @@ func (r *Registry[C]) Register(name string, ctor C) {
 	r.ctors[name] = ctor
 }
 
-// Lookup returns the constructor for name (an empty name resolves to the
+// lookup returns the constructor for name (an empty name resolves to the
 // default) and whether it was found.
-func (r *Registry[C]) Lookup(name string) (C, bool) {
+func (r *Registry[C]) lookup(name string) (C, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if name == "" {
@@ -80,7 +80,7 @@ func (r *Registry[C]) Resolve(name string) (ctor C, resolved string, err error) 
 	if resolved == "" {
 		resolved = r.def
 	}
-	c, ok := r.Lookup(resolved)
+	c, ok := r.lookup(resolved)
 	if !ok {
 		var zero C
 		return zero, resolved, fmt.Errorf("component %q is not registered (available: %v)", resolved, r.Names())

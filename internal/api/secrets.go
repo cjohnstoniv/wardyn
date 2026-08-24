@@ -31,6 +31,8 @@ var secretNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 var reservedSecretNames = map[string]bool{
 	"wardyn-signing-key":             true,
 	"wardyn-session-key":             true,
+	"wardyn-ssh-host-key":            true,
+	"wardyn-ui-session-key":          true,
 	"wardyn-harness-anthropic-oauth": true,
 }
 
@@ -48,6 +50,16 @@ func reservedSecret(name string) bool {
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
 }
+
+// ReservedPlatformSecret reports whether name is one of this package's
+// platform-internal reserved keys — the base set both the generic-secrets-API
+// guard and every credential sink build on, so a true here means refused at all
+// of them.
+//
+// Exported for ONE caller: cmd/wardynd's TestPlatformSecretsAreReservedEverywhere,
+// the only place that can see both this set and the daemon's own platform-key
+// constants (a `package main` cannot be imported, so the test cannot live here).
+func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 
 // sinkReservedSecret is the reserved-name guard at the credential SINKS — the
 // api_key injection resolver (handleInternalInjection), the git_pat/ssh_key
@@ -67,11 +79,16 @@ func reservedSecret(name string) bool {
 // (mintGitPAT/mintSSHKey). Those return a secret's raw VALUE into the sandbox
 // (unlike api_key, whose value never leaves the broker), so they need a
 // STRICTLY WIDER guard — internal/broker.reservedBrokerSecretNames — that also
-// refuses github-app-key/github-app-id, wardyn-ssh-host-key, and
-// bedrock-api-key (W12-B-1). The broker cannot import this package, so the two
-// lists are related but deliberately not identical; do not "fix" that by
-// widening sinkReservedSecret itself — the api_key path is fine with the
-// narrower set.
+// refuses github-app-key/github-app-id and bedrock-api-key (W12-B-1). Those two
+// pairs are operator-PROVIDED credentials the generic secrets API must stay able
+// to Put, which is exactly why they are sealed on the broker side only. The
+// broker cannot import this package, so the two lists are related but
+// deliberately not identical; do not "fix" that by widening sinkReservedSecret
+// itself — the api_key path is fine with the narrower set. What the two sets
+// MUST agree on is the daemon-GENERATED platform keys (cmd/wardynd's
+// loadOrCreateSecret names, wardyn-ssh-host-key among them): nobody authors
+// those, so neither guard has a reason to let one through — see
+// TestPlatformSecretsAreReservedEverywhere (cmd/wardynd).
 func sinkReservedSecret(name string) bool {
 	return reservedSecret(name) ||
 		name == bedrockAccessKeyIDSecret ||
@@ -174,13 +191,32 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 // wardyn-session-key) are EXCLUDED from the listing: they back identity/session
 // handling and are not user-managed, so surfacing their names is an unnecessary
 // leak (and they are already non-writable/non-deletable via the API).
+//
+// A MEMBER sees only the names their own `secret` grants cover once that kind
+// is enforced — the reading half of the same capability that bounds which
+// secrets their inline policy may reference (narrowMemberInlinePolicy), so the
+// picker cannot offer a name the launch gate will drop. Narrowed HERE and not
+// in listUserSecretNames, which also feeds the setup checklist and
+// presentSecretNames: those compute whether the DEPLOYMENT is provisioned, and
+// a member's own grants must not make an operator's secret read as missing.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	names, err := s.listUserSecretNames(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"names": names})
+	kept := names[:0:0]
+	for _, n := range names {
+		ok, cerr := s.capSeamAllowed(r.Context(), capSecret, n)
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+			return
+		}
+		if ok {
+			kept = append(kept, n)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"names": kept})
 }
 
 // listUserSecretNames returns the present secret NAMES (never values) with the

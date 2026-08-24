@@ -74,6 +74,18 @@ func (s *countingShellSession) written() int {
 	return len(s.writes)
 }
 
+// writtenBytes is the total keystroke payload that reached the sandbox — what a
+// large-paste test needs, since one paste is one write of many bytes.
+func (s *countingShellSession) writtenBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, w := range s.writes {
+		n += len(w)
+	}
+	return n
+}
+
 func (s *countingShellSession) resizeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -544,7 +556,7 @@ func TestAttachTakeover_NoHolderIsRejected(t *testing.T) {
 // input dropped SERVER-side (while still streaming output), and an audited
 // take-over that closes the displaced socket with a reason the UI can read.
 func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
-	srv, st, fr, audit, run := holderTestServer(t)
+	srv, _, fr, audit, run := holderTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
@@ -599,17 +611,33 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	waitFor(t, "the observer's session to open", func() bool { return fr.session(1) != nil })
 	observed := fr.session(1)
 
-	// Its input is dropped SERVER-side. The touch counter is the barrier: both
-	// frames are consumed by the pump (which TouchRuns on every client frame)
-	// before we assert nothing reached the session.
-	before := st.touches()
+	// Its input is dropped SERVER-side, which by construction leaves NOTHING for
+	// the test to observe — so the barrier is a WebSocket ping: the server answers
+	// it from inside the very read loop that consumes the frames below, in frame
+	// order, so a completed Ping proves both of them were already handled. Ping
+	// requires a concurrent reader on this side; that reader doubles as the
+	// "read-only still streams output" assertion further down.
+	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer rcancel()
+	streamed := make(chan []byte, 1)
+	go func() {
+		typ, data, err := c2.Read(rctx)
+		if err == nil && typ == websocket.MessageBinary {
+			streamed <- data
+		} else {
+			close(streamed)
+		}
+	}()
+
 	if err := c2.Write(wctx, websocket.MessageBinary, []byte("rm -rf /\r")); err != nil {
 		t.Fatalf("observer write: %v", err)
 	}
 	if err := c2.Write(wctx, websocket.MessageText, []byte(`{"type":"resize","cols":20,"rows":5}`)); err != nil {
 		t.Fatalf("observer resize: %v", err)
 	}
-	waitFor(t, "the observer's frames to be consumed", func() bool { return st.touches() >= before+2 })
+	if err := c2.Ping(wctx); err != nil {
+		t.Fatalf("observer ping barrier: %v", err)
+	}
 	if n := observed.written(); n != 0 {
 		t.Errorf("observer's keystrokes reached the sandbox (%d writes) — read-only is not enforced server-side", n)
 	}
@@ -622,14 +650,16 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 
 	// ...but it DOES stream output: read-only is not blind.
 	go observed.feed("hello from the pty")
-	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer rcancel()
-	typ, data, err := c2.Read(rctx)
-	if err != nil {
-		t.Fatalf("observer read: %v", err)
-	}
-	if typ != websocket.MessageBinary || !strings.Contains(string(data), "hello from the pty") {
-		t.Errorf("observer got %v %q, want the PTY output streamed", typ, data)
+	select {
+	case data, ok := <-streamed:
+		if !ok {
+			t.Fatal("observer's read failed; the PTY output never streamed")
+		}
+		if !strings.Contains(string(data), "hello from the pty") {
+			t.Errorf("observer got %q, want the PTY output streamed", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer never received the streamed PTY output")
 	}
 
 	// ── take-over ──
@@ -651,7 +681,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 
 	// The displaced socket is closed with a reason the client can READ — this is
 	// how the UI tells a take-over from a network blip and declines to reconnect.
-	_, _, err = c1.Read(rctx)
+	_, _, err := c1.Read(rctx)
 	if err == nil {
 		t.Fatal("the displaced client's socket stayed open")
 	}
@@ -750,7 +780,7 @@ func TestSSHAttachHolder_RegistersAndIsDisplaced(t *testing.T) {
 // streams, keystrokes are dropped server-side, and the shared tmux window is
 // never resized under the holder.
 func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
-	srv, st, fr, _, run := holderTestServer(t)
+	srv, _, fr, _, run := holderTestServer(t)
 
 	// A web client already holds it.
 	held := &attachHolder{principal: holderOwner, source: attachSourceWeb, since: time.Now(), cols: 100, rows: 40, displace: func(string) {}}
@@ -774,10 +804,18 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 	waitFor(t, "the observer's session to open", func() bool { return fr.session(0) != nil })
 	observed := fr.session(0)
 
-	before := st.touches()
+	// Barriers, both structural rather than timing-based. Keystrokes: the fake
+	// channel is an io.Pipe, so clientSend returns only once the pump has READ
+	// the bytes, and a SECOND send returns only once the pump has looped back to
+	// Read — i.e. finished processing the first chunk. Window-changes: resizeCh
+	// has one slot, so the Nth send returns only once the resize goroutine has
+	// dequeued the (N-1)th; three sends therefore prove the FIRST one's iteration
+	// ran to completion.
 	ch.clientSend("rm -rf /\n")
-	resizeCh <- sshWindowChangeMsg{Columns: 20, Rows: 5}
-	waitFor(t, "the observer's keystrokes to be consumed", func() bool { return st.touches() > before })
+	ch.clientSend("and again\n")
+	for range 3 {
+		resizeCh <- sshWindowChangeMsg{Columns: 20, Rows: 5}
+	}
 	if n := observed.written(); n != 0 {
 		t.Errorf("read-only ssh client's keystrokes reached the sandbox (%d writes)", n)
 	}

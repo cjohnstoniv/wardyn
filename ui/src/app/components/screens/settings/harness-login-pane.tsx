@@ -51,6 +51,9 @@ type LoginFlow = {
   title: string;
   blurb: React.ReactNode;
   capture: CaptureMode;
+  // What the "done" phase's success line names as connected — provider-specific
+  // so an AWS SSO capture never claims a Claude subscription (or vice versa).
+  doneLabel: string;
   // Marker the in-sandbox helper prints on success (capture: "helper" only).
   doneMarker?: string;
   // The flow cannot start until the operator supplies their AWS access-portal
@@ -79,6 +82,7 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     cmd: "claude setup-token",
     title: "Connect a Claude subscription via container login",
     capture: "scrape",
+    doneLabel: "your Claude subscription is connected",
     expects: [
       <>
         A sandboxed login run starts and a terminal appears here, running{" "}
@@ -112,6 +116,7 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     // login succeeds — the operator never has to run a second command.
     cmd: "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso",
     title: "Connect an AWS SSO session via container login",
+    doneLabel: "your AWS SSO session is connected",
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
     needsStartUrl: true,
@@ -145,7 +150,7 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
   },
 };
 
-function loginFlow(provider: string): LoginFlow {
+export function loginFlow(provider: string): LoginFlow {
   return LOGIN_FLOWS[provider] ?? LOGIN_FLOWS.anthropic;
 }
 
@@ -199,7 +204,7 @@ export function extractAuthUrl(s: string): string | null {
 // and we prefer the complete one since it pre-fills the code. Same
 // trailing-boundary rule as the others so a still-streaming URL isn't opened
 // truncated. Exported for tests.
-export function extractDeviceVerificationUrl(s: string): string | null {
+function extractDeviceVerificationUrl(s: string): string | null {
   const re = /https:\/\/(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)\/[^\s'"<>]*/gi;
   let best: string | null = null;
   let m: RegExpExecArray | null;
@@ -544,7 +549,7 @@ export function HarnessLoginPane({
 
       {phase === "done" && (
         <p className="flex items-center gap-2 text-xs text-success">
-          <ShieldCheck className="size-3.5" /> Token captured — your Claude subscription is connected.
+          <ShieldCheck className="size-3.5" /> Token captured — {flow.doneLabel}.
         </p>
       )}
     </div>

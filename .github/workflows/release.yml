@@ -41,10 +41,19 @@ name: Release images
 # log entry (the standard GitHub-Actions-native keyless recipe) — `cosign
 # sign --yes` picks this up automatically from the ambient Actions OIDC env,
 # no extra flags. Signs by DIGEST (the build-push step's own `digest` output),
-# never by the mutable tag. `provenance: false` on the build step keeps that
-# digest pointing at the plain single-platform image manifest cosign expects,
-# not a multi-manifest index carrying a BuildKit attestation — signing the
-# index instead is also valid but is a different, unverified-here recipe.
+# never by the mutable tag.
+#
+# WHAT THAT DIGEST NOW IS: with the two-platform `platforms:` list below it is
+# the multi-arch INDEX digest, not a single image manifest — so ONE signature
+# covers the index, and the per-arch child manifests are NOT individually
+# signed. That is the normal multi-arch cosign posture (`cosign verify` on the
+# index ref is what a consumer runs), but it is a real change from the
+# single-arch shape this file used to have, so RELEASING.md's "Container
+# images" section carries the verify command and this caveat in prose.
+# `provenance: false` stays: it keeps the index to exactly the two platform
+# manifests, with no BuildKit attestation manifests riding along under
+# `unknown/unknown` platforms — those would land inside the signed index
+# without ever having been reviewed here.
 #
 # ── SBOM ──────────────────────────────────────────────────────────────────
 # `make sbom` (the existing target — not re-deriving syft flags here) via a
@@ -56,11 +65,23 @@ name: Release images
 # Release") is manual by design ("nothing here is automated to push
 # anything") — download this artifact and attach it by hand if wanted.
 #
-# ── linux/amd64 only ─────────────────────────────────────────────────────────
-# ponytail: single-arch (the runner's own arch, no QEMU/cross-build). Add
-# linux/arm64 (docker/setup-qemu-action + a multi-platform `platforms:` list)
-# when an operator actually asks for an arm64 cluster/laptop image — nobody
-# has yet.
+# ── linux/amd64 + linux/arm64 ────────────────────────────────────────────────
+# W-DESK S1: an Apple-silicon / arm64 laptop is the desktop tier's ordinary
+# hardware (docs/DESKTOP.md), so every published image is a two-platform index.
+# How the cost is kept sane: EVERY Go compile stage carries
+# `FROM --platform=$BUILDPLATFORM` + `GOARCH=$TARGETARCH`, so the binaries
+# cross-compile natively (pure Go, CGO_ENABLED=0) and never run under
+# emulation. QEMU below is therefore needed by the RUNTIME stages only — the
+# `apt-get`/`npm`/AWS-CLI-installer RUNs in the three agent images, which must
+# execute as the target arch. wardynd and wardyn-proxy need none of it: their
+# distroless runtime stages are COPY-only.
+#
+# Every base pin in these Dockerfiles was verified to be a multi-arch INDEX
+# digest (not an amd64-only manifest) with `docker buildx imagetools inspect
+# --raw` before this list was widened; all eight already carried linux/arm64,
+# so no repin was needed. `make lint`'s scripts/check-image-pins.sh still only
+# proves a digest EXISTS — it does no network I/O and cannot tell an index from
+# a single-arch manifest, so re-check by hand when bumping a base.
 #
 # ── can this be live-tested? ─────────────────────────────────────────────────
 # No. It only runs on a real `vX.Y.Z` tag push against origin, needs GHCR
@@ -81,7 +102,10 @@ jobs:
   images:
     name: build, push, sign (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60, not 30: the three agent rows run their apt-get/npm/installer steps
+    # twice, one of those passes under arm64 emulation. A timeout kill here
+    # would read as a build break — the one failure a release must not fake.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -100,13 +124,13 @@ jobs:
           # float-latest: "true" on the three agent-* rows below (W30-S1-2).
           # internal/api/runs_policy.go's agentImage() fallback — what a
           # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
-          # actually pulls — is hardcoded to the `:latest` tag
-          # (ghcr.io/cjohnstoniv/agent-<key>:latest), never the release
-          # semver. Without also pushing `:latest` here, a by-the-book Helm
-          # install pulled a tag this workflow never published — pull failure
-          # even after a green, signed release. wardynd/wardyn-proxy don't
-          # need this: the Helm chart pins their tag to .Chart.AppVersion
-          # (the release semver), never a bare `:latest` fallback.
+          # actually pulls — is ghcr.io/cjohnstoniv/agent-<key>:<version>, the
+          # daemon's OWN version.Version (D19), which the semver `:${RELEASE_TAG}`
+          # tag every matrix row pushes below satisfies. The extra `:latest`
+          # here is the fallback for a build with no version string (agentImageTag
+          # returns "latest" only then); pushing it keeps that last-resort tag
+          # pullable too. wardynd/wardyn-proxy don't need it: the Helm chart pins
+          # their tag to .Chart.AppVersion (the release semver).
           - name: agent-claude-code
             dockerfile: deploy/images/claude-code/Dockerfile
             build-args: ""
@@ -128,6 +152,10 @@ jobs:
             float-latest: "true"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # binfmt_misc handlers so the agent images' target-arch RUN steps
+      # (apt-get / npm / the AWS CLI installer) execute under emulation. The Go
+      # compile stages do NOT use this — they cross-compile (see the header).
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -174,7 +202,7 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
           tags: ${{ steps.tags.outputs.tags }}

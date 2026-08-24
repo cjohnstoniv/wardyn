@@ -115,3 +115,24 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 		t.Errorf("delete unknown id err = %v, want ErrNotFound", err)
 	}
 }
+
+// TestPG_CreatePolicy_DuplicateName pins W20-S1-3 against the real driver: the
+// run_policies.name UNIQUE constraint's 23505 must map to store.ErrConflict,
+// not surface as an opaque wrapped pgconn error the API layer can't classify.
+func TestPG_CreatePolicy_DuplicateName(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+
+	name := "policy-dup-" + uuid.New().String()
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2}
+	base := types.RunPolicy{ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Spec: spec}
+	if _, err := store.NewPG(pool).CreatePolicy(ctx, base); err != nil {
+		t.Fatalf("create first policy: %v", err)
+	}
+
+	dup := base
+	dup.ID = uuid.New()
+	if _, err := store.NewPG(pool).CreatePolicy(ctx, dup); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("duplicate-name create err = %v, want ErrConflict", err)
+	}
+}

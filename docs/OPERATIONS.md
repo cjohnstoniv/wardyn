@@ -7,8 +7,10 @@ that arrive after the stack is up.
 corporate-network sections below are written against
 [`deploy/compose/`](../deploy/compose/). The Helm chart (`deploy/helm/wardyn`,
 [`k8s.enabled`](../deploy/helm/wardyn/README.md)) now runs its own
-[Kubernetes runner substrate](#kubernetes-known-gaps-v05) with its own
-run/recording state to operate — see that section for what's different there.
+[Kubernetes runner substrate](#kubernetes-known-gaps-v06) with its own
+run/recording state to operate — see that section for what's different there,
+and [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup, restore,
+upgrade and key-persistence commands.
 "[Multi-user: who can change what](#multi-user-who-can-change-what)" and
 "[One replica, by construction](#one-replica-by-construction)" apply to both
 substrates identically: authorization and the per-process constraints live in
@@ -21,9 +23,19 @@ permanent.
 
 | Store | Where | Holds | If you lose it |
 |---|---|---|---|
-| Postgres | volume `postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
+| Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+
+`postgres_data`, `registry_data` and `audit` are declared WITHOUT an explicit
+`name:` in `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the
+compose project — `compose_postgres_data` by default (the project name comes from
+the `deploy/compose` directory, `docker compose config | grep '^name:'`). Only
+`recordings` is explicitly named (`${WARDYN_NS:-wardyn}-recordings`), because the
+docker runner has to mount that same volume into agent containers BY NAME. Reach
+for the unprefixed form and `docker volume inspect postgres_data` reports no such
+volume — and a volume-level backup that ignores that error archives nothing. Back
+Postgres up with `pg_dump` (below), not at the volume layer.
 
 The `audit` volume is **derived**, not primary: it is the optional file sink
 (`WARDYN_AUDIT_SINKS`, see [ENV.md](ENV.md)). Postgres is the source of truth for
@@ -42,7 +54,8 @@ docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
-#    (the volume is named, not project-prefixed — see docker-compose.yaml)
+#    (`recordings` is the ONE explicitly-named volume, so no project prefix —
+#     see docker-compose.yaml)
 docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
   tar czf /to/recordings-$(date +%F).tar.gz -C /from .
 
@@ -93,8 +106,8 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    then prove the age key actually decrypts what came back, which a row
 #    count alone can't: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts instead of
-#    failing closed with a decrypt error (see "The age key has no rotation
-#    path" — the wrong key fails exactly here, not at boot):
+#    failing closed with a decrypt error (see "Rotating the age key" — the
+#    wrong key fails exactly here, not at boot):
 wardyn run --agent claude-code --workspace <workspace-id>
 ```
 
@@ -105,7 +118,7 @@ wardyn run --agent claude-code --workspace <workspace-id>
 
 ### The audit log can't quietly rot
 
-[Watch — Audit & attach (2:00–2:30)](README.md#v12--audit--attach)
+[Watch — Audit & attach (2:00–2:30)](README.md)
 
 "Append-only" here is enforced by the database, not by convention. A row-level
 Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
@@ -126,12 +139,132 @@ it can record — Wardyn keeps both. The spool is per-process by design: it is t
 fallback for one pod's failed write, and each `wardynd` drains its own back on
 recovery (see [One replica, by construction](#one-replica-by-construction)).
 
+### The hash chain — what a rewritten row looks like
+
+The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
+and the role split hardens that against the app role. Neither binds a **table
+owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row
+— the residual `0007_audit_least_privilege.sql` states plainly. Migration
+`0047_audit_hash_chain.sql` does not close that hole; it makes a single use of
+it **visible**.
+
+Every row written from `0047` onward carries two hex columns:
+
+```
+row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
+                                           actor, action, target, outcome,
+                                           source_ip, data) )
+```
+
+`prev_hash` is the previous row's `row_hash`, so the log is a linked list where
+each row commits to everything before it. Both values are computed **inside
+Postgres**, in the `audit_events` `BEFORE INSERT` trigger — not by the writer —
+so no caller (including the sandbox-facing paths) can choose them, and both
+in-tree insert paths inherit the chain without knowing it exists.
+
+**What it gives you.** Edit one row and its stored `row_hash` no longer matches
+its contents. Delete one and its neighbours' links no longer meet. Either shows
+up as an exact `seq` and a reason.
+
+**What it does not give you.** This is tamper-**evidence**, not
+tamper-proofness. Someone who can rewrite one row can usually rewrite every row
+after it and re-chain the lot; a re-chained tail verifies perfectly clean.
+Truncating the newest rows is likewise invisible to the chain alone — what is
+left is a shorter, valid chain. The defence against both is **off-box**: every
+event on an audit sink stream (`WARDYN_AUDIT_SINKS`) now carries its
+`prev_hash`/`row_hash`, so a SIEM holds head hashes Wardyn cannot later disown.
+A chain that no longer contains a head your SIEM recorded has been rewritten or
+truncated, and that comparison — not the sweep — is the control. Signed receipts
+(a key the database role cannot reach) are the next rung and are **not built**.
+
+**Verifying.** Operator-invoked, never automatic:
+
+```bash
+curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+     https://wardyn.example.com/api/v1/audit/chain/verify
+```
+
+```json
+{"ok": true, "checked": 41233, "legacy": 902, "first_seq": 903,
+ "head_seq": 42135, "head_hash": "9f2c…"}
+```
+
+`wardynd` deliberately does **not** verify at boot: the sweep re-hashes every
+chained row, and paying that on every restart taxes the common case for an
+answer nobody is reading at that moment. Run it from cron and alert on
+`ok: false` — a broken chain answers **200** with `ok: false`, `broken_seq` and
+`reason` (the sweep succeeded; it found something), while `5xx` means the sweep
+could not run. `head_hash` is the value to diff against your SIEM's copy.
+
+One consequence worth knowing before the first alert: **a break is permanent.**
+The sweep stops at the first broken row and the log is append-only, so once a
+row has been rewritten every later sweep reports that same `broken_seq` forever
+— there is no repair, and no "acknowledge" cursor to move the baseline past a
+break you have already investigated. That is the append-only guarantee doing its
+job, not a bug, but it means `ok: false` is a one-way latch: treat the first
+occurrence as the incident and preserve the row range, because the alert will
+not clear.
+
+**Rows written before the upgrade** keep `NULL` hashes and are reported as
+`legacy`. They are outside the chain and are never a failure. There is no
+backfill, on purpose: hashes computed after the fact by the same process that
+could have altered the rows prove nothing, and writing them would mean
+`UPDATE`-ing the append-only table. The chain starts at the first row inserted
+after the migration.
+
+### Retention, erasure and GDPR — a residual, not a solved problem
+
+The append-only guarantee above is unconditional: there is no time window,
+size cap, or admin-invoked delete path anywhere in `audit_events`. That is a
+deliberate integrity choice (an audit trail an admin can prune is a trail an
+admin can hide behind), but it means **retention is forever by default and
+there is no erasure lever today** — a gap this section states plainly rather
+than leaving implicit.
+
+Concretely:
+
+- `Actor` (`internal/types/types.go`'s `AuditEvent`) is personal data — an
+  OIDC `sub` or email, on every human-attributed row, forever.
+- `Data` (`json.RawMessage`) can carry a human-typed value verbatim. The
+  platform's secret-masking registry only redacts values it minted or that
+  were explicitly registered (`internal/secretmask`); a credential a human
+  *pastes* into a recorded terminal or types into a run's task field is not
+  in that registry and is therefore stored — and replayable — in the clear,
+  with no per-value redaction path (see register finding D17 for the
+  session-recording instance of the same gap).
+- There is no `DELETE`/erasure endpoint for a single audit row, a single
+  actor's rows, or a single run's rows. Migration `0001_init.sql`'s
+  row-level trigger and `0004_audit_truncate_guard.sql`'s statement-level
+  trigger both exist specifically to make this true at the database layer,
+  not just by API convention — so there is no admin-surface workaround
+  either.
+
+**This is asymmetric with session recordings**, which already have exactly
+the retention lever audit lacks: `WARDYN_RECORDING_RETENTION_DAYS`
+(`docs/ENV.md:47`) age-deletes stored PTY casts, defaulting to keep-forever
+but operator-settable, and each sweep that removes anything emits its own
+`recording.retention.sweep` audit event (so the deletion itself stays
+auditable even though the deleted content is gone). Audit has no equivalent
+knob. If your deployment is subject to a "right to erasure" obligation on
+data an audit row could contain (an actor identity, or a pasted secret), the
+honest current answer is: **you cannot selectively erase it, and the fix that
+exists for recordings does not exist here.** A time-partitioned audit table
+with an attested, operator-invoked partition-drop (or crypto-shredding) is
+the shape of a real fix; nothing in that direction is built. Treat this
+paragraph, not silence, as the disclosure until it is.
+
 ## Monitoring
 
 `GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`)
 serves Prometheus text exposition — stdlib-only, no client library. Counters:
 runs by terminal state, approval decisions by outcome, egress denies, credential
-mints; plus sandbox launch-latency sum/count. Scrape it with any Prometheus
+mints; plus sandbox launch-latency sum/count. Two gauges sit beside them, because
+every counter above only moves on success — a dead store and an idle cluster
+otherwise scrape identically: `wardyn_store_up` (1 when Postgres answers the same
+bounded ping `/readyz` makes, 0 when it does not) and `wardyn_audit_spool_lines`
+(audit events waiting in the local JSONL fallback spool — a value that never
+returns to 0 means the drain loop is not working, a condition that had no
+operator-visible signal before 0.6). Scrape it with any Prometheus
 `authorization` config carrying the admin token. `/healthz` stays the
 liveness/component surface (identity, runner classes, eBPF ground-truth state);
 `/metrics` is the trend surface. Audit sinks (`WARDYN_AUDIT_SINKS`,
@@ -183,26 +316,69 @@ default role set, is denied at login instead ("no Wardyn role assigned").
 
 **What admin-only still means** — the writes with the widest blast radius stay
 gated on the role being exactly `admin` (`requireOperator`): the managed
-harness credential, policy create/update/delete, every mutating `/workspaces`
-route (including `approved-egress`/`denied-egress`/`llm-cred`/`requirements`), `PUT
+harness credential, policy create/update/delete, the `/workspaces` routes that
+WIDEN AN EGRESS CEILING, BIND CREDENTIAL MATERIAL or WRITE THE HOST
+(`approved-egress`, `denied-egress`, `llm-cred`, `requirements`, `record` and
+its `promote-egress`, `env-as-code/write`, and the `reassign` below — workspace
+CRUD/scan/build itself is owner-or-admin since 0.6, see "Workspace ownership"),
+`PUT
 /site-config` and its connectivity probes, secret write/delete, `GET
-/metrics`, and bringing a custom sandbox image or devcontainer repo to a run
-(`image`/`devcontainer_repo` — `denyMemberCustomImage`, `internal/api/runs_create.go`:
-a member's own onboarded-workspace base image is unaffected, since that path
-is operator-authored at onboarding time, never the member's own free-text
-choice). Launching and killing a run (`POST /runs`, `POST /runs/{id}/kill`)
-stay open to any signed-in human — using the product is a member act by
-design.
+/metrics`, the permissioning routes below, and bringing a custom devcontainer
+repo to a run (`devcontainer_repo` — `denyMemberRequest`,
+`internal/api/runs_create_validate.go`). A custom sandbox `image` is admin-only
+*by default* and is the one power a capability grant can hand a member (see
+"Capabilities" below); a member's own onboarded-workspace base image was never
+gated either way, since that path is operator-authored at onboarding time,
+never the member's own free-text choice. Launching and killing a run (`POST
+/runs`, `POST /runs/{id}/kill`) stay open to any signed-in human — using the
+product is a member act by design.
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches
 their OWN resources the same way an admin reaches any of them
 (`ownsRunOrAdmin`/`getRunAuthorized`, `internal/api/helpers.go`): `GET`/kill/
 profile/grants on a run, minting its attach ticket, its recording replay, and
-`GET /runs`/`GET /approvals`/`GET /audit` (each scoped to the caller's own
-`created_by` rows) all answer a foreign resource with the **byte-identical
+`GET /runs`/`GET /approvals` (each scoped to the caller's own `created_by`
+rows) all answer a foreign resource with the **byte-identical
 404** a truly-missing one gets — never a 403 — so probing another user's run
-id learns nothing (no existence oracle). `GET /setup/status` redacts
+id learns nothing (no existence oracle). `GET /audit` is **run-scoped, not
+`created_by`-scoped**: a member must pass `?run_id=` naming a run they own —
+no `run_id`, or one they don't own, both return an empty `200` list (a
+collection endpoint's no-oracle answer), so a member's unfiltered audit feed
+is always empty by design. The console reaches it from a run's Audit tab,
+whose "open full Audit" link carries `?run_id=`. `GET /setup/status` redacts
 operator-diagnostic detail (checks, secret names, runner detail) for a member.
+
+**Workspace ownership (0.6, migration `0048`).** Runs were the only owned noun
+until 0.6; workspaces are the second. `workspaces.owned_by` holds the creating
+MEMBER's principal, and `""` — every pre-0.6 row, and everything an admin
+creates — means **operator-owned**, i.e. exactly today's behavior. On that
+column:
+
+- **CRUD/scan/build are owner-or-admin, not admin-only.** A member creates
+  workspaces they own and may read/edit/delete/scan/build their own
+  (`getWorkspaceAuthorized`/`getWorkspaceReadable`, `internal/api/helpers.go`).
+  Another member's owned workspace answers the **byte-identical 404** a missing
+  id does — the same no-existence-oracle rule runs use. An OPERATOR-owned
+  workspace still answers a member's mutation with the same 403 it did in 0.5,
+  because it is listable and readable by every member and there is no existence
+  to hide. `GET /workspaces` returns the caller's own rows plus the
+  operator-owned ones, never another member's.
+- **A member's `local_dir` source is bounded by operator-set roots.** See
+  `WARDYN_MEMBER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
+  shared list for a principal that has an entry) in [ENV.md](ENV.md). Unset =
+  no member `local_dir` mounts at all (fail closed); writability needs the
+  separate `WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`.
+- **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): it returns
+  the row to the operator (`owned_by=""`) and audits `workspace.reassign` with
+  the departed member in `from_owner`. It is idempotent, so a sweep over a
+  departing member's ids never fails halfway. Note what moves with it: the
+  row's `local_dir` sources stop being member-authored, so the member root and
+  dotfile gates no longer bound them — they become ordinary operator mounts.
+  Reassigning is an authoring act; treat it like creating the workspace.
+- **Cross-user admin access is queryable.** When an admin acts on a
+  member-owned workspace the audit actor stays the ADMIN (there is no
+  impersonation on this path) and the event carries `workspace_owner` naming
+  the member — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
 (`decide()`, `internal/api/approvals.go`): a member may approve or deny an
@@ -213,6 +389,64 @@ their own run's credential request would self-mint a real token, and
 self-approving a `tool_call` re-opens exactly what the clamp (below) exists to
 bound, both under the same authority the operator ceiling is meant to
 constrain.
+
+**Optional: require a SECOND human on egress decisions.** Set
+`WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain`
+approval may not be the human who created the run — four-eyes, on the one
+decision that widens what a running agent can reach. Off by default, because
+turning it on unprompted would deadlock every single-operator deployment. Both
+verbs are covered: a self-*deny* is refused too, since a deny is how an operator
+closes an approval they would rather nobody saw. A refusal is a `403` recorded as
+`authz.denied` with `reason: second_human_required`, and it lands **before** the
+decision is written, so a refused decision leaves the approval `PENDING` for
+someone else.
+
+**The `admin-token` principal BYPASSES it, and you should plan around that
+rather than be surprised by it.** A bare `WARDYN_ADMIN_TOKEN` caller is
+attributed `system`/`admin-token` precisely because a shared token carries no
+per-human identity — there is no second human to compare it against, and
+`X-Wardyn-Principal` is ignored off local mode specifically so a token bearer
+cannot forge one. Refusing the token instead would lock you out of your own
+approval queue the moment SSO breaks, which is when you need it most, so the
+bypass is the deliberate break-glass. It is not silent: every one writes an
+`approval.second_human.bypass` audit event beside the `actor_type=system`
+`approval.decide`. **For this gate to actually bind, treat the admin token as a
+break-glass credential** — configure SSO, and hold the token out of band.
+
+Local mode is the same story with a different label: the injected operator IS a
+verified human there, so `local:alice` deciding `local:alice`'s own run is
+refused like any other self-decision. On a single-dev machine this switch is
+simply not one to turn on. A run with an empty `created_by` (system-created
+follow-on runs) has no human creator to be the same as, so the rule cannot apply
+and the decision proceeds. The switch is scoped to `egress_domain` only —
+`credential` and `tool_call` approvals are already admin-only regardless of
+ownership.
+
+**A `credential` decision carries one scope: `run` — the per-run credential
+lease.** Every other scope on a `credential` approval is a `400`, and so is any
+scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
+credential helper git invokes on every operation, so single-use forced the
+operator to choose between a click per git op and standing auto-issue of a real
+personal credential (`docs/adoption/corp-network-onboarding-findings.md` B2).
+Approving with `decision_scope=run` (`wardyn approve <id> --scope run`) makes
+that one decision re-mintable for the rest of the run.
+
+Three things bound it. It applies to **`git_pat` only** — `github_token` is
+brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never
+leaves the broker, so none of them has the standing-consumer problem, and
+`broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped
+decision. It is **per scope**: if the grant's scope no longer matches what the
+human approved, the lease does not carry over. And it is **killed by
+revocation** — a leased re-mint still runs the whole mint transaction, so the
+kill-switch cascade ends it the moment the revocation commits.
+
+The audit says which mints were the human's and which were the lease's:
+`credential.mint` carries `lease: true` plus the raw `decision_scope`. The
+comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d — an
+empty `decision_scope` normalizes to `run`, and every credential approval
+decided before this feature carries an empty one, so a normalized comparison
+would have turned every legacy approval in the deployment into a standing lease
+on upgrade. Nothing you approved before v0.6 leases anything.
 
 **An `egress_domain` decision's *scope* adds a second, narrower gate on top
 of the kind check above — and one of the four scopes is gated on ROLE, not
@@ -260,35 +494,311 @@ the ceiling allows, and `workspace_mounts` dropped entirely — a member's
 policy can only ever get MORE restrictive than the operator's default, never
 less. An admin's own `inline_policy` is not clamped.
 
-Every member denial above that isn't a plain foreign-resource 404 is audited
-under `authz.denied` (reasons include `admin_surface`, `byoi_member`,
-`not_owner`) — a 404 on a resource that genuinely doesn't exist stays silent
-by design, matching the no-existence-oracle rule. One exception: the
-`always`-scope 403 above returns before `decide()` reaches any audit call, so
-it is a bare 403 with no audit trail at all, unlike every other denial on
-this list.
+**The desktop tier's standing honesty gap: the operator IS the admin.**
+[The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`, one laptop,
+one daemon) has no member role at all — local-mode callers are *always*
+admins (`Server.requireOperator`'s own doc says so), so the unclamped branch
+above is not an edge case there, it is the default. An `inline_policy` the
+developer submits through the normal console/API path is bounded by nothing
+`WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call — no
+root, no file edit, no MDM race. What still holds: the unclamped spec lands
+on the audit feed as `policy.inline` before `run.create`
+([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off the
+sandbox except `wardyn-proxy`, and the session is still recorded — so a
+developer who widens their own ceiling produces evidence that they did, on a
+device they cannot retroactively edit the org's copy of. It is a governance
+control, not a containment boundary against the operator holding the laptop.
+See [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly" for the
+full accounting — this paragraph is the pointer, that one is the source.
 
-**What's still not built.** No custom roles beyond admin/member, no
-per-resource fine-grained permission model (owner-or-admin only — no
-"read-only share" or "co-owner" concept), no tenant/org columns, no
+### Capabilities: what one member, or one group, may do
+
+The role split above is deployment-wide. A **capability grant** is per-human:
+a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or
+`deny` (`capability_grants`, migration 0042), with a per-kind **enforcement
+switch** beside it (`capability_enforcement`). One sentence is the doctrine,
+and every rule below follows from it: **a capability bounds what the MEMBER
+chose, never what the ADMIN pre-authorized.**
+
+That is why a stored policy, a workspace's own requirements, the hosts a
+workspace scan seeded, the model provider's own egress, and the grant
+`foldRunIntegration`/`applyWorkspaceRequirements` re-add at launch are all left
+untouched no matter what a member does or doesn't hold: narrowing
+admin-authored egress would brick workspace runs at scale, and a member who
+cannot be trusted with a workspace should not be granted the workspace.
+
+**The four kinds** — a closed set, written down once in Go
+(`capabilityKinds`, `internal/api/capabilities.go`) rather than as a schema
+CHECK:
+
+| Kind | Value | Direction | What it bounds, and where |
+|---|---|---|---|
+| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeMemberDecision`, `internal/api/approvals.go`), and which hosts survive on a member's own `inline_policy` allowlist (`narrowMemberInlinePolicy`, `internal/api/inline_policy.go`) |
+| `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, `internal/api/secrets.go`) |
+| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyMemberRequest`, `internal/api/runs_create_validate.go`) |
+| `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+
+`*` as a value matches everything of that kind, spelled the same way for all
+four. `egress_host` values are matched by `entryCoversAny`
+(`internal/api/artifact_redirect.go`) — the *same* matcher that already decides
+whether one allowlist entry covers a host, deliberately not a second one,
+because two host matchers that disagree is how a deny gets bypassed by a port
+suffix. Every other kind is an exact compare: a secret name, a uuid, and an
+image ref are identifiers where a near-miss must not match.
+
+A **deny** on `egress_host` asks that matcher in BOTH directions, and bites
+whenever the two sets intersect: `deny secret.example.com` stops a member
+asking for `*.example.com`, and `deny *.corp` stops one asking for
+`evil.corp`. An allow still has to COVER the request outright — a grant that
+half-overlaps what was asked for permits nothing. The proxy's label boundary
+is unchanged either way: `*.example.com` never covers `example.com`. Grant
+values are shape-checked when they are written, by the same validator every
+`allowed_domains` ingest uses, so a value that could never match any request
+is a `400` on the grant rather than a row that quietly does nothing.
+
+`devcontainer_repo` is **not** a kind and stays unconditionally admin-only. It
+hands attacker-authored build configuration to the image builder, which is not
+a power to hand out one row at a time.
+
+**Precedence — the order is the design** (`capAllowed`, same file):
+
+1. **admin, admin token, and local mode are exempt.** A capability bounds a
+   member; the admin tier is the one writing the grants.
+2. Any matching **deny** ⇒ refused.
+3. Any matching **allow** ⇒ permitted.
+4. The kind is **not enforced** ⇒ permitted.
+5. Otherwise ⇒ refused.
+
+There is no user-over-group precedence: a deny anywhere wins, because "Bob's
+user allow overrode the group deny" is a breach report. Deny sits *above* the
+enforcement switch on purpose — that makes deny rows the adoption on-ramp: you
+can blacklist one host for one contractor without flipping the whole
+deployment fail-closed. A store error is never permission: the request answers
+`500`, not "allowed".
+
+**The widening kind reads the same rows the other way.** For `image`
+(`capGranted`), an unenforced kind is *refused*, not permitted — because 0.5
+refused it too. Both directions obey the same rule, "an upgrade with no
+configuration changes nothing", and land on opposite defaults only because the
+two start from opposite postures. So `image` needs *both* the switch on and an
+exact-ref grant; the other three need only the absence of a deny until you
+enforce them.
+
+**Default posture: an absent enforcement row is off.** A deployment upgraded
+from 0.5 with no rows written behaves byte-for-byte as it did before — this
+whole subsection is inert until an admin turns a kind on, one kind at a time.
+Turning `workspace` on with no grants written is the way to lock every member
+out of every workspace at once; write the grants (or the targeted denies)
+first, then flip the switch.
+
+**Subjects, and the group snapshot's ceiling.** A grant's `subject_type` is
+`user`, `group`, or `all`:
+
+- `user` matches **either** the lowercased OIDC `sub` **or** the email — an
+  admin writing a grant knows one or the other and shouldn't have to guess
+  which one the IdP made authoritative. It widens who an allow hits, and in
+  the direction that matters a deny on either identity also hits.
+- `group` matches the login-time union of the ID token's `roles` and `groups`
+  claims (so Entra App Roles are grantable for free), lowercased and
+  deduped.
+- `all` matches every signed-in human — the baseline for an IdP whose group
+  claims aren't usable.
+
+Group membership is a **snapshot taken at login** and carried in the session
+cookie; grants themselves are read from the database per request, so a new
+grant takes effect on the very next request but a *directory* change does not
+until the human signs in again. The snapshot is capped at 2048 bytes of
+payload (`maxSessionGroupsBytes`, `internal/auth/oidc/derive.go`) so the
+signed cookie stays under the ~4096 bytes a browser will silently drop
+entirely; groups are sorted and dropped **from the end**, so the same human
+loses the same groups on every login instead of a coin flip. That is roughly
+100 typical group names — past that, grant the user directly, or prefer Entra
+App Roles, which arrive on the much smaller `roles` claim. A pre-0.6 session
+cookie carries no groups field at all and stays valid (no forced re-login);
+that state is reported distinctly as `groups_snapshot_stale` on `GET
+/me/capabilities`, because "can't tell yet" and "holds no groups" must not
+read the same.
+
+**Both of those cut the DENY direction too, which is the half worth stating
+plainly.** A group's rows are matched against the caller's snapshot, so a group
+that fell off the 2048-byte cut — or a caller still holding a pre-0.6 cookie —
+has *none* of its rows evaluated, denies included, and with the kind unenforced
+that resolves as permitted. Signing in again fixes both. Where a deny has to
+bite regardless of session age or group count, write it against the **user**
+(either identity — the lowercased `sub` or the email) rather than the group.
+
+**What a capability deliberately does not reach.** `always`-scope decisions
+stay operator-only even for a member granted the host — a grant must never
+promote a member's decision into durable workspace config. `GET /workspaces`
+is not narrowed: visibility is not capability, the launch gate is what
+refuses, and hiding the row would only make the refusal unexplainable.
+Machine lanes (`/internal/*`, ground-truth ingest, attach tickets) are
+untouched. And where the operator ceiling sets `allow_all_egress`, the
+allowlist is not the gate at all, so `egress_host` narrowing does nothing
+there — that is the operator's own posture, not a switch that failed.
+
+**Managing them** (all `operatorOnly` except the last):
+
+| Route | Does |
+|---|---|
+| `GET /permissions` | the whole grant table plus every enforcement switch, one call |
+| `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
+| `DELETE /permissions/grants/{id}` | remove one grant |
+| `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
+
+`PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind
+is an enforced kind switched off: re-fetch `GET /permissions` immediately
+before writing, or a stale admin tab can silently disable a control that two
+admins both believe is on. `GET /permissions`'s `ETag` header (a content hash
+of the enforcement map alone, not the grant table) can be sent back as this
+`PUT`'s `If-Match` for that: a document that changed underneath a stale tab is
+refused `412` instead of accepted and silently narrowed. `If-Match` is
+optional — omitting it keeps working exactly as before, so this is additive,
+not a new requirement, and the write is audited either way regardless of
+whether `If-Match` was used, which is attribution rather than prevention.
+
+Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
+`capability.enforcement.write`. Enforcement lives in its own table rather than
+in SiteConfig precisely because `PUT /site-config` is a full replace: a stale
+client round-tripping an older document could otherwise silently disable an
+authorization control, which is a fail-open nobody would see.
+
+There is **no cache** — resolution is two indexed reads per check, so a
+grant applies immediately. A process-local cache would be the same HA blocker
+named elsewhere in this document, and a stale permission cache is a security
+bug rather than a slow page.
+
+### Per-user API tokens: stop sharing the admin token
+
+`WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to
+nobody. Every script that held it was an admin, and the audit log recorded all
+of them as `admin-token`. A **per-user API token** is the replacement: a human
+mints one for their own automation, it carries *their* identity and *their*
+role, and it is revocable on its own.
+
+| Call | Who | What |
+|---|---|---|
+| `POST /api/v1/me/tokens` | any signed-in human | mint one for yourself — the response is the **only** time the plaintext exists |
+| `GET /api/v1/me/tokens` | any signed-in human | your own tokens, revoked ones included |
+| `DELETE /api/v1/me/tokens/{id}` | any signed-in human | revoke one of your own |
+| `GET /api/v1/tokens` | admin | every token in the deployment |
+| `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
+
+Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
+revokes every unrevoked token that principal holds — a token is their session in
+another form, so the incident lever covers both in one call. The `all` arm is
+deployment-wide for tokens too: EVERY live token goes, the calling admin's own
+included — plan to re-mint after a global revoke.
+
+Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
+indistinguishable from that human's console session — run ownership, the
+admin/member gate and capability grants all resolve to the owning human — so a
+member's token reaches exactly the routes their session reaches, and no more. A
+token is **never** the admin identity: minting one requires a verified SSO
+human, so neither the admin token nor local mode can mint one, and a token
+cannot mint a successor (otherwise revoking a leaked one would not end the
+compromise).
+
+Only `hex(sha256(token))` is stored. A lost token is re-minted, never
+recovered, and a database reader — a reporting role, a hot standby, a `pg_dump`
+in a backup bucket — cannot lift a usable credential off a row. `last_used_at`
+is best effort and is the signal for "which of these are dead"; revoke those.
+
+**The role is a stamp, not a live check.** A token carries the role its owner
+held when they minted it, exactly the way a registered SSH key does. Demoting a
+human from admin to member does **not** reach their outstanding tokens — revoke
+them with `DELETE /api/v1/tokens/{id}`, which is also the path for a departed
+owner's credential. Both `token.create` and `token.revoke` are audited (see
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
+owner, so an admin revoking someone else's is legible after the fact.
+
+### Every denial that isn't a 404
+
+(This section is the source of record for `authz.denied`'s `reason` values;
+[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
+every *other* audit `action` and points back here for this one rather than
+restating it.)
+
+Every member denial that isn't a plain foreign-resource 404 is audited under
+`authz.denied`, whose `reason` field is the whole vocabulary:
+
+| `reason` | Raised when | Shape |
+|---|---|---|
+| `admin_surface` | a member requested an admin-only route | `403` |
+| `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | `404` (byte-identical to missing) |
+| `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | `403` |
+| `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | `403`, or a drop |
+| `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | `403`, or a drop |
+| `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | drop |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | `403` |
+
+The three drop rows are why `POST /runs` mostly *narrows* rather than refuses:
+a member whose whole allowlist is ungranted gets a run with no member-authored
+egress, not a `403`, because the run's admin-authored egress is still there and
+is usually what the task needed. A drop is never silent: it comes back as a
+**warning on the launch response itself** — surfaced as a toast in the console
+and on `wardyn run`'s stderr — it appears the same way in a preflight/Review
+dry-run *before* launch, and it is recorded as an audit event at launch: one
+event per reason, with the affected values beside it, rather than one per
+dropped host, so a policy naming twenty ungranted hosts reads as the one
+authorization outcome it is. Preflight dry-runs are not audited: Review re-resolves on every
+edit, and a stream of denials for a policy nobody launched is
+indistinguishable from denials that actually bounded a run.
+
+A 404 on a resource that genuinely doesn't exist stays silent by design,
+matching the no-existence-oracle rule. One exception remains: the
+`always`-scope 403 above returns before `decide()` reaches any audit call, so
+it is a bare 403 with no audit trail at all, unlike every other denial here.
+
+**What's still not built.** No custom roles beyond admin/member — capabilities
+narrow (or widen) what a member may reach, they do not add a third role. Only
+the four kinds above are grantable; there is no general per-resource permission
+model (a run is still owner-or-admin only — no "read-only share" or "co-owner"
+concept), no tenant/org columns, no
 separation of duty among admins — every admin (and the admin token, always)
 can rewrite the policy that bounds them (`threatmodel/THREAT-MODEL.md`
-residual #14, still open). The SSH gateway has **no admin override** at all
-today — SSH authorization is a single `run.created_by == the key's principal`
-check, deliberately narrower than the web terminal's `requireOperator` gate;
-an admin who needs another human's run uses the web terminal, same as a
-member would (`docs/SSH.md`'s Bounds section; `threatmodel/THREAT-MODEL.md`
-residual #15). See [ROADMAP.md](../ROADMAP.md) for what's queued.
+residual #14, still open). The SSH gateway's admin override is a
+**bounded-stale stamp**, not a live role check: since migration `0043` a
+key authorizes when `run.created_by == the key's principal` OR the key's
+`role` column reads `admin` AND its `role_checked_at` (migration `0046`) is
+no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). That stamp is written at
+`POST /me/ssh-keys` time, from the role the registering session held then,
+but it is also RE-stamped — both `role` and `role_checked_at` — on every OIDC
+login for that principal, across every key they hold, no re-registration
+required. The gateway still never reads the human's role live at connect time
+— SSH carries no session for `requireOperator` to read — so this stays
+bounded-stale rather than live, but a demoted admin's already-registered key
+now loses the override on its own: at their next login (which re-stamps
+`role=member`), or once `role_checked_at` ages past `WARDYN_SSH_ROLE_TTL`
+even if they never log in again — whichever comes first. Deleting the key
+(`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registering it is
+still the immediate lever, just no longer the only one — strictly weaker than
+the web terminal's live `requireOperator` gate, but no longer unboundedly so.
+The same TTL is why **an admin upgrading from 0.5 (or from pre-`0046`) does not
+get the override on the key they already have until it is refreshed**: `0043`
+backfills every pre-existing row as `member` (the fail-closed value — nothing
+in the schema knows what role its registrant held), and `0046` backfills
+`role_checked_at` as `NULL` for every pre-existing row, which `sshAuth` treats
+as infinitely stale — so that key has no override until its owner logs in
+again (the ordinary path, no re-registration needed) or deletes and
+re-registers it. A member's key never satisfies the override
+(`docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
+[ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split above, the
-approval broker, and the append-only audit log all ship in the Apache-2.0 build —
-there is no license key, no "Premium" gate, no entitlement check anywhere in the
-tree (`grep -riE 'license.key|premium|enterprise.(only|tier)|entitlement'
-internal/ cmd/` returns nothing), and the gating is completeness-tested:
-`internal/api/rbac_test.go` enumerates all 34 operator-gated routes and fails the
-build if any non-GET `/api/v1` route goes unclassified — a new mutating route
-must either join the gate or be explicitly declared viewer-safe
-(`launchARunAllowlist`). Worth stating plainly,
+capability grants, the approval broker, and the append-only audit log all ship in
+the Apache-2.0 build — there is no license key, no "Premium" gate, no entitlement
+check anywhere in the tree (`grep -riE
+'license.key|premium|enterprise.(only|tier)|entitlement' internal/ cmd/` returns
+nothing), and the gating is completeness-tested: `internal/api/authz_test.go`
+walks every route the router actually registers and fails the build if any one of
+them — all 36 admin-gated routes included — is missing from its `routeMatrix`, so
+a new route must be classified admin/member/owner/anonymous/internal before it can
+ship; `internal/api/rbac_test.go` then proves each of the 24 widest admin-gated
+writes really does 403 a member. Worth stating plainly,
 because the field Wardyn is measured against puts exactly these controls behind a
 license — Coder bundles audit logging and template RBAC into a 30-day **Premium**
 trial, Vault's namespaces and hold-then-resume are Enterprise/HCP, OpenHands gates
@@ -419,8 +929,6 @@ makes that moot for this recipe; set the domain(s) for real once you point this
 at a corporate IdP that isn't hand-curated the same way.
 
 ## Workspaces: three tiers
-
-[Watch — Add a workspace (~4:00)](README.md#v04--add-a-workspace)
 
 A workspace is not one unit of configuration. Wardyn splits it into three:
 
@@ -614,8 +1122,6 @@ integration that delivers no credential header (a data store reachable on
 
 ### Model access resolves — it does not default to none
 
-[Watch — Interactive runs (~3:00)](README.md#v07--interactive-runs)
-
 A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):
 
@@ -657,7 +1163,7 @@ in **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`,
 `wardyn site-config get|apply`) — the corporate upstream proxy and the list of
 outbound redirects every run's egress inherits. Unconfigured is a valid,
 common state: a host with direct internet access needs none of this. Because
-it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
+it lives in Postgres, `make reset` / `make reset-all` take it with the volume; `wardyn
 site-config get > corp-baseline.json` before a reset and `wardyn site-config
 apply corp-baseline.json` after is the round-trip — the document carries
 secret **names**, never values, so it's safe to keep beside the repo. Because
@@ -791,12 +1297,33 @@ client that `get`s a config saved before `integrations` existed, then `apply`s
 it back unmodified (the exact round-trip described at the top of this
 section), would otherwise silently delete every stored integration.
 
-The practical edge: `wardyn site-config apply` does not strip `integrations`
-from the file it reads (`cmd/wardyn/siteconfig.go`), so once any are stored, a
-fresh `wardyn site-config get > corp-baseline.json` captures them too — drop
-the `integrations` key from that file before `apply`, or the request 400s.
-Manage integrations themselves through their own routes (`GET /api/v1/integrations`,
-`PUT`/`DELETE /api/v1/integrations/{id}`), never through this document.
+The practical edge: once any integrations are stored, a fresh `wardyn
+site-config get > corp-baseline.json` captures them too, and the client strips
+them back out on the way in (`PutSiteConfig`, `pkg/client/families.go`) so the
+`apply` half of the round-trip does not 400 on its own capture. That strip is
+what keeps the recovery flow working, but it also means **`apply` never
+restores an integration** — the ones in the file are dropped, and the stored
+ones are carried forward untouched. `wardyn site-config apply` prints a warning
+naming how many it dropped, so a restore that did not happen does not read as
+one. Manage integrations themselves through their own routes (`GET
+/api/v1/integrations`, `PUT`/`DELETE /api/v1/integrations/{id}`), never through
+this document.
+
+`apply` also decodes the file strictly (`DisallowUnknownFields`, the same
+validator the server runs): because this is a whole-document replace, a typo'd
+key is not an ignored line — it would leave the real setting out of the body and
+delete it. A misspelled field fails on the host, before anything is sent.
+
+**Optional `If-Match`.** `GET /site-config` returns an `ETag` (a content hash
+of the document); a `PUT` carrying that value back as `If-Match` is refused
+`412` if the document changed underneath it — two admins editing the same
+config, or a stale `corp-baseline.json` applied after someone else's `PUT`
+already landed — instead of one silently overwriting the other. Omitting
+`If-Match` keeps working exactly as before: this is additive, not a new
+requirement, and `wardyn site-config apply` today sends none. A `PUT` that
+does send it and gets `412` should re-`GET`, re-apply its intended change on
+top of the current document, and retry — the same shape as any optimistic
+concurrency failure.
 
 ### Testing it: two probes, not a courtesy button
 
@@ -984,20 +1511,88 @@ verbatim, never injected into. An agent CLI is present in that image only if
 the repo's own devcontainer installs it; an agent run on an image without
 one fails at the CLI, visibly, rather than being silently patched.
 
-## The age key has no rotation path
+## Rotating the age key
 
 The secret store binds **one** age identity for both encryption and decryption
-(`internal/secretstore/pg`), and nothing re-encrypts stored secrets under a new
-key — there is no `wardyn secret rotate`. Changing `WARDYN_AGE_KEY` does not
-migrate anything; it strands every existing ciphertext. To move keys today you
-must re-enter every secret (`wardyn secret set …`, `wardyn subscription connect`)
-against the new identity.
+(`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates
+nothing — it strands every existing ciphertext, and wardynd then fails closed on
+the first decrypt rather than starting.
 
-The "set a persistent key or lose your secrets on restart" warning is already in
-[`deploy/compose/README.md`](../deploy/compose/README.md),
-[TRY-IT.md](TRY-IT.md), and both installer scripts. What those do not say, and
-this does: **back the key up off-host, because you cannot rotate out of a
-compromise without re-entering every secret.**
+`wardynd -rotate-age-key <key-file>` is the supported rotation. It is a
+**maintenance mode, not a server start**: it mints a new identity, re-encrypts
+every row of the `secrets` table from the current key to the new one in ONE
+transaction, replaces the key file, writes a `secret.rekey` audit event, and
+exits. It never opens a listener and never dispatches a run.
+
+Three properties are worth knowing before you run it:
+
+- **The daemon must be stopped.** A serving wardynd holds the OLD identity in
+  memory for the life of the process; after a rotation it decrypts nothing and
+  would write any newly-stored secret under the retired key. A Postgres advisory
+  lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
+  cannot see a serving daemon — no wardynd holds a process-lifetime lock — so
+  stopping it is **your** step, not one the tool enforces.
+- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A
+  row the current key cannot decrypt aborts the whole thing with an error naming
+  that secret and how far it got (`rekey ABORTED after 3 of 9 rows …`), and
+  nothing is committed — every secret is still readable with the old key. There
+  is no half-rotated state to diagnose.
+- **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
+  is a `wardynd` flag, run by whoever has shell access to the key file.
+
+The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines are
+allowed, so `age-keygen` output works as-is) — *not* an env file. It must
+already hold the identity `WARDYN_AGE_KEY` names, or the rotation is refused:
+the whole point is that this file is replaced, and pointing the flag at
+`deploy/compose/.env` would otherwise overwrite it.
+
+```sh
+# 0. Take the Postgres dump above FIRST. It is the only rollback for the data
+#    half; the .bak below is only the rollback for the key half.
+
+# 1. Stop the daemon. Nothing may be writing secrets during the rotation.
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+
+# 2. Put the CURRENT key in a key file, if it is not already in one.
+#    (Compose keeps it as a WARDYN_AGE_KEY= line in deploy/compose/.env.)
+umask 077
+grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | cut -d= -f2- > ~/.wardyn/age.key
+
+# 3. Rotate. The old key still comes in via WARDYN_AGE_KEY; the new one is
+#    generated here and lands in the key file.
+WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+# INFO wardynd: age key rotated; … secrets=7 key_file=/home/you/.wardyn/age.key
+#      public_recipient=age1… rollback_copy=/home/you/.wardyn/age.key.bak
+
+# 4. Put the NEW key back where the deployment reads it from, then restart.
+#    Compose: rewrite the .env line. Helm: update the Secret's age-key entry.
+docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
+```
+
+Verify the same way the restore runbook does — a row count proves nothing about
+decryptability. Launch a run against a workspace that depends on a stored secret
+and confirm it starts. The audit trail records the rotation itself:
+
+```sh
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
+  -c "SELECT time, data FROM audit_events WHERE action='secret.rekey' ORDER BY time DESC LIMIT 1;"
+```
+
+**Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until
+*you* delete it — nothing cleans it up. Restoring it is only half an undo: the
+database is already re-encrypted, so `.bak` is usable **only** together with the
+Postgres dump from step 0. Once you have confirmed the rotated deployment works,
+delete `.bak` — leaving it is leaving a second copy of a retired master key on
+disk.
+
+If a step after the commit fails (the key file could not be replaced), the error
+says so explicitly and names `<key-file>.new`, which holds the new identity and
+at that point is the **only** key that reads the store. Save it before doing
+anything else.
+
+Whatever you do, **back the key up off-host.** Rotation re-encrypts what is
+there; it cannot recover a key you have already lost.
 
 ## Upgrades
 
@@ -1014,6 +1609,355 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 Take the Postgres dump above **before** the restart; that dump is the only
 rollback you have. Agent images are built separately — `make agent-images`
 rebuilds them.
+
+**On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever
+matter.** The chart's readiness probe targets `/readyz`, which the 0.6 images
+introduced. The empty default `image.tag` resolves to `.Chart.AppVersion` —
+`0.6.0` from this release on — so a stock install is fine; an `image.tag`
+explicitly **pinned** at or below `0.5.0` serves only `/healthz`, so the probe
+404s forever, the pod never joins the Service's endpoints, and
+`helm upgrade`/`rollout status` hangs NotReady with nothing crashed and nothing
+logged. Pin the probe back for such an image with
+`--set readinessProbe.path=/healthz`, accepting that version's ceiling (a dead
+Postgres reads healthy again). CI does not catch this — `helm-install-test` and
+the kind quickstart both build `wardynd` from source.
+
+## Kubernetes: day-2
+
+The four sections above — backup, restore, the age key, upgrades — are written
+against compose, and none of them transfers verbatim to the chart. This section
+is the k8s form of the same four questions. Every command below was run once
+against the throwaway cluster [`deploy/kind/quickstart.sh`](../deploy/kind/quickstart.sh)
+builds (`make kind-quickstart`), and the outputs shown are that run's; substitute
+your own release, namespace and Postgres. That cluster is demo-grade (a
+single Postgres pod with no PVC) — it is a faithful place to rehearse these
+commands, not a template for where to run them.
+
+### `helm upgrade`, and why `--wait` is not optional
+
+The migration rule is the substrate-independent one stated above: forward-only,
+applied on boot, no `down` path. wardynd on k8s runs the identical
+`internal/db` code, so **take the dump before the upgrade** — through the
+Postgres you actually run, or through `kubectl exec` if it lives in the cluster:
+
+```sh
+kubectl -n wardyn exec deploy/postgres -- \
+  pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
+```
+
+Then upgrade — passing the install's values, from the file you keep them in:
+
+```sh
+helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
+  -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
+```
+
+Keeping the values in a file under version control is the recommendation for
+its own sake — nothing is being reused, and what is deployed is reviewable —
+but it also steps around two Helm sharp edges worth knowing before they bite.
+
+**The first: `helm upgrade` reuses the previous release's values *only while you
+pass no `--set`/`-f` at all*.** Add a single `--set` and Helm resets everything
+else to chart defaults — which drops exactly the values a Wardyn install cannot
+run without (`auth.adminToken.*`, `k8s.proxyImage`, `serviceAccount.automount`,
+`secrets.ageKeyFromSecret`). The chart is built to catch that rather than
+render a crippled install, so such an upgrade fails at render time with a
+refusal naming the missing one:
+
+```console
+$ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn --set image.tag=<new-tag> --dry-run
+Error: UPGRADE FAILED: execution error at (wardyn/templates/secret.yaml):
+wardyn: the public API would 401 every request. Set auth.adminToken.secretRef.name
+(external Secret), auth.adminToken.value (inline demo), env.WARDYN_ADMIN_TOKEN, or
+env.WARDYN_OIDC_ISSUER for SSO — [...]
+```
+
+(Helm prints a `templates/secret.yaml:<line>:<col>` location alongside that
+message; the line moves whenever the template does, so the message is the part
+to match on.) A refusal is the good case, and dropping
+`secrets.ageKeyFromSecret` earns one too: on an external-DSN install the chart
+refuses any render with no age identity wired, rather than letting the reset
+render cleanly and take the pod down at boot (see
+[the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
+below).
+
+**The second, and the reason `--reuse-values` is still not the fix for the
+first: `--reuse-values` replaces the new chart's `values.yaml` with the previous
+release's, so every value block the new version ADDED is absent from the map the
+templates read.** That is fatal for any chart that dereferences a new block
+without a default — the render dies on a nil map, not on a refusal. This chart
+is written not to: each `0.6`-only block (the UI-sandbox gateway, the
+readiness-probe path) is read through a `default dict` and its `values.yaml`
+leaf default, so a `0.5` values map renders as though you had accepted the new
+defaults, with and without `k8s.enabled`. It renders — but only ever with those
+defaults: the knobs `0.6` added never appear in the map, so what a fresh install
+would have made you choose is chosen for you, silently. Use
+`--reset-then-reuse-values` instead (Helm ≥ 3.14: it starts from the NEW
+chart's defaults and layers the previous release's overrides on top), or —
+better — pass `-f your-values.yaml` as above, which is the same idea with the
+overrides somewhere you can review them. None of this is Wardyn-specific: it is
+what `--reuse-values` does to every chart that grows a values block.
+
+The new pod applies only the migration files `schema_migrations` does not
+already record — the forward-only rule at work. For the `0.5` → `0.6` upgrade
+this recipe serves, that is `0042_capability_grants` and `0043_ssh_key_role`;
+re-running the same version applies nothing and the count is `0`:
+
+```console
+$ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
+NAME                      READY   STATUS    RESTARTS   AGE
+wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
+
+$ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
+2
+```
+
+A non-zero count here is the expected shape of a version bump, not a warning.
+It is `0` only when the schema was already current — a re-deploy of the same
+version, or a rollout the schema did not move.
+
+**`--wait` (or `--atomic`) is the load-bearing flag, not a courtesy.** Without
+it `helm upgrade` reports on the API objects it wrote, not on whether anything
+came up: a deliberately broken upgrade on this cluster printed `STATUS:
+deployed` and exited `0` while its only pod sat in `CrashLoopBackOff`, and
+`helm history` later recorded that same revision as a clean `Upgrade complete`.
+Helm's release status is not a health signal. Re-check `/healthz` after every
+upgrade regardless — the quickstart's own probe asserts `.runner == "k8s"`
+rather than accepting any `200`, for the same reason.
+
+There is still no rollback. `helm rollback` restores the previous *manifest*,
+which is exactly the wrong half: the schema stays migrated, and the older
+wardynd it reinstates is the unsupported combination named above. Use it for a
+bad *config* change (a wrong env var, a wrong image tag within one schema
+generation). For a bad *release*, the dump is the rollback.
+
+### Backup: what `pg_dump` carries here, and what it does not
+
+The chart renders no database. `postgres.dsn` points at a Postgres you operate,
+so the backup itself is your Postgres's own backup story — Wardyn adds no
+mechanism. What it adds is three corrections to the compose recipe:
+
+- **Recordings are NOT in the dump on a stock chart install.** The chart pins
+  `WARDYN_RECORDING_STORE=fs` (`deploy/helm/wardyn/values.yaml`, the
+  `persistence` block) — the *opposite* of wardynd's own `pg` default that the
+  compose recipe above relies on to sweep asciicasts up with the database. With
+  `persistence.enabled=false` (the shipped default) `WARDYN_RECORDING_DIR`
+  renders empty and replay is off, so there is nothing to lose. Turn
+  `persistence` on and every asciicast lives on that PVC alone: `pg_dump` will
+  not carry them, and the PVC needs its own snapshot. Setting
+  `env.WARDYN_RECORDING_STORE=pg` instead puts them back in the dump — the
+  trade the `persistence` comment in `values.yaml` spells out.
+- **The age key is a Secret, not a `.env` line.** See below; it is still the
+  item that makes the difference between a restorable dump and a file of
+  undecryptable ciphertext.
+- **The audit spool is not a backup target.** `WARDYN_AUDIT_SPOOL` renders to
+  `/tmp/audit-spool.jsonl` on a stock install and onto the PVC beside the
+  recordings once `persistence` is on (`templates/deployment.yaml`) — so turning
+  persistence on to capture asciicasts sweeps the spool up too, and neither
+  needs restoring. Derived by design (`internal/api/auditspool.go`): it is the
+  fallback for a failed Postgres write and drains back into the database.
+  Postgres remains the source of truth for the audit log on both substrates.
+
+### Restore: rehearse into a scratch database first
+
+Two steps are Wardyn's, and both are cheap:
+
+**1. Nothing may run against the database mid-restore.** The compose recipe's
+"start Postgres alone" becomes a scale-to-zero, which on a chart install is the
+whole control plane:
+
+```console
+$ kubectl -n wardyn scale deployment/wardyn --replicas=0
+deployment.apps/wardyn scaled
+$ kubectl -n wardyn rollout status deployment/wardyn --timeout=60s
+deployment "wardyn" successfully rolled out
+```
+
+**2. The age key must already be in place** — the same "age key FIRST" ordering
+as compose, for the same reason (see the next section for what happens when it
+is not).
+
+Then restore the way your Postgres restores, keeping `-v ON_ERROR_STOP=1` for
+the reason the compose section gives: without it `psql` walks past a failed
+statement and still exits `0`, leaving a half-loaded database that looks
+clean. Before doing that to real data, **rehearse the dump into a scratch
+database** — it proves the file actually loads, costs nothing, and touches no
+live row:
+
+```console
+$ kubectl -n wardyn exec deploy/postgres -- createdb -U wardyn wardyn_restorecheck
+$ kubectl -n wardyn exec -i deploy/postgres -- \
+    psql -U wardyn -v ON_ERROR_STOP=1 -q wardyn_restorecheck < wardyn-2026-08-20.sql
+$ echo $?
+0
+$ kubectl -n wardyn exec deploy/postgres -- psql -U wardyn -d wardyn_restorecheck \
+    -c "SELECT count(*) AS audit_events FROM audit_events;" \
+    -c "SELECT count(*) AS migrations FROM schema_migrations;" \
+    -c "SELECT name FROM secrets ORDER BY name;"
+ audit_events
+--------------
+            9
+(1 row)
+
+ migrations
+------------
+         43
+(1 row)
+
+        name
+---------------------
+ wardyn-signing-key
+ wardyn-ssh-host-key
+(2 rows)
+
+$ kubectl -n wardyn exec deploy/postgres -- dropdb -U wardyn wardyn_restorecheck
+```
+
+That last query is the one to read closely. `secrets` is where the control
+plane's own keys live — the signing key and, with `ssh.enabled`, the gateway
+host key — so those two rows returning is the difference between a restored
+database and a restored *install*.
+
+Present is not the same as decryptable, though, and no `SELECT` can tell you
+which one you have. Compose answers that by launching something that needs a
+stored secret; on k8s the control plane answers it for you the moment you scale
+back to one, because it reads its own signing key out of that table before it
+serves anything. A key that does not match the restored ciphertext is therefore
+a failed rollout, not a surprise at first use — which is the next section.
+
+### The age key is a Secret, and the default loses your secrets on boot 2
+
+Two supported wirings, and the chart refuses both ways of getting it wrong
+(`deploy/helm/wardyn/templates/secret.yaml`):
+
+| `postgres.dsn` mode | age key value | What injects `WARDYN_AGE_KEY` |
+|---|---|---|
+| inline (`dsn.value`) | `secrets.ageKey` | the Secret the chart creates |
+| external (`dsn.secretRef.name`) | an `age-key` entry in **that** Secret | `secrets.ageKeyFromSecret=true` |
+| external | `secrets.ageKey` | **render fails** — it would be silently dropped |
+| external | none wired at all | **render fails** — unless `secrets.allowEphemeralAgeKey=true` |
+
+`secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so an
+external-DSN install wiring neither would get **no** stable identity: wardynd
+mints an ephemeral one per boot. That install works perfectly once. Its second
+boot cannot decrypt what its first boot wrote, and because the control plane
+loads its own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`)
+it fails closed there, before serving — a `CrashLoopBackOff`, not a degraded
+pod. That is the fourth row: a guaranteed outage is not a default worth
+shipping, so the chart stops the install at render, before it touches a
+cluster.
+
+```console
+$ helm template wardyn ./deploy/helm/wardyn \
+    --set postgres.dsn.secretRef.name=wardyn-db --set auth.adminToken.value=t
+Error: execution error at (wardyn/templates/secret.yaml): wardyn:
+postgres.dsn.secretRef.name="wardyn-db" is a PERSISTENT Postgres, but no age
+identity is wired, so wardynd generates an ephemeral one at every boot. [...]
+Throwaway install where losing every stored secret on restart is fine:
+secrets.allowEphemeralAgeKey=true renders anyway.
+```
+
+Taking that escape hatch — `--set secrets.allowEphemeralAgeKey=true` — is what
+it takes to render the broken install today, and it then fails exactly as
+described. This is what flipping `ageKeyFromSecret` off on the quickstart
+cluster produced back when the render still permitted it:
+
+```console
+$ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
+NAME                     READY   STATUS             RESTARTS      AGE
+wardyn-794dcd78f-tk6jw   0/1     CrashLoopBackOff   1 (23s ago)   24s
+
+$ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
+WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
+ERROR wardynd: fatal err="load secret \"wardyn-signing-key\": pg secretstore: decrypt wardyn-signing-key: age decrypt: no identity matched any of the recipients"
+```
+
+That is the correct behaviour — `loadOrCreateSecret` fails closed on a decrypt
+error rather than minting a fresh key over the existing one, which would strand
+the old ciphertext permanently instead of loudly. But it is also unrecoverable
+from inside the cluster. [Rotating the age key](#rotating-the-age-key)
+re-encrypts a store you can still *read*; it cannot help here, because the key
+that reads this one is exactly what is missing. So the fix is always "put the
+original Secret back", never "generate a new one". Back the Secret up
+off-cluster, wherever the DSN Secret is backed up, and treat deleting it as
+equivalent to deleting the database.
+
+**Rotating it on k8s** uses the same runbook
+([Rotating the age key](#rotating-the-age-key)), with two differences.
+
+First, "stop the daemon" is a scale-to-zero — the Deployment *is* the daemon:
+
+```sh
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+kubectl -n wardyn wait --for=delete pod -l app.kubernetes.io/name=wardyn --timeout=2m
+```
+
+Second, **run the rotation from outside the cluster, not in a Pod.**
+`-rotate-age-key` needs only `WARDYN_PG_DSN`, `WARDYN_AGE_KEY` and a writable
+path for the key file — so port-forward Postgres and run the same `wardynd`
+binary on your workstation, exactly as the compose runbook does. Doing it in a
+one-shot Pod is the awkward path, not the clever one: the wardynd image is
+distroless with no shell (`deploy/compose/Dockerfile.wardynd`), so there is
+nothing in it to seed the key file with or to copy the result back out
+afterwards, and the `.bak` would die with the Pod anyway.
+
+```sh
+kubectl -n wardyn port-forward svc/<your-postgres> 15432:5432 &
+WARDYN_PG_DSN='postgres://…@127.0.0.1:15432/wardyn?sslmode=disable' \
+  WARDYN_AGE_KEY="$(kubectl -n wardyn get secret <name> -o jsonpath='{.data.age-key}' | base64 -d)" \
+  ./bin/wardynd -rotate-age-key ~/.wardyn/age.key
+```
+
+Then write the new value into the Secret the Deployment reads
+(`secrets.ageKey`, or the `age-key` entry of the external-DSN Secret — see the
+table above) and scale back up. Keep the old Secret value **and** the Postgres
+backup until the rotated deployment is confirmed working; on k8s those are the
+rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
+
+### The SSH host key survives restarts — because the age key does
+
+The SSH gateway (`ssh.enabled`) does not carry a host key in the chart or in a
+volume. wardynd generates an ed25519 key on first boot and persists it into the
+secret store under `wardyn-ssh-host-key` (`loadOrCreateSSHHostKey`,
+`cmd/wardynd/main.go`), through the same `loadOrCreateSecret` path as the
+signing key. So the fingerprint a client pins is stable across pod churn with
+no operator action — the same value survived a rolling `helm upgrade` and a
+full scale-to-zero-and-back on the quickstart cluster:
+
+```console
+$ curl -s http://127.0.0.1:8080/healthz | jq -c .ssh
+{"advertise_addr":"127.0.0.1:2222","enabled":true,"host_key_fingerprint":"SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8"}
+
+$ kubectl -n wardyn logs deploy/wardyn | grep "ssh gateway listening"
+INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_key_fingerprint=SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8
+```
+
+`/healthz` is anonymous, so that fingerprint is publishable to the people who
+will connect — see [SSH.md](SSH.md).
+
+The dependency runs one way and is worth stating plainly: **the host key is
+exactly as stable as the age key.** Persist the age key and clients never see a
+fingerprint change. Lose it and the pod crash-loops on the previous section's
+error before the gateway ever listens, so what clients get is a connection
+refused, never a silently different host key — a strictly better failure than
+the man-in-the-middle warning a re-minted key would produce, and the reason
+`loadOrCreateSecret`'s fail-closed branch matters here specifically.
+
+### The UI-sandbox gateway: a per-run origin is the production default
+
+If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
+set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — this
+is the documented enterprise default, not an optional extra. Leaving it unset
+puts every run's relayed app on the SAME browser origin, separated only by a
+path-scoped cookie; that shared-origin mode is a published residual
+([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18), tolerable for a
+single-tenant demo cluster but not the shape a multi-tenant or production
+install should run in. Setting the template needs wildcard DNS and a wildcard
+certificate for the gateway's hostname (e.g. `*.ui.example.com`) — the one-time
+cost that buys every run its own origin, with an enter on any other host
+refused outright. Full recipe, including the wildcard Ingress, in
+[docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the Helm chart
+section linked above.
 
 ## One replica, by construction
 
@@ -1045,7 +1989,11 @@ rather than a preference:
   map, so a run whose secrets were registered before the restart and whose
   cast uploads after it hits the identical empty-snapshot fail-open — with
   `replicas: 1` throughout. The pin removes the *cross-replica* case; it does
-  not remove this one.
+  not remove this one. What the map no longer does is grow without bound: a
+  background sweeper evicts a run's entry once that run has been terminal for
+  an hour (`api.RunSecretGrace`) — late enough for the finalize audit and the
+  cast upload, which mask lazily at use time, to still see it. Nothing to
+  configure, and it never touches a live run.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: it is the fallback
   for a failed Postgres write, and each pod drains its own back into the
@@ -1095,13 +2043,13 @@ those lost work, this one persists secrets. Keep `replicas: 1`. Going beyond it
 has not been built, tested, or released, and the chart will not render it without
 `allowMultiReplica=true`.
 
-## Kubernetes: known gaps (v0.5)
+## Kubernetes: known gaps (v0.6)
 
 The `k8s` runner substrate (`deploy/helm/wardyn`, `k8s.enabled=true`,
 `internal/runner/k8s`) is a **separate, independent confinement substrate**
 from the Docker Compose path (L1/NetworkPolicy-backed vs. Compose's L0
 structural one) — most of this document applies to both, but the list below
-is what the k8s substrate does NOT do yet, honestly, as of v0.5. Each item is
+is what the k8s substrate does NOT do yet, honestly, as of v0.6. Each item is
 a real limitation checked against the driver, not a guess:
 
 - **No BYOI or devcontainer builds.** A `wardyn-byoi/`-prefixed image ref is
@@ -1155,6 +2103,26 @@ a real limitation checked against the driver, not a guess:
   NetworkPolicy-enforced boundary (proven live by the boot-time egress
   canary) but not the independent kernel-level corroboration Compose +
   Tetragon provides.
+- **A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses
+  boot outright, with no override.** The boot-time egress canary's phase A
+  applies no NetworkPolicy of its own — it only proves the cluster is
+  reachable at all before phase B proves Wardyn's deny-all rule takes effect.
+  If the namespace already carries a default-deny policy from something else
+  (a cluster-wide baseline, another operator's), phase A's pod is blocked too,
+  and wardynd refuses to boot with an INDETERMINATE verdict indistinguishable
+  from a genuinely broken cluster — even though per-run confinement would work
+  fine once Wardyn's own allow-rules are in place
+  (`internal/runner/k8s/canary.go`). **Fix**: give `k8s.runsNamespace` a
+  namespace with no ambient default-deny, or exempt Wardyn's pods from *that
+  policy's own* `podSelector` (a `matchExpressions` entry with
+  `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`) so it stops
+  selecting them. **Do not instead add a separate allow policy for
+  `wardyn.managed=true`**: NetworkPolicy allows are additive and both the agent
+  and proxy pods carry that label, so such a policy widens every sandbox pod's
+  egress past Wardyn's per-run deny+proxy-only policy
+  (`internal/runner/k8s/sandbox.go`) and flips the canary's phase B to "CNI
+  does not enforce" — which in turn invites
+  `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 - **`replicas` stays 1 on k8s exactly as it does everywhere else** — see
   [One replica, by construction](#one-replica-by-construction) above; nothing
   about the k8s substrate changes that story (the masking registry is still

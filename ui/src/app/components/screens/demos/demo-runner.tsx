@@ -41,7 +41,7 @@ import { usePoll } from "../../../lib/use-poll";
 import { isTerminalRunState, type AuditEvent, type RunState } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
-import { CopyPill } from "../workspace-detail/record-pane";
+import { CopyPill } from "../workspace-detail/record-pane-chips";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";

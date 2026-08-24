@@ -15,7 +15,8 @@
 # deliberately outside this gate, so do not read a green run as "nothing floats".
 #
 # Exempt:
-#   - compose `*:local` tags   — locally BUILT images (they carry a `build:` stanza)
+#   - compose `*:local` tags   — locally BUILT images (they carry a `build:` stanza),
+#                                 including behind a `${VAR:-...:local}` override knob
 #   - $ALLOWLIST_REF            — the one documented local retag of a :local image
 # Run via `make lint`.
 set -euo pipefail
@@ -32,7 +33,11 @@ while IFS= read -r df; do
   # (FROM <alias>); those refs are not external images and need no digest.
   mapfile -t aliases < <(grep -iE '^FROM .+ [Aa][Ss] ' "$df" | sed -E 's/.* [Aa][Ss] +([^ ]+).*/\1/')
   while IFS= read -r line; do
-    ref=$(echo "$line" | awk '{print $2}')
+    # The ref is the first token after FROM that is not a FLAG: a build stage
+    # may carry `FROM --platform=$BUILDPLATFORM <image>` (cross-compiling Go
+    # stages pin themselves to the builder's arch). Taking $2 blindly read the
+    # flag AS the image and failed every such stage as unpinned.
+    ref=$(echo "$line" | awk '{for (i=2;i<=NF;i++) if ($i !~ /^--/) {print $i; exit}}')
     # `FROM ${VAR}` is BuildKit's global-ARG stage selector (e.g. UI_STAGE picks
     # ui-build vs ui-prebuilt). Resolve it against the Dockerfile's own
     # `ARG VAR=default` so the alias check below sees the stage name. Only the
@@ -59,6 +64,10 @@ done < <(find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) ! -path './.git
 #    with -f docker-compose.yaml -f docker-compose.ci.yaml) ──────────────────
 for compose in ./deploy/compose/docker-compose*.yaml; do
   while IFS= read -r img; do
+    # `${VAR:-default}` — the wardynd/proxy image override knobs. Judge the
+    # DEFAULT, the way the Dockerfile arm above resolves `FROM ${VAR}`: only the
+    # default is knowable here, and a floating registry default still fails.
+    [[ "$img" =~ ^\$\{[A-Za-z_][A-Za-z0-9_]*:-(.+)\}$ ]] && img="${BASH_REMATCH[1]}"
     [[ "$img" == *:local ]] && continue        # locally-built stanza (has `build:`)
     if [[ "$img" != *"@sha256:"* ]]; then
       echo "FAIL: $compose: image '$img' is not digest-pinned (@sha256). Pin it: '$img@sha256:<digest>'." >&2

@@ -282,6 +282,14 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 				if !enabled {
 					continue
 				}
+				// #12: same TRUST BOUNDARY as the secret case below, gated
+				// behind RequireOperatorSetEgress (default off — see the
+				// Config field doc). When enabled, a scan_seeded egress host
+				// (the workspace scanner reading untrusted repo content) is
+				// skipped; only an operator's DIRECT declaration auto-adds.
+				if s.cfg.RequireOperatorSetEgress && req.Provenance != "operator_set" {
+					continue
+				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
 			case "secret":
 				if !enabled {
@@ -767,7 +775,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWrite
 	// silently clobbered back to FAILED (was: unconditional write), audit, and
 	// answer 201 with the refreshed (FAILED) run + warnings.
 	buildFailed := func(auditData map[string]any) {
-		s.failAndRevoke(ctx, runID, types.RunPending)
+		// D9: surface the build failure under the FAILED badge, not only in the
+		// run.build audit row. The error text is already in auditData["error"].
+		hint := "the run's sandbox image could not be built"
+		if e, ok := auditData["error"].(string); ok && e != "" {
+			hint += ": " + e
+		}
+		s.failAndRevoke(ctx, runID, types.RunPending, hint)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "failure", mustJSON(auditData)))
 		created = s.refreshRun(ctx, runID, created)

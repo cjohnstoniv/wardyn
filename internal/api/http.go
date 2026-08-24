@@ -12,9 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // claimsCtxKey carries the verified run claims through the internal handlers.
@@ -81,6 +84,67 @@ func withOIDCRole(ctx context.Context, role string) context.Context {
 func oidcRoleFromContext(ctx context.Context) string {
 	r, _ := ctx.Value(oidcRoleCtxKey{}).(string)
 	return r
+}
+
+// oidcGroupsCtxKey carries the login-time group snapshot of the same verified
+// OIDC session (oidc.Session.Groups), published by humanOrAdminAuth next to the
+// principal/email/role and for the same reason those keys exist: the auth
+// middleware stays the single place that trusts the oidc package. It is what a
+// `group`-subject capability grant matches against — see capabilities.go.
+//
+// NIL AND EMPTY ARE DIFFERENT (see oidc.GroupsFromContext). Empty: the IdP sent
+// no usable group identity, and group grants genuinely do not apply. Nil:
+// either there is no SSO session at all, or the human holds a PRE-0.6 cookie
+// that predates the field. A caller that already knows a session is present
+// must read nil as "snapshot unavailable, re-login required" and surface it as
+// groups_snapshot_stale — never as "this human has no groups", which would
+// silently withhold every group grant they hold and be unexplainable from the
+// admin side.
+type oidcGroupsCtxKey struct{}
+
+func withOIDCGroups(ctx context.Context, groups []string) context.Context {
+	return context.WithValue(ctx, oidcGroupsCtxKey{}, groups)
+}
+
+func oidcGroupsFromContext(ctx context.Context) []string {
+	g, _ := ctx.Value(oidcGroupsCtxKey{}).([]string)
+	return g
+}
+
+// oidcExpiryCtxKey carries the same verified OIDC session's expiry, published
+// by humanOrAdminAuth next to the principal/email/role for the same reason
+// those keys exist: the auth middleware stays the single place that trusts the
+// oidc package, and /me (W31-S1-7's session-expiry warning) is unit-testable
+// without minting a signed session cookie. Zero when there is no SSO session.
+type oidcExpiryCtxKey struct{}
+
+func withOIDCExpiry(ctx context.Context, expiry time.Time) context.Context {
+	return context.WithValue(ctx, oidcExpiryCtxKey{}, expiry)
+}
+
+func oidcExpiryFromContext(ctx context.Context) time.Time {
+	t, _ := ctx.Value(oidcExpiryCtxKey{}).(time.Time)
+	return t
+}
+
+// withHumanIdentity publishes the four keys that TOGETHER describe an
+// authenticated human: who they are (sub), the email an admin may have written
+// a grant against, the role isOperator gates on, and the group snapshot the
+// capability resolver matches. It exists so the SSO-session branch and the
+// api-token branch of humanOrAdminAuth cannot DRIFT: a fifth identity key added
+// to one path and forgotten on the other is exactly how a token would silently
+// resolve to a different permission set than the session that minted it — and
+// for a DENY grant, silently resolving to "no match" is a breach, not a
+// degradation. Both branches call this and nothing else.
+//
+// Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
+// an identity: an api token has no session to expire, so the key stays zero for
+// one and is set by the SSO branch alone (see oidcExpiryCtxKey).
+func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string) context.Context {
+	ctx = withOIDCHuman(ctx, sub)
+	ctx = withOIDCEmail(ctx, email)
+	ctx = withOIDCRole(ctx, role)
+	return withOIDCGroups(ctx, groups)
 }
 
 // errorBody is the uniform JSON error envelope.
@@ -253,7 +317,13 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(withLocalPrincipal(r.Context(), op)))
 		})
 	}
-	admin := s.adminAuth(next)
+	// The THIRD auth branch sits in front of the admin bearer path, on both
+	// halves of the split below: a `wdn_`-prefixed bearer is a per-user API
+	// token, anything else is still compared against the single deployment-wide
+	// admin token. Both halves get it because a token is a token — an operator
+	// who has not configured SSO can still hold one (they simply cannot MINT
+	// one; see handleCreateAPIToken, which requires a verified human).
+	admin := s.apiTokenAuth(next, s.adminAuth(next))
 	if s.cfg.OIDC == nil {
 		return admin
 	}
@@ -269,9 +339,18 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// The session email rides along for /me and audit attribution; the
 			// session role rides along for isOperator (B1's derived admin/member
 			// role is now the sole source of the admin tier — see isOperator).
-			ctx := withOIDCHuman(r.Context(), sub)
-			ctx = withOIDCEmail(ctx, oidc.EmailFromContext(r.Context()))
-			ctx = withOIDCRole(ctx, oidc.RoleFromContext(r.Context()))
+			//
+			// The group snapshot rides along for the capability resolver, copied
+			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
+			// empty set (see oidcGroupsCtxKey).
+			ctx := withHumanIdentity(r.Context(), sub,
+				oidc.EmailFromContext(r.Context()),
+				oidc.RoleFromContext(r.Context()),
+				oidc.GroupsFromContext(r.Context()))
+			// The session expiry rides along so /me can warn ahead of it —
+			// W31-S1-7: there is no refresh, so the alternative is a silent 401
+			// that wipes mid-work console state back to the sign-in gate.
+			ctx = withOIDCExpiry(ctx, oidc.ExpiryFromContext(r.Context()))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -318,7 +397,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// only that they are not an admin.
 			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberCustomImage) —
+			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
@@ -345,26 +424,102 @@ func (s *Server) isOperator(ctx context.Context) bool {
 	return oidcRoleFromContext(ctx) == oidc.RoleAdmin
 }
 
+// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
+// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
+// handful of genuine failures in the same second are not silently dropped,
+// while a scanner's rapid-fire 401s past the burst are.
+const (
+	authFailedRatePerSec = 1.0
+	authFailedBurst      = 5.0
+)
+
+// authFailedLimiter is a process-local token bucket gating auth.failed
+// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
+// first call).
+type authFailedLimiter struct {
+	mu     sync.Mutex
+	last   time.Time
+	tokens float64
+}
+
+func (l *authFailedLimiter) allow(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last.IsZero() {
+		l.tokens = authFailedBurst
+	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
+		l.tokens += elapsed * authFailedRatePerSec
+		if l.tokens > authFailedBurst {
+			l.tokens = authFailedBurst
+		}
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
+}
+
 // adminAuth gates the public API behind a constant-time bearer compare. An
 // empty configured AdminToken denies everything (fail closed): the public API
 // must not be unauthenticated. SSO/Dex replaces this in a later milestone.
+//
+// Every 401 here is audited as auth.failed (#19a) — this is the ONE chokepoint
+// every public-API auth failure funnels through (humanOrAdminAuth composes
+// oidc.Middleware(adminAuth(...)), and a rejected session cookie still falls
+// through to here), so one emit call covers both "adminAuth 401s" and
+// "dropped/invalid OIDC session cookies" without a second call site per caller.
 func (s *Server) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AdminToken == "" {
+			s.auditAuthFailed(r, "admin_token_not_configured")
 			writeError(w, http.StatusUnauthorized, "admin token not configured; public API disabled")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
+			s.auditAuthFailed(r, "missing_bearer_token")
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
+			s.auditAuthFailed(r, "invalid_admin_token")
 			writeError(w, http.StatusUnauthorized, "invalid admin token")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// auditAuthFailed emits auth.failed (actor system) for an authentication
+// failure on the public API. reason is the adminAuth-local bounded enum
+// ("admin_token_not_configured", "missing_bearer_token",
+// "invalid_admin_token"); it is overridden by a more specific
+// oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session"/
+// "revoked_session"/"session_revocation_unavailable")
+// when a session cookie was ALSO presented and rejected on this same
+// request — that is the more actionable signal of the two. Data is
+// content-free by construction: a closed reason enum, the request path, and
+// the TCP peer — never a user-supplied string.
+//
+// Rate-bound so a scanner throwing 401s cannot flood the append-only log:
+// ponytail: one process-global token bucket, not per-IP — per-IP needs its
+// own eviction policy (an unbounded map keyed by attacker-controlled IPs is
+// itself a memory-DoS vector) and a global cap already starves a flood from
+// any single source; add per-IP if a shared IP (corp NAT) needs to be
+// distinguished from an attacker sharing it.
+func (s *Server) auditAuthFailed(r *http.Request, reason string) {
+	if !s.authFailedLimiter.allow(s.cfg.Now()) {
+		return
+	}
+	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {
+		reason = sr
+	}
+	ev := s.auditEvent(nil, types.ActorSystem, "wardyn/adminAuth", "auth.failed", r.URL.Path,
+		"failure", mustJSON(map[string]any{"reason": reason}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
 }
 
 // internalAuth verifies a per-run token via identity.Provider.Verify with the

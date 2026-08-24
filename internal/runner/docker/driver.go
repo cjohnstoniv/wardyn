@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -422,7 +421,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(spec.Mounts)
+	agentMounts, err := d.agentMounts(spec.Mounts, spec.MemberMountRoots)
 	if err != nil {
 		return fail(err)
 	}
@@ -522,65 +521,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Driver:        driverName,
 		EnforcedClass: enforced,
 	}, nil
-}
-
-// agentMounts assembles every mount attached to the agent container: the
-// recording-cast delivery mount (driver config) followed by the operator/policy
-// workspace mounts (specMounts), in that order. Any denied source/target FAILS
-// CLOSED with an error, which aborts CreateSandbox and runs its rollback.
-//
-// SECURITY MODEL (documented here and in runner.SandboxSpec.Mounts):
-//   - Workspace mounts come ONLY from a policy's RunPolicySpec.WorkspaceMounts,
-//     copied into spec.Mounts by internal/api dispatch. The create-run HTTP
-//     request has no mounts field, so a prompt-injected agent / malicious
-//     requester can NEVER choose a host mount (invariants 1 & 3).
-//   - DENY-LIST DEFENSE-IN-DEPTH: even though the values came from policy
-//     (already validated at policy-write time), we re-run runner.ValidateMount
-//     here and FAIL CLOSED — any denied Source (/, /proc, /sys, /dev, /run,
-//     /var/run, /var/lib/docker, any docker.sock, /etc, /boot, /root, or a
-//     non-absolute/non-cleaned path) or a Target outside the allowed
-//     in-container prefixes errors the whole CreateSandbox (rollback runs).
-//   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
-//     ReadOnly=false, so a workspace bind cannot grant host write by default.
-func (d *Driver) agentMounts(specMounts []runner.Mount) ([]mount.Mount, error) {
-	var mounts []mount.Mount
-	if d.cfg.RecordingMount != "" {
-		// Cast delivery: wardyn-rec writes the finished recording to this
-		// shared mount (-out-dir), where the control plane's FSStore reads it.
-		mtype := mount.TypeVolume
-		if strings.HasPrefix(d.cfg.RecordingMount, "/") {
-			mtype = mount.TypeBind
-			// A host-path RecordingMount is a real host bind: subject its SOURCE to
-			// the same deny-list as workspace binds and FAIL CLOSED (a source that
-			// is/traverses /, /proc, docker.sock, ... must never be bound in). Only
-			// binds are validated — a named volume is Docker-managed, not a host path
-			// (mirrors how the workspace-bind loop treats host paths). Source half
-			// only: the target is RecordingMountTarget, a fixed Wardyn-owned path
-			// (never attacker-chosen), not a workspace-prefix target.
-			if err := runner.ValidateMountSource(d.cfg.RecordingMount); err != nil {
-				return nil, fmt.Errorf("docker: denied recording mount %q -> %q: %w", d.cfg.RecordingMount, RecordingMountTarget, err)
-			}
-		}
-		mounts = append(mounts, mount.Mount{
-			Type:   mtype,
-			Source: d.cfg.RecordingMount,
-			Target: RecordingMountTarget,
-		})
-	}
-
-	// Operator/policy-controlled host bind mounts (e.g. a host repo at ~/work).
-	for _, m := range specMounts {
-		if err := runner.ValidateMount(m); err != nil {
-			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
-		}
-		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   m.Source,
-			Target:   m.Target,
-			ReadOnly: m.ReadOnly, // default false in Go == RW only when policy opted in via ReadOnly=false
-		})
-	}
-	return mounts, nil
 }
 
 // recordingChmodDirs returns the directories prepareRecordingDirs makes agent-
@@ -1087,6 +1027,74 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: remove internal network: %w", err)
 	}
 	return nil
+}
+
+// containerListerAPI is the narrow docker-client slice SweepOrphanedSandboxes
+// needs beyond dockerAPI's own methods — kept separate (envbuild/reaper.go's
+// pattern) so the main seam does not grow ContainerList, and every dockerAPI
+// fake with it, until something else needs to list. A client that doesn't
+// implement it (a narrower test fake) is simply not swept.
+type containerListerAPI interface {
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+}
+
+// the real client must implement it.
+var _ containerListerAPI = (*client.Client)(nil)
+
+// SweepOrphanedSandboxes tears down the sandbox objects (agent container +
+// sibling proxy + per-run internal network) of every run whose row no longer
+// owns them — the residue of a crash BETWEEN CreateSandbox and SetSandboxRef,
+// which leaves those containers running under a run row that carries no
+// sandbox_ref, so no ref-keyed teardown (reconcile.go, SweepTerminalSandboxes)
+// ever revisits them (D13). isOrphan — supplied by the control plane, the only
+// layer that can read run rows — answers "does this run id still legitimately
+// own live sandbox containers?"; minAge is the reaper AGE GATE
+// (undispatchedGrace) below which a container is assumed to belong to a dispatch
+// still in flight and is left alone. That age gate is the SAME deliberately-blunt
+// multi-process safety net as envbuild's SweepOrphanedBuilds: a younger container
+// may be another replica's live dispatch that has not yet written its ref, so
+// only one older than any dispatch could still be provisioning is assumed
+// abandoned. Reuses the existing deterministic-name teardown, so a partially-created
+// sandbox (proxy up, agent still coming) is torn down whole from the run id alone.
+//
+// ponytail: keyed on the AGENT container (component=agent), whose deterministic
+// name reconstructs the proxy + network — a crash in the ~ms between
+// network-create and agent-create can leave a network with no container to key
+// on; that vanishingly rare edge is left to `docker network prune`, not a
+// second labeled-object listing.
+func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	lister, ok := d.cli.(containerListerAPI)
+	if !ok {
+		return 0, nil
+	}
+	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
+		All:     true, // a crashed sandbox's agent may be exited, not running
+		Filters: client.Filters{}.Add("label", labelComponent+"="+componentAgent),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
+	}
+	cutoff := time.Now().Add(-minAge)
+	var swept int
+	var errs []error
+	for _, c := range res.Items {
+		runID, perr := parseRunID(c.Labels[labelRun])
+		if perr != nil {
+			continue // not a wardyn agent container whose run id we can key teardown on
+		}
+		if time.Unix(c.Created, 0).After(cutoff) {
+			continue // too young: a dispatch may still be about to SetSandboxRef
+		}
+		if !isOrphan(runID) {
+			continue // a live run legitimately owns it
+		}
+		if terr := d.teardown(ctx, agentContainerName(runID)); terr != nil {
+			errs = append(errs, fmt.Errorf("docker: teardown orphaned run %s: %w", runID, terr))
+			continue
+		}
+		swept++
+	}
+	return swept, errors.Join(errs...)
 }
 
 // ensureImage pulls ref if it is not already present locally. Pull output is

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // Pagination defaults for the public list endpoints. defaultListLimit is what an
@@ -148,7 +150,61 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
+	// the run payload — the console's UI-apps lane needs it, and the run row
+	// cannot answer it (agent_runs carries policy_id only, and an inline or
+	// default policy has no row to fetch). Resolved from the same
+	// run.policy.effective envelope the UI gateway itself trusts. A store
+	// failure is logged and the field omitted rather than failing the whole run
+	// read: every other field is already loaded and correct, and a missing
+	// ui_apps renders the lane's "no apps declared" state, which is the
+	// closed direction.
+	apps, err := s.effectiveUIApps(r.Context(), id)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "wardynd: effective ui_apps lookup failed", "run_id", id, "err", err)
+	}
+	writeJSON(w, http.StatusOK, struct {
+		types.AgentRun
+		UIApps []types.UIApp `json:"ui_apps,omitempty"`
+	}{AgentRun: run, UIApps: apps})
+}
+
+// effectivePolicyAuditScan bounds how many of a run's earliest audit events are
+// scanned for its run.policy.effective envelope. Dispatch writes that event
+// before the sandbox exists, so it is always among a run's first events; the
+// bound keeps a long-lived run's audit tail out of the query.
+const effectivePolicyAuditScan = 200
+
+// effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
+// authorization envelope dispatch recorded as run.policy.effective
+// (runs_dispatch.go), which is the ONLY post-hoc source of a run's real spec:
+// agent_runs.policy_id has no spec column, run_policies.spec is overwritten in
+// place, and an inline/default policy has no stored row at all. Resolving
+// through policy_id instead would hand a run created with an INLINE policy the
+// DEFAULT policy's apps — a widening this must never do.
+//
+// A run with no such event (never dispatched, or the audit store unavailable)
+// yields no apps, so every caller fails closed on it.
+func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.UIApp, error) {
+	if s.cfg.Store == nil {
+		return nil, nil
+	}
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, effectivePolicyAuditScan)
+	if err != nil {
+		return nil, err
+	}
+	var apps []types.UIApp
+	for _, ev := range events {
+		if ev.Action != "run.policy.effective" || len(ev.Data) == 0 {
+			continue
+		}
+		var spec types.RunPolicySpec
+		if uerr := json.Unmarshal(ev.Data, &spec); uerr != nil {
+			continue
+		}
+		apps = spec.UIApps // last wins: a re-dispatch supersedes an earlier envelope
+	}
+	return apps, nil
 }
 
 // resolvePolicy returns the spec + policy id to attach. When policyID is nil it
@@ -213,7 +269,19 @@ func agentImage(agent string, images map[string]string) string {
 	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
 		key = def.ImageKey
 	}
-	return "ghcr.io/cjohnstoniv/agent-" + key + ":latest"
+	return "ghcr.io/cjohnstoniv/agent-" + key + ":" + agentImageTag(version.Version)
+}
+
+// agentImageTag picks the tag for a convention agent image: the daemon's OWN
+// version (images are published per-semver, so a 0.6 daemon pulls a 0.6 agent)
+// rather than a floating ":latest" that a later release re-points under a
+// version-pinned fleet's feet. ":latest" is the last resort only when the build
+// carries no version string.
+func agentImageTag(v string) string {
+	if v == "" {
+		return "latest"
+	}
+	return v
 }
 
 // primaryWorkspacePath returns the run's first local host workspace mount source

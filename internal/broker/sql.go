@@ -56,6 +56,18 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 // grant), so the SELECT-then-INSERT runs inside one tx with ON CONFLICT DO
 // NOTHING; a racing double-insert loses harmlessly and the re-select returns
 // the single winner.
+//
+// EXPIRED rows are SKIPPED by both selects (W19-W19c-2) — the re-select carries
+// the filter too, so the winner it returns is a PENDING row by predicate rather
+// than by relying on requested_at ordering to sort the swept row below it. The
+// approval sweeper (approval.ExpireStale) ages out every stale PENDING
+// approval, including this one; without the filter the next mint attempt
+// re-found that EXPIRED row forever, MintForGrant mapped it to
+// ErrApprovalDenied, and the run was permanently wedged with no PENDING request
+// left for a human to decide. An expiry is a sweep nobody decided
+// (types.ApprovalDecision), so re-raising a fresh PENDING is the honest
+// recovery. DENIED is a real human decision and stays terminal — it is
+// deliberately NOT skipped.
 func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, spec types.GrantSpec) (types.ApprovalRequest, error) {
 	tx, err := b.db.Begin(ctx)
 	if err != nil {
@@ -73,7 +85,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 	err = tx.QueryRow(ctx,
 		`SELECT id, state, requested_scope, minted_jti, reason
 		   FROM approvals
-		  WHERE grant_id = $1 AND kind = 'credential'
+		  WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
 		  ORDER BY requested_at DESC
 		  LIMIT 1`, grantID).
 		Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
@@ -102,7 +114,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 		err = tx.QueryRow(ctx,
 			`SELECT id, state, requested_scope, minted_jti, reason
 			   FROM approvals
-			  WHERE grant_id = $1 AND kind = 'credential'
+			  WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
 			  ORDER BY requested_at DESC
 			  LIMIT 1`, grantID).
 			Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
@@ -135,6 +147,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		apState   *string
 		reqScope  []byte
 		mintedJTI *string
+		decScope  *string
 	)
 	// FOR UPDATE OF g locks the grant row, serializing concurrent mints for the
 	// same grant. It CANNOT also lock `a`: Postgres forbids FOR UPDATE on the
@@ -149,7 +162,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 	// UPDATE (broker.mint) — that check is the load-bearing single-use guarantee.
 	const q = `
 		SELECT g.id, g.run_id, g.spec,
-		       a.id, a.run_id, a.state, a.requested_scope, a.minted_jti
+		       a.id, a.run_id, a.state, a.requested_scope, a.minted_jti, a.decision_scope
 		  FROM credential_grants g
 		  LEFT JOIN approvals a
 		         ON a.grant_id = g.id
@@ -166,7 +179,7 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		hint = approvalHint
 	}
 	err := tx.QueryRow(ctx, q, grantID, hint).
-		Scan(&r.grantID, &r.grantRunID, &specRaw, &apID, &apRunID, &apState, &reqScope, &mintedJTI)
+		Scan(&r.grantID, &r.grantRunID, &specRaw, &apID, &apRunID, &apState, &reqScope, &mintedJTI, &decScope)
 	if err != nil {
 		if errors.Is(err, errNoRow) {
 			return grantApprovalRow{}, ErrGrantNotFound
@@ -188,6 +201,11 @@ func selectGrantApprovalForUpdate(ctx context.Context, tx Tx, grantID, approvalH
 		r.requestedScope = json.RawMessage(reqScope)
 		if mintedJTI != nil {
 			r.mintedJTI = *mintedJTI
+		}
+		// RAW, never Normalize()d — the per-run lease turns on this exact value
+		// and "" must stay "" all the way to leaseCoversRemint.
+		if decScope != nil {
+			r.decisionScope = types.ApprovalScope(*decScope)
 		}
 	}
 	return r, nil

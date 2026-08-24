@@ -13,7 +13,6 @@
 // New Run and Add-workspace wizards, both of which are being replaced by single
 // screens, so it dies with them rather than outliving its purpose here.
 import * as React from "react";
-import { X } from "lucide-react";
 import { cn } from "../ui/utils";
 import { Label } from "../ui/label";
 
@@ -88,49 +87,5 @@ export function OptionCard({
         <div className="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">{hint}</div>
       )}
     </button>
-  );
-}
-
-// A list of removable domain pills (used for custom egress domains + deny-list).
-export function DomainPillList({
-  domains,
-  onRemove,
-  tone = "neutral",
-  emptyHint,
-}: {
-  domains: string[];
-  onRemove: (domain: string) => void;
-  tone?: "neutral" | "danger";
-  emptyHint?: string;
-}) {
-  if (!domains.length) {
-    return emptyHint ? (
-      <p className="text-[0.6875rem] text-muted-foreground">{emptyHint}</p>
-    ) : null;
-  }
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {domains.map((d) => (
-        <span
-          key={d}
-          className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[0.6875rem]",
-            tone === "danger"
-              ? "border-danger/25 bg-danger-subtle text-danger"
-              : "border-border bg-surface-2 text-foreground",
-          )}
-        >
-          {d}
-          <button
-            type="button"
-            onClick={() => onRemove(d)}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            aria-label={`Remove ${d}`}
-          >
-            <X className="size-3" />
-          </button>
-        </span>
-      ))}
-    </div>
   );
 }

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -482,5 +483,74 @@ func TestHandlePutSiteConfig_GetExistingErrorFailsClosed(t *testing.T) {
 	}
 	if fake.putSeen != nil {
 		t.Errorf("a failed carry-forward read must never reach PutSiteConfig, got %+v", fake.putSeen)
+	}
+}
+
+// doIfMatch is `do` (api_test.go) plus an If-Match header — the one thing
+// none of this package's request helpers carry, and the only thing this
+// test needs beyond them.
+func doIfMatch(t *testing.T, srv *Server, method, path, bearer, ifMatch, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(method, path, nil)
+	} else {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if ifMatch != "" {
+		r.Header.Set("If-Match", ifMatch)
+	}
+	r.Host = "127.0.0.1"             // see do (api_test.go) FIX #8
+	r.RemoteAddr = "127.0.0.1:54321" // see do (api_test.go) N1
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// TestHandlePutSiteConfig_IfMatch is the #7 optimistic-concurrency contract:
+// no If-Match keeps working (unchanged behavior), a stale one 412s BEFORE the
+// store is touched, and a fresh one (or none) succeeds and returns a new
+// ETag reflecting what was just written.
+func TestHandlePutSiteConfig_IfMatch(t *testing.T) {
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{ScmHosts: []string{"dev.azure.com"}}}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	get := do(t, srv, http.MethodGet, "/api/v1/site-config", adminToken, "")
+	etag := get.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("GET /site-config did not set an ETag")
+	}
+
+	// A stale If-Match (the document has since changed underneath it) is
+	// refused before the write reaches the store.
+	stale := `"0000000000000000000000000000000000000000000000000000000000000000"`
+	w := doIfMatch(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, stale, `{"scm_hosts":["gitlab.corp"]}`)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale If-Match: code = %d, want 412; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Fatalf("a refused If-Match must never reach the store, got %+v", fake.putSeen)
+	}
+
+	// The FRESH ETag from the GET above satisfies If-Match and the write
+	// proceeds, returning a new ETag for what was just persisted.
+	w = doIfMatch(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, etag, `{"scm_hosts":["gitlab.corp"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fresh If-Match: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || len(fake.putSeen.ScmHosts) != 1 || fake.putSeen.ScmHosts[0] != "gitlab.corp" {
+		t.Fatalf("fresh If-Match write did not reach the store as given: %+v", fake.putSeen)
+	}
+	if got := w.Header().Get("ETag"); got == "" || got == etag {
+		t.Fatalf("PUT ETag = %q, want a NEW value distinct from the pre-write one %q", got, etag)
+	}
+
+	// No If-Match at all: unconditional, exactly as before this feature.
+	w = do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"scm_hosts":["github.com"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("no If-Match: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }

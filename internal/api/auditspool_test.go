@@ -216,3 +216,50 @@ func TestAuditSpoolDrainReopensAfterTrim(t *testing.T) {
 		t.Fatalf("spool not empty after drain: %d lines", lc)
 	}
 }
+
+// TestAuditSpoolAppendRecoversTornTail is the D30 regression: an ENOSPC episode
+// (or a partial Write that landed bytes then errored) leaves a newline-less
+// fragment at EOF. The NEXT Append must not concatenate onto it — otherwise
+// Drain reads `fragment{good event}` as one line, fails to unmarshal it, and
+// drops BOTH, destroying a good event whose primary-store write had already
+// failed. The separator confines the loss to the torn fragment; the good event
+// survives and is replayed, and the torn line is counted.
+//
+// RED before the fix: recovered == 0 (the good event was swallowed with the
+// fragment) and TornDrops covers a merged line. GREEN after: recovered == 1 and
+// TornDrops == 1.
+func TestAuditSpoolAppendRecoversTornTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	// Simulate a torn tail: a partial JSON fragment with NO trailing newline,
+	// exactly what an ENOSPC leaves behind mid-line.
+	if err := os.WriteFile(path, []byte(`{"id":"deadbeef","action":"cred`), 0o600); err != nil {
+		t.Fatalf("seed torn tail: %v", err)
+	}
+
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	// The good event whose durable write failed, now spooled after the torn tail.
+	if err := sp.Append(newTestEvent("credential.mint")); err != nil {
+		t.Fatalf("Append onto torn tail: %v", err)
+	}
+
+	rec := &fakeRecorder{}
+	got, err := sp.Drain(context.Background(), rec, 100)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("Drain recovered %d events, want 1 (the good event must survive the torn tail)", got)
+	}
+	if rec.count() != 1 {
+		t.Fatalf("recorder saw %d events, want 1", rec.count())
+	}
+	if td := sp.TornDrops(); td != 1 {
+		t.Fatalf("TornDrops = %d, want 1 (the torn fragment, and only it, is dropped)", td)
+	}
+	if lc := spoolLineCount(t, path); lc != 0 {
+		t.Fatalf("spool not empty after drain: %d lines", lc)
+	}
+}

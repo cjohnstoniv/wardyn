@@ -243,3 +243,48 @@ func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 		})
 	}
 }
+
+// TestPermissionsPostureCheck is the #19b regression: the row must always be
+// "info" (a posture choice, never a misconfiguration to warn/fail about — an
+// operator may legitimately leave every kind fail-open) and must name exactly
+// which of the four capability kinds are enforced vs left at the fail-open
+// default, for every point on that 0-to-4 spectrum.
+func TestPermissionsPostureCheck(t *testing.T) {
+	cases := []struct {
+		name        string
+		enforcement map[string]bool
+		wantOn      []string
+		wantOff     []string
+	}{
+		{"nil map: all four fail-open (zero-config default)", nil,
+			nil, []string{capEgressHost, capSecret, capWorkspace, capImage}},
+		{"all four enforced", map[string]bool{capEgressHost: true, capSecret: true, capWorkspace: true, capImage: true},
+			[]string{capEgressHost, capSecret, capWorkspace, capImage}, nil},
+		{"mixed", map[string]bool{capEgressHost: true, capWorkspace: true},
+			[]string{capEgressHost, capWorkspace}, []string{capSecret, capImage}},
+		{"an explicit false is still fail-open (not merely absent)",
+			map[string]bool{capEgressHost: true, capSecret: false, capWorkspace: false, capImage: false},
+			[]string{capEgressHost}, []string{capSecret, capWorkspace, capImage}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk := permissionsPostureCheck(tc.enforcement)
+			if chk.ID != "permissions_posture" {
+				t.Errorf("ID = %q, want permissions_posture", chk.ID)
+			}
+			if chk.Status != "info" {
+				t.Errorf("Status = %q, want info (a posture choice, never warn/fail)", chk.Status)
+			}
+			for _, k := range tc.wantOn {
+				if !strings.Contains(chk.Detail, k) {
+					t.Errorf("Detail = %q, want it to name enforced kind %q", chk.Detail, k)
+				}
+			}
+			for _, k := range tc.wantOff {
+				if !strings.Contains(chk.Detail, k) {
+					t.Errorf("Detail = %q, want it to name fail-open kind %q", chk.Detail, k)
+				}
+			}
+		})
+	}
+}

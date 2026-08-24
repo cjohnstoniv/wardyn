@@ -49,6 +49,10 @@ type fakeApproval struct {
 	state     types.ApprovalState
 	mintedJTI string
 	reason    string
+	// decScope mirrors approvals.decision_scope AS STORED. "" is the shipped
+	// value for every credential approval (the column's NOT NULL DEFAULT), which
+	// is exactly the value the lease must NOT treat as run-scoped.
+	decScope types.ApprovalScope
 }
 
 // fakeDB models just enough of the grants/approvals tables for the broker's
@@ -59,9 +63,35 @@ type fakeDB struct {
 	grants      map[uuid.UUID]*fakeGrant
 	approvals   map[uuid.UUID]*fakeApproval
 	revokedRuns map[uuid.UUID]bool
+	auditRows   []auditRow // in-tx audit_events INSERTs (D29)
 
 	beginErr  error
 	commitErr error
+}
+
+// auditRow captures an in-tx INSERT INTO audit_events, recording whether it ran
+// BEFORE the tx committed — the D29 atomicity property.
+type auditRow struct {
+	action, actor, outcome string
+	actorType              types.ActorType
+	preCommit              bool
+	// data is the marshalled Data column — the lease tests read the lease
+	// marker off it, so the fake stores what the statement actually bound
+	// rather than a re-derived guess.
+	data string
+}
+
+// mintAudits returns the credential.mint rows written on the tx.
+func (db *fakeDB) mintAudits() []auditRow {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	var out []auditRow
+	for _, r := range db.auditRows {
+		if r.action == "credential.mint" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func newFakeDB() *fakeDB {
@@ -138,12 +168,23 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		return &loadGrantRow{g: g}
 
 	case strings.Contains(sql, "FROM approvals") && strings.Contains(sql, "grant_id = $1"):
-		// ensureApproval select: args[0]=grantID
+		// ensureApproval select: args[0]=grantID. The `state <> 'EXPIRED'`
+		// filter is read OFF THE QUERY TEXT, never hardcoded: a fake that
+		// applies a predicate the real statement does not carry passes either
+		// way, which is exactly how this lane went hollow —
+		// TestMintForGrant_ExpiredApproval_ReRaisesPending stayed green with
+		// the predicate deleted from sql.go, leaving only the
+		// WARDYN_TEST_PG-gated twin to catch it.
+		skipExpired := strings.Contains(sql, "state <> 'EXPIRED'")
 		grantID := args[0].(uuid.UUID)
 		for _, a := range tx.db.approvals {
-			if a.grantID == grantID && a.kind == "credential" {
-				return &ensureApprovalRow{a: a}
+			if a.grantID != grantID || a.kind != "credential" {
+				continue
 			}
+			if skipExpired && a.state == types.ApprovalExpired {
+				continue
+			}
+			return &ensureApprovalRow{a: a}
 		}
 		return errRow{errNoRow}
 
@@ -159,6 +200,12 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 	tx.db.mu.Lock()
 	defer tx.db.mu.Unlock()
 	switch {
+	case strings.Contains(sql, "pg_advisory_xact_lock"):
+		// The audit hash-chain lock insertAuditEventTx takes before its INSERT
+		// (migration 0047). Nothing to model: the fake is single-threaded, so
+		// there is no concurrency for the lock to serialize — it just must not
+		// fall through to the unhandled-exec error below.
+		return 0, nil
 	case strings.Contains(sql, "UPDATE approvals SET minted_jti"):
 		// args[0]=jti, args[1]=approvalID. Mirror the conditional UPDATE's
 		// rows-affected: 1 when this call wins the single-use write, 0 when
@@ -180,6 +227,19 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 			id: id, runID: runID, grantID: grantID, kind: "credential",
 			scope: json.RawMessage(scope), state: types.ApprovalPending,
 		}
+		return 1, nil
+	case strings.Contains(sql, "INSERT INTO audit_events"):
+		// D29 in-tx mint audit. args: id, time, run_id, actor_type, actor, action,
+		// target, outcome, source_ip, data. Record preCommit so the atomicity test
+		// can prove it rode the tx rather than a separate post-commit connection.
+		tx.db.auditRows = append(tx.db.auditRows, auditRow{
+			actorType: types.ActorType(args[3].(string)),
+			actor:     args[4].(string),
+			action:    args[5].(string),
+			outcome:   args[7].(string),
+			preCommit: !tx.committed,
+			data:      string(args[9].([]byte)),
+		})
 		return 1, nil
 	}
 	return 0, errors.New("fakeTx: unhandled exec: " + sql)
@@ -203,7 +263,8 @@ type grantJoinRow struct {
 }
 
 // Scan mirrors selectGrantApprovalForUpdate's dest order:
-// g.id, g.run_id, g.spec, a.id, a.run_id, a.state, a.requested_scope, a.minted_jti
+// g.id, g.run_id, g.spec, a.id, a.run_id, a.state, a.requested_scope,
+// a.minted_jti, a.decision_scope
 func (r *grantJoinRow) Scan(dest ...any) error {
 	*dest[0].(*uuid.UUID) = r.grantID
 	*dest[1].(*uuid.UUID) = r.g.runID
@@ -217,6 +278,8 @@ func (r *grantJoinRow) Scan(dest ...any) error {
 		*dest[6].(*[]byte) = []byte(r.ap.scope)
 		mj := r.ap.mintedJTI
 		*dest[7].(**string) = &mj
+		ds := string(r.ap.decScope)
+		*dest[8].(**string) = &ds
 	}
 	return nil
 }
@@ -328,13 +391,21 @@ func TestMintForGrant_ApprovedHappyPath_WritesJTI(t *testing.T) {
 	if minted.Metadata["branch_namespace"] != wantNS {
 		t.Fatalf("branch_namespace = %q, want %q", minted.Metadata["branch_namespace"], wantNS)
 	}
-	// Audit: one successful credential.mint with agent attribution.
-	mints := au.byAction("credential.mint")
-	if len(mints) != 1 || mints[0].Outcome != "success" {
-		t.Fatalf("expected 1 successful credential.mint, got %+v", mints)
+	// Audit: one successful credential.mint with agent attribution, written
+	// IN-TX (D29) — not through the post-commit recorder. _ = au: the success
+	// event no longer flows through it (only DENIED/FAILURE do).
+	mints := db.mintAudits()
+	if len(mints) != 1 || mints[0].outcome != "success" {
+		t.Fatalf("expected 1 successful in-tx credential.mint, got %+v", mints)
 	}
-	if mints[0].ActorType != types.ActorAgent || mints[0].Actor != spiffeForRun(runID) {
-		t.Fatalf("audit actor = %s/%s, want agent/%s", mints[0].ActorType, mints[0].Actor, spiffeForRun(runID))
+	if !mints[0].preCommit {
+		t.Fatal("mint audit not written before commit — not atomic with the minted_jti burn (D29)")
+	}
+	if mints[0].actorType != types.ActorAgent || mints[0].actor != spiffeForRun(runID) {
+		t.Fatalf("audit actor = %s/%s, want agent/%s", mints[0].actorType, mints[0].actor, spiffeForRun(runID))
+	}
+	if got := au.byAction("credential.mint"); len(got) != 0 {
+		t.Fatalf("success mint must not also go through the post-commit recorder (double durable write): %+v", got)
 	}
 	// github minter received clamped perms including metadata:read.
 	if gh.LastPermissions["metadata"] != "read" {
@@ -381,6 +452,39 @@ func TestMintForGrant_NoApprovalYet_CreatesPending(t *testing.T) {
 		if !jsonScopeEqual(a.scope, spec.Scope) {
 			t.Fatalf("created approval scope != grant scope")
 		}
+	}
+}
+
+// W19-W19c-2: the approval sweeper EXPIREs a stale PENDING approval. The next
+// mint attempt must raise a FRESH PENDING request (a human can still decide it)
+// — not re-find the swept row forever and return ErrApprovalDenied, which
+// wedged the run permanently with nothing left in the queue to approve.
+func TestMintForGrant_ExpiredApproval_ReRaisesPending(t *testing.T) {
+	b, db, _, _ := newTestBroker(t)
+	runID := uuid.New()
+	spec := githubGrantSpec(t, true)
+	gid := seedGrant(db, runID, spec)
+	swept := seedApproval(db, runID, gid, spec.Scope, types.ApprovalExpired)
+	db.approvals[swept].reason = "stale"
+
+	_, err := b.MintForGrant(context.Background(), callerFor(runID), gid)
+	var pend ErrApprovalPending
+	if !errors.As(err, &pend) {
+		t.Fatalf("want ErrApprovalPending after an expiry sweep, got %v", err)
+	}
+	if pend.ApprovalID == swept {
+		t.Fatal("re-raised the SWEPT approval id; want a new PENDING row")
+	}
+	fresh := db.approvals[pend.ApprovalID]
+	if fresh == nil || fresh.state != types.ApprovalPending {
+		t.Fatalf("approval %s not PENDING: %+v", pend.ApprovalID, fresh)
+	}
+	if !jsonScopeEqual(fresh.scope, spec.Scope) {
+		t.Fatal("re-raised approval scope != grant scope")
+	}
+	// The swept row is left alone — the expiry stays on the record.
+	if db.approvals[swept].state != types.ApprovalExpired {
+		t.Fatalf("swept approval state = %s, want EXPIRED", db.approvals[swept].state)
 	}
 }
 
@@ -515,9 +619,14 @@ func TestMintForGrant_AutoMint_APIKey_InjectionRuleNoSecret(t *testing.T) {
 	if minted.Injection.Host != "api.example.com" {
 		t.Fatalf("injection host = %q", minted.Injection.Host)
 	}
-	mints := au.byAction("credential.mint")
-	if len(mints) != 1 || mints[0].Outcome != "success" {
-		t.Fatalf("expected 1 successful credential.mint, got %+v", mints)
+	// D29: the auto-mint success audit rides the tx too (not the post-commit
+	// recorder), so the record commits with the mint.
+	mints := db.mintAudits()
+	if len(mints) != 1 || mints[0].outcome != "success" || !mints[0].preCommit {
+		t.Fatalf("expected 1 successful in-tx credential.mint, got %+v", mints)
+	}
+	if got := au.byAction("credential.mint"); len(got) != 0 {
+		t.Fatalf("success mint must not also go through the post-commit recorder: %+v", got)
 	}
 }
 
@@ -649,5 +758,41 @@ func TestMintForGrant_EmptyRepoScopeFails(t *testing.T) {
 	}
 	if gh.Calls != 1 {
 		t.Fatalf("minter calls = %d, want 1 — the guard belongs in the minter (where production has it), not in the caller", gh.Calls)
+	}
+}
+
+// TestMint_AuditRidesTxAtomicWithJTI is the D29 regression: the credential.mint
+// SUCCESS row must be written INSIDE the mint tx — atomically with the minted_jti
+// single-use burn — not on a separate connection after commit. Before the fix the
+// success event went through the post-commit Recorder (au); a crash in the window
+// between commit and that write burned the approval with no audit row and nothing
+// delivered.
+//
+// RED before: db.mintAudits() is empty (no in-tx insert), and au holds the success
+// event. GREEN after: the success row rode the tx (preCommit) and au holds none.
+func TestMint_AuditRidesTxAtomicWithJTI(t *testing.T) {
+	b, db, au, _ := newTestBroker(t)
+	runID := uuid.New()
+	spec := githubGrantSpec(t, true)
+	gid := seedGrant(db, runID, spec)
+	aid := seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
+
+	minted, err := b.MintForGrant(context.Background(), callerFor(runID), gid)
+	if err != nil {
+		t.Fatalf("MintForGrant: %v", err)
+	}
+
+	rows := db.mintAudits()
+	if len(rows) != 1 || rows[0].outcome != "success" {
+		t.Fatalf("want 1 in-tx success mint audit, got %+v", rows)
+	}
+	if !rows[0].preCommit {
+		t.Fatal("mint audit was written AFTER commit — not atomic with the minted_jti burn (D29)")
+	}
+	if db.approvals[aid].mintedJTI != minted.JTI {
+		t.Fatalf("minted_jti not written in the same tx")
+	}
+	if got := au.byAction("credential.mint"); len(got) != 0 {
+		t.Fatalf("success mint must not double-write through the post-commit recorder: %+v", got)
 	}
 }

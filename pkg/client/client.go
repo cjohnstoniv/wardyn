@@ -17,7 +17,8 @@
 //   - runs:        CreateRun, Preflight, GetRun, ListRuns, ListGrants, KillRun,
 //     SynthesizeProfile, GetRecording
 //   - approvals:   ListApprovals, Approve, Deny
-//   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
+//   - policies:    CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies, UpdatePolicy,
+//     DeletePolicy
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
 //     DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources:     ListSources, CreateSource, GetSource, ScanSource, DeleteSource
@@ -27,6 +28,7 @@
 //   - setup:       SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity:    Me
 //   - health:      Healthz
+//   - sessions:    RevokeSessions
 //
 // NOT covered (drive these with the CLI or raw HTTP): attach WebSocket /
 // attach-ticket, harness-login device flow, and the agent-facing /internal/*
@@ -311,10 +313,12 @@ type WorkspaceSelection struct {
 type CreateRunResult struct {
 	types.AgentRun
 	// Warnings are ADVISORY notices the server raised while resolving the run —
-	// discouraged, never blocking: a workspace-directory collision with another
-	// active run, or an ssh_key grant dropped because the agent has no SSH clone
-	// lane. Surface them: the run is live either way, so a dropped warning is a
-	// silently degraded run.
+	// discouraged, never blocking: a member's inline policy narrowed to what
+	// they are granted (an egress host, a secret-referencing grant, a workspace
+	// repo), a workspace-directory collision with another active run, or an
+	// ssh_key grant dropped because the agent has no SSH clone lane. Surface
+	// them: the run is live either way, so a dropped warning is a silently
+	// degraded run.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -348,9 +352,9 @@ type PreflightResult struct {
 	SetupItems               []PreflightItem        `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
 	// Warnings carries resolveRunPolicy's clamp notes — a member's silently
-	// narrowed inline policy, a filtered grant. The dry run is the ONLY place
-	// these surface (launch never returns them), so dropping them here left a
-	// member with no way to learn their policy was clamped at all.
+	// narrowed inline policy, a filtered grant. The same list rides
+	// CreateRunResult.Warnings at launch, so a preview and the real thing say
+	// the same words about the same drop.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -408,13 +412,23 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 	return out, err
 }
 
-// ListApprovals returns approval requests filtered by state.
-// Pass an empty string to return all states.
+// ListApprovals returns approval requests filtered by state and (optionally)
+// by run. Pass an empty state to return all states, and uuid.Nil for runID to
+// return approvals for every run — the server's own ?run_id= filter
+// (internal/api/approvals.go's handleListApprovals) was otherwise unreachable
+// from the CLI.
 // Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED" (types.ApprovalState).
-func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, opts ...ListOpts) ([]types.ApprovalRequest, error) {
+func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, runID uuid.UUID, opts ...ListOpts) ([]types.ApprovalRequest, error) {
 	path := "/api/v1/approvals"
+	q := url.Values{}
 	if state != "" {
-		path += "?state=" + url.QueryEscape(string(state))
+		q.Set("state", string(state))
+	}
+	if runID != uuid.Nil {
+		q.Set("run_id", runID.String())
+	}
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	var out []types.ApprovalRequest
 	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
@@ -500,6 +514,16 @@ func (c *Client) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, 
 	return out, err
 }
 
+// GetDefaultPolicy fetches the control plane's configured default policy
+// spec — the ceiling every run created without a policy_id gets, and the
+// ceiling composer.Clamp bounds a member-authored inline policy against
+// (W14-S1-6: previously unexposed by UI, CLI or API).
+func (c *Client) GetDefaultPolicy(ctx context.Context) (types.RunPolicySpec, error) {
+	var out types.RunPolicySpec
+	err := c.do(ctx, http.MethodGet, "/api/v1/policies/default", nil, &out)
+	return out, err
+}
+
 // CreatePolicy validates and persists a new policy.
 // Returns the created RunPolicy (status 201) on success; 400 on an invalid
 // name or spec.
@@ -532,6 +556,7 @@ type AuditFilter struct {
 	Since        string // RFC3339, e.g. time.Now().UTC().Format(time.RFC3339)
 	Until        string // RFC3339
 	ActionPrefix string
+	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
 }
@@ -548,6 +573,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.ActionPrefix != "" {
 		q.Set("action_prefix", f.ActionPrefix)
+	}
+	if f.Actor != "" {
+		q.Set("actor", f.Actor)
 	}
 	if f.ActorType != "" {
 		q.Set("actor_type", f.ActorType)

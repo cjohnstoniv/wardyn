@@ -99,6 +99,12 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
 
+	// Run-secret eviction lane: drop the in-memory plaintext masking corpus of
+	// runs terminal past api.RunSecretGrace, so a long-lived daemon stops
+	// holding credentials for every run it ever dispatched. Unconditional — a
+	// no-op without a mask registry, and there is nothing to configure.
+	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
+
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
 	// — the envbuild orphan-build sweep needs only an ImageBuilder, which a
@@ -107,6 +113,18 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}
+
+	// D28: re-apply decided `always`-scoped egress decisions onto their
+	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
+	// dropped on a PG blip. In a goroutine — it reads all decided egress
+	// approvals, which need not gate serving.
+	go goSafe("egress.reconcile", func() {
+		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(rootCtx); rerr != nil {
+			slog.WarnContext(rootCtx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
+		} else if n > 0 {
+			slog.InfoContext(rootCtx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
+		}
+	})
 }
 
 // startSSHGateway launches the SSH gateway's accept loop in its own goroutine
@@ -121,6 +139,53 @@ func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
 	go goSafe("ssh.gateway", func() {
 		if serr := srv.ServeSSHGateway(rootCtx); serr != nil {
 			slog.Error("wardynd: ssh gateway stopped", slog.Any("err", serr))
+		}
+	})
+}
+
+// startUISandboxGateway launches the UI-sandbox gateway's own HTTP(S) listener
+// in its own goroutine, like startSSHGateway above. A no-op when
+// -ui-sandbox-listen is empty (off = no listener, no new surface) or when the
+// server built no handler for it.
+//
+// It is a SECOND http.Server, not a route on the console's: that separation is
+// the security control (see internal/api/uigateway.go's header), and boot has
+// already refused a UI address equal to the console's. It reuses the SAME TLS
+// cert/key — one certificate, two names is a deployment detail, and a
+// deployment that terminates TLS upstream terminates both the same way.
+//
+// The timeouts mirror serveAndShutdown's for the same reasons: no whole-request
+// deadline (a relayed editor holds a long-lived streaming connection), a
+// header-read deadline, and a capped header size. Shutdown rides rootCtx: the
+// listener closes when the daemon does.
+func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server) {
+	handler := srv.UIGatewayHandler()
+	if *f.uiListen == "" || handler == nil {
+		return
+	}
+	httpSrv := &http.Server{
+		Addr:              *f.uiListen,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	go goSafe("ui.gateway", func() {
+		<-rootCtx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
+	})
+	go goSafe("ui.gateway.serve", func() {
+		slog.Info("wardynd: ui-sandbox gateway listening", slog.String("listen", *f.uiListen), slog.Bool("tls", posture.tlsEnabled))
+		var err error
+		if posture.tlsEnabled {
+			err = httpSrv.ListenAndServeTLS(*f.tlsCert, *f.tlsKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("wardynd: ui-sandbox gateway stopped", slog.Any("err", err))
 		}
 	})
 }

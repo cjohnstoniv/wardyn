@@ -185,6 +185,16 @@ type AgentRun struct {
 	// container liveness != agent liveness, and the exec id otherwise lived only in
 	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
+	// FailureHint is an operator-facing one-line reason a run FAILED, stamped by
+	// the dispatch/create failure paths (failAndRevoke). Precedent:
+	// record.go RecordResult.FailureHint. Without it a run that dies BEFORE the
+	// agent starts (an image that resolves control-plane-side but not on the
+	// daemon, a lost sandbox ref, an opaque-LLM inspection refusal) is just a
+	// reason-less FAILED badge — the real reason lived only in an audit row. Empty
+	// for every run that did not fail this way (a clean FAILED-by-nonzero-exit
+	// carries its exit code instead, and success/terminal-by-kill carry nothing).
+	// Display-only; never interpreted by the control plane.
+	FailureHint string `json:"failure_hint,omitempty"`
 }
 
 // SiteConfig is the operator-wide, admin-authored baseline every run inherits:
@@ -345,6 +355,32 @@ const (
 	// the same posture as WARDYN_GIT_HELPER_SECRET: code running AS the agent uid
 	// can read the key during that window. See broker.mintSSHKey + threat model.
 	GrantSSHKey GrantKind = "ssh_key"
+	// GrantEnvSecret places a STORED SECRET's value into the sandbox environment
+	// under an operator-named variable, at dispatch. It is the second DOCUMENTED
+	// EXCEPTION to the no-resident-secret invariant, and the honest reason is
+	// coverage, not impossibility: a PAT-authenticated CLI or REST tool reads a
+	// *_TOKEN env var, and neither the git_pat helper seam (git-only) nor api_key
+	// proxy-side injection (one host, one header) can reach it. See
+	// docs/adoption/corp-network-onboarding-findings.md B1.
+	//
+	// It is UNLIKE every other kind in three ways an operator must weigh:
+	//
+	//   - NOT BROKERED. There is no mint, no approval gate, no TTL and no JTI —
+	//     the value is resolved store->env at dispatch (api.resolveEnvSecretGrants,
+	//     the same seam resolveLLMInspectionSecrets uses) and the broker refuses
+	//     the kind outright (mintKind's ErrUnknownGrantKind).
+	//   - RESIDENT FOR THE WHOLE RUN. Unlike ssh_key's clone window, an env var
+	//     lives as long as the process tree does; anything running as the agent
+	//     uid can read /proc/self/environ.
+	//   - NO REVOCATION. The kill-switch cascade revokes minted credentials; a
+	//     value already in a process env is not one, so killing the run stops the
+	//     process but does not un-disclose the secret.
+	//
+	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
+	// env_secret grant is dropped unless the operator opens
+	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
+	GrantEnvSecret GrantKind = "env_secret"
 )
 
 // SubscriptionOAuthSecret is a SENTINEL secret name (NOT a stored secret). An
@@ -462,8 +498,11 @@ var (
 // ApprovalScope is how far a human's approve/deny decision reaches. It is
 // ORTHOGONAL to FirstUseMode: that policy setting decides whether an unknown
 // host is escalated to a human at all; this decides the blast radius of the
-// answer. Only egress_domain approvals carry a non-default scope — a credential
-// mints exactly once by construction and a tool_call is bounded by the clamp.
+// answer. egress_domain approvals carry any of the four; a tool_call carries
+// none (the clamp bounds it); a CREDENTIAL approval carries ScopeRun and
+// nothing else — that one value is the per-run credential lease (B2), read RAW
+// by broker.leaseCoversRemint so a git_pat approved once is re-mintable for the
+// rest of the run instead of raising a fresh approval per git operation.
 type ApprovalScope string
 
 const (
@@ -612,7 +651,12 @@ type ApprovalDecision struct {
 //	  "correlation": "mapped" | "unmapped",  // unmapped => run_id NULL, never
 //	                                          // silently dropped (visible blindness)
 //	  "reason": "...",                  // sensor.blind / failure detail (omitempty)
-//	  "dropped_total": <uint64>         // heartbeat only: sensor backpressure drops
+//	  "dropped_total": <uint64>,        // heartbeat only: sensor backpressure drops
+//	  "observed_total": <uint64>,       // heartbeat only: kernel events mapped off the tail
+//	  "dropped_unmapped": <uint64>      // heartbeat only: events dropped as
+//	                                    // uncorrelated — nonzero with
+//	                                    // observed_total 0 means correlation is
+//	                                    // broken, NOT that the sensor is blind
 //	}
 //
 // Outcome stays within the existing CHECK ("success"|"failure"|"denied"): the
@@ -632,6 +676,20 @@ type AuditEvent struct {
 	Outcome   string          `json:"outcome"` // "success" | "failure" | "denied"
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
+
+	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
+	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
+	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT
+	// trigger — never by the caller, who therefore cannot choose them.
+	//
+	// They are populated on the WRITE path only (InsertAuditEvent fills them
+	// from RETURNING), which is what carries the current head hash out to the
+	// audit sinks so a SIEM can detect a later truncation. The paginated READ
+	// paths deliberately do not select them, so both are empty on anything
+	// served by GET /audit — hence omitempty. The chain is verified through
+	// GET /api/v1/audit/chain/verify, not by reading rows back.
+	PrevHash string `json:"prev_hash,omitempty"`
+	RowHash  string `json:"row_hash,omitempty"`
 }
 
 // SSHPublicKey is a human's registered public key for the SSH gateway
@@ -640,18 +698,135 @@ type AuditEvent struct {
 // cloning — see GrantSSHKey). This type is the gateway's own trust root: a
 // human self-registers a public key against their principal, and the gateway
 // authenticates an incoming SSH connection ONLY against rows here, then
-// authorizes it owner-only (AgentRun.CreatedBy == Principal — see
-// internal/api/sshgateway.go).
+// authorizes it owner-OR-admin (AgentRun.CreatedBy == Principal, or Role ==
+// oidc.RoleAdmin — see internal/api/sshgateway.go).
 //
 // Fingerprint is the SHA256 form (ssh.FingerprintSHA256: "SHA256:<base64>"),
 // computed SERVER-SIDE from the parsed key — never client-supplied — so it is
 // both the natural primary key (a key's fingerprint is intrinsic to its bytes;
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
+//
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
+// on every OIDC login for the authenticating principal's keys (migration
+// 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
+// session for requireOperator to read — so a demoted admin's key keeps its
+// override only until RoleCheckedAt exceeds WARDYN_SSH_ROLE_TTL, or until the
+// key is deleted/re-registered (docs/SSH.md §Bounds).
+//
+// RoleCheckedAt is when Role was last stamped — at registration, or at any
+// later OIDC login (migration 0046). nil means "never refreshed since
+// upgrading to 0046" — a pre-migration row, or a key registered before an
+// OIDC-configured deployment's first login for that principal — and sshAuth
+// treats nil as infinitely stale, never as fresh.
 type SSHPublicKey struct {
-	Fingerprint string    `json:"fingerprint"`
-	Principal   string    `json:"principal"`
-	Name        string    `json:"name"`
-	PublicKey   string    `json:"public_key"` // authorized_keys line; never a secret
-	CreatedAt   time.Time `json:"created_at"`
+	Fingerprint   string     `json:"fingerprint"`
+	Principal     string     `json:"principal"`
+	Name          string     `json:"name"`
+	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
+	Role          string     `json:"role"`
+	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// APIToken is one per-user API token (migration 0045): a long-lived bearer
+// credential a HUMAN mints for their own scripts/CI so automation stops sharing
+// the single deployment-wide admin token. The auth branch that accepts one
+// (apiTokenAuth in internal/api/apitokens.go) republishes exactly the context
+// a verified SSO session publishes, so grants, RBAC and run ownership bind to
+// the OWNING HUMAN — never to the admin identity.
+//
+// Email/Role/Groups are a SNAPSHOT of the creating session, stamped at create
+// time the way SSHPublicKey.Role is stamped at registration: a bearer token
+// carries no ID token, so there is nothing to re-derive them from per request.
+// The ceiling is the same one SSHPublicKey.Role carries — a demotion does not
+// reach an outstanding token; REVOKE it.
+//
+// Groups distinguishes nil from empty exactly as the session path does (see
+// oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
+// empty means "the IdP sent no usable groups".
+//
+// Token carries the PLAINTEXT credential and is populated on exactly one
+// response — the create call — and is never stored, listed or logged. Every
+// other path leaves it empty, and `omitempty` keeps it out of those bodies.
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Principal  string     `json:"principal"`
+	Email      string     `json:"email,omitempty"`
+	Role       string     `json:"role"`
+	Groups     []string   `json:"groups,omitempty"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	Token      string     `json:"token,omitempty"` // plaintext, create response ONLY
+}
+
+// CapabilitySubjectType names WHO a capability grant is written against
+// (migration 0042). Closed and complete — its DB CHECK is pinned against these
+// constants by internal/db's TestClosedEnumChecksMatchConstants.
+type CapabilitySubjectType string
+
+const (
+	// CapabilitySubjectUser is one human, named by either their lowercased OIDC
+	// "sub" or their email — a grant on EITHER matches, so an admin can write
+	// down the identity they actually know rather than the one the IdP prefers.
+	CapabilitySubjectUser CapabilitySubjectType = "user"
+	// CapabilitySubjectGroup is one entry of the login-time union of the ID
+	// token's roles+groups claims (see oidc.Session.Groups). Entra App Roles are
+	// grantable through this without any extra configuration.
+	CapabilitySubjectGroup CapabilitySubjectType = "group"
+	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
+	// that emits no usable groups claim. Subject is "" for this type.
+	CapabilitySubjectAll CapabilitySubjectType = "all"
+)
+
+// Valid reports whether t is one of the three subject types. Used to reject a
+// garbage value at the API write boundary, mirroring ApprovalScope.Valid.
+func (t CapabilitySubjectType) Valid() bool {
+	switch t {
+	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll:
+		return true
+	default:
+		return false
+	}
+}
+
+// CapabilityEffect is a grant's direction. Closed and complete; DENY BEATS
+// ALLOW at resolution time, with no user-vs-group precedence — "Bob's user
+// allow overrode the group deny" is a breach report, not a feature.
+type CapabilityEffect string
+
+const (
+	CapabilityAllow CapabilityEffect = "allow"
+	CapabilityDeny  CapabilityEffect = "deny"
+)
+
+// Valid reports whether e is allow or deny.
+func (e CapabilityEffect) Valid() bool {
+	return e == CapabilityAllow || e == CapabilityDeny
+}
+
+// CapabilityGrant is one row of the permissioning grant list (migration 0042):
+// "subject S may (or may not) use capability C at value V".
+//
+// Capability is a PLAIN STRING here, not a typed enum, and that is deliberate:
+// the closed kind set lives in exactly one Go slice in internal/api
+// (capabilityKinds) and is validated at the write boundary, so a fifth kind is
+// a constant plus a call site with no schema change. A stored kind this binary
+// does not know is inert — no resolver ever asks for it.
+//
+// Value's meaning is per kind: a host or "*.suffix" for egress_host, an exact
+// secret name / workspace uuid / image ref for the others, and "*" is the
+// per-kind wildcard everywhere.
+type CapabilityGrant struct {
+	ID          uuid.UUID             `json:"id"`
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	Capability  string                `json:"capability"`
+	Value       string                `json:"value"`
+	Effect      CapabilityEffect      `json:"effect"`
+	CreatedAt   time.Time             `json:"created_at"`
+	CreatedBy   string                `json:"created_by,omitempty"`
 }

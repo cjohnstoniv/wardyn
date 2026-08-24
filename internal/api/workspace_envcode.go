@@ -68,7 +68,7 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.envcode.write", id.String(), "success",
-		mustJSON(map[string]any{"files": len(files), "skipped": len(skipped)})))
+		auditWorkspaceData(r, ws.OwnedBy, map[string]any{"files": len(files), "skipped": len(skipped)})))
 	writeJSON(w, http.StatusOK, map[string]any{"written_files": files, "skipped_files": skipped})
 }
 
@@ -119,7 +119,7 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
+	ws, ok := s.getWorkspaceReadable(w, r, id)
 	if !ok {
 		return
 	}

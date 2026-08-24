@@ -114,7 +114,11 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
+	// emitting — see sinks.Source's doc comment. A no-op (empty) is
+	// byte-identical to before this field existed.
+	sinks.Source = strings.TrimSpace(source)
 	storeRec := store.Recorder{Pool: pool}
 	var auditRec audit.Recorder = storeRec
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)
@@ -208,6 +212,10 @@ type optionalFeatures struct {
 	// "empty = off = no listener, no new surface" all the way down to never
 	// minting the secret in the first place.
 	sshHostKey ed25519.PrivateKey
+	// uiSessionKey signs the UI-sandbox gateway's relay cookie, loaded/generated
+	// ONLY when -ui-sandbox-listen is set — nil otherwise, the same
+	// never-mint-a-secret-for-a-disabled-feature discipline as sshHostKey.
+	uiSessionKey []byte
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -276,6 +284,24 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// keeps working as an admin allowlist with zero re-configuration
 			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
 			LegacyAdminEmails: splitCSV(*f.oidcOperatorEmails),
+			// D16: revoke-a-human-now over the pg-backed cutoff table. Always
+			// wired whenever OIDC is (pool is already required), unlike the
+			// jti-level identity_revocations store which is a separate
+			// concern — see pgSessionRevocations' doc comment.
+			Revocations: &pgSessionRevocations{pool: pool},
+			// OnLogin (migration 0046): every successful login re-stamps
+			// role+role_checked_at on every ssh_public_keys row this principal
+			// owns — the bounded-stale re-check sshAuth's admin-override path
+			// reads (WARDYN_SSH_ROLE_TTL). store.NewPG(pool) is a cheap value
+			// wrapper (constructed the same way elsewhere in this file), not a
+			// connection of its own. Best-effort: a store hiccup here logs and
+			// the login still succeeds — see oidc.Config.OnLogin's own doc for
+			// why that contract lives on the callback side, not here.
+			OnLogin: func(ctx context.Context, sub, role string) {
+				if err := store.NewPG(pool).RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
+					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+				}
+			},
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
@@ -406,6 +432,28 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		slog.Info("wardynd: ssh gateway enabled", slog.String("listen", *f.sshListen), slog.String("advertise", *f.sshAdvertise))
 		if *f.sshAdvertise == "" {
 			slog.Warn("wardynd: WARDYN_SSH_ADVERTISE is unset — the run-detail SSH pane has no reachable host[:port] to show; set it to this deployment's externally-reachable address")
+		}
+	}
+
+	// UI-sandbox gateway (pillar 4), optional: the relay cookie's HMAC key is
+	// minted ONLY when the gateway is enabled, the same discipline as the SSH
+	// host key above.
+	if *f.uiListen != "" {
+		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, secrets)
+		if kerr != nil {
+			return of, kerr
+		}
+		of.uiSessionKey = uiKey
+		slog.Info("wardynd: ui-sandbox gateway enabled",
+			slog.String("listen", *f.uiListen),
+			slog.String("advertise", *f.uiAdvertise),
+			slog.Bool("host_mode", *f.uiOriginTemplate != ""),
+		)
+		if *f.uiAdvertise == "" && *f.uiOriginTemplate == "" {
+			slog.Warn("wardynd: WARDYN_UI_SANDBOX_ADVERTISE is unset — /healthz will advertise the raw bind address, which is wrong for any deployment whose bind is not its reachable address; set it (or WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) whenever the gateway is enabled")
+		}
+		if *f.uiOriginTemplate == "" {
+			slog.Warn("wardynd: ui-sandbox gateway is in SHARED-ORIGIN mode — every run's app is served from one origin, separated only by a path-scoped cookie; set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (wildcard DNS) to give each run its own origin")
 		}
 	}
 

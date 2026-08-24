@@ -183,9 +183,9 @@ func TestPG_RunWorkspaceIDsRoundTrip(t *testing.T) {
 		ID: uuid.New(), CreatedAt: now, UpdatedAt: now,
 		CreatedBy: "op@example.com", Agent: "claude-code", Task: "scope round trip",
 		ConfinementClass: types.CC1, State: types.RunPending,
-		SPIFFEID:         "spiffe://test/agent-run/" + uuid.NewString(),
-		RunnerTarget:     "docker",
-		WorkspaceIDs:     want,
+		SPIFFEID:     "spiffe://test/agent-run/" + uuid.NewString(),
+		RunnerTarget: "docker",
+		WorkspaceIDs: want,
 	})
 	if err != nil {
 		t.Fatalf("create run: %v", err)
@@ -226,8 +226,8 @@ func TestPG_RunWorkspaceIDsNilRoundTrip(t *testing.T) {
 		ID: uuid.New(), CreatedAt: now, UpdatedAt: now,
 		CreatedBy: "op@example.com", Agent: "claude-code", Task: "no workspace",
 		ConfinementClass: types.CC1, State: types.RunPending,
-		SPIFFEID:         "spiffe://test/agent-run/" + uuid.NewString(),
-		RunnerTarget:     "docker",
+		SPIFFEID:     "spiffe://test/agent-run/" + uuid.NewString(),
+		RunnerTarget: "docker",
 	})
 	if err != nil {
 		t.Fatalf("create run: %v", err)
@@ -252,8 +252,8 @@ func TestPG_DecideApprovalPersistsScope(t *testing.T) {
 		ID: uuid.New(), CreatedAt: now, UpdatedAt: now,
 		CreatedBy: "op@example.com", Agent: "claude-code", Task: "scope persist",
 		ConfinementClass: types.CC1, State: types.RunPending,
-		SPIFFEID:         "spiffe://test/agent-run/" + uuid.NewString(),
-		RunnerTarget:     "docker",
+		SPIFFEID:     "spiffe://test/agent-run/" + uuid.NewString(),
+		RunnerTarget: "docker",
 	})
 	if err != nil {
 		t.Fatalf("create run: %v", err)

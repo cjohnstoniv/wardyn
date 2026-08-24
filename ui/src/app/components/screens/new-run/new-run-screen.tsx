@@ -31,12 +31,15 @@ import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
 import type { WizardAgent } from "./wizard-types";
+import { RailSection, SectionCard, Seg } from "./new-run-primitives";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
+import { DENIED } from "../../../lib/permissions-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
@@ -47,11 +50,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { PolicyPanel, POLICY_TEMPLATES, parseSpec } from "../../wardyn/policy-panel";
-import { cn } from "../../ui/utils";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
 import { agentLabel, initialWizardState, primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -66,65 +69,15 @@ const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
 // A tier is pickable only if the host can BUILD it and the policy allows it.
 const rank = (c: ConfinementClass) => ORDERED_CLASSES.indexOf(c);
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-xl border border-border bg-surface-1">
-      <div className="border-b border-border px-4 py-2.5">
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
-      </div>
-      <div className="p-4">{children}</div>
-    </section>
-  );
-}
-
-function Seg({
-  options,
-  value,
-  onChange,
-  label,
-}: {
-  options: { id: string; label: string; disabled?: boolean }[];
-  value: string;
-  onChange: (id: string) => void;
-  label: string;
-}) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          role="radio"
-          aria-checked={value === o.id}
-          disabled={o.disabled}
-          onClick={() => onChange(o.id)}
-          className={cn(
-            "rounded-lg border px-3 py-1.5 text-[0.8125rem] font-medium transition-colors",
-            value === o.id
-              ? "border-primary bg-primary/10 text-primary"
-              : "border-border text-foreground hover:border-border-strong",
-            o.disabled && "cursor-not-allowed opacity-40 hover:border-border",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function RailSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border-b border-border pb-3 last:border-0">
-      <p className="mb-1.5 text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase">{title}</p>
-      {children}
-    </div>
-  );
-}
-
 export function NewRunScreen() {
   const navigate = useNavigate();
   const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
+  // Visibility is not capability: the workspace list is NOT narrowed by the
+  // `workspace` grant (the launch gate refuses, and a hidden workspace makes
+  // that refusal unexplainable and the grant undiscoverable). Ungranted rows
+  // are annotated instead.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
   // Seed with the PERSISTED default (Settings' promise); the health probe
   // below re-resolves it against what this host actually enforces. The old
   // resolveDefaultCc(…, ["CC1"]) hardcoded the availability list, so a saved
@@ -282,6 +235,11 @@ export function NewRunScreen() {
     useSaved && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
       : undefined;
+  // Whether the workspace this run is aimed at is one the caller may launch
+  // against. Advisory — denyMemberRequest is the real gate.
+  const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
+  const selectedWorkspaceUngranted =
+    !!pickedWorkspaceId && !capabilityAllowed(caps, "workspace", pickedWorkspaceId);
 
   // The screen's ONE validation rule. Deliberately a local derivation rather
   // than a shared validator: it answers "can this button be pressed", which is
@@ -666,10 +624,20 @@ export function NewRunScreen() {
                     {statusWord(w.status) === "Import failed" && (
                       <span className="text-danger"> — import failed</span>
                     )}
+                    {!capabilityAllowed(caps, "workspace", w.id) && (
+                      <Chip tone="neutral">{DENIED.WORKSPACE_CHIP}</Chip>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {/* The reason rides the SELECTION, not each row: a Radix item's
+                content is what the closed trigger renders, so a per-row
+                paragraph would end up inside the trigger. The chip above
+                annotates every ungranted row; this says what it costs. */}
+            {selectedWorkspaceUngranted && (
+              <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
+            )}
             <Button variant="ghost" size="sm" className="mt-2 px-1" onClick={() => setAddWsOpen(true)}>
               <Plus className="size-4" /> Add workspace
             </Button>

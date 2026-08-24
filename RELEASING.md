@@ -167,8 +167,35 @@ the other:
   it from the run and attach it to the GitHub Release (step 5) by hand if you
   want it there; nothing here auto-touches the Release object, matching this
   document's "nothing here is automated to push anything" for that step.
-  `linux/amd64` only (see that workflow's own `ponytail:` note for the
-  cross-arch follow-up). Images are **not** digest-pinned anywhere they're
-  *consumed* (the chart's `image.tag` still floats on the mutable semver
-  tag) — only the cosign signature is by digest; pinning every consumer to a
-  digest is separate, unstarted work.
+  Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
+  (arm64 laptops are the desktop tier's ordinary hardware — see
+  [docs/DESKTOP.md](docs/DESKTOP.md)). Images are **not** digest-pinned
+  anywhere they're *consumed* (the chart's `image.tag` still floats on the
+  mutable semver tag) — only the cosign signature is by digest; pinning every
+  consumer to a digest is separate, unstarted work.
+
+  **On the first multi-arch tag, verify the INDEX digest by hand.** cosign
+  signs whatever digest `docker/build-push-action` reports, and with a
+  two-platform `platforms:` list that is the *index* digest, not a per-arch
+  manifest — so there is exactly ONE signature per image and the per-arch
+  children are **not** individually signed. That is the normal multi-arch
+  posture, but it is a change from the single-arch shape earlier releases had,
+  so prove it once rather than assuming it:
+
+  ```sh
+  TAG=0.6.0   # the bare semver just pushed, no leading v
+  for img in wardynd wardyn-proxy agent-claude-code agent-codex-cli agent-aws-sso; do
+    ref="ghcr.io/cjohnstoniv/$img:$TAG"
+    # 1. the tag resolves to an index listing BOTH platforms
+    docker buildx imagetools inspect "$ref"
+    # 2. that index digest — not a child manifest — is what carries the signature
+    digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
+    cosign verify "ghcr.io/cjohnstoniv/$img@$digest" \
+      --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  done
+  ```
+
+  A `cosign verify` against a per-arch *child* digest is **expected to fail** —
+  that is the index-signing model, not a broken release. Consumers verify the
+  index ref.

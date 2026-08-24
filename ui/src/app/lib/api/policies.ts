@@ -33,6 +33,14 @@ export const policies = {
     return asJson<RunPolicy>(res);
   },
 
+  // GET /api/v1/policies/default — the control plane's configured ceiling
+  // policy (applied to a run created without a policy_id; also the ceiling
+  // a member's inline policy is clamped against). W14-S1-6.
+  async getDefaultPolicy(): Promise<RunPolicySpec> {
+    const res = await wfetch("/policies/default", { method: "GET" });
+    return asJson<RunPolicySpec>(res);
+  },
+
   // DELETE /api/v1/policies/{id} -> 204.
   async deletePolicy(id: string): Promise<void> {
     const res = await wfetch(`/policies/${encodeURIComponent(id)}`, { method: "DELETE" });
