@@ -40,16 +40,16 @@ is *about* would record it in the one place already under suspicion.
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
 | `run.create` | A run row is created (`POST /runs`, or system-created for a follow-on workspace-step run) | `error`, `sandbox_ref`, `set_sandbox_ref_error` | `internal/api/runs.go:267` | internal |
-| `run.dispatch` | Sandbox dispatch attempted or completed | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:129` | internal |
+| `run.dispatch` | Sandbox dispatch attempted or completed | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:138` | internal |
 | `run.build` | BYOI/devcontainer image build for a run | `byoi_base`, `devcontainer_repo`, `error`, `image` | `internal/api/runs_create.go:777` | internal |
 | `run.complete` | Run reaches a terminal state | `error`, `exit_code`, `panic`, `state` | `internal/api/runs_lifecycle.go:60` | internal |
 | `run.fail` | Run fails before the agent starts (the D9 FailureHint gap this same register names) | `error`, `from` | `internal/api/runs_lifecycle.go:371` | internal |
 | `run.kill` | Operator or owner kills a run | (run state transition) | `internal/api/runs_lifecycle.go:507` | internal |
-| `run.exec` | Exec into a dispatched sandbox | `argv`, `error` | `internal/api/runs_dispatch.go:534` | internal |
+| `run.exec` | Exec into a dispatched sandbox | `argv`, `error` | `internal/api/runs_dispatch.go:555` | internal |
 | `run.files` | A workspace file-browse operation on a run fails | `error` | `internal/api/run_files.go:315` | internal |
-| `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:505` | internal |
+| `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:526` | internal |
 | `run.resources` | A run-resources query/update fails | `error` | `internal/api/run_resources.go:188` | internal |
-| `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:778` | internal |
+| `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:792` | internal |
 | `run.record.start` | A Record Mode session starts or fails to start | `allow_all_egress`, `confined`, `confinement`, `confinement_class`, `detail`, `label`, `mode`, `record_run_id` | `internal/api/record.go:300` | internal |
 | `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:156` | internal |
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails | `error`, `errors`, `id`, `state` | `internal/api/runs_lifecycle.go:198`; reaper failure at `internal/lifecycle/lifecycle.go:368` | internal |
@@ -58,26 +58,26 @@ is *about* would record it in the one place already under suspicion.
 | `sandbox.orphan_sweep` | The boot-time orphan reconciler (`reconcileOrphanedSandbox`) FAILS to tear down a terminal run's still-live sandbox — emitted on failed teardown only; a still-failing teardown leaves the ref set for the next boot to retry | `sandbox_ref`, `teardown_error` | `internal/api/reconcile.go:212` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:164`) | internal |
 | `sandbox.sweep` | `SweepTerminalSandboxes` (the callable sweep primitive over terminal runs with a live probed sandbox) FAILS to tear one down — emitted on failed teardown only, like its boot-time sibling | `sandbox_ref`, `teardown_error` | `internal/api/runs_lifecycle.go:236` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:164`) | internal |
 | `run.artifact.redirect` | Package-registry (artifact) redirect configured for a run | `detail`, `ecosystem`, `error`, `header`, `host`, `integration_id`, `port`, `secret_name` | `internal/api/artifact_redirect.go:231` | internal |
-| `run.policy.effective` | The effective (post-merge) policy snapshot is recorded at dispatch | (full policy snapshot) | `internal/api/runs_dispatch.go:369` | internal |
-| `run.upstream_proxy.resolve` | Upstream (corporate) proxy resolution for a run | `reason` | `internal/api/runs_dispatch_mounts.go:89` | internal |
+| `run.policy.effective` | The effective (post-merge) policy snapshot is recorded at dispatch | (full policy snapshot) | `internal/api/runs_dispatch.go:390` | internal |
+| `run.upstream_proxy.resolve` | Upstream (corporate) proxy resolution for a run | `reason` | `internal/api/runs_dispatch_mounts.go:102` | internal |
 | `run.llm.bedrock` | Bedrock LLM credential/config wired into a run | `detail`, `hosts`, `mode`, `model`, `region` | `internal/api/runs_dispatch_llm.go:252` | internal |
 | `run.llm.subscription_inject` | Subscription OAuth proxy-side inject wired into a run (see `subscription-proxy-inject` — the operator's live OAuth is injected proxy-side, never resident in the sandbox) | `detail`, `host`, `source`, `tls_mitm` | `internal/api/runs_dispatch_llm.go:354` | internal |
-| `run.llm_inspection.secrets_resolve` | LLM egress content-inspection secret names resolved for a run | `missing`, `names`, `reason`, `resolved` | `internal/api/runs_dispatch.go:594` | internal |
+| `run.llm_inspection.secrets_resolve` | LLM egress content-inspection secret names resolved for a run | `missing`, `names`, `reason`, `resolved` | `internal/api/runs_dispatch.go:615` | internal |
 | `llm.scan.*` | An outbound LLM content-inspection pass completes for a run's egress — the literal suffix is `sc.Action` (`llm.scan.alert`, `llm.scan.block`, `llm.scan.skipped`, or `llm.scan.blind`, per `egress.ScanSummary.Action`); security-relevant, and deliberately CONTENT-FREE — `findings` carries detector names, field paths, offsets, counts and masked samples only, never the matched bytes | `channel`, `coverage`, `finding_count`, `findings`, `host`, `mode`, `scanned`, `skipped`, `skip_reason` | `internal/api/internal.go:135` (`recordLLMScanAudit`) | internal |
-| `run.env_secret.resolve` | One `env_secret` grant resolved store→sandbox env at dispatch (one event per grant). `outcome=failure` means the grant was SKIPPED — `reason` says why (unreadable scope, reserved secret name, no secret store, unresolvable secret, or a refusal to overwrite a platform-authored variable that is already set to a non-empty value) — and the variable is left ABSENT, never blank-set. Carries the variable name and the SECRET NAME only; the value is never logged, and is mask-registered for the run | `name`, `reason`, `secret_name` | `internal/api/runs_dispatch.go:700` | internal |
-| `run.git_pat.egress` | A `git_pat` grant adds egress domains at launch | `added_domains` | `internal/api/runs_create.go:747` | internal |
+| `run.env_secret.resolve` | One `env_secret` grant resolved store→sandbox env at dispatch (one event per grant). `outcome=failure` means the grant was SKIPPED — `reason` says why (unreadable scope, reserved secret name, no secret store, unresolvable secret, or a refusal to overwrite a platform-authored variable that is already set to a non-empty value) — and the variable is left ABSENT, never blank-set. Carries the variable name and the SECRET NAME only; the value is never logged, and is mask-registered for the run | `name`, `reason`, `secret_name` | `internal/api/runs_dispatch.go:714` | internal |
+| `run.git_pat.egress` | A `git_pat` grant adds egress domains at launch | `added_domains` | `internal/api/runs_create.go:755` | internal |
 | `run.git_pat.brokered_forge` | A `git_pat` grant is withheld at dispatch because the run is brokered for that forge — the git-broker route is its only route to it by name, so withholding the PAT is load-bearing, not belt-and-braces | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:165` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
-| `run.site_config.egress` | Site-config-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:738` | internal |
-| `run.ssh.egress` | SSH gateway egress domains added at launch | `added_domains` | `internal/api/runs_create.go:743` | internal |
-| `run.ssh.brokered_forge` | An `ssh_key` grant is withheld at dispatch for the same brokered-forge reason as `run.git_pat.brokered_forge` | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:160` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
-| `run.ssh.unsupported_agent` | SSH-enabled run launched against an agent image without SSH support; the SSH host set is dropped | `dropped_hosts` | `internal/api/runs_create.go:656` | internal |
-| `run.workspace.clone_egress` | Workspace-clone egress domains added at launch | `added_domains` | `internal/api/runs_create.go:712` | internal |
+| `run.site_config.egress` | Site-config-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:746` | internal |
+| `run.ssh.egress` | SSH gateway egress domains added at launch | `added_domains` | `internal/api/runs_create.go:751` | internal |
+| `run.ssh.brokered_forge` | An `ssh_key` grant is withheld at dispatch for the same brokered-forge reason as `run.git_pat.brokered_forge` | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:169` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
+| `run.ssh.unsupported_agent` | SSH-enabled run launched against an agent image without SSH support; the SSH host set is dropped | `dropped_hosts` | `internal/api/runs_create.go:664` | internal |
+| `run.workspace.clone_egress` | Workspace-clone egress domains added at launch | `added_domains` | `internal/api/runs_create.go:720` | internal |
 | `run.workspace.collision` | Launch refused because the workspace is already in use by another run | `other_runs` | `internal/api/runs.go:73` | internal |
 | `run.workspace.creds` | Workspace-scoped integration credential resolved for a run | `integration_ref`, `type` | `internal/api/runs.go:215` | internal |
-| `run.workspace.egress` | Workspace-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:695` | internal |
-| `run.workspace.requirement.egress` | A workspace-needs-scanner egress requirement is satisfied at launch | `added_domains`, `workspace_id` | `internal/api/runs_create.go:330` | internal |
+| `run.workspace.egress` | Workspace-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:703` | internal |
+| `run.workspace.requirement.egress` | A workspace-needs-scanner egress requirement is satisfied at launch | `added_domains`, `workspace_id` | `internal/api/runs_create.go:338` | internal |
 | `run.workspace.requirement.integration` | A workspace-needs-scanner integration requirement is satisfied at launch | `header`, `injected_hosts`, `integration_id` | `internal/api/integrations_run.go:88` | internal |
-| `run.workspace.requirement.secret` | A workspace-needs-scanner secret requirement is satisfied at launch | `host`, `secret_name` | `internal/api/runs_create.go:392` | internal |
+| `run.workspace.requirement.secret` | A workspace-needs-scanner secret requirement is satisfied at launch | `host`, `secret_name` | `internal/api/runs_create.go:400` | internal |
 
 ## Workspaces & sources
 
@@ -86,17 +86,17 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:431` | internal |
 | `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:557` | internal |
 | `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:871` | internal |
-| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:718` | internal |
-| `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:880` | internal |
-| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:844` | internal |
+| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725` | internal |
+| `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:887` | internal |
+| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:959` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
 | `workspace.envcode.write` | The onboarding "env code" (devcontainer/setup snippet) is written for a workspace | `files`, `skipped`, `skipped_files`, `written_files` | `internal/api/workspace_envcode.go:70` | internal |
-| `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back — the D28 non-atomicity this register names) | `domains`, `source` | `internal/api/approvals.go:770`, `internal/api/record.go:604` | internal |
-| `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:768`, `internal/api/workspaces.go:603` | internal |
-| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:632` | internal |
+| `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back — the D28 non-atomicity this register names) | `domains`, `source` | `internal/api/approvals.go:885`, `internal/api/record.go:604` | internal |
+| `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:883`, `internal/api/workspaces.go:694` | internal |
+| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:723` | internal |
 | `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:260` | internal |
 | `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:342` | internal |
-| `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:684`, `internal/api/source_scan.go:62` | internal |
+| `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:691`, `internal/api/source_scan.go:62` | internal |
 
 ## Sessions, SSH & UI relay
 
@@ -108,7 +108,7 @@ is *about* would record it in the one place already under suspicion.
 | `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:603` | internal |
 | `recording.upload` | A sandbox uploads an asciinema-cast chunk for a run's recording session — audited on both outcomes, like every sibling recording lane, since a full store or an over-cap upload is exactly how a long session's provenance gets lost | `error` (failure only) | `internal/api/recording.go:120` | internal |
 | `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway.go:309` (failure), `internal/api/sshgateway.go:345` (success); documented `docs/SSH.md:251,303,308` | **stable** (documented) |
-| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:611`; documented `docs/SSH.md:346` | **stable** (documented) |
+| `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content, per D15) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:632`; documented `docs/SSH.md:346` | **stable** (documented) |
 | `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames, per D15) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:346` | **stable** (documented) |
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:347` | **stable** (documented) |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:144` | internal |
@@ -127,7 +127,7 @@ is *about* would record it in the one place already under suspicion.
 | `secret.read` | A registered secret is resolved for injection into a run (or fails to resolve) | `grant_id`, `host`, `jti`, `purpose`, `reason`, `source` | `internal/api/injection.go:118` | internal |
 | `secret.rekey` | `wardynd -rotate-age-key` re-encrypted the whole store to a new age identity. SUCCESS only, and written by the one-shot maintenance process rather than the serving daemon (`actor_type` `system`, `actor` `wardyn/rotate-age-key`); an aborted rotation commits nothing and emits nothing. `target` is the store name (`pg`). Deliberately carries NO secret names — the sibling rows above each name one secret because each event IS one secret, whereas a single event listing the whole inventory would hand every configured sink the full set of names at once. `public_recipient` is the new age recipient (public by construction: it is what ciphertext is encrypted *to*), which is what lets an operator confirm which key the store now answers to | `public_recipient`, `secrets` | `cmd/wardynd/rekey.go:177` | internal |
 | `credential.mint` | A credential is minted against an `APPROVED` approval (invariant 2 — mint IS the approval, same transaction). `lease` marks a mint the human did NOT individually decide: a `git_pat` whose approval carried `decision_scope=run` re-mints for the rest of the run under that one decision (the B2 per-run lease), and `decision_scope` beside it is the RAW stored value the lease turned on. Absent on every ordinary mint — a lease widens what one approval authorized, so it is stamped rather than left inferable | `approval_id`, `decision_scope`, `grant_id`, `host`, `jti`, `kind`, `lease`, `reason`, `scope` | `internal/broker/broker.go:1006` (`mintEvent`), `internal/api/internal.go:453` | internal |
-| `credential.revoke` | A minted credential is revoked (kill-switch, run stop) | — | `internal/broker/broker.go:892` | internal |
+| `credential.revoke` | A minted credential is revoked (kill-switch, run stop) | — | `internal/broker/broker.go:991` | internal |
 | `identity.mint` | A per-run SPIFFE identity (JWT-SVID) is minted | — | `internal/identity/embedded/embedded.go:187` | internal |
 | `identity.renew` | A run's identity JWT is renewed | `expires_at`, `prev_jti`, `reason`, `run_state` | `internal/api/internal.go:698` | internal |
 | `identity.revoke` | A run's identity is revoked at teardown | — | `internal/identity/embedded/embedded.go:263` | internal |
@@ -153,7 +153,7 @@ is *about* would record it in the one place already under suspicion.
 | `capability.grant.deleted` | `DELETE /permissions/grants/{id}` | — | `internal/api/permissions.go:199` | internal |
 | `capability.enforcement.write` | `PUT /permissions/enforcement` (whole-map replace) | (saved enforcement map) | `internal/api/permissions.go:252`; documented `docs/OPERATIONS.md`'s capability-grants section | internal |
 | `approval.second_human.bypass` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the decider was the `admin-token` principal, so the four-eyes rule was BYPASSED (break-glass). A shared token carries no per-human identity to compare against, so it is exempt by design — this event is what keeps that exemption from being silent, and sits beside the `actor_type=system` `approval.decide` the decision itself writes | `reason`, `switch` | `internal/api/approvals.go:488` (`requireSecondHuman`) | internal |
-| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`, `second_human_required`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:444-460` | **stable** (documented, closed `reason` enum) |
+| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`, `second_human_required`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:657-750` | **stable** (documented, closed `reason` enum) |
 | `auth.failed` | A public-API authentication attempt fails: an `adminAuth` 401 (admin token not configured, missing bearer, or a bearer that doesn't match), OR a presented OIDC session cookie was rejected (tampered/malformed or expired) — whichever reason is more specific wins when both apply on the same request. Actor is always `system` (`wardyn/adminAuth`; no verified caller identity exists at this point). Content-free: `reason` is a closed enum (`admin_token_not_configured`, `missing_bearer_token`, `invalid_admin_token`, `invalid_session`, `expired_session`), never a user-supplied string; the request path is `Target`, the TCP peer is `SourceIP`. Rate-bound (process-global token bucket, 1/sec with a burst of 5) so a scanner throwing 401s cannot flood the append-only log | `reason` | `internal/api/http.go` (`auditAuthFailed`); session-rejection reason from `internal/auth/oidc/oidc.go`'s `Middleware`/`SessionRejectedFromContext` | internal |
 | `egress.*` | The proxy reports an egress decision for a run — the literal suffix is the decision itself: `egress.allow`, `egress.deny`, or `egress.pending` (`egress.Decision`, `internal/egress/egress.go:27-31`). A synthetic `blind` scan decision emits only `llm.scan.blind`, never a duplicate `egress.allow` for the tunnel | `approval_id`, `host`, `method`, `path`, `port`, `rule_source` | `internal/api/internal.go:80` | internal |
 
@@ -196,7 +196,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:554` | internal |
+| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:642` | internal |
 
 ## Notes on completeness
 
