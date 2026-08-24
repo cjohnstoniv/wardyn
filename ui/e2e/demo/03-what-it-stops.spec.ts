@@ -992,10 +992,17 @@ test("V03 act 9 — a PAT that only ever exists in a pipe", async () => {
   await caption(page, "In a real clone git reads them straight off this pipe, and they're gone.");
   await beat(page, PACE.read);
 
-  // Step 3: printenv — the gate token is here, the PAT is not.
-  await typeInTerminal(page, await pillCmd(card, 3), card);
+  // Step 3: printenv — the gate token is here, the PAT is not. Scope the check
+  // to the printenv output ALONE: step 2 legitimately printed the PAT on stdout
+  // (the pipe IS the point), and that line is still in the xterm scrollback —
+  // innerText() over the whole buffer would see it. Slice from the printenv
+  // command echo onward so "not in the environment" means exactly that.
+  const printenvCmd = await pillCmd(card, 3);
+  await typeInTerminal(page, printenvCmd, card);
   await pollScreen(screen, /WARDYN_GIT_HELPER_SECRET=/, "printenv never echoed the gate token");
-  const envText = await screen.innerText();
+  const fullText = await screen.innerText();
+  const envIdx = fullText.lastIndexOf(printenvCmd);
+  const envText = envIdx >= 0 ? fullText.slice(envIdx + printenvCmd.length) : fullText;
   expect(envText.includes(PAT_VALUE), "the PAT's VALUE printed in the environment").toBe(false);
   await caption(page, "The PAT isn't here.");
   await beat(page, BEAT_SHORT);
