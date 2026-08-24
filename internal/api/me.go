@@ -62,12 +62,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // memberLocalDirRootLabel renders the operator's configured member root(s) as
 // the short human-readable prose the dialog shows before a path is typed —
-// never a dump of every prefix (ui-batch2-mock.md's M3 wire note). nil when
-// roots is empty, the same "unavailable" signal RootsFor already uses.
+// never a dump of every prefix (ui-batch2-mock.md's M3 wire note). No "under "
+// prefix: the UI's ROOT_HINT template (permissions-copy.ts) already supplies
+// that word, so this returns the bare root(s) to avoid doubling it in the
+// composed sentence. nil when roots is empty, the same "unavailable" signal
+// RootsFor already uses.
 func memberLocalDirRootLabel(roots []string) *string {
 	if len(roots) == 0 {
 		return nil
 	}
-	label := "under " + strings.Join(roots, " or ")
+	label := strings.Join(roots, " or ")
 	return &label
 }

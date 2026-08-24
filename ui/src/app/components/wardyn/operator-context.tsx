@@ -28,7 +28,9 @@ const PrincipalContext = React.createContext<string>("");
 
 // M3 — presentational label of the WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP
 // constraint that applies to this signed-in member (GET /me's
-// `member_local_dir_root`), e.g. "under /home/agent-projects". null when no
+// `member_local_dir_root`), e.g. "/home/agent-projects" (bare — the "under "
+// word comes from permissions-copy.ts's ROOT_HINT template, not this value).
+// null when no
 // root applies (§DECISIONS O1: no per-member map entry AND the shared list
 // is empty) — the fail-closed default (unresolved /me, a failed fetch, an
 // unwrapped test all read as "no root", which shows AddWorkspaceDialog's

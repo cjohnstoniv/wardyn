@@ -314,8 +314,10 @@ already enforces (§DECISIONS O1/O3).
 `memberLocalDirRoot: string | null` field on `ShellMeta`/`GET /api/v1/me`
 (`app-shell.tsx:55-72`'s `ShellMeta` interface) — `null` when no root applies to this
 signed-in member (§DECISIONS O1: the per-member map has no entry AND the shared list is
-empty), otherwise a short human-readable label of the constraint (the operator's own
-prose, e.g. `"under /home/agent-projects"` — not a dump of every configured prefix). This
+empty), otherwise a short human-readable label of the constraint — the bare configured
+root(s) (e.g. `"/home/agent-projects"`, or `"/a or /b"` for more than one — not a dump of
+every configured prefix, and never prefixed with "under": the rendered `m3:root-hint`
+template below supplies that word, so the wire value must not). This
 is presentational only; the actual root list is never sent to the browser as a value to
 trust — enforcement is `ValidateMemberMountSource` at bind time
 (`member-role-desktop.md` §c), same non-authoritative-hint relationship

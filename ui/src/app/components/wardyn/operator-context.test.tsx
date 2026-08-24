@@ -61,10 +61,10 @@ describe("operator-context", () => {
 
   it("OperatorProvider(memberLocalDirRoot=...) threads the configured root through", () => {
     render(
-      <OperatorProvider operator={false} memberLocalDirRoot="under /home/agent-projects">
+      <OperatorProvider operator={false} memberLocalDirRoot="/home/agent-projects">
         <RootProbe />
       </OperatorProvider>,
     );
-    expect(screen.getByText("root:under /home/agent-projects")).toBeInTheDocument();
+    expect(screen.getByText("root:/home/agent-projects")).toBeInTheDocument();
   });
 });

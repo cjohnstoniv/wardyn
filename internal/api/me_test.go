@@ -116,8 +116,8 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 			t.Fatalf("decode response: %v", err)
 		}
 		got, ok := body["member_local_dir_root"].(string)
-		if !ok || got != "under /home/agent-projects" {
-			t.Fatalf("member_local_dir_root = %#v, want %q", body["member_local_dir_root"], "under /home/agent-projects")
+		if !ok || got != "/home/agent-projects" {
+			t.Fatalf("member_local_dir_root = %#v, want %q", body["member_local_dir_root"], "/home/agent-projects")
 		}
 	})
 
@@ -135,8 +135,8 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 			t.Fatalf("decode response: %v", err)
 		}
 		got, ok := body["member_local_dir_root"].(string)
-		if !ok || got != "under /bob/only" {
-			t.Fatalf("member_local_dir_root = %#v, want %q (per-principal replaces shared)", body["member_local_dir_root"], "under /bob/only")
+		if !ok || got != "/bob/only" {
+			t.Fatalf("member_local_dir_root = %#v, want %q (per-principal replaces shared)", body["member_local_dir_root"], "/bob/only")
 		}
 	})
 }
