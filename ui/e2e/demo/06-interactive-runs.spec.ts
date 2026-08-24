@@ -389,7 +389,7 @@ test("V06 beat 3 — the decoy", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Anthropic has never seen it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The real credential stays outside the sandbox — the proxy supplies it at the boundary, per request.");
+  await caption(page, "The real credential stays outside the sandbox. The proxy attaches it at the boundary when it's needed.");
   await beat(page, PACE.read);
   await caption(page, "That means the proxy is also the point where the credential can be attached to the request.");
   await beat(page, PACE.read);
@@ -455,7 +455,7 @@ test("V06 beat 4 — drive the agent", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "The sandbox never held the key.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "That's the whole trick.");
+  await caption(page, "That's the basic pattern. Now let's prove it with a secret of our own.");
   await beat(page, BEAT_SHORT + 400);
 });
 
@@ -599,7 +599,7 @@ test("V06 beat 6 — one masked write", async () => {
   await beat(page, PACE.read);
   await caption(page, "Two demos borrow this key by name.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Neither of them can read it.");
+  await caption(page, "Neither of them can read it. Both of them can use it.");
   await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 });
@@ -634,11 +634,11 @@ test("V06 beat 7 — the key that never enters the box", async () => {
   const card = page.getByTestId("demo-card-key-never-in-the-box");
 
   await spotlight(page, page.getByTestId("demo-policy-key-never-in-the-box"));
-  await caption(page, "This demo's policy hands the sandbox a grant.");
+  await caption(page, "This demo gives the run permission to use one secret by name.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "One host, one header, and the name of the key.");
+  await caption(page, "One host, one header to attach, and the name of the secret.");
   await beat(page, PACE.read);
-  await caption(page, "Not the key.");
+  await caption(page, "Not the secret itself.");
   await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 
@@ -680,9 +680,9 @@ test("V06 beat 7 — the key that never enters the box", async () => {
   await spotlight(page, auditRows);
   await caption(page, "Before we type anything, look at the record.");
   await beat(page, PACE.read);
-  await caption(page, "Wardyn already minted the credential and read the secret.");
+  await caption(page, "Wardyn has already authorized the proxy to use the secret; the secret value still isn't in the box.");
   await beat(page, PACE.read);
-  await caption(page, "That happened at startup — outside the box, on the way in.");
+  await caption(page, "That happened outside the box, before the request crossed the boundary.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -718,11 +718,11 @@ test("V06 beat 7 — the key that never enters the box", async () => {
       message: "the allowed host never answered — expected a 200 through the proxy",
     })
     .toMatch(/HTTP\/[\d.]+ 200/);
-  await caption(page, "And yet that request went out credentialed.");
+  await caption(page, "And yet the request left with the credential attached.");
   await beat(page, PACE.read);
-  await caption(page, "The header was attached as the request left the proxy — after the sandbox had already sent it.");
+  await caption(page, "The sandbox sent the request without the secret. The proxy attached the header before forwarding it.");
   await beat(page, PACE.read);
-  await caption(page, "Which is why the response tells you nothing, and the record tells you everything.");
+  await caption(page, "The response can't prove where the credential came from. The audit record shows the proxy attached it.");
   await beat(page, PACE.read + 400);
 
   await typeInTerminal(page, "curl -sSI http://wikipedia.org", card);
@@ -734,7 +734,7 @@ test("V06 beat 7 — the key that never enters the box", async () => {
     .toMatch(/403/);
   await caption(page, "One more thing.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Handing a run a credential never widens where it can go.");
+  await caption(page, "Authorizing a run to use a credential never widens where it can go.");
   await beat(page, PACE.read);
   await caption(page, "This host was never on the list.");
   await beat(page, BEAT_SHORT);
@@ -756,10 +756,10 @@ test("V06 beat 8 — authorized, not issued", async () => {
   ).toBeVisible({ timeout: 30_000 });
   const card = page.getByTestId("demo-card-authorized-not-issued");
 
-  await caption(page, "Same grant, one field different.");
+  await caption(page, "Same permission, one field different.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.getByTestId("demo-policy-authorized-not-issued"));
-  await caption(page, "This one requires an approval before it can be minted at all.");
+  await caption(page, "This one requires approval before that one-time use can be authorized.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -795,7 +795,7 @@ test("V06 beat 8 — authorized, not issued", async () => {
   const mintCmd = (await mintPill.innerText()).trim();
 
   const screen = card.locator(".xterm-screen").first();
-  await caption(page, "The sandbox asks for the credential itself.");
+  await caption(page, "The sandbox asks to use the credential.");
   await beat(page, PACE.read);
   await typeInTerminal(page, mintCmd, card);
   await expect
@@ -804,7 +804,7 @@ test("V06 beat 8 — authorized, not issued", async () => {
       message: 'the first mint never came back pending — expected 409 {"code":"pending"}',
     })
     .toMatch(/pending/);
-  await caption(page, "Refused — pending.");
+  await caption(page, "Refused — but an approval is now waiting.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That ask didn't fail. It raised a decision.");
   await beat(page, PACE.read);
@@ -833,15 +833,15 @@ test("V06 beat 8 — authorized, not issued", async () => {
     mintText.includes(DEMO_SECRET_VALUE),
     "the approved mint returned the secret VALUE — the demo's entire claim is that it never does",
   ).toBe(false);
-  await caption(page, "Now the same ask succeeds.");
+  await caption(page, "Now the same ask is authorized.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And look at what came back.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "A host, a header, and the name of a secret.");
+  await caption(page, "A host, a header, and the name of a secret — the information the proxy needs to inject it at the boundary.");
   await beat(page, PACE.read);
   await caption(page, "An instruction for the proxy — not a credential for the box.");
   await beat(page, PACE.read);
-  await caption(page, "Authorized, not issued.");
+  await caption(page, "Authorized, not handed to the sandbox.");
   await beat(page, BEAT_SHORT + 400);
 
   await typeInTerminal(page, mintCmd, card);
@@ -853,7 +853,7 @@ test("V06 beat 8 — authorized, not issued", async () => {
     .toMatch(/already_minted/);
   await caption(page, "Ask again, and it's spent.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "One approval, one mint.");
+  await caption(page, "One approval, one use.");
   await beat(page, BEAT_SHORT + 400);
 
   // deny -> allow -> deny in the panel: decisionForStatus maps every non-2xx
@@ -868,9 +868,9 @@ test("V06 beat 8 — authorized, not issued", async () => {
   ).toContainText("allow", { timeout: 60_000 });
   await centerInFrame(auditRows);
   await spotlight(page, auditRows);
-  await caption(page, "Three asks, three rows: refused, allowed, refused.");
+  await caption(page, "Three asks, three audit rows: refused pending approval, authorized once, then spent.");
   await beat(page, PACE.read);
-  await caption(page, "The two refusals are the mechanism working.");
+  await caption(page, "The first row is the approval gate. The last is the single-use boundary working.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await act(page, card.getByRole("button", { name: "End demo" }));
@@ -900,7 +900,7 @@ test("V06 conclusion", async () => {
   // DIALOG-NEW-BEAT: the recap covered the credential Wardyn owns and said
   // nothing about the one WE stored — half the episode after beats 6-8.
   // Drafted; see local/secrets-episodes-dialog-proposals.md.
-  await caption(page, "And the key we stored ourselves never entered the box either — authorized at the boundary, never issued inside it.");
+  await caption(page, "And the key we stored ourselves never entered the box either — the run was authorized to use it, while the proxy kept the value outside.");
   await beat(page, PACE.read);
   await caption(page, "Next, we'll take our hands off the keyboard.");
   await beat(page, PACE.read);

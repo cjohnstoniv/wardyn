@@ -537,7 +537,7 @@ test("V04 beat 5 — write-only, proved from inside", async () => {
   const writeOnlyChip = row.getByTitle(/never read back — not even by you/);
   await centerInFrame(writeOnlyChip);
   await spotlight(page, writeOnlyChip);
-  await caption(page, "Every row in this store says the same thing.");
+  await caption(page, "The store tells us the rule. Now let's test whether the rule is actually true.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Write-only — you can replace it, you can delete it, you can never read it.");
   await beat(page, PACE.read);
@@ -576,7 +576,7 @@ test("V04 beat 5 — write-only, proved from inside", async () => {
   await expect(start, "the demo Start button is disabled — this stack has no ready barrier").toBeEnabled({
     timeout: 60_000,
   });
-  await caption(page, "This sandbox is given no grant at all.");
+  await caption(page, "This sandbox has no permission to use a secret.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Nothing was ever going to hand it our secret.");
   await beat(page, BEAT_SHORT);
@@ -620,7 +620,7 @@ test("V04 beat 5 — write-only, proved from inside", async () => {
     envText.includes(SECRET_NAME),
     `"${SECRET_NAME}" reached the demo sandbox's environment — this demo's policy carries no grant, so nothing should have injected it`,
   ).toBe(false);
-  await caption(page, "The proxy's address is in there. Our secret isn't.");
+  await caption(page, "The proxy's address is in there. The secret value isn't.");
   await beat(page, PACE.read);
 
   await caption(page, "So ask Wardyn for it directly — by name, from inside the box.");
@@ -635,13 +635,13 @@ test("V04 beat 5 — write-only, proved from inside", async () => {
   // Same page-wide grep as every beat since the paste: a 404 that still echoed
   // the value would be the worst possible frame for this line.
   await assertSentinelAbsent(page, "the demo terminal, after the read-back probe");
-  await caption(page, "Four-oh-four.");
+  await caption(page, "Four-oh-four. The read-back request has nowhere to go.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Not 'forbidden'. There is no route to read a secret back.");
+  await caption(page, "Not 'forbidden'. Wardyn has no read-back route for that secret.");
   await beat(page, PACE.read);
-  await caption(page, "Not for the agent, not for the API, not for the person who stored it.");
+  await caption(page, "The run can't read it back — and neither can the operator through this store.");
   await beat(page, PACE.read);
-  await caption(page, "Write-only isn't a permission you could escalate past — it's the only door there is.");
+  await caption(page, "Write-only isn't a permission you can escalate past. There simply isn't a read-back operation.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   // Silent: nothing to teach in the teardown, and a demo left running would
@@ -677,7 +677,7 @@ test("V04 conclusion", async () => {
   // DIALOG-NEW-BEAT (dialog review, A19): 04 ends on what we built and never
   // says what it is FOR — every sibling conclusion hands off to the next
   // episode by name. Drafted; see local/light-episodes-dialog-flags.md.
-  await caption(page, "Next, we spend it. Our first run.");
+  await caption(page, "Next, we put this workspace to work. Our first run.");
   await beat(page, BEAT_SHORT + 400);
   await caption(page, "");
   await silentCard(page, "Next — 05: Your first run");
