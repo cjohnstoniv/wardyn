@@ -6,40 +6,60 @@
 /*
  * Video 06 of the series — "Your first run".
  *
- * WHAT THIS FILMS. The simplest governed thing Wardyn can do: a plain shell
- * command, run unattended in the background, against the workspace video 02
- * onboarded. No agent, no model, no network — deliberately. The video's whole
- * job is to teach the New Run form itself while nothing else is moving: what a
- * run is, the three kinds of task, why this one needs zero egress, what the
- * rail promises before launch, and then the receipts a finished run leaves
- * behind — its exit code, the file it really wrote to the host, and the audit
- * trail from create to complete. Driving an agent is video 07; autonomy with
- * a human decision mid-run is video 08.
+ * WHAT THIS FILMS. The simplest governed thing Wardyn can do — a plain shell
+ * command, run unattended in the background against the workspace video 04
+ * onboarded — governed by the POLICY WE SAVED IN EPISODE 05. That reuse is the
+ * whole point: episode 05 wrote "first-policy" and named it; this run does not
+ * author a new one, it REUSES that one BY REFERENCE. The video's job is to
+ * teach the New Run form while nothing else is moving: what a run is, the three
+ * kinds of task, how a saved policy attaches by name (nothing on the page is
+ * merged into it), what Preflight promises before launch, and then the receipts
+ * a finished run leaves behind — its exit code, the file it really wrote to the
+ * host, and the audit trail from create to complete. Driving an agent is video
+ * 07; autonomy with a human decision mid-run is video 08.
  *
- * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from
- * local/episodes-03-12-scripts-current.md's "Episode 04 — Your first run"
- * section, as edited). Every SAY / SAY-ON-CLICK stanza in that section is one
- * caption() (or one act() caption) here, in order — do not reword; wording
- * changes go through the script file and the owner. Short stanzas ride
- * BEAT_SHORT; full-length lines keep PACE.read.
+ * THE 05 -> 06 PAYOFF. Episode 05 ends on the reuse-by-reference beat on this
+ * same form; episode 06 opens by USING it. The narrative arc is "write the
+ * rules once, reuse them for every run." So the OPENING is reworked from the
+ * old inline-authoring choreography (template chips + a hand-edited spec doc)
+ * into the "Reuse a saved policy" mode row (policy_id path) — and every old
+ * inline-authoring line that went false under reuse is DIALOG-STALE-marked,
+ * never reworded (see below).
  *
- * WHY A SHELL COMMAND WITH NO NETWORK. Three reasons, each load-bearing:
- * keyless (no model quota spent on the form-teaching video); the tightest
- * possible envelope makes the policy's promise legible ("this run can touch
- * the workspace, and nothing else" is provable at a glance when the allowlist
- * is empty); and the command still produces a REAL artifact — it writes an
- * inventory file into the writable workspace, so "Files changed" has an honest
- * row and the take can assert the byte actually landed on the host.
+ * THE DIALOG. Owner lines that SURVIVE the rework are carried VERBATIM, in
+ * order — do not reword; wording changes go through the owner. The NEW opening
+ * (the reuse framing, "the policy from episode five") is drafted for the
+ * owner's pen and marked [OWNER SLOT — drafted]. Lines the reuse made false
+ * (the no-network framing, the inline first_use_approval mode-choice, the
+ * "designed to fail" off-list beat) are DIALOG-STALE — pulled from the take,
+ * flagged in local/episode-06-firstrun-proposal.md, never edited in place.
+ * local/episode-06-stanza-check.py holds spec and proposal in lockstep. Short
+ * stanzas ride BEAT_SHORT; full-length lines keep PACE.read.
  *
- * STATE IT INHERITS. Video 02's finished stack: the slugify workspace exists,
- * onboarded WRITABLE on camera (the write grant is what lets this run's file
- * reach the host). record-demo.sh --video 06 does not reset. If the workspace
- * is missing (a fresh stack, or 02 was never shot here) the beforeAll fails
- * loudly with the staging instruction instead of filming a broken form.
+ * WHY AN OFFLINE COMMAND UNDER A 2-HOST POLICY. first-policy allows two hosts
+ * (github.com, npmjs.org), holds everything else for review (deny_with_review),
+ * and floors at CC2/Wall. This run's command needs NONE of that egress — it
+ * takes stock of the workspace and writes the result to a file — so the policy
+ * grants a modest envelope the command simply does not spend, and the receipts
+ * show only Wardyn's own control channel. The command still produces a REAL
+ * artifact (NOTES-INVENTORY.txt) in the writable workspace, so the take can
+ * assert the byte actually landed on the host. Deliberately no off-list curl:
+ * under deny_with_review an unlisted host would PARK a held approval into a
+ * video that has not taught approvals yet (that is episode 10).
+ *
+ * STATE IT INHERITS. Video 04's slugify workspace, onboarded WRITABLE on camera
+ * (the write grant is what lets this run's file reach the host), and video 05's
+ * saved "first-policy". record-demo.sh --video 06 does not reset. The beforeAll
+ * SEEDS first-policy off camera (POST /policies with 05's exact spec) so a take
+ * shot independently of 05 still has a policy to reuse; if the workspace is
+ * missing it fails loudly with the staging instruction instead of filming a
+ * broken form. first-policy floors at CC2/Wall, so the filming host MUST be able
+ * to build Wall — the launch beat 422s loudly on a host that cannot.
  *
  * OWNERSHIP OF NOUNS. This video launches one run titled RUN_TITLE (unique to
- * V06 — the board groups by title, and the verifier finds the run by it) and
- * writes one file, NOTES-INVENTORY.txt, inside the slugify workspace. It
+ * V06 — the board groups by title, and the verifier finds the run by it),
+ * reuses the policy named POLICY_NAME ("first-policy", authored by video 05),
+ * and writes one file, NOTES-INVENTORY.txt, inside the slugify workspace. It
  * touches no other series noun.
  *
  * This is NOT a test. It asserts only enough to keep itself honest and to know
@@ -71,24 +91,44 @@ test.describe.configure({ mode: "serial" });
 // This video's nouns.
 // ---------------------------------------------------------------------------
 
-/** Unique title (DA5): the board groups by it and the verifier finds it. */
+/** Unique title (DA5): the board groups by it and the verifier finds it.
+ *  TWO-FILE CONTRACT: the default matches verify-demo-take.sh's
+ *  WARDYN_DEMO_V06_TITLE fallback — change one, change both. */
 const RUN_TITLE = process.env.WARDYN_DEMO_V06_TITLE || "Take inventory — first governed run";
+
+/** The policy this run REUSES by reference — authored and saved by video 05.
+ *  The reuse beat picks it by this exact name (matches 05's POLICY_NAME). */
+const POLICY_NAME = "first-policy";
+
+/**
+ * 05's saved spec, verbatim (05-your-first-policy.spec.ts's POLICY_SPEC): CC2
+ * floor (Wall), two allowed hosts, deny_with_review for everything else. The
+ * beforeAll seeds a policy of this name+spec off camera so 06 is self-sufficient
+ * when a take runs independently of 05's on-camera create.
+ */
+const POLICY_SPEC = {
+  allowed_domains: ["github.com", "npmjs.org"],
+  first_use_approval: "deny_with_review",
+  min_confinement_class: "CC2",
+  auto_stop_after_sec: 3600,
+  eligible_grants: [],
+} as const;
 
 /** The artifact the run writes into the workspace — the proof a background
  *  run really touched the host. Deleted before the take so the diff is real. */
 const ARTIFACT = "NOTES-INVENTORY.txt";
 
 /**
- * The command. Offline on purpose (the run's allowlist is EMPTY — an npm
- * install here would hang a held approval into a video that has not taught
- * approvals yet), and it ends by writing the artifact so the finished run has
- * a diff. Multi-line: the console's Shell-command field takes a script.
+ * The command. Offline on purpose — first-policy grants two hosts this command
+ * never touches, and an off-list curl would PARK a held approval (the policy is
+ * deny_with_review) into a video that has not taught approvals yet. It ends by
+ * writing the artifact so the finished run has a diff. Multi-line: the console's
+ * Shell-command field takes a script.
  */
 const COMMAND = [
   "echo taking inventory of the workspace...",
   "ls -la",
   "wc -l src/*.js test/*.js",
-  `curl -sS --max-time 5 https://example.com || echo "example.com: refused, as configured"`,
   `wc -l src/*.js test/*.js > ${ARTIFACT}`,
   "echo inventory written",
   `cat ${ARTIFACT}`,
@@ -107,10 +147,12 @@ function apiHeaders(): Record<string, string> | undefined {
 }
 
 /**
- * Per-take hygiene + the one hard precondition. The slugify workspace must
- * already exist (video 02 creates it, writable); this video will not silently
- * re-create off camera what an earlier video teaches on camera. The artifact
- * from a prior take is deleted so "Files changed" shows a real new write.
+ * Per-take hygiene + the preconditions. The slugify workspace must already
+ * exist (video 04 creates it, writable); this video will not silently re-create
+ * off camera what an earlier video teaches on camera. first-policy IS seeded off
+ * camera (video 05 authors it on camera, but 06 must be self-sufficient for an
+ * independent take). The artifact from a prior take is deleted so "Files
+ * changed" shows a real new write.
  */
 async function preflight(page: Page): Promise<void> {
   const res = await page.request.get("/api/v1/workspaces", { headers: apiHeaders() });
@@ -121,10 +163,33 @@ async function preflight(page: Page): Promise<void> {
     : (body?.items ?? body?.workspaces ?? []);
   expect(
     items.some((w) => w.name === WORKSPACE_NAME),
-    `no "${WORKSPACE_NAME}" workspace on this stack — video 06 runs against the one video 02 onboards. ` +
-      `Shoot 02 first (scripts/record-demo.sh --video 02), or restage it off camera.`,
+    `no "${WORKSPACE_NAME}" workspace on this stack — video 06 runs against the one video 04 onboards. ` +
+      `Shoot 04 first (scripts/record-demo.sh --video 04), or restage it off camera.`,
   ).toBe(true);
   fs.rmSync(path.join(WORKSPACE_PATH, ARTIFACT), { force: true });
+
+  // Seed first-policy so the reuse beat has something to pick. Episode 05 saves
+  // it ON CAMERA, but takes may run independently, so 06 must be self-sufficient:
+  // clear any stale row of that name and POST a fresh one with 05's EXACT spec,
+  // off camera, before the first beat. (Looked up by NAME in the reuse beat, so
+  // a changed id across a re-seed is harmless.)
+  const pol = await page.request.get("/api/v1/policies", { headers: apiHeaders() });
+  expect(pol.ok(), `GET /api/v1/policies failed (${pol.status()}) — is the stack up on :8080?`).toBe(true);
+  const polBody = await pol.json();
+  const policies: { id?: string; name?: string }[] = Array.isArray(polBody) ? polBody : (polBody?.items ?? []);
+  for (const p of policies) {
+    if (p?.id && p.name === POLICY_NAME) {
+      await page.request.delete(`/api/v1/policies/${p.id}`, { headers: apiHeaders() }).catch(() => {});
+    }
+  }
+  const seeded = await page.request.post("/api/v1/policies", {
+    headers: apiHeaders(),
+    data: { name: POLICY_NAME, spec: POLICY_SPEC },
+  });
+  expect(
+    seeded.ok(),
+    `could not seed the "${POLICY_NAME}" policy (${seeded.status()}) — the reuse beat would have nothing to pick`,
+  ).toBe(true);
 
   // Clear any PENDING approval an earlier video deliberately left undecided —
   // video 01's "once, or for good" demo ends on a fresh re-raise it never
@@ -192,8 +257,11 @@ test("V06 beat 1 — name it, aim it", async () => {
   await beat(page, PACE.read);
   await caption(page, "No agent.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "No internet.");
-  await beat(page, BEAT_SHORT);
+  // DIALOG-STALE: "No internet." — the reused first-policy grants two hosts
+  // (github.com, npmjs.org), so the run's envelope is no longer no-network. The
+  // COMMAND still touches nothing, but the line contradicts the policy the
+  // viewer just watched being built in 05. Pulled, not reworded; see the
+  // proposal. ("No agent. / Just a command." still lands as a pair.)
   await caption(page, "Just a command.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Because before we make this complicated, it's worth seeing what the basic contract looks like.");
@@ -239,184 +307,149 @@ test("V06 beat 1 — name it, aim it", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Beat 2 — the workspace, the envelope, the rail
+// Beat 2 — the workspace, the reused policy, the rail
 // ---------------------------------------------------------------------------
 
-test("V06 beat 2 — the envelope", async () => {
+test("V06 beat 2 — the envelope, by reference", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  // The workspace video 02 built. The combobox's option carries the name.
+  // The workspace video 04 built. The combobox's option carries the name.
   const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
   await act(page, wsPicker, "Attach the workspace we just created.");
-  await caption(page, "This is the blast radius we established in the last episode.");
-  await beat(page, PACE.read);
+  // DIALOG-STALE: "This is the blast radius we established in the last episode."
+  // — the workspace is episode 04's; the LAST episode (05) established the
+  // POLICY, not the blast radius. Off-by-one under the restructure. Pulled, not
+  // reworded (see the proposal). "One directory. / Nothing else." still frame the
+  // attached workspace.
   await caption(page, "One directory.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Nothing else.");
   await beat(page, BEAT_SHORT);
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(), "Choose the workspace.");
 
-  // ── THE POLICY, AS A DOCUMENT ─────────────────────────────────────────
+  // ── THE POLICY, BY REFERENCE (the 05 -> 06 payoff) ────────────────────
   //
-  // The Confinement + Network cards are GONE: policy-panel.tsx replaced both
-  // with ONE spec-JSON Policy card, so the envelope beat now films the
-  // document itself. Neither owner claim below went false with them — the
-  // run is still confined (default-deny is what "confined" WAS), and the
-  // template chip below still authors an empty allowlist — only the controls
-  // they used to point at did, exactly like 06/07's "Confined." line.
+  // Episode 05 authored and saved "first-policy"; this run REUSES it by
+  // reference rather than authoring a fresh spec inline. "Reuse a saved policy"
+  // is the Policy panel's mode row (policy-panel.tsx) — an aria-pressed <button>
+  // whose accessible name is its title plus its hint, so prefix-match the title.
+  // Switching to it HIDES the template chips and the spec-JSON textarea
+  // (usingSaved renders only the picker), which is why every inline-authoring
+  // locator the old beat drove — the spec box, the CI-baseline chip, the "No
+  // egress" chip, the first_use_approval "Insert" rail row — is gone here, and
+  // every inline-authoring line is DIALOG-STALE.
   //
-  // The panel opens on the Minimal template with its floor rewritten to the
-  // operator's own default barrier (new-run-screen.tsx), which is a whole
-  // policy in eight lines — the thing this beat now exists to show.
-  const specBox = page.getByLabel("Spec (JSON)");
-  await centerInFrame(specBox);
-  await spotlight(page, specBox);
-  // DIALOG-NEW-BEAT: the re-choreography's whole reason for existing — the
-  // policy is one small readable SPEC, and this is the first episode that
-  // puts it on screen. "spec" is the series' one name for this object (07's
-  // and 08's beats say it too); the line names its three parts so the JSON on
-  // screen reads as an envelope, not a config file. Drafted for the owner's
-  // pen; see local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Every rule for this run lives in one small spec — where it can go, what it can touch, and how much isolation it requires.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Short enough to read end to end before we launch.");
+  // DIALOG-STALE (the inline-authoring block, in original take order; all pulled,
+  // none reworded — see local/episode-06-firstrun-proposal.md):
+  //   · "Every rule for this run lives in one small spec — where it can go, what
+  //     it can touch, and how much isolation it requires." (a drafted doc intro;
+  //     no spec textarea on screen under reuse, and 05 is the spec episode)
+  //   · "Short enough to read end to end before we launch." (same — no doc shown)
+  //   · "And because this is a confined run, the network starts closed." and the
+  //     "Network: none." CI-baseline chip act and "This command doesn't need the
+  //     internet, so we're not giving it one." — FALSE: first-policy GRANTS two
+  //     hosts (the command simply never uses them)
+  //   · the four first_use_approval mode-choice lines ("…we decide what
+  //     happens." / "We can hold it for approval." / "We can deny it, but let it
+  //     ask." / "Or we can deny it silently.") — the stored policy already fixed
+  //     the mode (deny_with_review); the run does not re-choose it
+  await caption(page, "Last episode, we wrote our first policy and saved it under a name.");
   await beat(page, PACE.read);
-  await caption(page, "And because this is a confined run, the network starts closed.");
+  await caption(page, "This run doesn't need a brand-new one — it can reuse that.");
   await beat(page, PACE.read);
+  await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Reuse a saved policy.");
+  // The picker renders once this half is lit; the picks are silent (the rail
+  // lines narrate the result). Same drive as 05's A4 reuse beat.
+  await act(page, page.getByRole("combobox", { name: "Saved policy" }));
+  await act(page, page.getByRole("option", { name: POLICY_NAME }));
 
-  // "Network: none." — the deleted Network preset's line, now the template
-  // chip that authors the same envelope: allowed_domains [], denied_domains
-  // [], first_use_approval always_deny.
-  //
-  // DELIBERATELY NOT "Minimal" (the chip 06/07 pick): Minimal allows
-  // api.anthropic.com and answers an unlisted host with deny_with_review,
-  // which would both contradict "No internet." and park a PENDING approval
-  // row on every later episode's sidebar — the exact chrome this file's own
-  // preflight() clears off camera. And Minimal floors at CC2, which would
-  // grey out Fence on the Barrier Seg and make "Same choices." false three
-  // lines later; CI baseline floors at CC1, so every tier this host can
-  // build stays live.
-  await act(page, page.getByRole("button", { name: "CI baseline" }), "Network: none.");
-  // The panel's own live egress chip, where the rail's "0 hosts allowed"
-  // used to be — the rail stopped counting hosts for a self-authored policy
-  // when the Network card died. Asserted so the narration can't outrun the
-  // form, same as before.
+  // The rail names the STORED policy, its floor and host count, and says outright
+  // that nothing on this page is merged into it (new-run-screen.tsx). Scoped to
+  // the rail (an <aside>) because the name also shows in the Select trigger.
+  const rail = page.locator("aside").filter({ hasText: "What this run can do" });
   await expect(
-    page.getByText("No egress", { exact: true }),
-    "the policy on screen still grants egress — the CI baseline chip never landed",
+    rail.getByText(POLICY_NAME, { exact: true }),
+    `the rail does not name "${POLICY_NAME}" — the reuse pick never attached the saved policy`,
   ).toBeVisible();
-  await spotlight(page, null);
-  await caption(page, "This command doesn't need the internet, so we're not giving it one.");
+  const railPolicy = rail.getByText(/^The stored spec governs this run/);
+  await expect(railPolicy, "the rail isn't showing the reused policy by reference").toBeVisible();
+  await centerInFrame(railPolicy);
+  await spotlight(page, railPolicy);
+  await caption(page, "There it is — first-policy, the one we just built.");
   await beat(page, PACE.read);
+  await caption(page, "The run launches by reference. Nothing on this page is merged into it.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
-  // The barrier rides along unremarked otherwise — name it once, on camera,
-  // wording deliberately tier-agnostic so it stays true at whichever barrier
-  // this host defaults to at take time (series ruling S4).
+  // The barrier rides along as a SEPARATE per-run field (its own Seg, not part of
+  // the stored spec). first-policy floors at CC2/Wall, so the form auto-clamps
+  // the requested barrier UP to the floor and greys Fence beneath it — which is
+  // exactly why "Same choices." is DIALOG-STALE: the original spec's OWN note
+  // said a CC2 floor "would grey out Fence on the Barrier Seg and make 'Same
+  // choices.' false." 05 already filmed the floor greying Fence, so this beat
+  // only names the barrier riding along.
   await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
   await caption(page, "The sandbox barrier comes along with the run too.");
   await beat(page, PACE.read);
-  await caption(page, "Same choices.");
-  await beat(page, BEAT_SHORT);
   await caption(page, "Same governance.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
-  // The unlisted-hosts rule — the OTHER half of the envelope (owner note:
-  // whether requests are even expected must be controllable, with always-deny
-  // as the fallback). Its on-card Seg died with the Network card; the same
-  // three modes ARE the spec's first_use_approval, and the panel's helper
-  // rail documents all three legal values on one row (policy-panel.tsx's
-  // FIELD_HELP) — which is what the owner's three staccato lines now point
-  // at. The run still lands on the strictest mode, for the same reason as
-  // before: a command that expects zero requests should not park approvals on
-  // a human. The CI baseline chip above already authored it.
-  //
-  // Located by the row's own "Insert <key>" button (an aria-label, unique per
-  // field) rather than the key text: the same key names also live inside the
-  // textarea's value a few hundred pixels up.
-  const railEntry = (key: string) =>
-    page.getByRole("button", { name: `Insert ${key}` }).locator("xpath=ancestor::li[1]");
-  const unlisted = railEntry("first_use_approval");
-  await centerInFrame(unlisted); // S2: scrollIntoViewIfNeeded leaves it under the caption bar
-  await spotlight(page, unlisted);
-  await caption(page, "And if the command tries to reach somewhere it shouldn't, we decide what happens.");
-  await beat(page, PACE.read);
-  await caption(page, "We can hold it for approval.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "We can deny it, but let it ask.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Or we can deny it silently.");
-  await beat(page, BEAT_SHORT);
-
-  // PREFLIGHT — the server's own answer to the owner's next lines, and the
-  // one control on this screen that can give it. Clicked SILENTLY: the owner
-  // lines below are what narrate the result, which renders in the rail beside
-  // Launch (new-run-screen.tsx). A dry run of the exact body Launch will send,
-  // so what it shows is what will run.
-  //
-  // CHOREOGRAPHY (dialog review, A1): this act runs BEFORE the launch-fail
-  // beat, not after it. "Before launch, we can see what this run is allowed to
-  // do." is only true while nothing has been launched — and the owner's
-  // "Launch the command…" beat below is the launch it is talking about.
+  // PREFLIGHT — a dry run of the exact body Launch will send. It stays enabled
+  // once a saved policy is picked (policy-panel.tsx: preflightDisabled only while
+  // the saved lane has nothing selected). Clicked SILENTLY; the lines below
+  // narrate the result, which renders beside Launch (new-run-screen.tsx) as the
+  // enforced-barrier chip plus either clamp warnings or "No adjustments." — one
+  // panel, NOT two columns (so the reuse re-draft names the chip, not a
+  // side-by-side the UI never renders).
   await act(page, page.getByRole("button", { name: "Preflight" }));
   const preflight = page.getByTestId("preflight-result");
   await expect(
     preflight,
-    "preflight returned nothing — the control plane refused the dry run, so the policy on screen is not launchable",
+    "preflight returned nothing — the control plane refused the dry run, so the reused policy is not launchable here",
   ).toBeVisible({ timeout: 30_000 });
   await spotlight(page, preflight);
   await caption(page, "That's the important part of this screen.");
   await beat(page, PACE.read);
   await caption(page, "Before launch, we can see what this run is allowed to do.");
   await beat(page, PACE.read);
-  // DIALOG-NEW-BEAT: the result box is two columns — requested vs effective —
-  // and nothing on screen tells the viewer that. Drafted; see
-  // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "Preflight shows two things side by side: the spec we wrote, and the policy that will actually run.");
+  // [OWNER SLOT — drafted] re-draft for reuse: under policy_id the result box
+  // resolves the STORED spec and shows the enforced-barrier chip. Replaces the
+  // old drafted "two things side by side…" line, which described a two-column UI
+  // the panel never rendered.
+  await caption(page, "It resolves the reused policy and shows the barrier this run will actually run at.");
   await beat(page, PACE.read);
-  // The clamp lane's own words: an operator's spec is not clamped, so this
-  // reads "No adjustments." Asserted BEFORE it is spoken — a stack that did
-  // clamp something must not be narrated as if it hadn't.
+  // An operator's own saved spec is not clamped, so this reads "No adjustments."
+  // Asserted BEFORE it is spoken — a stack that clamped something must not be
+  // narrated as if it hadn't.
   await expect(
     preflight.getByText("No adjustments."),
-    "preflight came back with adjustments — the policy that runs is not the policy on screen",
+    "preflight came back with adjustments — the policy that runs is not the stored policy",
   ).toBeVisible();
-  // DIALOG-NEW-BEAT: names what the result box says. Drafted; see
-  // local/heavy-episodes-dialog-proposals.md.
-  await caption(page, "They match. Nothing was widened on our behalf.");
+  // [OWNER SLOT — drafted] names what "No adjustments." says (carried from the
+  // old drafted "They match. Nothing was widened on our behalf.", trimmed to
+  // drop the "they match" two-column framing).
+  await caption(page, "Nothing was widened on our behalf.");
   await beat(page, PACE.read);
 
-  // Owner's "Launch the command…" line never had a launch click (Launch
-  // itself is beat 3) — it rode the "Deny silently" pick, and that radio is
-  // gone. It rides the document that now says the same thing instead; the
-  // COMMAND still carries the off-list curl. Asserted, not assumed: a
-  // changed template default would make the deny below never happen while
-  // the take went green (10's own rule for this exact field).
-  await centerInFrame(specBox);
-  await expect(
-    specBox,
-    "the spec's unlisted-host rule is not always_deny — this run would raise an approval instead of a silent deny",
-  ).toHaveValue(/"first_use_approval": "always_deny"/);
-  await spotlight(page, specBox);
-  await caption(page, "So let's run it — and have it reach for a host that was never on the list.");
-  await beat(page, PACE.read);
-  await spotlight(page, null);
-  await caption(page, "This one is designed to fail.");
-  await beat(page, PACE.read);
-  await caption(page, "The request is outside the contract, so it gets denied.");
-  await beat(page, PACE.read);
+  // DIALOG-STALE (the "designed to fail" off-list beat, in original take order;
+  // all pulled, none reworded): "So let's run it — and have it reach for a host
+  // that was never on the list." / "This one is designed to fail." / "The
+  // request is outside the contract, so it gets denied." — the COMMAND no longer
+  // curls an unlisted host (under deny_with_review that would park a held
+  // approval, and 06 has not taught approvals), and deny_with_review is not a
+  // silent deny anyway.
 
-  // NOT wsPicker: its hasText filter matched the pre-selection placeholder,
-  // and once slugify is chosen no combobox carries that text — ring the
-  // Workspace card itself, which is the better frame for the line anyway.
+  // The envelope recap — re-pointed at the reused policy in the rail (its old
+  // targets, the "No egress" chip and the first_use_approval rail row, exist only
+  // in inline mode).
   await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 3 }).locator("xpath=ancestor::section[1]"));
   await caption(page, "The workspace defines what it can touch.");
   await beat(page, PACE.read);
-  await spotlight(page, page.getByText("No egress", { exact: true }));
+  await spotlight(page, railPolicy);
   await caption(page, "The network defines where it can go.");
   await beat(page, PACE.read);
-  await spotlight(page, unlisted);
   await caption(page, "And the policy defines what happens when it tries something else.");
   await beat(page, PACE.read);
   await spotlight(page, null);
@@ -518,7 +551,7 @@ test("V06 beat 4 — the receipts", async () => {
   await spotlight(page, null);
 
   // 2. ...and the file is REALLY on the host — the writable grant from video
-  // 02 doing its job. Asserted against the disk, not narrated over a widget:
+  // 04 doing its job. Asserted against the disk, not narrated over a widget:
   // a take where the write silently failed must die here, not ship. (The
   // replay itself already played in beat 3, in the Overview's hero pane —
   // the Files-changed widget stays out of this video: a 7-second sandbox is
@@ -533,10 +566,11 @@ test("V06 beat 4 — the receipts", async () => {
   await caption(page, "That file is inside the workspace we mounted — not somewhere else on the host.");
   await beat(page, PACE.read);
 
-  // 3. wardynd's own allow row — the run's ONE egress line despite "no
-  // network": the sandbox's control channel back to Wardyn, not the internet.
-  // The deny-silently curl above now gives the panel a deny row to sit beside
-  // it, so the contrast (deny + allow, side by side) is the teaching.
+  // 3. wardynd's own allow row — the run's ONE egress line even though the
+  // command reached the internet not at all: the sandbox's control channel back
+  // to Wardyn, not the open internet. first-policy allows two hosts, but the
+  // command touches neither, so the panel shows only this internal entry — the
+  // teaching that "allowed" and "reached" are different things.
   const egressPanel = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
   await spotlight(page, egressPanel);
   await caption(page, "And there's one internal network entry here.");
@@ -568,7 +602,9 @@ test("V06 beat 4 — the receipts", async () => {
   await beat(page, PACE.read);
   // VERIFY at rehearsal: kernel.sensor.blind must actually read true for the
   // barrier this take's run used — reword or drop the line if it doesn't
-  // (series ruling S4: don't outrun what the screen shows).
+  // (series ruling S4: don't outrun what the screen shows). NOTE: first-policy
+  // floors at CC2/Wall, so this run enforces AT LEAST Wall (higher than the
+  // old CI-baseline CC1) — re-confirm the sensor is blind at that tier.
   await caption(page, "On this barrier, the kernel sensor can't give us a complete picture.");
   await beat(page, PACE.read);
   await caption(page, "We'll come back to that in episode twelve.");
@@ -592,10 +628,10 @@ test("V06 conclusion", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And the run leaves a record behind.");
   await beat(page, PACE.read);
-  await caption(page, "No internet was granted.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "An off-list request was denied.");
-  await beat(page, BEAT_SHORT);
+  // DIALOG-STALE: "No internet was granted." and "An off-list request was
+  // denied." — the reused first-policy GRANTS two hosts, and the command reaches
+  // for none (no off-list curl), so neither claim is true of this run. Pulled,
+  // not reworded; see the proposal.
   await caption(page, "The command still completed its work.");
   await beat(page, PACE.read);
   await caption(page, "And we have the receipts to prove what happened.");
