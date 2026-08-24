@@ -94,9 +94,27 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back — the D28 non-atomicity this register names) | `domains`, `source` | `internal/api/approvals.go:885`, `internal/api/record.go:604` | internal |
 | `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:883`, `internal/api/workspaces.go:694` | internal |
 | `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:723` | internal |
+| `workspace.reassign` | An admin returns a member-owned workspace to the operator, `owned_by=""` (`POST /workspaces/{id}/reassign`) — the offboarding path for a member who has left | `from_owner` (the departed member's principal; `""` when the row was already operator-owned) | `internal/api/workspace_owner.go:60` | internal |
 | `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:260` | internal |
 | `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:342` | internal |
 | `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:691`, `internal/api/source_scan.go:62` | internal |
+
+**`workspace_owner` — the cross-user marker on every workspace-scoped write.**
+Any event in this section whose target is a MEMBER-OWNED workspace
+(`workspaces.owned_by` non-empty, migration `0048`) carries one extra Data
+field, `workspace_owner`, **whenever the actor is not that owner** — i.e.
+whenever an admin acts on a member's workspace for support or offboarding. It
+is stamped at one place, `auditWorkspaceData` in
+`internal/api/workspace_owner.go`, and is what makes cross-user admin access
+QUERYABLE rather than merely present in the log: filter `?actor=<admin>` and
+keep the rows where `workspace_owner` is set and differs.
+
+The actor is never rewritten to match. An admin acting on a member's workspace
+is recorded as the ADMIN — there is no impersonation anywhere on this path, and
+`TestWorkspaceOwner_NoImpersonation` (`internal/api/workspace_reassign_test.go`)
+pins it across the write surface. An operator-owned workspace (`owned_by=""`,
+every pre-0.6 row) never stamps the field, so an admin-only deployment's audit
+Data is unchanged.
 
 ## Sessions, SSH & UI relay
 

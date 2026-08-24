@@ -601,7 +601,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		updated.Requirements = wsAfter.Requirements
 		updated.EffectiveRequirements = wsAfter.EffectiveRequirements
 		s.recordAudit(r.Context(), s.auditEvent(&res.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.egress.approve", id.String(), "success", mustJSON(map[string]any{
+			"workspace.egress.approve", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{
 				"domains": promoted, "source": "record:" + taskKey,
 			})))
 	}
