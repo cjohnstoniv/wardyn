@@ -28,7 +28,12 @@ ARG UI_STAGE=ui-build
 # This is the default UI stage (UI_STAGE=ui-build). Behind a corporate allowlist
 # mirror that hasn't onboarded pnpm (every pnpm tarball 404s), select the
 # ui-prebuilt stage below instead and pass a host-built ui/dist in the context.
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
+#
+# --platform=$BUILDPLATFORM: the output is arch-independent JavaScript, so this
+# stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
+# no emulated pnpm. Same reason applies to every other stage in this file that
+# carries the flag.
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -75,7 +80,7 @@ RUN pnpm build
 # ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
 # fails loudly (empty COPY) if you selected this stage without building the UI
 # first, rather than shipping a stale bundle silently.
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ui-prebuilt
+FROM --platform=$BUILDPLATFORM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
 RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.html is absent — run 'make ui' on the host first"; exit 1; }
@@ -83,8 +88,10 @@ RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.
 # Select which UI stage feeds the runtime image (UI_STAGE declared at file top).
 FROM ${UI_STAGE} AS ui
 
-# Stage 2: build the Go binaries.
-FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+# Stage 2: build the Go binaries. Runs on the BUILDER's arch and CROSS-COMPILES
+# to $TARGETARCH below — every binary here is pure Go (CGO_ENABLED=0), so a
+# linux/arm64 image needs no QEMU for the compile, only Go's own GOARCH.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 WORKDIR /build
 
@@ -113,10 +120,14 @@ COPY . .
 # in whichever runner substrate(s) are named (see this file's top-of-file note
 # on why both by default costs nothing at runtime).
 ARG GO_BUILD_TAGS=docker,k8s
-RUN CGO_ENABLED=0 GOOS=linux go build -tags "${GO_BUILD_TAGS}" -o /out/wardynd ./cmd/wardynd \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper
+# TARGETARCH is BuildKit's automatic per-target ARG (amd64 / arm64 / …). Empty
+# under the legacy non-BuildKit builder, and `GOARCH=` empty is exactly how Go
+# spells "use the default", so a legacy build still produces a native binary.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -o /out/wardynd ./cmd/wardynd \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn ./cmd/wardyn \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper
 
 # A HOST-NATIVE `wardyn` for scripts/up.sh's host-side proxy detection. The
 # containerized wardynd cannot see the host's shell profiles, git/tool configs or
@@ -128,6 +139,9 @@ ARG HOST_GOOS=linux
 ARG HOST_GOARCH=amd64
 RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardyn-host ./cmd/wardyn
 
+# Runtime stage: resolves to $TARGETPLATFORM (no --platform pin) and runs NO
+# commands — every instruction below is COPY or ENV — so a linux/arm64 build of
+# this image needs no QEMU at all, only the arm64 child of this pinned index.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 
 # Carry the builder's CA bundle (standard roots + any staged corp CA) into the

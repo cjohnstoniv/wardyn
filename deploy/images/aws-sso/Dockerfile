@@ -34,7 +34,11 @@
 # native/staged-override pattern (see deploy/images/README.md).
 
 # ── Stage 1: Go builder ───────────────────────────────────────────────────────
-FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
+# --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
+# $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
+# does need it (apt + the AWS CLI installer run as the target arch; that stage
+# already selects x86_64/aarch64 off its own TARGETARCH).
+FROM --platform=$BUILDPLATFORM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 
 WORKDIR /build
 
@@ -55,9 +59,12 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec        ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
+# TARGETARCH is BuildKit's automatic per-target ARG; empty under the legacy
+# builder, and `GOARCH=` empty is how Go spells "use the default".
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec        ./cmd/wardyn-rec \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818

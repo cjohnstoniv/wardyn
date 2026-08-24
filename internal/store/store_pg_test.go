@@ -90,7 +90,7 @@ func TestPG_AuditAppendOnly_TriggerRejects(t *testing.T) {
 		Action:    "run.create",
 		Outcome:   "success",
 	}
-	if err := store.InsertAuditEvent(ctx, pool, ev); err != nil {
+	if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 		t.Fatalf("insert audit event: %v", err)
 	}
 

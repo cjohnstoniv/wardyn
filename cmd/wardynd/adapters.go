@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -24,6 +26,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+var _ oidc.SessionRevocations = (*pgSessionRevocations)(nil)
+
+// sessionRevocationsFor returns the D16 pg-backed revocations store when OIDC
+// is actually configured (authn != nil), else nil — mirrors "OIDC:
+// feats.authn" on api.Config being nil exactly when OIDC is unconfigured, so
+// the admin revoke-sessions surface never mounts with no session mechanism
+// for it to act on. A second, independent *pgSessionRevocations instance from
+// the one buildOptionalFeatures wires into oidc.Config.Revocations — both are
+// stateless wrappers over the same pool, so two instances cost nothing.
+func sessionRevocationsFor(authn *oidc.Authenticator, pool *pgxpool.Pool) oidc.SessionRevocations {
+	if authn == nil {
+		return nil
+	}
+	return &pgSessionRevocations{pool: pool}
+}
 
 // pgRevocations is the pg-backed embedded.RevocationStore: jti-level OR
 // run-level revocation over the identity_revocations table. Verify consults it
@@ -78,6 +96,67 @@ func (r *pgRevocations) RevokeJTI(ctx context.Context, jti string, runID uuid.UU
 		ON CONFLICT (jti) DO NOTHING`
 	if _, err := r.pool.Exec(ctx, q, jti, runID); err != nil {
 		return fmt.Errorf("wardynd: revoke jti: %w", err)
+	}
+	return nil
+}
+
+// globalRevokeSub is the reserved oidc_session_revocations.sub sentinel for a
+// revoke-all — see the migration's doc comment.
+const globalRevokeSub = ""
+
+// pgSessionRevocations is the pg-backed oidc.SessionRevocations (D16): a
+// per-principal (and global) revoke CUTOFF over oidc_session_revocations,
+// checked by internal/auth/oidc's Middleware on every authenticated request
+// once wired. Distinct from pgRevocations above, which is the per-run SPIFFE
+// identity denylist — a different table, a different session concept
+// entirely (a stateless signed cookie has no row of its own to delete).
+type pgSessionRevocations struct {
+	pool *pgxpool.Pool
+}
+
+// IsSessionRevoked reports revoked when issuedAt is at-or-before the LATER of
+// the sub-specific cutoff and the global one — a single query (MAX over the
+// two candidate rows) so a caller with no wired revocations at all (the
+// common case: no row for this sub or globally) pays one indexed lookup and
+// gets back SQL NULL, which is "never revoked", not a zero-time false alarm.
+func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub string, issuedAt time.Time) (bool, error) {
+	const q = `
+		SELECT MAX(revoked_at)
+		FROM oidc_session_revocations
+		WHERE sub = $1 OR sub = $2`
+	var cutoff sql.NullTime
+	if err := r.pool.QueryRow(ctx, q, sub, globalRevokeSub).Scan(&cutoff); err != nil {
+		return false, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
+	}
+	if !cutoff.Valid {
+		return false, nil // no revocation on record for this sub or globally
+	}
+	// issuedAt.IsZero() (a pre-D16 cookie with no iat) sorts before EVERY real
+	// cutoff, so it reads as revoked the moment any matching row exists at
+	// all — see oidc.SessionRevocations' doc comment for why that is
+	// deliberate rather than a bug.
+	return !issuedAt.After(cutoff.Time), nil
+}
+
+// RevokeSub stamps sub's cutoff at now, invalidating every current session
+// for that principal. Idempotent (repeat revokes just move the cutoff later).
+func (r *pgSessionRevocations) RevokeSub(ctx context.Context, sub string) error {
+	return r.upsertCutoff(ctx, sub)
+}
+
+// RevokeAll stamps the global cutoff at now, invalidating every current
+// session for every principal.
+func (r *pgSessionRevocations) RevokeAll(ctx context.Context) error {
+	return r.upsertCutoff(ctx, globalRevokeSub)
+}
+
+func (r *pgSessionRevocations) upsertCutoff(ctx context.Context, sub string) error {
+	const q = `
+		INSERT INTO oidc_session_revocations (sub, revoked_at)
+		VALUES ($1, now())
+		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`
+	if _, err := r.pool.Exec(ctx, q, sub); err != nil {
+		return fmt.Errorf("wardynd: revoke session cutoff: %w", err)
 	}
 	return nil
 }
@@ -190,7 +269,16 @@ type fanoutRecorder struct {
 var _ audit.Recorder = fanoutRecorder{}
 
 func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	err := f.primary.Record(ctx, ev)
+	// store.InsertAuditEvent is called directly rather than through
+	// f.primary.Record for ONE reason: it takes ev by POINTER and fills in the
+	// hash chain Postgres computed (migration 0047), so what fans out to the
+	// sinks below carries prev_hash and this row's own row_hash — the CURRENT
+	// CHAIN HEAD at the moment of the write. That is what lets an external SIEM
+	// detect a later truncation: it holds head hashes off-box, and a chain that
+	// no longer contains one it saw has been rewritten. audit.Recorder takes ev
+	// by value, so Recorder.Record structurally cannot hand them back.
+	// A failed store write leaves both empty and the event still fans out.
+	err := store.InsertAuditEvent(ctx, f.primary.Pool, &ev)
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
 		if ferr := f.fanout.Emit(ctx, ev); ferr != nil {

@@ -204,6 +204,44 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleVerifyAuditChain runs the audit hash-chain sweep (migration 0047) and
+// reports what it found. Operator-only (registered on routes.go's operatorOnly
+// group): a member reading it would learn the deployment's total audit volume
+// across every other user's runs — the same disclosure that keeps /metrics
+// admin-gated.
+//
+// This is the ONLY surface that verifies the chain, and it is deliberately
+// PULL-based. wardynd does NOT verify at boot: the sweep re-hashes every chained
+// row, so it costs O(whole audit log) on a check whose answer is "fine" on every
+// start that is not an incident. An operator — or a cron hitting this route with
+// the admin bearer — chooses when to pay it.
+//
+// A BROKEN chain answers 200 with ok=false, not 5xx: the sweep SUCCEEDED, it
+// just found something. 5xx is reserved for "the sweep could not run", so an
+// alert on ok=false never fires on a store hiccup and a store hiccup is never
+// mistaken for tampering.
+func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) {
+	v, ok := s.cfg.Store.(store.AuditChainVerifier)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "audit chain verification requires the Postgres store backend")
+		return
+	}
+	st, err := v.VerifyAuditChain(r.Context())
+	if err != nil {
+		slog.ErrorContext(r.Context(), "wardyn: audit chain sweep failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "audit chain sweep failed")
+		return
+	}
+	if !st.OK {
+		// Loud on the daemon's own logger too: whoever is paged is not
+		// necessarily whoever ran the sweep.
+		slog.ErrorContext(r.Context(), "wardyn: AUDIT CHAIN BROKEN",
+			slog.Int64("broken_seq", st.BrokenSeq),
+			slog.String("reason", st.Reason))
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 // parseAuditFilter reads the optional narrowing predicates off the query string
 // (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=), writing a
 // 400 and returning ok=false on a malformed value. ?actor= (D6) is the exact

@@ -65,9 +65,9 @@ export const V2C = {
   WAIT_NOTE: "Suggestions improve when the scan lands — you can change the image on the workspace's page any time.",
   REC_SUB:
     "Wardyn builds and caches this image from the scan, and rebuilds it when the profile changes. Generated images include standard tooling — git, curl, and the claude-code CLI (inert until a run is granted model access; credentials are never in the image).",
-  CUSTOM_SUB: "Wardyn builds and caches your custom image like the recommended one.",
+  CUSTOM_SUB: "Wardyn uses your image as the base, verbatim — the same as bringing your own.",
   STEPS_HELP:
-    "Dockerfile instructions appended after the tools above (RUN, ENV, ARG). They execute during the image build, inside the build sandbox — never on this machine.",
+    "Dockerfile instructions (RUN, ENV, ARG) to attach to this image. Not currently applied — nothing runs them yet, so they're stored but have no effect on the image.",
   CRED_WARN:
     "Anything baked into an image can be read by every run that uses it — and by anyone who can pull the image. Prefer a brokered secret instead: it's injected at use time and never stored in the image.",
   IMG_NO_INJECT: "Wardyn doesn't inspect the image and never injects tools into it.",

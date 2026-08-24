@@ -68,6 +68,7 @@ type bootFlags struct {
 	recordingRetention *int
 	auditSinks         *string
 	auditSpool         *string
+	auditSource        *string
 
 	oidcIssuer       *string
 	oidcInternalIss  *string
@@ -100,9 +101,10 @@ type bootFlags struct {
 	envbuildImg  *string
 	envbuildRepo *string
 
-	agentImagesJSON *string
-	agentModel      *string
-	scanAIAdvisor   *bool
+	agentImagesJSON    *string
+	agentModel         *string
+	scanAIAdvisor      *bool
+	requireOpSetEgress *bool
 
 	bedrockRegion       *string
 	bedrockModel        *string
@@ -114,12 +116,22 @@ type bootFlags struct {
 
 	printGroundtruthToken *bool
 	genAgeKey             *bool
+	// rotateAgeKey is the one knob in this struct with NO WARDYN_* env pair, on
+	// purpose: it is a destructive maintenance mode that re-encrypts every
+	// stored secret, so it must be an explicit act on a command line. Its
+	// early-exit siblings above are print-and-quit and harmless if an env var
+	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
+	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
+	rotateAgeKey *string
 
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
 	// run-detail pane's `ssh` command — never read by the gateway itself.
+	// sshRoleTTL (migration 0046) bounds how stale a key's admin-override
+	// stamp may be — see api.Config.SSHRoleTTL.
 	sshListen    *string
 	sshAdvertise *string
+	sshRoleTTL   *time.Duration
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -175,6 +187,7 @@ func parseBootFlags() *bootFlags {
 		// the operator asks for a retention window.
 		recordingRetention: flagIntEnv("recording-retention-days", "WARDYN_RECORDING_RETENTION_DAYS", 0, "delete stored session recordings older than N days (0 = keep forever, the default)"),
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
+		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", "#10: optional static string stamped as an extra \"source\" field on every event a sink (file/webhook/syslog) serializes — lets one SIEM index tell multiple wardynd instances/environments apart. Empty = no stamp (byte-identical to today). Never written to Postgres, sink payloads only."),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (durability so a security event is never lost); empty disables"),
 
 		oidcIssuer:         flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL — browser-facing, matches the id_token iss (enables human SSO when set)"),
@@ -207,6 +220,17 @@ func parseBootFlags() *bootFlags {
 		agentImagesJSON: flagEnv("agent-images", "WARDYN_AGENT_IMAGES", "", `JSON map of agent-name -> OCI image ref; overrides ghcr convention for named agents (env WARDYN_AGENT_IMAGES)`),
 		agentModel:      flagEnv("agent-anthropic-model", "WARDYN_AGENT_ANTHROPIC_MODEL", "", `optional: pin ANTHROPIC_MODEL inside claude-code sandboxes (e.g. "opus") so the agent doesn't use the account/CLI default (which a promo can push to Fable). Empty = CLI default.`),
 		scanAIAdvisor:   flagBool("scan-ai-advisor", "WARDYN_SCAN_AI_ADVISOR", false, "enable the ADVISORY AI workspace-scan fallback: when the deterministic scanner is unsure (low confidence / unrecognized build system), a resident read-only coding-agent CLI gap-fills EMPTY profile fields and forces needs_review. Advisory-only + fail-open (never overrides a deterministic fact, never fails the scan upload). Requires a resident claude CLI on the host PATH. Off = deterministic-only (default)."),
+		// #12: the SAME provenance gate applyWorkspaceRequirements already
+		// applies to a scan_seeded SECRET requirement (never auto-grant from
+		// untrusted repo content), now optionally applied to a scan_seeded
+		// EGRESS requirement too. Default OFF: today every scan-seeded egress
+		// host a workspace scan finds is auto-added at launch regardless of
+		// provenance, and flipping that off by default would silently narrow
+		// egress for every existing workspace on upgrade. An operator in a
+		// higher-trust posture (repo content is reviewed, or the exfil risk
+		// inline_policy.go's filterMemberGrants comment names matters more than
+		// the convenience) opts in here.
+		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", false, "require a workspace egress requirement's provenance to be operator_set before applyWorkspaceRequirements auto-adds it at launch — a scan_seeded egress host (the workspace scanner reading untrusted repo content) is skipped instead. Mirrors the existing operator_set-only gate on scan_seeded SECRET requirements. Off = today's behavior: any enabled egress requirement is auto-added regardless of provenance (default)."),
 
 		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
 		// billed via AWS). Both must be set to enable it; the AWS credentials
@@ -240,12 +264,20 @@ func parseBootFlags() *bootFlags {
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
 
+		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
+		// The backquoted word is deliberate: flag.PrintDefaults renders the first
+		// one in a usage string as the argument placeholder ("-rotate-age-key path").
+		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, re-encrypt every stored secret from WARDYN_AGE_KEY to it in ONE transaction, "+
+			"replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. "+
+			"That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
+
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),
 		uiAdvertise:      flagEnv("ui-sandbox-advertise", "WARDYN_UI_SANDBOX_ADVERTISE", "", `externally-reachable base URL of the UI-sandbox gateway (e.g. "https://wardyn-ui.example.com"), published on /healthz for the console's Open button; purely advisory copy (the gateway binds -ui-sandbox-listen, not this)`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional PER-RUN origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS + a wildcard certificate). Set, every run gets its own browser origin and an enter on any other host is refused; empty, all runs share one origin separated only by a path-scoped cookie`),
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty publishes NO address at all: /healthz reports an empty advertise_addr, the console pane has no host to show and "wardyn ssh" refuses with that message — so set this whenever the gateway is enabled`),
+		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, `how stale a registered SSH key's admin-override stamp (role_checked_at, migration 0046) may be before the gateway refuses the override; refreshed on every OIDC login for that key's owning principal (bounded-stale, never live — see docs/SSH.md Bounds)`),
 	}
 	flag.Parse()
 

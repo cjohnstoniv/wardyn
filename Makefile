@@ -147,8 +147,14 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts
 	./scripts/test-report.sh unit ./...
 
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
+# -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
+# DSN), and singleton state — site_config above all — is mutated by tests in
+# internal/api AND test/apie2e. Parallel packages therefore race each other
+# through the DB (seen: LegacyArtifactOverridesFold vs the apie2e integrations
+# PUT). Serializing packages costs ~1 min; per-package throwaway databases are
+# the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	./scripts/test-report.sh pg \
+	./scripts/test-report.sh pg -p 1 \
 		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
 		./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
 
@@ -398,6 +404,7 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	@echo "Running daemon-free shell regression tests..."
 	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-image-pins.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh

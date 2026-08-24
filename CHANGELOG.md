@@ -12,6 +12,101 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Per-user API tokens.** A signed-in human mints `wdn_…` bearer tokens for
+  themselves (`POST /me/tokens` returns the plaintext exactly once; `GET`/
+  `DELETE /me/tokens`); an admin can list and revoke anyone's (`/tokens`).
+  Only the SHA-256 is stored (migration `0045`). A token authenticates **as
+  the human who minted it** — it publishes the same context the OIDC session
+  does, so grants, RBAC and ownership bind identically and a member's token
+  can never reach an admin route. Audited `token.create`/`token.revoke`.
+- **`wardynd -rotate-age-key <path>`: age-key rotation as a maintenance
+  mode.** With the daemon stopped, mints a new age identity, re-encrypts every
+  stored secret in one transaction (any row that fails to decrypt aborts the
+  whole rotation), swaps the key file atomically and exits. The `wardyn` CLI
+  never sees the key. Audited `secret.rekey` (count only, no names).
+- **Hash-chained audit log** (migration `0047`). Every new event carries
+  `prev_hash`/`row_hash` (SHA-256 over the previous hash and the row's
+  immutable fields, computed by Postgres under a transaction-scoped advisory
+  lock so chain order equals commit order). The head hash rides the audit-sink
+  stream so an external SIEM can detect truncation; `GET /audit/chain/verify`
+  (admin) walks the chain and reports the first break. Tamper-*evident*, not
+  tamper-proof — a database owner can rewrite the whole chain; the threat
+  model says so.
+- **`env_secret` grant kind.** Injects a named stored secret as a sandbox
+  environment variable at dispatch. Resident for the run's lifetime and not
+  revocable mid-run — its own threat-model row — so it is admin-only unless
+  `WARDYN_ALLOW_MEMBER_ENV_SECRET` opens it to members. The grant-pairing
+  table is now closed: an unknown grant kind is refused instead of falling
+  through unclamped.
+- **`git_pat` per-run lease.** A `git_pat` approval decided with
+  `decision_scope=run` re-mints for the rest of that run under the one
+  decision; mints are stamped `lease` in `credential.mint`. The scope is
+  compared as stored — a legacy approval never silently becomes a lease.
+- **Second-human egress approval.** `WARDYN_EGRESS_SECOND_HUMAN=1` refuses an
+  egress decision by the run's own creator (`authz.denied`,
+  `reason: second_human_required`). The shared admin token has no per-human
+  identity and bypasses the rule — that bypass is audited
+  (`approval.second_human.bypass`) and documented as break-glass, not hidden.
+- **`auth.failed` audit event.** Admin-token 401s and rejected OIDC session
+  cookies used to fail silently; they now emit a content-free `auth.failed`
+  (reason, source IP, path) behind a process-local token bucket so a scanner
+  cannot flood the append-only log.
+- **`WARDYN_AUDIT_SOURCE`** stamps a static `source` field on every event a
+  sink serializes — one SIEM index can tell instances apart. Sink payloads
+  only, never Postgres. OPERATIONS.md gains Splunk HEC / generic-webhook
+  recipes.
+- **`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`** (default off) applies the
+  scan-seeded provenance guard that already protected secrets to egress
+  domains: a run may not carry egress the operator never set.
+- **Setup status grades the permissioning posture** — the fail-open
+  enforcement switches are scored as a check, informational and non-blocking.
+- **`If-Match` on `PUT /permissions/enforcement` and site-config apply.**
+  Both whole-replace surfaces return an `ETag`; a stale `If-Match` is refused
+  with 412 before the write reaches the store. Omitting the header keeps
+  today's behaviour.
+- **SSH admin override is bounded-stale, not permanent** (migration `0046`).
+  Every OIDC login re-stamps `role`/`role_checked_at` on the principal's
+  registered keys; the gateway refuses the override once the stamp is older
+  than `WARDYN_SSH_ROLE_TTL` (default 24h). Keys registered before 0.6 carry
+  no stamp and never gain the override until their owner logs in again.
+- **Session revocation.** `POST /sessions/revoke` (admin; `wardyn sessions
+  revoke --sub … | --all`) invalidates every current console session for one
+  principal or for everyone, effective immediately (migration `0049`).
+  Sessions are stateless cookies, so revocation is a per-principal cutoff
+  time the middleware checks on every request — fail-closed when the store
+  errors. It also revokes every unrevoked API token the target holds: a
+  `wdn_` bearer is that human's session in another form, so "revoke a human
+  now" covers both in one call. Audited `session.revoke` (with
+  `tokens_revoked`); a request presenting a revoked cookie surfaces as
+  `auth.failed` with `reason: revoked_session`.
+- **`wardyn support-bundle`** gathers version, healthz, setup status, a bounded
+  audit tail and the compose config — secret values redacted, including
+  commented-out lines — into a tar.gz for a support ticket.
+- **OIDC token exchange retries transient IdP errors** (5xx/timeout, at most
+  three attempts with backoff) and distinguishes them from a configuration
+  error on the error page.
+- **linux/arm64 images.** `wardynd`, `wardyn-proxy` and the agent images build
+  for `linux/amd64,linux/arm64` (pure-Go cross-compile; QEMU only for runtime
+  stages); every base-image pin is an index digest, enforced by
+  `scripts/test-image-pins.sh`. The release lane signs and attaches an SBOM
+  for the agent images too, the agent CLI is pinned to an exact version, and
+  CI runs a trivy scan (CRITICAL fails; accepted CVEs live in `.trivyignore`).
+- **Managed desktop envelope.** `deploy/desktop/wardyn.env.example` +
+  `docs/DESKTOP.md`: a local daemon per laptop under an MDM-managed policy
+  file, developer = operator. The ceiling is stated verbatim — the developer
+  is not the adversary in this tier — and the operator-unclamped inline-policy
+  path is named, not hidden.
+- **Member-owned workspaces (backend, migration `0048`).** A member may now
+  create, update, delete and scan their own workspaces (`owned_by`); a foreign
+  member's workspace answers the byte-identical 404 a missing one does. A
+  member's `local_dir` mounts are allowed only under operator/MDM-set roots
+  (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or a per-member
+  `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` that replaces the shared list),
+  canonicalized at bind time (symlink and `..` escapes refused, `$HOME`
+  dotfiles denied), and writable only under `WARDYN_MEMBER_WRITABLE_ROOTS`
+  minus `WARDYN_MEMBER_WRITABLE_DENY` — both unset means no writable member
+  mount at all. `WARDYN_MEMBER_MODE=1` refuses to start alongside local mode.
+  The console flow and the reassign action follow in the next stage.
 - **The `wait_for_review` hold window and concurrency are configurable.** A
   policy may set `first_use_hold_seconds` and `max_holds` instead of living
   with the built-in 30s/16; absent or zero keeps today's defaults. Note the

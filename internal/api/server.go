@@ -225,6 +225,13 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
+	// SessionRevocations (D16) is the write side of the revoke-a-human-now
+	// lever: handleRevokeSessions calls RevokeSub/RevokeAll on it.
+	// oidc.Middleware holds the matching READ side (Config.Revocations, wired
+	// by the same cmd/wardynd adapter) — this field is nil exactly when OIDC
+	// is unconfigured, and the revoke-sessions route only mounts when it is
+	// set (see routes.go).
+	SessionRevocations oidc.SessionRevocations
 	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
 	// internal/api no longer reads this field directly: requireOperator/isOperator
 	// (http.go) gate on the session's B1-derived Role instead. The list still
@@ -371,6 +378,16 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, default
+	// false), when true, makes applyWorkspaceRequirements apply the SAME
+	// provenance gate to a scan_seeded EGRESS requirement that it already
+	// applies to a scan_seeded SECRET requirement (runs_create.go): only an
+	// operator_set requirement is auto-added at launch, and a scan_seeded one
+	// (the workspace scanner reading untrusted repo content) is skipped.
+	// Default off preserves today's behavior — every enabled egress
+	// requirement is auto-added regardless of provenance — so flipping the
+	// default would silently narrow egress for existing workspaces on upgrade.
+	RequireOperatorSetEgress bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -420,6 +437,15 @@ type Config struct {
 	// SSHListenAddr is set, so a deployment with SSH off never even mints this
 	// secret).
 	SSHHostKey ed25519.PrivateKey
+	// SSHRoleTTL is WARDYN_SSH_ROLE_TTL: how stale a key's role_checked_at
+	// (migration 0046) may be before sshAuth's admin-override path refuses it
+	// — the bound on the OIDC-login re-check, since SSH itself has no live
+	// session to read a current role from. Zero defaults to a sensible 24h in
+	// New (matching the flag's own default), so a Config built without going
+	// through cmd/wardynd's flags — every test harness, notably — gets the
+	// same posture production does rather than an accidental zero-tolerance
+	// TTL that fails every override.
+	SSHRoleTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
@@ -499,6 +525,16 @@ type Server struct {
 	// promote to a PG advisory lock (gt_rotator.go's pattern) if
 	// allowMultiReplica ever becomes real.
 	siteConfigMu sync.Mutex
+	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
+	// replace this package added If-Match/ETag optimistic concurrency to
+	// (etag.go): PUT /permissions/enforcement reads the current enforcement
+	// map to check If-Match against, then writes the new one, and this mutex
+	// is what keeps that check-then-write atomic against a second overlapping
+	// PUT on the same process — same reasoning as siteConfigMu above (single
+	// replica by construction), just a second lock because the two documents
+	// live in different tables and a writer on one must never block a writer
+	// on the other. Zero value is ready to use.
+	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
@@ -518,6 +554,10 @@ type Server struct {
 	uiReady     map[string]time.Time
 	uiProxyOnce sync.Once
 	uiProxy     *httputil.ReverseProxy
+	// authFailedLimiter rate-bounds the auth.failed audit emit (see
+	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
+	// append-only log. Zero value is ready to use.
+	authFailedLimiter authFailedLimiter
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -527,6 +567,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RunnerTarget == "" {
 		cfg.RunnerTarget = "docker"
+	}
+	if cfg.SSHRoleTTL <= 0 {
+		cfg.SSHRoleTTL = defaultSSHRoleTTL
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()

@@ -34,6 +34,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -306,6 +307,9 @@ type grantApprovalRow struct {
 	requestedScope json.RawMessage
 	mintedJTI      string
 	hasApproval    bool
+	// decisionScope is approvals.decision_scope AS STORED — deliberately RAW,
+	// never types.ApprovalScope.Normalize()d. See leaseCoversRemint.
+	decisionScope types.ApprovalScope
 }
 
 // MintForGrant is the public entry point. It verifies the caller's run owns the
@@ -398,9 +402,19 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		return Minted{}, ErrRequiresSPIRE
 	}
 
-	// Single-use guard: a written minted_jti blocks re-mint.
+	// Single-use guard: a written minted_jti blocks re-mint — UNLESS the human
+	// scoped their decision to the whole run, which is the B2 lease (see
+	// leaseCoversRemint). `leased` rides the rest of this function: it suppresses
+	// the minted_jti burn below (already burnt, and the conditional UPDATE would
+	// return 0 rows and fail the mint closed) and it is stamped on the audit
+	// event, because a lease widens what ONE approval authorizes and the stream
+	// has to say which mints were the human's and which were the lease's.
+	leased := false
 	if row.mintedJTI != "" {
-		return Minted{}, ErrAlreadyMinted
+		if !leaseCoversRemint(row) {
+			return Minted{}, ErrAlreadyMinted
+		}
+		leased = true
 	}
 
 	// Chokepoint self-enforcement: an approval-required grant must carry an
@@ -467,7 +481,14 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// the deferred Rollback discards the tx, so the minted token above is never
 	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
 	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
-	if row.hasApproval {
+	//
+	// SKIPPED UNDER A LEASE, and that is the lease: the burn already happened on
+	// the first mint, so this conditional UPDATE would match 0 rows and fail a
+	// re-mint the human explicitly authorized. Nothing else is skipped — the
+	// approval state, run ownership, no-widening and kill-switch checks above all
+	// still ran on this transaction, so a revoked run's lease is dead the moment
+	// the revocation commits.
+	if row.hasApproval && !leased {
 		n, err := tx.Exec(ctx,
 			`UPDATE approvals SET minted_jti = $1 WHERE id = $2 AND minted_jti = ''`,
 			minted.JTI, row.approvalID)
@@ -492,6 +513,14 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// cannot be written, roll the whole mint back rather than hand out an
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
+	if leased {
+		// A lease widens what ONE human decision authorizes, so the stream must
+		// say which mints the human made and which the lease did — B2's own
+		// condition for the feature. Stamped on the event rather than raised as a
+		// separate action so an existing credential.mint consumer sees it without
+		// subscribing to anything new.
+		mintEv.Data = withLeaseMarker(mintEv.Data, row.decisionScope)
+	}
 	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
 		return Minted{}, err
 	}
@@ -527,10 +556,71 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	return minted, nil
 }
 
+// leaseCoversRemint reports whether an ALREADY-MINTED approval still authorizes
+// another mint for this grant — the per-run credential lease B2 asks for
+// (docs/adoption/corp-network-onboarding-findings.md). Without it a git_pat run
+// has no middle ground: requires_approval=true raises a fresh approval on every
+// single git operation (pull then push = two clicks), and requires_approval=false
+// auto-mints a real personal credential silently for the whole session.
+//
+// Four conditions, all required, and each is doing work:
+//
+//   - git_pat ONLY. It is the kind with a STANDING consumer — git's credential
+//     helper is invoked on every operation — so it is the kind whose single-use
+//     guard fights its own delivery mechanism. github_token is brokered
+//     proxy-side and never re-minted from inside a sandbox; ssh_key is materialized
+//     once and wiped; api_key never leaves the broker. Widening those would be
+//     unasked-for blast radius, so this stays one kind wide until another one
+//     demonstrates the same friction.
+//   - The decision is APPROVED. A denied/expired approval leases nothing.
+//   - decisionScope is EXACTLY types.ScopeRun, compared RAW — never through
+//     types.ApprovalScope.Normalize(). This is the whole hazard: Normalize()
+//     maps the empty string to ScopeRun, and EVERY credential approval ever
+//     decided carries an EMPTY decision_scope (the column's NOT NULL DEFAULT,
+//     and
+//     until this change api.decide 400'd any explicit scope on a credential
+//     approval). Comparing normalized would therefore convert every legacy
+//     approval in every deployment into a standing re-mint lease on upgrade —
+//     silently deleting the single-use guarantee those decisions were made
+//     under. Raw means a lease exists only where a human, on this build, chose
+//     "run". (TestLease_NormalizedLegacyDecisionIsNotALease is the regression.)
+//   - The approval's requested_scope still deep-equals the grant's scope. The
+//     lease is per-run PER SCOPE: what the human saw is what it covers, so a
+//     grant whose scope moved after the decision falls back to single-use rather
+//     than riding an approval for a different (host, secret) pairing. mint's own
+//     no-widening check re-tests this a few lines later; it is repeated here so
+//     the lease decision is readable on its own rather than by trusting what
+//     comes after it.
+func leaseCoversRemint(row grantApprovalRow) bool {
+	return row.grantSpec.Kind == types.GrantGitPAT &&
+		row.hasApproval &&
+		row.approvalState == types.ApprovalApproved &&
+		row.decisionScope == types.ScopeRun &&
+		jsonScopeEqual(row.requestedScope, row.grantSpec.Scope)
+}
+
+// withLeaseMarker adds the lease fields to a credential.mint event's Data. A
+// decode failure returns data unchanged rather than dropping the event: an
+// unmarked lease mint in the stream is bad, an absent one is worse.
+func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMessage {
+	var d map[string]any
+	if err := json.Unmarshal(data, &d); err != nil {
+		return data
+	}
+	d["lease"] = true
+	d["decision_scope"] = string(scope)
+	out, err := json.Marshal(d)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
 // mintKind dispatches to the kind-specific minter. github_token scopes are
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
-// (secret value never returned). cloud_sts is refused (caller already checked).
+// (secret value never returned). cloud_sts is refused (caller already checked),
+// and so is env_secret — see its case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -544,6 +634,15 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		return b.mintSSHKey(ctx, spec)
 	case types.GrantCloudSTS:
 		return Minted{}, ErrRequiresSPIRE
+	case types.GrantEnvSecret:
+		// NOT a brokered kind, refused EXPLICITLY rather than by falling into
+		// the default arm: an env_secret is resolved store->sandbox env at
+		// dispatch (api.resolveEnvSecretGrants) and has no mint, no TTL and no
+		// JTI. Its credential_grants row exists only so the run's grant list is
+		// complete, so a caller POSTing that id at the mint route must get a
+		// clear refusal — not a token, and not a puzzling "unknown kind" for a
+		// kind this binary knows perfectly well.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}
@@ -642,42 +741,6 @@ type apiKeyScope struct {
 	SecretName string `json:"secret_name"`
 }
 
-// mintAPIKey resolves the secret NAME to a proxy InjectionRule. The secret
-// VALUE is never read or returned here — late binding happens proxy-side, at
-// egress time, by name. This is intentional late binding, not an oversight:
-// existence is checked earlier, at create time, by validateInlineSecretRefs
-// (internal/api/inline_policy.go) for both the inline and stored/default
-// policy paths; mintAPIKey itself does NOT re-check existence here.
-func (b *Broker) mintAPIKey(spec types.GrantSpec) (Minted, error) {
-	var sc apiKeyScope
-	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
-		return Minted{}, fmt.Errorf("broker: decode api_key scope: %w", err)
-	}
-	if sc.Host == "" || sc.SecretName == "" {
-		return Minted{}, errors.New("broker: api_key scope requires host and secret_name")
-	}
-	format := sc.Format
-	if format == "" {
-		format = "Bearer %s"
-	}
-	header := sc.Header
-	if header == "" {
-		header = "Authorization"
-	}
-	return Minted{
-		Kind:      types.GrantAPIKey,
-		JTI:       newJTI(),
-		ExpiresAt: time.Now().Add(ttlFor(spec)),
-		Injection: &egress.InjectionRule{
-			Host:       sc.Host,
-			Header:     header,
-			SecretName: sc.SecretName,
-			Format:     format,
-		},
-		Metadata: map[string]string{"secret_name": sc.SecretName, "host": sc.Host},
-	}, nil
-}
-
 // gitPATScope is the JSON shape of a git_pat grant scope.
 type gitPATScope struct {
 	Host       string `json:"host"`
@@ -750,118 +813,12 @@ func reservedBrokerSecret(name string) bool {
 // missed in the other.
 func ReservedSecretName(name string) bool { return reservedBrokerSecret(name) }
 
-// mintGitPAT resolves a stored Personal Access Token and returns its VALUE to
-// the git credential helper as username/password for a matched non-GitHub host.
-//
-// This is the OPPOSITE of mintAPIKey (whose secret value never leaves the
-// broker; the proxy injects it header-side): git-over-HTTPS to ADO/GitLab is an
-// opaque CONNECT tunnel the proxy cannot inject Basic-auth into without MITM, so
-// the PAT MUST reach git through the helper — exactly like the minted
-// github_token. Fails closed on missing host/secret_name, a reserved secret
-// name (defense-in-depth at the sink), or an unresolvable secret.
-//
-// ExpiresAt is only an emission/freshness window (ttlFor) — the PAT
-// itself is a long-lived, operator-managed secret that Wardyn CANNOT expire or
-// down-scope; per-use revocation/scoping would need the host's token API
-// (ADO/GitLab), out of scope. This is the honesty ceiling for this grant kind.
-// The returned Token is masked from PTY/asciicast by the maskReg.Add in mint().
-func (b *Broker) mintGitPAT(ctx context.Context, spec types.GrantSpec) (Minted, error) {
-	var sc gitPATScope
-	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
-		return Minted{}, fmt.Errorf("broker: decode git_pat scope: %w", err)
-	}
-	if sc.Host == "" || sc.SecretName == "" {
-		return Minted{}, errors.New("broker: git_pat scope requires host and secret_name")
-	}
-	if reservedBrokerSecret(sc.SecretName) {
-		return Minted{}, fmt.Errorf("broker: git_pat secret name %q is reserved for platform internals", sc.SecretName)
-	}
-	if b.secrets == nil {
-		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
-	}
-	value, err := b.secrets.Get(ctx, sc.SecretName)
-	if err != nil {
-		return Minted{}, fmt.Errorf("broker: read git_pat secret %q: %w", sc.SecretName, err)
-	}
-	return Minted{
-		Kind:      types.GrantGitPAT,
-		JTI:       newJTI(),
-		ExpiresAt: time.Now().Add(ttlFor(spec)),
-		Token:     string(value),
-		Username:  gitPATUsername(sc.Host, sc.Username),
-		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host},
-	}, nil
-}
-
 // sshKeyScope is the JSON shape of an ssh_key grant scope.
 type sshKeyScope struct {
 	Host                string `json:"host"`
 	KeySecretRef        string `json:"key_secret_ref"`
 	Username            string `json:"username"`
 	KnownHostsSecretRef string `json:"known_hosts_secret_ref"`
-}
-
-// mintSSHKey resolves a stored SSH PRIVATE KEY and returns its VALUE (plus, when
-// named, the known_hosts material) to agent-run for a git-over-SSH clone.
-//
-// SECURITY EXCEPTION (documented honestly, mirrors mintGitPAT's honesty ceiling):
-// git's SSH transport has NO credential-helper seam (git credential.helper is
-// HTTP-only), so — unlike git_pat (returned to the helper, never on disk) or
-// api_key (never leaves the broker; the proxy injects it) — an SSH key CANNOT be
-// brokered without becoming resident: the ssh client reads it from a file. So the
-// key material is returned here and agent-run writes it 0400, agent-owned, then
-// WIPES it right after the clone (deploy/images/*/agent-run). The readable window
-// is the clone only, but within it code running AS the agent uid can read the key
-// — the same residual as WARDYN_GIT_HELPER_SECRET. This is the accepted
-// exception the owner chose when enabling the SSH SCM lane; there is no way to
-// down-scope or expire an SSH private key from Wardyn's side (out of scope, host
-// SSH-key API). The returned Token is mask-registered by mint()'s maskReg.Add.
-//
-// Fails closed on missing host/key_secret_ref, a reserved secret name (defense-
-// in-depth at the sink), an unresolvable key secret, or an unresolvable
-// known_hosts secret when one was named.
-func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, error) {
-	var sc sshKeyScope
-	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
-		return Minted{}, fmt.Errorf("broker: decode ssh_key scope: %w", err)
-	}
-	if sc.Host == "" || sc.KeySecretRef == "" {
-		return Minted{}, errors.New("broker: ssh_key scope requires host and key_secret_ref")
-	}
-	if reservedBrokerSecret(sc.KeySecretRef) || reservedBrokerSecret(sc.KnownHostsSecretRef) {
-		return Minted{}, fmt.Errorf("broker: ssh_key secret name is reserved for platform internals")
-	}
-	if b.secrets == nil {
-		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
-	}
-	key, err := b.secrets.Get(ctx, sc.KeySecretRef)
-	if err != nil {
-		return Minted{}, fmt.Errorf("broker: read ssh_key secret %q: %w", sc.KeySecretRef, err)
-	}
-	// Optional operator-supplied known_hosts (for a custom host the image-baked
-	// /etc/ssh/ssh_known_hosts does not cover). For github.com / ADO the baked file
-	// is authoritative and this ref is normally unset.
-	var knownHosts string
-	if sc.KnownHostsSecretRef != "" {
-		kh, kerr := b.secrets.Get(ctx, sc.KnownHostsSecretRef)
-		if kerr != nil {
-			return Minted{}, fmt.Errorf("broker: read ssh_key known_hosts secret %q: %w", sc.KnownHostsSecretRef, kerr)
-		}
-		knownHosts = string(kh)
-	}
-	username := sc.Username
-	if username == "" {
-		username = "git" // github.com and ssh.dev.azure.com both authenticate as user "git"
-	}
-	return Minted{
-		Kind:       types.GrantSSHKey,
-		JTI:        newJTI(),
-		ExpiresAt:  time.Now().Add(ttlFor(spec)),
-		Token:      string(key),
-		Username:   username,
-		KnownHosts: knownHosts,
-		Metadata:   map[string]string{"key_secret_ref": sc.KeySecretRef, "host": sc.Host},
-	}, nil
 }
 
 // RevokeRun best-effort revokes credentials minted for a run, part of the
@@ -953,10 +910,22 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 // mirrors store.InsertAuditEvent's statement exactly — the broker cannot import
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.
+//
+// prev_hash/row_hash are NOT written here: migration 0047's BEFORE INSERT
+// trigger fills them for every insert path, including this one. What this path
+// DOES owe the chain is the serializing lock — it must be taken before the
+// INSERT statement, on this same tx, so the seq identity default and the
+// trigger's head read happen under it (db.AuditChainLockKey explains why the
+// trigger cannot take it itself). Taken here, as late in the mint tx as
+// possible, so the chain lock is always acquired AFTER this tx's grant/approval
+// row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("broker: marshal mint audit data: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
+		return fmt.Errorf("broker: lock audit chain: %w", err)
 	}
 	const q = `
 		INSERT INTO audit_events

@@ -56,6 +56,7 @@ log them.
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by `scripts/up.sh` on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** Unset ⇒ the step honestly reports it could not look at the host. See [Four variables that need more than a table cell](#four-variables-that-need-more-than-a-table-cell) |
 | `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`) |
+| `WARDYN_AUDIT_SOURCE` | string | (unset) | #10: optional static string stamped as an extra top-level `"source"` field on every event a configured sink (file/webhook/syslog) serializes — never written to Postgres, sink payloads only (flag `-audit-source`). Lets one SIEM index ingesting from several wardynd instances/environments (staging vs prod, cluster A vs B) tell them apart without per-sink config. Empty (the default) is byte-identical to before this field existed. See [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`) |
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
 | `WARDYN_LOCAL_MODE` | bool | `false` | LOCAL HOST MODE: bypass public-API auth (flag `-local-mode`) |
@@ -86,6 +87,7 @@ log them.
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_SUBSCRIPTION_INJECT` | bool | **binary: ON** (unset); compose: `off` | proxy-side subscription OAuth injection; `off`/`0`/`false`/`no` disable, garbage exits 2. Two layers, and they differ: the compose stack pins it `off` because the distroless `wardynd` image carries no `claude` binary to inject with — see [deploy/compose/README.md](../deploy/compose/README.md). **Scope: the resident-mount subscription path only** — a run with `~/.claude` mounted falls back to its own OAuth creds over the tunnel, unMITMed, when this is `off`. It has NO effect on the separate Wardyn-managed lane (a connected managed setup-token, no resident mount): that path still injects proxy-side and still MITMs `api.anthropic.com` regardless of this flag (`internal/api/runs_dispatch_llm.go`'s `managed` gate) |
 | `WARDYN_SCAN_AI_ADVISOR` | bool | `false` | opt-in advisory AI workspace-scan fallback (flag `-scan-ai-advisor`) |
+| `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | bool | `false` (**off**) | opt in to gating a `egress:<host>` workspace requirement the SAME way a `secret:<name>` one already is (`runs_create.go`'s `applyWorkspaceRequirements`): only `operator_set` provenance auto-adds the host at launch; a `scan_seeded` one (the workspace scanner reading untrusted repo content) is skipped. **Default off** because today every enabled egress requirement is auto-added regardless of provenance, and flipping the default would silently narrow egress for every existing workspace on upgrade (flag `-require-operator-set-egress`) |
 | `WARDYN_GITHUB_REQUIRE_REF_RULESET` | bool | `false` (**off**) | opt in to refusing a `github_token` mint whose repo is not confined by a GitHub repository ruleset. On, for every repo in the grant, the broker reads `GET /repos/{owner}/{repo}/rules/branches/{branch}` for a ref outside `refs/heads/wardyn/**/*` (`creation`, `update` and `deletion` must all be in force) and one inside it (`creation`/`update` may not be, or the run's own pushes would be refused), then `GET /repos/{owner}/{repo}/rulesets/{id}` for each ruleset behind those rules (`current_user_can_bypass` must be `never`) — and fails the mint if any answer is wrong **or cannot be obtained**. Note the `**/*`: a bare `refs/heads/wardyn/**` exclude matches nothing a run pushes, fails this gate, and blocks governed pushes at GitHub too. **Default off** because the ruleset must be created per repo by someone with admin on it, which Wardyn never has, so defaulting on would break every existing deployment; the `github_ref_ruleset` setup-checklist row is what keeps the off state visible rather than silent. Recipe: [docs/POLICIES.md](POLICIES.md) → "Bound the token itself: a GitHub ruleset". Read once at broker construction, so a garbage value exits at boot. No flag |
 | `WARDYN_ENVBUILD` | bool | **binary: `false`**; compose: `true` | enable devcontainer image builds for create-run (`-tags docker`) (flag `-envbuild`). Gates BOTH the BYOI wrap and the devcontainer-build lane — see [OPERATIONS.md](OPERATIONS.md#recommended-builds-on-compose) and `threatmodel/THREAT-MODEL.md` residual #13 |
 | `WARDYN_ENVBUILD_IMAGE` | string | (unset = upstream) | envbuilder OCI image override (flag `-envbuild-image`) |
@@ -99,14 +101,17 @@ log them.
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`) |
 | `WARDYN_AGENT_ANTHROPIC_MODEL` | string | (unset) | pin `ANTHROPIC_MODEL` inside claude-code sandboxes (flag `-agent-anthropic-model`) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1` in the sandbox env, `runs_dispatch_mounts.go`): the CLI's first-run phone-home is otherwise the FIRST pending egress approval a Confined pilot sees, before the host their task actually needs |
+| `WARDYN_ALLOW_MEMBER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` grants. Default-unset DROPS a member's `env_secret` grant even when the operator's ceiling lists the exact `(name, secret)` pairing (`filterMemberGrants`, `inline_policy.go`): every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` reaches git through the helper, `ssh_key` is wiped after the clone) while an `env_secret` is a raw value in the process env for the run's whole life, with no mint, no TTL and nothing to revoke. An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling |
+| `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals.go`). Default-unset keeps single-human approval — turning it on unprompted would deadlock every single-operator deployment. **The `admin-token` principal BYPASSES it** — a bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` precisely because a shared token carries no per-human identity to compare, so it is the deliberate break-glass; each one writes `approval.second_human.bypass`. A deployment that wants this gate to bind must treat the admin token accordingly (SSO configured, token held out of band). Scoped to `egress_domain` only. See `docs/OPERATIONS.md` and `threatmodel/THREAT-MODEL.md` §5 |
 | `WARDYN_BEDROCK_MODEL` | string | (unset) | Bedrock inference-profile id (flag `-bedrock-model`) |
 | `WARDYN_BEDROCK_REGION` | string | (unset) | AWS region for the Bedrock transport (flag `-bedrock-region`); falls back to the standard `AWS_REGION` / `AWS_DEFAULT_REGION` when empty |
 | `WARDYN_BEDROCK_AWS_DIR` | string | (unset) | host `~/.aws` mounted read-only into Bedrock runs (flag `-bedrock-aws-dir`) |
 | `WARDYN_BEDROCK_AWS_PROFILE` | string | (unset) | `AWS_PROFILE` to select from the mounted `~/.aws` (flag `-bedrock-aws-profile`); falls back to the standard `AWS_PROFILE` when empty |
 | `WARDYN_BEDROCK_AWS_SSO_REGION` | string | (= bedrock-region) | AWS SSO region for the sandbox token exchange (flag `-bedrock-aws-sso-region`) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
-| `WARDYN_SSH_LISTEN` | string | (unset) | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`). Registered-public-key auth only (no passwords), owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` at registration, never re-checked live); see `docs/SSH.md` Bounds |
+| `WARDYN_SSH_LISTEN` | string | (unset) | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`). Registered-public-key auth only (no passwords), owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` and re-checked within `WARDYN_SSH_ROLE_TTL`); see `docs/SSH.md` Bounds |
 | `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway, shown in the run-detail "Attach from your terminal" pane's `ssh` command and on `/healthz`'s `ssh.advertise_addr` (flag `-ssh-advertise`). Purely advisory copy — the gateway itself binds `WARDYN_SSH_LISTEN`, not this; a container/NAT deployment's bind and its externally-reachable address routinely differ, so set this whenever the gateway is enabled (unset logs a boot warning) |
+| `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp (`ssh_public_keys.role_checked_at`, migration `0046`) may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`). Refreshed on every OIDC login for that key's owning principal (`oidc.Config.OnLogin`) and at registration time; a key whose stamp is older than this (or was never stamped — `NULL`, a pre-`0046` row) is treated as **bounded-stale**, never live — see `docs/SSH.md` Bounds |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`). **Empty = off = no listener, no new surface** — the relay cookie key is not even generated unless this is set. It **must differ from `WARDYN_LISTEN`** (and from `-ssh-listen`) and boot refuses if it does not: relayed pages are the sandbox's own code, and the separate browser origin is the only thing keeping that code away from the console's session. Boot also applies the `WARDYN_ALLOW_PLAINTEXT_LISTEN` rule to **this** address, not only to `WARDYN_LISTEN`: the relay session cookie is an 8h bearer credential for a run, so a specific non-loopback bind with no TLS posture is refused here too |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`), published on `/healthz`'s `ui_sandbox.enter_url_template` for the console's **Open** button. Purely advisory copy — the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset falls back to the raw bind address and logs a boot warning |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional **per-run** origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. Set, each run's apps get their own browser origin and an enter served on any other host is refused; unset, every run shares one origin separated only by a path-scoped cookie (a stated residual, logged at boot). Boot refuses a template with no `{run}` placeholder |
@@ -144,6 +149,52 @@ Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping
 `max_retries` (`3`) and `retry_base_delay` (`200ms`) — see
 `internal/audit/sinks/webhook.go`. The compose stack ships the `file` sink
 pointed at `/data/audit/audit.log`.
+
+Every event is one JSON object (NDJSON on the webhook sink — one line per
+event per POST batch); `Data` is the per-action payload documented in
+[AUDIT-ACTIONS.md](AUDIT-ACTIONS.md). `WARDYN_AUDIT_SOURCE` above adds a
+`"source"` field to every one of them, for a multi-instance SIEM index.
+
+#### SIEM recipes (`webhook`)
+
+Two concrete `webhook` configs — swap in your real collector URL/token. Both
+are just `WARDYN_AUDIT_SINKS`'s `webhook` block; nothing else changes.
+
+**Splunk HTTP Event Collector (HEC).** HEC wants each line wrapped in an
+`{"event": ...}` envelope, which this sink does not do — point it at a
+lightweight HEC-shaped relay (or Splunk's own NDJSON-to-HEC forwarder) rather
+than `services/collector/event` directly, and pass the HEC token as the
+bearer:
+
+```json
+{
+  "webhook": {
+    "url": "https://splunk-hec-relay.corp.example:8443/ingest",
+    "bearer_token": "<hec-token>",
+    "batch_size": 100
+  }
+}
+```
+
+**Generic JSON webhook** (Datadog, Elastic, Chronicle, an in-house collector
+— anything that accepts a bearer-authed NDJSON POST):
+
+```json
+{
+  "webhook": {
+    "url": "https://siem.example.com/ingest",
+    "bearer_token": "<collector-token>",
+    "batch_size": 50,
+    "flush_interval": "5s"
+  }
+}
+```
+
+Both refuse to boot with a `bearer_token` set on a non-`https://` `url` (the
+credential would replay in cleartext on every POST — see `NewWebhookSink`).
+Watch `wardyn_audit_sink_drops_total{sink="webhook"}` on `/metrics`: a rising
+count means the collector is slow/down and events are being shed after
+`max_retries` — see [Monitoring](OPERATIONS.md#monitoring).
 
 ## `wardyn-proxy` (egress sidecar)
 

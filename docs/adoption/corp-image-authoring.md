@@ -87,14 +87,23 @@ proxy that 403s public npm and where onboarding the package into the internal
 mirror is heavy, install the **native binary** instead — no npm, no registry
 onboarding. Opt-in per agent; the npm default is unchanged for OSS builds.
 
+`CLAUDE_CODE_VERSION` is an **exact pinned version**, not a channel, and it
+drives BOTH install paths (npm takes it as the version specifier; the native
+path passes a bare semver through as a release id). A released image has to be
+reproducible — a floating `stable`/`latest` means two builds of the same git tag
+ship different agents. Pass `CLAUDE_CODE_VERSION=stable` explicitly if you
+deliberately want the channel; the Dockerfile still resolves it on the native
+path, and npm has a `stable` dist-tag of its own.
+
 **claude-code** (`CLAUDE_INSTALL=native`): installs the native `claude` binary,
 checksum-verified against the release manifest, from the official
 `https://downloads.claude.ai/claude-code-releases` surface — the **only** host this
 path contacts (allowlist it in the proxy; the corp CA above covers its TLS):
 
 ```
-make agent-images-core CLAUDE_INSTALL=native                      # stable channel
-make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215   # pinned
+make agent-images-core CLAUDE_INSTALL=native                               # the pinned default
+make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215   # a different pin
+make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=stable    # opt back into the channel
 ```
 
 For a fully **offline / strict-allowlist** mirror that can't reach

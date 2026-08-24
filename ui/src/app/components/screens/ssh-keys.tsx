@@ -115,7 +115,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                       {k.role === "admin" && (
                         <Chip
                           tone="warning"
-                          title="Registered while you were an admin, so this key reaches runs you do not own. The stamp never changes: delete and re-register the key to drop the override."
+                          title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
                         >
                           Admin override
                         </Chip>

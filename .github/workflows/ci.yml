@@ -455,6 +455,94 @@ jobs:
           name: pg-test-reports
           path: test/reports/go/pg/**
 
+  # ── deploy: multi-arch buildx smoke (build only, never pushes) ────────────
+  # W-DESK S1. The release lane (.github/workflows/release.yml) publishes every
+  # image as a linux/amd64 + linux/arm64 index, and it only ever runs on a
+  # `vX.Y.Z` tag — so without this job an arm64 build break is discovered
+  # DURING a release, with the tag already pushed. This is the PR-time proof
+  # that the two-platform build still resolves. `push: false`, no registry
+  # login, no `packages:` permission: it builds and throws the result away.
+  #
+  # WHY THESE THREE and not all five release images — each cell is a distinct
+  # BUILD SHAPE, and the two omitted images are strict duplicates of shapes
+  # already covered here:
+  #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
+  #                      stage + a COPY-only distroless runtime (no emulation
+  #                      anywhere). wardyn-proxy is the same shape minus the UI.
+  #   agent-claude-code — a bookworm runtime doing apt-get + `npm install -g`
+  #                      as the TARGET arch, i.e. the emulated path.
+  #                      agent-codex-cli is the same shape.
+  #   agent-aws-sso    — a bookworm runtime that SELECTS its download by
+  #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
+  #                      verified). Nothing else exercises that branch.
+  #
+  # QEMU is what makes the emulated cells possible; the Go compiles do not use
+  # it (every builder stage is `FROM --platform=$BUILDPLATFORM` + GOARCH).
+  # timeout-minutes is generous on purpose: emulated apt/npm is slow, and a
+  # timeout kill here would read as a build break.
+  buildx-smoke:
+    name: multi-arch build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+          - name: agent-claude-code
+            dockerfile: deploy/images/claude-code/Dockerfile
+          - name: agent-aws-sso
+            dockerfile: deploy/images/aws-sso/Dockerfile
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build both platforms (no push, no load — the result is discarded)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+
+  # ── supply-chain: trivy image scan (OS + language packages) ───────────────
+  # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
+  # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
+  # Debian packages, the node runtime or the globally-installed agent CLI that
+  # the agent image actually ships. agent-claude-code is the scan target
+  # because it is by far the fattest image we publish (bookworm + node + npm +
+  # git/ssh/tmux/socat); wardynd and wardyn-proxy are distroless-static, which
+  # carries essentially no OS package surface to scan.
+  #
+  # --severity CRITICAL --exit-code 1: only CRITICAL fails the build. Anything
+  # broader on a Debian base is a gate that is red every week for findings
+  # nobody can act on, and a gate people learn to ignore is worse than none.
+  # --ignore-unfixed for the same reason: a CRITICAL with no upstream fix
+  # available is not something a rebuild can clear, so failing on it just
+  # blocks every PR until Debian ships a patch. Accepted-with-a-reason CVEs go
+  # in .trivyignore (trivy's own allowlist format — one id per line, each with
+  # a comment saying who accepted it and why).
+  #
+  # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
+  # is not arch-specific, so scanning one arch finds the same advisories.
+  trivy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the agent image locally (scan target — never pushed)
+        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:trivy-scan .
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: wardyn/agent-claude-code:trivy-scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+
   # ── supply-chain gates ────────────────────────────────────────────────────
   # One matrix job in place of five near-identical checkout + setup-go + one-
   # `make` jobs. Each gate still gets its own entry in the checks UI (`gates

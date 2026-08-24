@@ -103,7 +103,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /auth/logout":   {class: classAnonymous},
 
 	// ── admin ──
-	"GET /metrics":                                              {class: classAdmin},
+	"GET /metrics": {class: classAdmin},
+	// The admin twins of /me/tokens: the deployment-wide inventory names other
+	// humans, and revoke-any is the remediation path for a token whose owner was
+	// demoted or has left (migration 0045's stamp ceiling).
+	"GET /api/v1/tokens":                                        {class: classAdmin},
+	"DELETE /api/v1/tokens/{id}":                                {class: classAdmin},
 	"POST /api/v1/setup/harness-login":                          {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":           {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}":        {class: classAdmin},
@@ -133,6 +138,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":                           {class: classAdmin},
 	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
 	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
+	"POST /api/v1/sessions/revoke":                              {class: classAdmin},
+	// The audit hash-chain sweep, unlike the two /audit READS below: its
+	// verdict counts every row in the deployment, which is whole-fleet audit
+	// volume — the disclosure that keeps /metrics admin-gated too.
+	"GET /api/v1/audit/chain/verify": {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -149,6 +159,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// /me/tokens is the same self-service shape as /me/ssh-keys above:
+	// classMember, principal-scoped AT THE STORE, so DELETE /me/tokens/{id}
+	// answers a foreign id with store.ErrNotFound (404) without needing an
+	// owner/foreign pair here. The token a member mints carries their own
+	// stamped role, so minting one crosses no tier — see apiTokenAuth.
+	"GET /api/v1/me/tokens":         {class: classMember},
+	"POST /api/v1/me/tokens":        {class: classMember},
+	"DELETE /api/v1/me/tokens/{id}": {class: classMember},
 	// /me/capabilities is the member-safe twin of GET /permissions above: it
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
@@ -278,6 +296,19 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	}
 }
 
+// fakeAuthzSessionRevocations is a no-op oidc.SessionRevocations double that
+// exists only to make POST /api/v1/sessions/revoke visible to chi.Walk: the
+// route is mounted conditionally (see routes.go) on cfg.SessionRevocations
+// != nil, same as Secrets/RecordingStore above — the matrix's "every
+// conditional route mounted" doctrine requires it wired here too.
+type fakeAuthzSessionRevocations struct{}
+
+func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }
+func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { return nil }
+
 func TestAuthzMatrix(t *testing.T) {
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
@@ -291,6 +322,7 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.RecordingStore = rs
+	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	srv := New(cfg)
 
 	const memberSub = "sub-member"
@@ -871,6 +903,32 @@ func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHP
 	return types.SSHPublicKey{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
+func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+// ─── per-user api tokens (migration 0045) ─────────────────────────────────
+//
+// Honest empty state, same rationale as the SSH stubs above: this matrix pins
+// the coarse admit/refuse boundary of the five token routes, not the feature.
+// GetAPITokenByRaw returning ErrNotFound is what makes every bearer in this file
+// take the pre-existing admin path — the matrix presents session cookies and the
+// admin token, never a `wdn_` bearer, so the token auth branch must be inert
+// here. apitokens_test.go is that branch's own pin.
+func (s *authzStore) CreateAPIToken(_ context.Context, t types.APIToken, _ string) (types.APIToken, error) {
+	return t, nil
+}
+func (s *authzStore) GetAPITokenByRaw(context.Context, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (s *authzStore) TouchAPIToken(context.Context, uuid.UUID, time.Time) error { return nil }
+func (s *authzStore) ListAPITokensByPrincipal(context.Context, string) ([]types.APIToken, error) {
+	return nil, nil
+}
+func (s *authzStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Time) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
 
 // ─── capability grants (migration 0042) ───────────────────────────────────
 //

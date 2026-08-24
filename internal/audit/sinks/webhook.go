@@ -6,7 +6,6 @@ package sinks
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -297,14 +296,17 @@ func (w *WebhookSink) post(ctx context.Context, body []byte) error {
 }
 
 // encodeBatch serialises each event as a JSON object followed by a newline
-// (JSON-lines / NDJSON format).
+// (JSON-lines / NDJSON format), via marshalEvent so the #10 WARDYN_AUDIT_SOURCE
+// stamp applies here exactly as it does for the file/syslog sinks.
 func encodeBatch(batch []types.AuditEvent) ([]byte, error) {
 	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
 	for i := range batch {
-		if err := enc.Encode(batch[i]); err != nil {
+		b, err := marshalEvent(batch[i])
+		if err != nil {
 			return nil, err
 		}
+		buf.Write(b)
+		buf.WriteByte('\n')
 	}
 	return buf.Bytes(), nil
 }
