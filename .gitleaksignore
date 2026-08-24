@@ -68,3 +68,16 @@ cd72049ecaaa91d7d7d3797d6901c2d149e13868:docs/OPERATIONS.md:generic-api-key:1422
 # is the literal marker "distinctivEKEYline" padded with base64 alphabet — it
 # was never a key. History-scan flags the introducing commit, so pin it here.
 18607e555faed35c206d9d21e2915e0c76a9adec:cmd/wardynd/adapters_test.go:private-key:279
+
+# The demos-restructure specs plant CANARY strings and then prove they never
+# reach the sandbox: `WARDYN-V03-KEY-CANARY-8Q4ZR7` is the value the key-never-
+# in-the-box demo writes to a secret and greps the run's own environment for,
+# and `WARDYN-V0{6,7}-CANARY-4T7RM` are the interactive-run equivalents. The
+# assertion IS "this string is absent", so the literal has to be in the spec —
+# it authenticates to nothing. Introduced on main's demo commits; `gitleaks
+# git` scans every ref, so the fingerprints are pinned here regardless of which
+# branch the commits sit on.
+ac54c5b4894c60ebd3a5bcfed09e48c2216c88d7:ui/e2e/demo/demos.ts:generic-api-key:53
+181f6440284bcbb4d9add1e6a652a4af14346f0c:ui/e2e/demo/03-what-it-stops.spec.ts:generic-api-key:124
+2bd5671d26e937ff2f4993094676b51366c8cb33:ui/e2e/demo/07-interactive-runs.spec.ts:generic-api-key:128
+e8faade340cba6a05325197665a7b628136a194b:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128
