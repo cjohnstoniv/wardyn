@@ -48,6 +48,7 @@ import {
   DENY_SCOPE_LABEL,
   OPERATOR_ONLY_REASON,
   UNTIL_PRESETS,
+  credentialKind,
   denyDialogCopy,
 } from "./copy";
 
@@ -133,13 +134,27 @@ export function LiveApprovals({
       // producer with the toolgate (a `hold` run raises one per mutating tool
       // call) and this strip is that run's primary decision surface.
       //
-      // credential stays OUT: a mint approval is raised once at dispatch, before
-      // anyone is watching a terminal, and its blast-radius banner (the git_pat
-      // "the agent's process can read this" nuance, the broker's TTL) is the
-      // whole point of deciding it — none of which fits a one-line strip. It
-      // surfaces via the run detail's "Waiting for your confirmation" banner,
-      // which routes to the Approvals screen's kind-aware card.
-      setPending(all.filter((a) => a.run_id === runId && (a.kind === "egress_domain" || a.kind === "tool_call")));
+      // credential is admitted ONLY for an api_key mint: unlike a dispatch-time
+      // grant, the secrets demos' authorized-not-issued mint is raised from
+      // INSIDE the sandbox, mid-run, over the broker's own mint route — the
+      // same decision-visible-where-it-happens principle the egress/tool_call
+      // rows already follow, so it belongs on this strip too. git_pat/ssh_key
+      // credential approvals stay OUT: those mounts also occur on run-detail and
+      // twice in record-pane, where a mid-run mint's blast-radius banner (the
+      // git_pat "the agent's process can read this" nuance, the resident-key
+      // TTL) is the whole point of deciding it — a bare one-click host row
+      // there would be a regression. Those route via the run detail's "Waiting
+      // for your confirmation" banner to the Approvals screen's kind-aware
+      // card instead.
+      setPending(
+        all.filter(
+          (a) =>
+            a.run_id === runId &&
+            (a.kind === "egress_domain" ||
+              a.kind === "tool_call" ||
+              (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
+        ),
+      );
     } catch {
       /* transient poll error — keep the last snapshot */
     }
@@ -292,11 +307,17 @@ export function LiveApprovals({
               {/* denyDialogCopy is egress-shaped ("blocks this host…") and every
                   one of its four scopes is false for a tool hold, which has no
                   host and no scope at all: a deny refuses THIS call, the agent
-                  is told no, and the run carries on. One string, one use — it
-                  stays here rather than in copy.ts. */}
+                  is told no, and the run carries on. It is equally false for a
+                  credential mint refusal — denying withholds the CREDENTIAL,
+                  not the host; the allowlist (unaffected by this decision)
+                  still governs what the run can reach. Two strings, two uses —
+                  they stay here rather than in copy.ts, same as the tool_call
+                  one below. */}
               {denyTarget?.request.kind === "tool_call"
                 ? "Denying refuses this tool call. The agent is told no and carries on — its next one asks again."
-                : denyDialogCopy(denyTarget?.scope ?? "run", { until: denyTarget?.until })}
+                : denyTarget?.request.kind === "credential"
+                  ? "Denying refuses this credential mint — the agent gets no key. The allowlist still governs what the run can reach; this decision doesn't touch it."
+                  : denyDialogCopy(denyTarget?.scope ?? "run", { until: denyTarget?.until })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

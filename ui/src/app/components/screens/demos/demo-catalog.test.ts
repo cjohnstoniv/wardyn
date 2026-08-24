@@ -4,50 +4,101 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
 import { DEMOS } from "./demo-catalog";
 
-// Keyless, workspace-free, LLM-free sandboxes an operator drives by hand.
-// DEMOS also carries a seventh, harness-aware demo (needsModel) — kept out of
-// this subset since it trades the shared invariants below (empty
-// allowed_domains, a pasted command) for a real, egress-scoped agent task.
+// Keyless, workspace-free sandboxes an operator drives by hand. DEMOS also
+// carries a harness-aware demo (needsModel) — kept out of this subset since
+// it trades the shared invariants below (empty allowed_domains, a pasted
+// command) for a real, egress-scoped agent task.
 const KEYLESS = DEMOS.filter((d) => !d.needsModel);
 
-// The original showcase quartet — the first four keyless demos, each covering
-// a distinct first_use_approval / allow-all combo. Two later keyless demos sit
-// on different axes entirely and deliberately REUSE an earlier combo rather
-// than inventing a new mode to distinguish, so both are excluded from the
-// distinctness checks below and asserted on separately:
+// The original showcase quartet — the first four keyless EGRESS demos, each
+// covering a distinct first_use_approval / allow-all combo. Two later egress
+// keyless demos sit on different axes entirely and deliberately REUSE an
+// earlier combo rather than inventing a new mode to distinguish, so both are
+// excluded from the distinctness checks below and asserted on separately (the
+// section filter also excludes the three secrets demos, which cover a
+// different axis — value governance, not first_use_approval/allow-all — and
+// would otherwise swallow this quartet check):
 // - record-a-policy reuses the open-egress combo (Record Mode, not an
 //   egress-approval-mode showcase — recording needs egress wide open, that's
 //   the point).
 // - once-or-for-good reuses fail-then-approve's deny_with_review (the
 //   decision-SCOPE axis, not a new first_use_approval mode — scope is
 //   orthogonal to FirstUseMode).
-const SHOWCASE_QUARTET = KEYLESS.filter((d) => d.id !== "record-a-policy" && d.id !== "once-or-for-good");
+const SHOWCASE_QUARTET = KEYLESS.filter(
+  (d) => d.section === "egress" && d.id !== "record-a-policy" && d.id !== "once-or-for-good",
+);
 
 describe("demo catalog", () => {
-  it("ships exactly six keyless demos with distinct ids/titles", () => {
-    expect(KEYLESS).toHaveLength(6);
-    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(6);
-    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(6);
+  it("ships exactly nine keyless demos with distinct ids/titles", () => {
+    expect(KEYLESS).toHaveLength(9);
+    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(9);
+    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(9);
   });
 
-  it("every demo (including the harness one) is CC1, auto-stops, and grants/mounts/repos nothing", () => {
+  it("sections split the original egress demos from the new secrets demos", () => {
+    const egressIds = [
+      "sealed-box",
+      "fail-then-approve",
+      "held-at-the-door",
+      "lines-that-cant-be-crossed",
+      "agent-in-the-box",
+      "record-a-policy",
+      "once-or-for-good",
+    ];
+    for (const id of egressIds) expect(DEMOS.find((d) => d.id === id)?.section).toBe("egress");
+    const secretsIds = ["write-only-by-design", "key-never-in-the-box", "authorized-not-issued"];
+    for (const id of secretsIds) expect(DEMOS.find((d) => d.id === id)?.section).toBe("secrets");
+    expect(DEMOS).toHaveLength(egressIds.length + secretsIds.length);
+  });
+
+  it("every demo is CC1, auto-stops, and mounts/repos nothing", () => {
     for (const d of DEMOS) {
       expect(d.policy.min_confinement_class).toBe("CC1");
       expect(d.policy.auto_stop_after_sec ?? 0).toBeGreaterThan(0);
-      // Workspace-free / grant-free by construction — these fields must be absent.
-      expect(d.policy.eligible_grants).toBeUndefined();
+      // Workspace-free by construction — these fields must be absent on every demo.
       expect(d.policy.workspace_mounts).toBeUndefined();
       expect(d.policy.workspace_repos).toBeUndefined();
     }
   });
 
-  it("every keyless demo pins an empty allowed_domains (deny-all base) and needs no model", () => {
-    for (const d of KEYLESS) {
+  it("every egress-section demo grants nothing (the secrets demos are the only ones that do)", () => {
+    for (const d of DEMOS.filter((d) => d.section === "egress")) {
+      expect(d.policy.eligible_grants).toBeUndefined();
+    }
+  });
+
+  it("every egress-section keyless demo pins an empty allowed_domains (deny-all base) and needs no model", () => {
+    for (const d of KEYLESS.filter((d) => d.section === "egress")) {
       expect(d.policy.allowed_domains).toEqual([]);
       expect(d.needsModel).toBeFalsy();
     }
+  });
+
+  it("the secrets-section granted demos use api_key-only grants, a host inside allowed_domains, and a non-reserved secret_name", () => {
+    const granted = DEMOS.filter((d) => d.section === "secrets" && d.policy.eligible_grants?.length);
+    expect(granted.length).toBe(2);
+    for (const d of granted) {
+      expect(d.needsSecret).toBeTruthy();
+      for (const g of d.policy.eligible_grants!) {
+        expect(g.kind).toBe("api_key");
+        const scope = g.scope as { host?: string; secret_name?: string };
+        expect(scope.host).toBeTruthy();
+        expect(d.policy.allowed_domains).toContain(scope.host);
+        expect(scope.secret_name).toBeTruthy();
+        expect(scope.secret_name).not.toBe(SUBSCRIPTION_OAUTH_SECRET);
+        expect(scope.secret_name).not.toBe("anthropic-managed-oauth");
+      }
+    }
+  });
+
+  it("authorized-not-issued's steps pin the real mint 409 body codes", () => {
+    const d = DEMOS.find((x) => x.id === "authorized-not-issued")!;
+    const allText = d.steps.map((s) => `${s.text} ${s.cmd ?? ""}`).join(" ");
+    expect(allText).toContain('"code":"pending"');
+    expect(allText).toContain('"code":"already_minted"');
   });
 
   it("the original showcase quartet covers distinct first_use_approval / allow-all combos", () => {
@@ -86,7 +137,7 @@ describe("demo catalog", () => {
     // Interactive like the rest (the operator runs `claude` in the attached
     // terminal) — a command step to paste, not an autonomous task.
     expect(d.steps.some((s) => s.cmd?.includes("claude"))).toBe(true);
-    // Egress is scoped to Anthropic, not deny-all like the keyless six.
+    // Egress is scoped to Anthropic, not deny-all like the keyless demos.
     expect(d.policy.allowed_domains.length).toBeGreaterThan(0);
     expect(d.policy.allowed_domains.every((h) => h.includes("anthropic.com"))).toBe(true);
   });

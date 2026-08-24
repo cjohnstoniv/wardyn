@@ -59,13 +59,58 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
-  it("a pending credential for this run stays out of the strip (its blast-radius card lives on the Approvals screen)", async () => {
+  // {host,secret_name} with no header/format classifies as git_pat under the
+  // credentialKind heuristic (copy.ts) — a resident, agent-readable PAT whose
+  // blast-radius card (TTL, "the agent's process can read this") is the whole
+  // point of deciding it, so it stays off this strip and routes via the
+  // Approvals screen's kind-aware card instead.
+  it("a pending git_pat-shaped credential stays out of the strip (its blast-radius card lives on the Approvals screen)", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "cred", kind: "credential", requested_scope: { host: "api.example", secret_name: "x" } }),
     ]);
     render(<LiveApprovals runId="r1" />);
     expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
     expect(screen.queryByTestId("live-approvals")).not.toBeInTheDocument();
+  });
+
+  // An api_key-shaped scope (carries `header`) is the opposite case: the
+  // secrets demos' authorized-not-issued mint is raised from INSIDE the
+  // sandbox mid-run, over the broker's own route — the same
+  // decision-visible-where-it-happens principle egress/tool_call rows already
+  // get, so it renders on the strip, labeled by host like an egress row.
+  it("a pending api_key-shaped credential renders on the strip, labeled by host", async () => {
+    listApprovalsMock.mockResolvedValue([
+      pending({
+        id: "cred-key",
+        kind: "credential",
+        requested_scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key" },
+      }),
+    ]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText("example.com")).toBeInTheDocument();
+  });
+
+  // Deny's confirm copy must own up to what the click actually refuses: a
+  // mint, not the host. The egress sentence ("blocks this host…") would be
+  // FALSE here — denying withholds the credential; the allowlist is
+  // unaffected. Same pin shape as the tool_call precedent above.
+  it("denying an api_key-shaped credential shows the mint-refusal copy, not the egress host sentence", async () => {
+    listApprovalsMock.mockResolvedValue([
+      pending({
+        id: "cred-key",
+        kind: "credential",
+        requested_scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key" },
+      }),
+    ]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/refuses this credential mint/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/blocks this host/i)).not.toBeInTheDocument();
   });
 
   // The toolgate is tool_call's first producer: a `hold` run parks the agent on

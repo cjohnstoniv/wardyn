@@ -451,3 +451,34 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   egress_domain: "egress",
   tool_call: "tool",
 };
+
+// Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,
+// which is a static import — see live-approvals.tsx's H2 comment for why the
+// screen module itself can't be the source instead) so both files read the
+// SAME kind-sniffing heuristic rather than keeping two that could drift.
+export type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" | "generic";
+// H7 fix: requested_scope never carries the grant KIND (ApprovalRequest.kind is
+// only the wire-level "credential"/"egress_domain"/"tool_call"), so this stays a
+// key-sniffing heuristic. Order matters:
+//  - key_secret_ref is UNIQUE to ssh_key (broker.sshKeyScope) — must be checked
+//    before the git_pat fallback, or every ssh_key approval (a resident,
+//    agent-readable PRIVATE KEY, not a PAT) rendered the git_pat banner.
+//  - api_key's scope ALSO carries secret_name (the broker requires it), so the
+//    api_key discriminators (header/format) must be checked before the git_pat
+//    fallback — otherwise every api_key approval renders the git_pat banner,
+//    which claims the agent's process can read the key (the opposite of
+//    api_key's proxy-side injection design).
+// a MINIMAL api_key scope ({host,secret_name} only, header/format
+// omitted since the broker defaults them) is indistinguishable from a minimal
+// git_pat scope ({host,secret_name}, username omitted) by keys alone — genuine
+// wire-format ambiguity, not fixable client-side. We bias the fallback toward
+// git_pat: it's the safer direction (never under-claim exposure) and the only
+// in-app path that produces a truly minimal scope today (git_pat with a blank
+// username field). Upgrade path: expose the real GrantKind on ApprovalRequest.
+export function credentialKind(scope: Record<string, unknown>): CredentialKind {
+  if ("repos" in scope || "permissions" in scope) return "github_token";
+  if ("key_secret_ref" in scope) return "ssh_key";
+  if ("header" in scope || "format" in scope) return "api_key";
+  if ("secret_name" in scope || "username" in scope) return "git_pat";
+  return "generic";
+}

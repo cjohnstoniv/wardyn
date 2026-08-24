@@ -38,6 +38,7 @@ import {
   OPERATOR_ONLY_REASON,
   WIRE_TO_COPY,
   approvalScopeBadge,
+  credentialKind,
   egressBlastRadius,
 } from "../wardyn/copy";
 
@@ -90,32 +91,9 @@ function ttlPhrase(scope: Scope): string {
   return min >= 1 ? ` for ${min} minute${min === 1 ? "" : "s"}` : ` for ${sec} seconds`;
 }
 
-type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" | "generic";
-// H7 fix: requested_scope never carries the grant KIND (ApprovalRequest.kind is
-// only the wire-level "credential"/"egress_domain"/"tool_call"), so this stays a
-// key-sniffing heuristic. Order matters:
-//  - key_secret_ref is UNIQUE to ssh_key (broker.sshKeyScope) — must be checked
-//    before the git_pat fallback, or every ssh_key approval (a resident,
-//    agent-readable PRIVATE KEY, not a PAT) rendered the git_pat banner.
-//  - api_key's scope ALSO carries secret_name (the broker requires it), so the
-//    api_key discriminators (header/format) must be checked before the git_pat
-//    fallback — otherwise every api_key approval renders the git_pat banner,
-//    which claims the agent's process can read the key (the opposite of
-//    api_key's proxy-side injection design).
-// a MINIMAL api_key scope ({host,secret_name} only, header/format
-// omitted since the broker defaults them) is indistinguishable from a minimal
-// git_pat scope ({host,secret_name}, username omitted) by keys alone — genuine
-// wire-format ambiguity, not fixable client-side. We bias the fallback toward
-// git_pat: it's the safer direction (never under-claim exposure) and the only
-// in-app path that produces a truly minimal scope today (git_pat with a blank
-// username field). Upgrade path: expose the real GrantKind on ApprovalRequest.
-function credentialKind(scope: Scope): CredentialKind {
-  if ("repos" in scope || "permissions" in scope) return "github_token";
-  if ("key_secret_ref" in scope) return "ssh_key";
-  if ("header" in scope || "format" in scope) return "api_key";
-  if ("secret_name" in scope || "username" in scope) return "git_pat";
-  return "generic";
-}
+// credentialKind + its CredentialKind type now live in ../wardyn/copy.ts —
+// hoisted so live-approvals.tsx's credential filter reads the SAME heuristic
+// (see copy.ts's H7 comment on the function itself for the ordering rules).
 
 // Does the github_token scope's permissions object grant any write/admin/push?
 function grantsWrite(scope: Scope): boolean {

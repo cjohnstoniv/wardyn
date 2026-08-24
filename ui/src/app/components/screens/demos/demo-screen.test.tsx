@@ -13,11 +13,13 @@ const getSetupStatusMock = vi.fn();
 const createRunMock = vi.fn();
 const getRunMock = vi.fn();
 const killRunMock = vi.fn();
+const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
     createRun: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
+    getGrants: (...a: unknown[]) => getGrantsMock(...a),
   },
 }));
 vi.mock("../../../lib/api/setup", () => ({
@@ -37,6 +39,7 @@ const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", () => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  demoAuditRows: () => [],
 }));
 const toastErrorMock = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(...a) } }));
@@ -62,6 +65,7 @@ describe("DemoScreen", () => {
     createRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
     getRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
     killRunMock.mockReset().mockResolvedValue(undefined);
+    getGrantsMock.mockReset().mockResolvedValue([]);
     listAuditMock.mockReset().mockResolvedValue([]);
     toastErrorMock.mockReset();
   });
@@ -115,7 +119,7 @@ describe("DemoScreen", () => {
     expect(await screen.findByTestId("demo-terminated")).toBeInTheDocument();
   });
 
-  it("renders the six keyless demo cards, and hides the harness demo without a model", async () => {
+  it("renders the nine keyless demo cards, and hides the harness demo without a model", async () => {
     renderScreen();
     for (const d of DEMOS.filter((d) => !d.needsModel)) {
       expect(await screen.findByText(d.title)).toBeInTheDocument();
@@ -163,7 +167,7 @@ describe("DemoScreen", () => {
     renderScreen();
     expect(await screen.findByTestId("demos-not-ready")).toBeInTheDocument();
     const starts = screen.getAllByRole("button", { name: /start demo/i });
-    expect(starts).toHaveLength(6);
+    expect(starts).toHaveLength(9);
     for (const b of starts) expect(b).toBeDisabled();
   });
 
@@ -187,5 +191,21 @@ describe("DemoScreen", () => {
     expect(screen.getByTestId("live-approvals")).toBeInTheDocument();
     expect(screen.getByTestId("demo-audit-panel")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /end demo/i })).toBeInTheDocument();
+  });
+
+  // authorized-not-issued's mint command carries a literal "{grant_id}" token —
+  // StepList must render it AS-IS before a run exists (the "what you'll run"
+  // preview has no run to ask), then substitute the real id once one is live.
+  it("StepList renders {grant_id} literally pre-launch, and substitutes it once a run's grant is fetched", async () => {
+    getGrantsMock.mockResolvedValue([{ id: "grant-123", scope: "api_key", audience: "api_key", state: "active" }]);
+    renderScreen();
+    const demo = DEMOS.find((d) => d.id === "authorized-not-issued")!;
+
+    await screen.findByText(demo.title);
+    expect(screen.getAllByText(/\{grant_id\}/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByTestId(`demo-start-${demo.id}`));
+    await waitFor(() => expect(screen.getAllByText(/grant-123/).length).toBeGreaterThan(0));
+    expect(screen.queryAllByText(/\{grant_id\}/)).toHaveLength(0);
   });
 });

@@ -3,21 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Demo sandbox catalog — six hands-on, workspace-free, LLM-free demos that a
-// new user can run BEFORE onboarding any repo or key, to prove Wardyn's egress
-// confinement first-hand. Each launches an interactive CC1 sandbox via the
-// existing POST /api/v1/runs (interactive + inline_policy); the operator drives
-// plain curl in the attached terminal and watches the policy hold. All six are
-// CC1 / auto-stop 900s / no grants / no mounts / no repos by construction.
+// Demo sandbox catalog — hands-on, workspace-free demos that a new user can run
+// BEFORE onboarding any repo or key, to prove Wardyn's confinement first-hand.
+// Each launches an interactive CC1 sandbox via the existing POST /api/v1/runs
+// (interactive + inline_policy); the operator drives plain curl in the attached
+// terminal and watches the policy hold. Every demo is CC1 / auto-stop 900s / no
+// mounts / no repos by construction. Two sub-sections (`Demo.section`):
 //
-// A seventh, harness-aware demo (needsModel:true) rounds out the set: same CC1 /
-// no-grants / no-mounts / no-repos confinement and the same interactive idle
-// sandbox, but egress is scoped to Anthropic's API and the operator runs a REAL
-// Claude Code agent (`claude`) in the attached terminal — authenticating through
-// the connected model, injected proxy-side. Wardyn governs any workload — a
-// coding agent is the flagship case, not the only one — so this demo is gated on
-// a connected model (demo-screen.tsx) and shown alongside, never instead of, the
-// keyless six (which stay entirely LLM-free).
+// - egress (seven): the original network-egress governance demos — the four
+//   keyless first_use_approval/allow-all showcase demos, the agent-in-the-box
+//   harness demo (needsModel:true — same CC1/no-grants confinement, but egress
+//   is scoped to Anthropic's API and the operator runs a REAL Claude Code agent
+//   in the terminal, authenticating through the connected model injected
+//   proxy-side; gated on a connected model and shown alongside, never instead
+//   of, the keyless demos), record-a-policy, and once-or-for-good. All keyless
+//   except the harness one.
+// - secrets (three, all keyless): governance for a stored VALUE rather than a
+//   destination — write-only-by-design (no route ever reads a secret back),
+//   key-never-in-the-box (an api_key grant injects proxy-side, never resident),
+//   and authorized-not-issued (an approval-gated, single-use mint). The two
+//   granted demos carry `needsSecret` — a missing secret 422s at run-create.
 import type { RunPolicySpec } from "../../../lib/types";
 import { lsGet, lsSet } from "../../../lib/storage";
 
@@ -60,6 +65,10 @@ export interface Demo {
   /** Honest danger note (allow-all-egress demos only — CC1 + open egress). */
   caution?: string;
   policy: RunPolicySpec;
+  /** Which Getting-Started sub-section this demo belongs to: network egress
+   *  governance (the original seven) or secrets governance (keeping a value
+   *  out of the sandbox, whether or not it ever touches egress). */
+  section: "egress" | "secrets";
   steps: DemoStep[];
   /** How you'd set up a sandbox like this yourself, on the New run page. */
   setupUi: string[];
@@ -68,6 +77,12 @@ export interface Demo {
    *  comes up idle for the operator to drive — here they run the agent CLI in the
    *  attached terminal (which is what makes "watch it live" honest). */
   needsModel?: boolean;
+  /** Set only on a demo whose policy carries an api_key grant referencing this
+   *  secret NAME (validateInlineSecretRefs collects api_key secrets regardless
+   *  of requires_approval) — a missing secret 422s at run-create. Gated the
+   *  same shape as needsModel; the Getting-Started step filtering that hides
+   *  an unmet step is phase-2 work (setup/steps.ts), not this catalog. */
+  needsSecret?: string;
 }
 
 // Shared across every demo: weakest barrier (runs anywhere), reaped 15 min after
@@ -82,6 +97,7 @@ const SHARED = {
 export const DEMOS: Demo[] = [
   {
     id: "sealed-box",
+    section: "egress",
     title: "The sealed box",
     teaches: "Default-deny egress: an unlisted host is refused outright — no prompt, no wait.",
     overview:
@@ -107,6 +123,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "fail-then-approve",
+    section: "egress",
     title: "Fail, then approve",
     teaches: "deny_with_review: the first hit is denied but raises an approval; approve it and a retry passes.",
     overview:
@@ -135,6 +152,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "held-at-the-door",
+    section: "egress",
     title: "Held at the door",
     teaches: "wait_for_review: Wardyn HOLDS the connection open while it waits for your live decision.",
     overview:
@@ -166,6 +184,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "lines-that-cant-be-crossed",
+    section: "egress",
     title: "Lines that can't be crossed",
     teaches: "allow_all_egress: the public internet is open, yet cloud-metadata and private/LAN addresses have no route out at all.",
     overview:
@@ -201,6 +220,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "agent-in-the-box",
+    section: "egress",
     title: "The agent in the box",
     teaches: "The flagship path: run a real coding agent in the terminal, bound by the exact same policy primitives as the demos above.",
     overview:
@@ -231,6 +251,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "record-a-policy",
+    section: "egress",
     title: "Record a policy",
     teaches:
       "Run a task open once, then synthesize the least-privilege policy from what it actually did, and re-run it confined.",
@@ -270,6 +291,7 @@ export const DEMOS: Demo[] = [
   },
   {
     id: "once-or-for-good",
+    section: "egress",
     title: "Once, or for good",
     teaches: "The Once scope grants exactly one connection, not the run — approve it and the very next attempt has to ask again.",
     overview:
@@ -297,6 +319,135 @@ export const DEMOS: Demo[] = [
       "In Policy, start from the Minimal template and empty allowed_domains — no hosts at all.",
       "Set \"first_use_approval\": \"deny_with_review\" — refused now, raised for review.",
       "Launch interactive; when a request appears, use the split button's caret to grant Once instead of a plain Approve.",
+    ],
+  },
+
+  // ============================================================
+  // Secrets demos — governance for a stored VALUE, tied to egress or not.
+  // write-only-by-design goes FIRST: it's the precondition the other two
+  // gate on (both reference the secret it walks the operator through adding).
+  // ============================================================
+  {
+    id: "write-only-by-design",
+    section: "secrets",
+    title: "Write-only, even for you",
+    teaches:
+      "A stored secret's value can be replaced or removed, but never read back — not by the agent, not by the API, not by you.",
+    overview:
+      "Every secret you store in Wardyn goes into a one-way door: set it, rotate it, delete it — there is no route, anywhere, that hands the value back. This demo doesn't even need a policy grant to prove it; the negative holds before one exists. Add the secret on /secrets, then watch the terminal come up empty three different ways.",
+    policy: {
+      ...SHARED,
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+    },
+    steps: [
+      {
+        cmd: "printenv | sort",
+        text: "No key in the environment — this demo's policy carries no grant at all, so nothing was ever going to inject it.",
+      },
+      {
+        cmd: "grep -rIl --exclude-dir={proc,sys,dev} wardyn-demo-key /etc /home /tmp /usr 2>/dev/null",
+        text: "Nothing resident on disk either (scoped to skip /proc, /sys, /dev — a bare / grep can block on special files mid-demo).",
+      },
+      {
+        cmd: 'curl -sS --noproxy \'*\' "$WARDYN_PROXY_URL/wardyn/v1/secrets/wardyn-demo-key"',
+        text: "404 — there is no read-back route for a stored secret anywhere in Wardyn, not one gated to the operator either. Write-only isn't a permission you could escalate past; it's the only door that exists.",
+      },
+    ],
+    setupUi: [
+      "New Run → pick any barrier (Fence is fine for a demo).",
+      "On /secrets, add a secret named \"wardyn-demo-key\" — the masked entry field and its write-only tooltip (\"can be replaced or removed, but never read back — not even by you\") are the same door this demo proves from the terminal.",
+      "In Policy, start from the Minimal template and empty allowed_domains — set \"first_use_approval\": \"always_deny\". This demo doesn't need a grant to make its point.",
+      "Launch interactive and attach the terminal.",
+    ],
+  },
+  {
+    id: "key-never-in-the-box",
+    section: "secrets",
+    title: "The key that never enters the box",
+    needsSecret: "wardyn-demo-key",
+    teaches:
+      "A brokered api_key grant injects the header on the way OUT of the proxy — the sandbox itself never holds, sees, or can leak the value.",
+    overview:
+      "The sandbox is credentialed without ever being handed a credential: the header is stitched onto the outbound request only as it leaves the proxy, after the sandbox's own process already sent it. printenv and a scoped grep both come up empty, and the response carries no trace either — the proof lives in the Audit panel, stamped before you typed a single command.",
+    policy: {
+      ...SHARED,
+      allowed_domains: ["example.com"],
+      first_use_approval: "always_deny",
+      eligible_grants: [
+        {
+          kind: "api_key",
+          requires_approval: false,
+          scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key", format: "%s" },
+        },
+      ],
+    },
+    steps: [
+      { cmd: "printenv | sort", text: "No key in the environment." },
+      {
+        cmd: "grep -rIl --exclude-dir={proc,sys,dev} wardyn-demo-key /etc /home /tmp /usr 2>/dev/null",
+        text: "Nothing resident on disk either — the value was never written into the box.",
+      },
+      {
+        cmd: "curl -sSI http://example.com",
+        text: "200 — but don't trust the response, trust the Audit panel below: it shows credential.mint and secret.read stamped at STARTUP, before you ran anything. That's when the box was credentialed — proxy-side, never inside.",
+      },
+      {
+        cmd: "curl -sSI http://wikipedia.org",
+        text: "Instant 403. Injecting a header never widens egress — the allowlist stays exact, and this host was never on it.",
+      },
+    ],
+    setupUi: [
+      "New Run → pick the Fence (CC1) barrier.",
+      "In Policy, add an eligible grant: kind \"api_key\", host \"example.com\", header \"X-Wardyn-Demo\", secret_name pointing at a secret you've already stored.",
+      "Set \"first_use_approval\": \"always_deny\" and allowed_domains to just that host.",
+      "Launch interactive, attach the terminal, and watch the Audit panel — the mint happens before you type anything.",
+    ],
+  },
+  {
+    id: "authorized-not-issued",
+    section: "secrets",
+    title: "Authorized, not issued",
+    needsSecret: "wardyn-demo-key",
+    teaches:
+      "requires_approval doesn't hand out a credential on request — it raises a human decision, and even an approved mint returns a RULE, never a value.",
+    overview:
+      "This grant needs a live approval before the broker will mint it, and it's single-use once it does. The sandbox asks for it itself, over the same broker route the proxy uses at startup, with no auth of its own — the proxy injects the run's own token. The first ask is refused pending review; approve it and the very next ask succeeds, returning an injection rule with no secret in it; ask a third time and it's refused again, because it already spent itself.",
+    policy: {
+      ...SHARED,
+      allowed_domains: ["example.com"],
+      first_use_approval: "always_deny",
+      eligible_grants: [
+        {
+          kind: "api_key",
+          requires_approval: true,
+          ttl_seconds: 300,
+          scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key", format: "%s" },
+        },
+      ],
+    },
+    steps: [
+      {
+        cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
+        text: 'First mint — the sandbox\'s own request AUTO-CREATES the pending approval and comes back 409 {"code":"pending"}.',
+      },
+      {
+        text: "Approve it below — the credential card appears right where you're already watching, not off on a separate screen.",
+      },
+      {
+        cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
+        text: "Same command again — 200, returning the injection RULE (host/header/format), never a value: the response's token field stays empty.",
+      },
+      {
+        cmd: 'curl -sS --noproxy \'*\' -X POST -H "Content-Type: application/json" -d \'{"grant_id":"{grant_id}"}\' "$WARDYN_PROXY_URL/wardyn/v1/credentials/mint"',
+        text: 'A third time — 409 {"code":"already_minted"}: single-use, already spent on the mint above. Check the Audit panel: deny → allow → deny, in that order — the two denials are the mechanism working, not a failure.',
+      },
+    ],
+    setupUi: [
+      "New Run → pick the Fence (CC1) barrier.",
+      "In Policy, add an eligible grant: kind \"api_key\" with \"requires_approval\": true and a ttl_seconds — this is what raises the human decision instead of auto-minting.",
+      "Set \"first_use_approval\": \"always_deny\".",
+      "Launch interactive, attach the terminal, and mint from inside the sandbox — approve it in the panel below the terminal when it asks.",
     ],
   },
 ];

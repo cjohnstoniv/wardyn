@@ -28,7 +28,7 @@ import { toast } from "sonner";
 import { runs as api } from "../../../lib/api/runs";
 import { HttpError } from "../../../lib/api/core";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { audit, egressFromAudit } from "../../../lib/api/audit";
+import { audit, demoAuditRows, egressFromAudit, type DemoAuditRow } from "../../../lib/api/audit";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
@@ -342,7 +342,7 @@ function DemoCard({
 
       {demo.caution && <DemoCaution text={demo.caution} />}
 
-      <StepList steps={demo.steps} />
+      <StepList steps={demo.steps} runId={run?.id} />
 
       <DemoRunControls
         demo={demo}
@@ -418,7 +418,7 @@ export function DemoRunControls({
           // teaches it explicitly).
           hasWorkspace={false}
         />
-        <DemoAuditPanel runId={run.id} />
+        <DemoAuditPanel runId={run.id} section={demo.section} />
         <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>
           <Square className="size-3.5" /> End demo
         </Button>
@@ -490,11 +490,17 @@ export function DemoRunControls({
   );
 }
 
-// DemoAuditPanel — the run's egress decisions, inline and live, so the operator
-// sees a denial land on the record WITHOUT leaving the demo for the Audit screen.
-// Projects egress.allow/deny/pending audit rows via egressFromAudit; polls /audit
-// every 2s while mounted (i.e. while the demo sandbox is running).
-export function DemoAuditPanel({ runId }: { runId: string }) {
+// DemoAuditPanel — the run's decisions, inline and live, so the operator sees
+// one land on the record WITHOUT leaving the demo for the Audit screen. Polls
+// /audit every 2s while mounted (i.e. while the demo sandbox is running).
+//
+// Egress-section demos keep the ORIGINAL egress-only projection/look
+// (egressFromAudit) untouched. Secrets-section demos widen it via
+// demoAuditRows: an api_key grant's mint/injection lands as secret.read /
+// credential.mint rows (outcome + secret/grant target, no domain — they don't
+// fit EgressDecision at all), so those demos need the credential-shaped row
+// alongside any real egress decision on the same timeline.
+export function DemoAuditPanel({ runId, section }: { runId: string; section?: Demo["section"] }) {
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const refresh = React.useCallback(async () => {
     const list = await audit.listAudit(runId).catch(() => null);
@@ -505,49 +511,95 @@ export function DemoAuditPanel({ runId }: { runId: string }) {
   }, [refresh]);
   usePoll(refresh, 2000, false);
 
-  // Newest first, so a just-triggered denial lands at the top.
-  const decisions = egressFromAudit(events)
-    .slice()
-    .sort((a, b) => b.time.localeCompare(a.time));
+  const rows: DemoAuditRow[] =
+    section === "secrets"
+      ? demoAuditRows(events)
+      : egressFromAudit(events).map((d) => ({ kind: "egress" as const, ...d }));
+  // Newest first, so a just-triggered decision lands at the top.
+  const sorted = rows.slice().sort((a, b) => b.time.localeCompare(a.time));
 
   return (
     <div className="rounded-lg border border-border bg-surface-2/40 p-3" data-testid="demo-audit-panel">
       <div className="mb-2 flex items-center gap-2">
         <ScrollText className="size-4 shrink-0 text-primary" />
-        <span className="text-sm font-medium text-foreground">Audit — egress decisions</span>
+        <span className="text-sm font-medium text-foreground">
+          {section === "secrets" ? "Audit — decisions" : "Audit — egress decisions"}
+        </span>
         <Chip tone="success" dot pulse className="ml-auto">
           live
         </Chip>
       </div>
-      {decisions.length === 0 ? (
+      {sorted.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No egress decisions yet — run a command in the terminal above and each allow/deny lands
-          here, on the record.
+          {section === "secrets"
+            ? "No decisions yet — run a command in the terminal above and each one lands here, on the record."
+            : "No egress decisions yet — run a command in the terminal above and each allow/deny lands here, on the record."}
         </p>
       ) : (
         <ul className="space-y-1" data-testid="demo-audit-rows">
-          {decisions.map((d) => (
-            <li key={d.id} className="flex items-center gap-2 text-xs">
-              <Chip
-                tone={d.decision === "deny" ? "danger" : d.decision === "allow" ? "success" : "warning"}
-                dot
-              >
-                {d.decision}
-              </Chip>
-              <span className="min-w-0 truncate font-mono text-foreground">{d.domain}</span>
-              <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
-                {relativeTime(d.time)}
-              </span>
-            </li>
-          ))}
+          {sorted.map((d) =>
+            d.kind === "credential" ? (
+              <li key={d.id} className="flex items-center gap-2 text-xs">
+                <Chip tone={d.outcome === "success" ? "success" : "danger"} dot>
+                  {d.action}
+                </Chip>
+                <span className="min-w-0 truncate font-mono text-foreground">{d.target}</span>
+                <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                  {relativeTime(d.time)}
+                </span>
+              </li>
+            ) : (
+              <li key={d.id} className="flex items-center gap-2 text-xs">
+                <Chip
+                  tone={d.decision === "deny" ? "danger" : d.decision === "allow" ? "success" : "warning"}
+                  dot
+                >
+                  {d.decision}
+                </Chip>
+                <span className="min-w-0 truncate font-mono text-foreground">{d.domain}</span>
+                <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                  {relativeTime(d.time)}
+                </span>
+              </li>
+            ),
+          )}
         </ul>
       )}
     </div>
   );
 }
 
-// Numbered instructions — a copy pill for the command steps, the explanation for all.
-export function StepList({ steps }: { steps: DemoStep[] }) {
+// Numbered instructions — a copy pill for the command steps, the explanation
+// for all. A cmd containing the literal token "{grant_id}" (the
+// authorized-not-issued demo's mint command) renders that token AS-IS in the
+// pre-launch "what you'll run" preview (no runId yet) and substitutes the
+// run's real grant id once a run is live — fetched via runsApi.getGrants
+// (runs.ts; grants exist pre-mint, so this resolves before the operator ever
+// needs to paste the command).
+export function StepList({ steps, runId }: { steps: DemoStep[]; runId?: string }) {
+  const needsGrantId = React.useMemo(() => steps.some((s) => s.cmd?.includes("{grant_id}")), [steps]);
+  const [grantId, setGrantId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!runId || !needsGrantId) {
+      setGrantId(null);
+      return;
+    }
+    let active = true;
+    api
+      .getGrants(runId)
+      .then((grants) => {
+        if (active && grants[0]) setGrantId(grants[0].id);
+      })
+      .catch(() => {
+        /* leave the literal token rendered — a transient fetch failure isn't fatal here */
+      });
+    return () => {
+      active = false;
+    };
+  }, [runId, needsGrantId]);
+
+  const rendered = (cmd: string) => (grantId ? cmd.split("{grant_id}").join(grantId) : cmd);
+
   return (
     <ol className="mt-3 space-y-2" data-testid="demo-steps">
       {steps.map((s, i) => (
@@ -556,7 +608,7 @@ export function StepList({ steps }: { steps: DemoStep[] }) {
             {i + 1}
           </span>
           <div className="min-w-0 space-y-1">
-            {s.cmd && <CopyPill text={s.cmd} />}
+            {s.cmd && <CopyPill text={rendered(s.cmd)} />}
             <p className="leading-snug">{s.text}</p>
           </div>
         </li>

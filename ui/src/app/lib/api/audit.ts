@@ -5,7 +5,7 @@
 
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
-import type { AuditEvent, EgressDecision } from "../types";
+import type { AuditEvent, EgressDecision, Outcome } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Project egress.allow / egress.deny / egress.pending audit events into
@@ -33,6 +33,40 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         bytes: num(d.bytes),
       } satisfies EgressDecision;
     });
+}
+
+// The secrets-section demos widen the inline audit panel beyond egress: an
+// api_key grant's mint/injection is credentialed via secret.read +
+// credential.mint audit rows, which carry an OUTCOME + a secret/grant TARGET
+// instead of a domain — they don't fit EgressDecision at all (audit-visibility
+// note in the demos plan). DemoAuditRow is the union the secrets demos' panel
+// renders; egress-section demos keep the untouched EgressDecision-only look
+// (egressFromAudit, unchanged) rather than routing through this union.
+export type CredentialAuditRow = {
+  kind: "credential";
+  id: string;
+  time: string;
+  action: string; // "secret.read" | "credential.mint"
+  target: string;
+  outcome: Outcome;
+};
+export type DemoAuditRow = ({ kind: "egress" } & EgressDecision) | CredentialAuditRow;
+
+const CREDENTIAL_AUDIT_ACTIONS = new Set(["secret.read", "credential.mint"]);
+
+export function demoAuditRows(events: AuditEvent[]): DemoAuditRow[] {
+  const egressRows: DemoAuditRow[] = egressFromAudit(events).map((d) => ({ kind: "egress", ...d }));
+  const credentialRows: DemoAuditRow[] = events
+    .filter((e) => CREDENTIAL_AUDIT_ACTIONS.has(e.action))
+    .map((e) => ({
+      kind: "credential",
+      id: e.id,
+      time: e.time,
+      action: e.action,
+      target: e.target ?? "—",
+      outcome: e.outcome,
+    }));
+  return [...egressRows, ...credentialRows];
 }
 
 // The agent's real exit code is only ever recorded in run.complete's

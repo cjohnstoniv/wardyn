@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { audit, egressFromAudit, exitCodeFromAudit } from "./audit";
+import { audit, demoAuditRows, egressFromAudit, exitCodeFromAudit } from "./audit";
 import type { AuditEvent } from "../types";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
@@ -69,6 +69,33 @@ describe("egressFromAudit", () => {
     ]);
     expect(withBytes.bytes).toBe(4096);
     expect(noBytes.bytes).toBeUndefined();
+  });
+});
+
+// demoAuditRows is the secrets-section demos' widened panel projection —
+// egress decisions UNION secret.read/credential.mint (which carry an outcome
+// + secret/grant target, no domain, and don't fit EgressDecision at all).
+describe("demoAuditRows", () => {
+  it("unions egress decisions with credential/secret rows", () => {
+    const out = demoAuditRows([
+      ev({ id: "e1", action: "egress.deny", target: "wardyn-api:8443" }),
+      ev({ id: "s1", action: "secret.read", target: "wardyn-demo-key", outcome: "success" }),
+      ev({ id: "c1", action: "credential.mint", target: "grant-1", outcome: "success" }),
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out.filter((r) => r.kind === "egress")).toHaveLength(1);
+    expect(out.filter((r) => r.kind === "credential")).toHaveLength(2);
+  });
+
+  it("ignores every action that is neither egress.* nor secret.read/credential.mint", () => {
+    const out = demoAuditRows([ev({ action: "run.create" }), ev({ action: "run.complete" })]);
+    expect(out).toHaveLength(0);
+  });
+
+  it("carries the credential row's outcome and target verbatim, no domain", () => {
+    const [row] = demoAuditRows([ev({ id: "c1", action: "credential.mint", target: "grant-1", outcome: "denied" })]);
+    expect(row).toMatchObject({ kind: "credential", action: "credential.mint", target: "grant-1", outcome: "denied" });
+    expect((row as { domain?: string }).domain).toBeUndefined();
   });
 });
 
