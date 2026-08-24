@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -35,6 +36,25 @@ func (s *ownerStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.W
 	// Mirror the PG statement's column list: it does NOT carry owned_by, which
 	// is what stops an ordinary edit from moving ownership.
 	cur.Name, cur.Sources = ws.Name, ws.Sources
+	s.workspaces[id] = cur
+	return cur, nil
+}
+
+// MergeWorkspaceRequirements is REAL for the same reason UpdateWorkspace above
+// is: learnVerifyEgress reads the workspace OWNER off the row this hands back,
+// so a stub answering ErrNotFound would exercise only that writer's give-up
+// path and let a missing marker on the write that actually LANDS go green.
+func (s *ownerStore) MergeWorkspaceRequirements(_ context.Context, id uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	if cur.Requirements == nil {
+		cur.Requirements = map[string]types.WorkspaceRequirement{}
+	}
+	maps.Copy(cur.Requirements, add)
 	s.workspaces[id] = cur
 	return cur, nil
 }
@@ -266,6 +286,70 @@ func TestWorkspaceOwner_NoImpersonation(t *testing.T) {
 		}
 		if got := auditData(t, *ev)["workspace_owner"]; got != ownerMemberSub {
 			t.Errorf("%s: workspace_owner = %v, want %q — cross-user admin access must be queryable", a.action, got, ownerMemberSub)
+		}
+	}
+
+	// The APPROVAL write-backs reach the same workspaces from the other
+	// direction, and are the most common cross-user path of all: deciding an
+	// approval is owner-OR-admin, so an admin choosing `always` on a member's
+	// run durably rewrites that member's egress lists, and approving a host in
+	// an admin-launched record run writes that member's requirements contract.
+	// Driven DIRECTLY rather than through the table above: both hang off decide
+	// with the acting principal already resolved to a string and no request in
+	// hand — the exact shape that let the marker go missing here while every
+	// request-context write carried it. Wiring a pending approval and an
+	// approvals service through HTTP would prove a great deal about the
+	// approval fixture and nothing more about the marker.
+	ctx := context.Background()
+	reqWS := st.put(types.Workspace{OwnedBy: ownerMemberSub})
+	run, err := st.CreateRun(ctx, types.AgentRun{Task: "workspace record", WorkspaceID: &reqWS})
+	if err != nil {
+		t.Fatalf("seed record run: %v", err)
+	}
+	ap := types.ApprovalRequest{
+		ID:             uuid.New(),
+		RunID:          run.ID,
+		Kind:           types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(`{"host":"example.com"}`),
+	}
+	egressWS := st.put(types.Workspace{OwnedBy: ownerMemberSub})
+	srv.persistWorkspaceEgressDecision(ctx, ap, egressWS, true, types.ActorHuman, adminSub)
+	srv.learnVerifyEgress(ctx, ap, types.ActorHuman, adminSub)
+
+	// Both writers fail SILENT-BUT-AUDITED, and the marker rides those emits
+	// too — the owner is re-read for it when no row came back. An admin who
+	// reached into a member's workspace and missed must not drop out of the
+	// ?actor=<admin> + workspace_owner query just because the write lost.
+	gaveUpWS := st.put(types.Workspace{OwnedBy: ownerMemberSub})
+	noHost := ap
+	noHost.RequestedScope = json.RawMessage(`{}`)
+	srv.persistWorkspaceEgressDecision(ctx, noHost, gaveUpWS, true, types.ActorHuman, adminSub)
+
+	for _, c := range []struct{ action, target, outcome string }{
+		{"workspace.egress.approve", egressWS.String(), "success"},
+		{"workspace.requirement.write", reqWS.String(), "success"},
+		{"workspace.egress.approve", gaveUpWS.String(), "failure"},
+	} {
+		var ev *types.AuditEvent
+		for i := range h.audit.events {
+			if h.audit.events[i].Action == c.action && h.audit.events[i].Target == c.target {
+				ev = &h.audit.events[i]
+			}
+		}
+		if ev == nil {
+			t.Errorf("%s: no audit event for the admin's write-back on a member-owned workspace", c.action)
+			continue
+		}
+		// Outcome asserted too: a give-up emit carries the marker as well, and
+		// without this the case would pass on a write that never landed.
+		if ev.Outcome != c.outcome {
+			t.Errorf("%s: outcome = %q, want %q — a success case that quietly became a give-up would assert nothing about the write that lands (%s)", c.action, ev.Outcome, c.outcome, ev.Data)
+		}
+		if ev.Actor != adminSub {
+			t.Errorf("%s: audit actor = %q, want %q — an admin deciding a member's approval must never be recorded AS the member", c.action, ev.Actor, adminSub)
+		}
+		if got := auditData(t, *ev)["workspace_owner"]; got != ownerMemberSub {
+			t.Errorf("%s: workspace_owner = %v, want %q — cross-user admin access must be queryable", c.action, got, ownerMemberSub)
 		}
 	}
 }

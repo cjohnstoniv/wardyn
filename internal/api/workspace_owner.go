@@ -4,8 +4,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 // The two halves of "an admin acting on a MEMBER's workspace stays visible":
@@ -80,7 +83,18 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 // was before ownership existed. A nil map with nothing to add stays nil rather
 // than becoming `null`, so a caller that logs no Data still logs no Data.
 func auditWorkspaceData(r *http.Request, owner string, data map[string]any) json.RawMessage {
-	if owner != "" && owner != principalFromRequest(r) {
+	return auditWorkspaceDataFor(principalFromRequest(r), owner, data)
+}
+
+// auditWorkspaceDataFor is the same stamp for a writer that holds the acting
+// principal as a STRING rather than the request it came from — the approval
+// write-backs (persistWorkspaceEgressDecision, learnVerifyEgress) run off the
+// decide handler with `by` already resolved and no *http.Request in hand.
+// Splitting here rather than threading a request keeps ONE stamping rule: a
+// second copy of the "actor != owner" comparison is exactly how the marker
+// drifts onto some writes and off others.
+func auditWorkspaceDataFor(actor, owner string, data map[string]any) json.RawMessage {
+	if owner != "" && owner != actor {
 		if data == nil {
 			data = map[string]any{}
 		}
@@ -90,4 +104,20 @@ func auditWorkspaceData(r *http.Request, owner string, data map[string]any) json
 		return nil
 	}
 	return mustJSON(data)
+}
+
+// workspaceOwner reads a workspace's owner for the O5 marker ALONE, on the
+// give-up paths of writers that never got a row back to read it from (the
+// durable write failed, or was never attempted). Every failure answers "" — no
+// store, a row deleted mid-flight — which stamps nothing, so a marker lookup
+// can never turn a recorded miss into an unrecorded one.
+func (s *Server) workspaceOwner(ctx context.Context, id uuid.UUID) string {
+	if s.cfg.Store == nil {
+		return ""
+	}
+	ws, err := s.cfg.Store.GetWorkspace(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return ws.OwnedBy
 }

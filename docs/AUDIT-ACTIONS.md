@@ -88,7 +88,7 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:871` | internal |
 | `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725` | internal |
 | `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:887` | internal |
-| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:959` | internal |
+| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:971` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
 | `workspace.envcode.write` | The onboarding "env code" (devcontainer/setup snippet) is written for a workspace | `files`, `skipped`, `skipped_files`, `written_files` | `internal/api/workspace_envcode.go:70` | internal |
 | `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back — the D28 non-atomicity this register names) | `domains`, `source` | `internal/api/approvals.go:885`, `internal/api/record.go:604` | internal |
@@ -103,11 +103,22 @@ is *about* would record it in the one place already under suspicion.
 Any event in this section whose target is a MEMBER-OWNED workspace
 (`workspaces.owned_by` non-empty, migration `0048`) carries one extra Data
 field, `workspace_owner`, **whenever the actor is not that owner** — i.e.
-whenever an admin acts on a member's workspace for support or offboarding. It
-is stamped at one place, `auditWorkspaceData` in
-`internal/api/workspace_owner.go`, and is what makes cross-user admin access
-QUERYABLE rather than merely present in the log: filter `?actor=<admin>` and
-keep the rows where `workspace_owner` is set and differs.
+whenever an admin acts on a member's workspace for support or offboarding. That
+includes the approval write-backs (`workspace.egress.approve`,
+`workspace.egress.deny`, `workspace.requirement.write`), which are the most
+common cross-user path of all: deciding an approval is owner-OR-admin, so an
+admin choosing `always` on a member's run durably rewrites that member's
+workspace. One rule stamps them all, in `internal/api/workspace_owner.go` —
+`auditWorkspaceData` for a handler that holds the request,
+`auditWorkspaceDataFor` for a writer that holds the acting principal as a
+string — and it is what makes cross-user admin access QUERYABLE rather than
+merely present in the log: filter `?actor=<admin>` and keep the rows where
+`workspace_owner` is set and differs.
+
+Two events in this section are the deliberate exception: `workspace.scan` and
+`workspace.record` are emitted by `wardynd` itself once a run settles, with no
+acting human to compare the owner against, so they never stamp. The human who
+launched that run is recorded on the run, not on these events.
 
 The actor is never rewritten to match. An admin acting on a member's workspace
 is recorded as the ADMIN — there is no impersonation anywhere on this path, and
