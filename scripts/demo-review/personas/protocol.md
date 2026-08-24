@@ -69,11 +69,15 @@ persona is the audience, not an auditor.
 |---|---|
 | 01 (primer) | Why would a team without AI agents still want a sandbox? What are a sandbox, egress, and a proxy, in your own words? What was the real caught-on-camera example, and what happened to it? What does "observe, then decide" replace? |
 | 02 | What is a "barrier"? What happens when a run reaches a host that isn't allowed? Where does the model key live? What did the setup actually require of you? |
+| 02b (desktop) | What does MDM deliver, and what never rides in it? Who is NOT the adversary in this tier? What flips a′ into m′? |
+| 02c (cloud) | What is different about where the sandbox runs? What did the readiness probe prove? |
 | 03a | Name the four things that can happen to a host a run dials, and which policy line decides each. What happens when you try to read a secret back? Where did the key live while the run used it? |
 | 03b (optional) | Which host did the agent reach, and how did you know it was the only one? What did the recording propose, and from what? What happened on the third `curl` after an approval scoped Once? |
 | 03c (optional) | What did the second mint return, and why is that the point? Why is a PAT minted into a pipe and not a header? What did the audit panel show for the approval-gated grant, in order? |
 | 03d (optional) | Which credential kind touches disk, and for how long? Which two demos never started a sandbox, and why is that the lesson rather than a failure? |
 | 04 | What is a workspace? What can a run touch outside it? |
+| 04b (members) | Where may a member mount from, and who set that? What does a member see of another member's workspace? |
+| 04c (admin) | Name one thing a member cannot do, and where the console says so. Who may decide an egress approval on a run they created? |
 | 05 | What does a policy carry that a single run's settings don't? What does the "floor" do? What did the safety meter read, and why? |
 | 06 | What ran, and where? How did you know it finished? How do you know which policy the run ACTUALLY ran under? |
 | 07 | Who was driving the terminal? What credential did the agent hold, and why didn't it matter? What's the difference from the first run in 06? |
@@ -82,6 +86,7 @@ persona is the audience, not an auditor.
 | 10 | Name the four approval scopes. Which one outlives the run, and where is its receipt? |
 | 11 | What replaces the human approver in CI? What does the pipeline's exit code mean? What receipts does a pipeline run leave? |
 | 12 | Who may SSH into a run? What does the second person see? What proof exists afterward of who did what? |
+| 12b (admin) | What proves the audit log wasn't edited? What happens to a revoked human's tokens? How does an ex-member's workspace come home? |
 | 13 (cloud) | What is different about where the sandbox runs? What did `exit 37` prove? Which audit rows name the person? |
 
 ## Verdict lanes
