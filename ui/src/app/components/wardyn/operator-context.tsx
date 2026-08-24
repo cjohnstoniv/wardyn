@@ -26,20 +26,40 @@ const OperatorContext = React.createContext<boolean>(true);
 // OperatorContext above (unresolved /me, a failed fetch, an unwrapped test).
 const PrincipalContext = React.createContext<string>("");
 
+// M3 — presentational label of the WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP
+// constraint that applies to this signed-in member (GET /me's
+// `member_local_dir_root`), e.g. "under /home/agent-projects". null when no
+// root applies (§DECISIONS O1: no per-member map entry AND the shared list
+// is empty) — the fail-closed default (unresolved /me, a failed fetch, an
+// unwrapped test all read as "no root", which shows AddWorkspaceDialog's
+// local_dir-unavailable state rather than a path field that would just be
+// refused server-side). Never the enforcement point — ValidateMemberMountSource
+// at bind time is (member-role-desktop.md §c).
+const MemberLocalDirRootContext = React.createContext<string | null>(null);
+
 export function OperatorProvider({
   operator,
   principal = "",
+  memberLocalDirRoot = null,
   children,
 }: {
   operator: boolean;
   principal?: string;
+  memberLocalDirRoot?: string | null;
   children: React.ReactNode;
 }) {
   return (
     <OperatorContext.Provider value={operator}>
-      <PrincipalContext.Provider value={principal}>{children}</PrincipalContext.Provider>
+      <PrincipalContext.Provider value={principal}>
+        <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>{children}</MemberLocalDirRootContext.Provider>
+      </PrincipalContext.Provider>
     </OperatorContext.Provider>
   );
+}
+
+// The member's local_dir root constraint label — see MemberLocalDirRootContext above.
+export function useMemberLocalDirRoot(): string | null {
+  return React.useContext(MemberLocalDirRootContext);
 }
 
 // Whether the signed-in caller may perform operator-only actions (secret

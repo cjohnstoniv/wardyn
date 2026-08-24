@@ -212,3 +212,20 @@ export const DENIED = {
   STALE_GROUPS:
     "You signed in before Wardyn started recording your groups. If a permission looks missing, sign out and back in.",
 };
+
+// M3 — member local_dir onboarding (AddWorkspaceDialog), root-constrained per
+// WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md §DECISIONS
+// O1/O3). Presentational only: enforcement is ValidateMemberMountSource at
+// bind time, same non-authoritative-hint relationship DENIED above has to
+// server-side requireOperator.
+export const MEMBER_WORKSPACE = {
+  ROOT_HINT: (root: string) =>
+    `Mounted from this machine into the sandbox. Must be under ${root} — your admin set this boundary.`,
+  LOCAL_DIR_UNAVAILABLE_OPTION: "Local directory · unavailable",
+  LOCAL_DIR_UNAVAILABLE_BODY:
+    "Local directories aren't set up for your account. Ask your admin to configure a projects root, or use a repository.",
+  // Deliberately NOT the `Your runs · ${n}` shape (runs.tsx) — handleListWorkspaces
+  // returns a member's own rows UNION every operator-owned row, so "Your" would
+  // overclaim exclusivity for rows actually shared with every other member.
+  WORKSPACES_HEADER_MEMBER: (n: number) => `Workspaces · ${n}`,
+};

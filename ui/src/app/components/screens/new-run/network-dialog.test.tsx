@@ -52,7 +52,9 @@ describe("NetworkDialog — the unlisted-host rule", () => {
   // copy must not blur the two, because that difference is the whole feature.
   it("each card states what actually happens, not the mode name", () => {
     open();
-    expect(screen.getByText(/waits, live, until you approve/)).toBeInTheDocument();
+    // D8: the hold has a real bound (first_use_hold_seconds, default 30s) —
+    // the copy says so instead of promising an open-ended wait.
+    expect(screen.getByText(/waits, live, for the standard 30-second window/)).toBeInTheDocument();
     expect(screen.getByText(/Refused right away and raised for review/)).toBeInTheDocument();
     expect(screen.getByText(/no prompt, no wait/)).toBeInTheDocument();
   });

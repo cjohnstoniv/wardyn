@@ -60,7 +60,7 @@ export const UNLISTED_RULES: { id: FirstUseMode; title: string; body: string }[]
   {
     id: "wait_for_review",
     title: "Hold it for approval",
-    body: "The connection waits, live, until you approve or deny it. Nothing is refused behind your back.",
+    body: "The connection waits, live, for the standard 30-second window. Decide in time and it goes through; miss it and it's refused — the approval itself stays open for you to decide.",
   },
   {
     id: "deny_with_review",

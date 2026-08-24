@@ -27,9 +27,9 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Field, OptionCard } from "../wardyn/form-primitives";
-import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
-import { useOperator } from "../wardyn/operator-context";
+import { useMemberLocalDirRoot, useRole } from "../wardyn/operator-context";
 import { getErrorMessage } from "../../lib/format";
+import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
 import { useK8sRunner } from "../../lib/use-k8s-runner";
 import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
@@ -101,12 +101,15 @@ export function AddWorkspaceDialog({
    *  next (navigate to the detail page, or attach it to a run being built). */
   onCreated: (workspace: Workspace) => void;
 }) {
-  // Every mutation this dialog makes is operator-only server-side. It mounts
-  // from more than one place (the Workspaces list, and the New Run wizard's
-  // "Add a workspace" — neither of which gates a MEMBER out client-side on
-  // its own), so it carries its own check rather than trusting every caller
-  // to have one.
-  const operator = useOperator();
+  // M3 (0027f514): POST /workspaces is member-allowed now, so this dialog
+  // carries no operator gate — only local_dir's root constraint below is
+  // role-aware.
+  const role = useRole();
+  const memberLocalDirRoot = useMemberLocalDirRoot();
+  // §DECISIONS O1: no per-member root AND no shared root ⇒ local_dir is
+  // unavailable for this member. Presentational only — ValidateMemberMountSource
+  // at bind time is the real enforcement (member-role-desktop.md §c).
+  const localDirUnavailable = role === "member" && memberLocalDirRoot === null;
 
   const [kind, setKind] = React.useState<SourceKind>("repo");
   const k8s = useK8sRunner();
@@ -176,24 +179,6 @@ export function AddWorkspaceDialog({
     }
   };
 
-  if (!operator) {
-    return (
-      <Dialog open onOpenChange={(o) => !o && onClose()}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add workspace</DialogTitle>
-            <DialogDescription>{OPERATOR_ONLY_REASON}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" onClick={onClose}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -219,7 +204,7 @@ export function AddWorkspaceDialog({
               <OptionCard
                 selected={kind === "local_dir"}
                 onClick={() => setKind("local_dir")}
-                title="Local directory"
+                title={localDirUnavailable ? MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_OPTION : "Local directory"}
               />
             )}
             <OptionCard selected={kind === "ephemeral"} onClick={() => setKind("ephemeral")} title="Empty" />
@@ -239,8 +224,27 @@ export function AddWorkspaceDialog({
               />
             </Field>
           )}
-          {kind === "local_dir" && (
-            <Field label="Path on this host" htmlFor="aw-source" hint="Mounted from this machine into the sandbox.">
+          {/* M3: a member with no configured root sees WHY instead of a path
+              field — an admin-configuration gap, not a control that silently
+              vanishes. No Input renders here, so canSubmit stays gated on a
+              non-empty path same as every other kind; the server's own
+              root-empty fail-closed (ValidateMemberMountSource) is what
+              actually stops a stale client from racing past this hint. */}
+          {kind === "local_dir" && localDirUnavailable && (
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+              {MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY}
+            </p>
+          )}
+          {kind === "local_dir" && !localDirUnavailable && (
+            <Field
+              label="Path on this host"
+              htmlFor="aw-source"
+              hint={
+                role === "member" && memberLocalDirRoot
+                  ? MEMBER_WORKSPACE.ROOT_HINT(memberLocalDirRoot)
+                  : "Mounted from this machine into the sandbox."
+              }
+            >
               <Input
                 id="aw-source"
                 value={sourceValue}
@@ -319,14 +323,20 @@ export function AddWorkspaceDialog({
               />
             </Field>
 
-            <label htmlFor="aw-writable" className="flex items-center gap-2 text-xs text-foreground">
-              <Checkbox
-                id="aw-writable"
-                checked={writable}
-                onCheckedChange={(v) => setWritable(v === true)}
-              />
-              Allow writes to this directory
-            </label>
+            {/* M3: no wire field exposes a per-member writable-roots grant yet
+                (§DECISIONS O3 default is no writable member mounts at all),
+                so a member local_dir mount stays read-only in this dialog —
+                the conservative branch until that field exists. */}
+            {!(role === "member" && kind === "local_dir") && (
+              <label htmlFor="aw-writable" className="flex items-center gap-2 text-xs text-foreground">
+                <Checkbox
+                  id="aw-writable"
+                  checked={writable}
+                  onCheckedChange={(v) => setWritable(v === true)}
+                />
+                Allow writes to this directory
+              </label>
+            )}
           </Disclosure>
         </div>
 

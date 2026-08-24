@@ -149,6 +149,17 @@ export function SummaryHeader({
         </Chip>
       )}
 
+      {/* D9: the pre-agent-start failure class (mount failure, etc.) never
+          gets an exit code at all — this is the only place THAT run says
+          why. Independent of the exit chip above: a run can show one, the
+          other, both, or neither. Bare server text, no prefix — the state
+          badge already says "Failed". */}
+      {run.failure_hint && (
+        <Chip tone="danger" className="max-w-[280px] shrink-0 truncate" title={run.failure_hint}>
+          {run.failure_hint}
+        </Chip>
+      )}
+
       {/* Confinement/barrier + interactive-attach detail — genuinely
           secondary next to state/repo/workspace/elapsed/pending/Kill. */}
       <div className="hidden shrink-0 items-center gap-2 lg:flex">

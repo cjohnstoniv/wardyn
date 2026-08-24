@@ -265,6 +265,16 @@ export function approvalScopeBadge(
   return APPROVAL_SCOPE_LABEL[scope].toLowerCase();
 }
 
+// D7 — the tag LiveApprovals shows on a pending row whose host matches the
+// agent CLI's own known telemetry endpoint (WARDYN_ALLOW_AGENT_TELEMETRY
+// opt-in, or a historical run from before that switch defaulted to
+// suppressing it). Cockpit-adjacent, not a screen of its own — kept beside
+// RUN_COCKPIT rather than folded into it.
+export const TELEMETRY_TAG = {
+  label: "Agent telemetry",
+  title: "The agent CLI's usual diagnostics endpoint. Approve or deny it like any other host.",
+};
+
 // Run cockpit (/runs/:id) — the terminal-first live-run screen. Every string
 // the redesign introduces lands HERE first, so the four Terminal states and the
 // evidence widgets can't drift into inventing their own vocabulary.

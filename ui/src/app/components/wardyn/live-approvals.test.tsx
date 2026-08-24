@@ -312,4 +312,20 @@ describe("LiveApprovals", () => {
       });
     });
   });
+
+  // D7: a pending row whose host is the agent CLI's known telemetry endpoint
+  // gets an identification tag; an ordinary off-policy host does not.
+  describe("D7 — known-telemetry tag", () => {
+    it("tags a row matching the known telemetry host, and only that row", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "telemetry", requested_scope: { host: "http-intake.logs.us5.datadoghq.com" } }),
+        pending({ id: "other", requested_scope: { host: "api.internal.acme.com" } }),
+      ]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const rows = within(panel).getAllByTestId("live-approval-row");
+      expect(within(rows[0]).getByText("Agent telemetry")).toBeInTheDocument();
+      expect(within(rows[1]).queryByText("Agent telemetry")).not.toBeInTheDocument();
+    });
+  });
 });

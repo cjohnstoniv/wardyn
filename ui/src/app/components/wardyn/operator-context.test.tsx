@@ -6,10 +6,14 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { OperatorProvider, useOperator } from "./operator-context";
+import { OperatorProvider, useMemberLocalDirRoot, useOperator } from "./operator-context";
 
 function Probe() {
   return <span>operator:{String(useOperator())}</span>;
+}
+
+function RootProbe() {
+  return <span>root:{String(useMemberLocalDirRoot())}</span>;
 }
 
 describe("operator-context", () => {
@@ -44,5 +48,23 @@ describe("operator-context", () => {
       </OperatorProvider>,
     );
     expect(screen.getByText("operator:false")).toBeInTheDocument();
+  });
+
+  // M3: fail-closed default — no root applies unless a Provider explicitly
+  // says so (unresolved /me, a failed fetch, an unwrapped test all show
+  // AddWorkspaceDialog's local_dir-unavailable state, never a path field
+  // that would just be refused server-side).
+  it("useMemberLocalDirRoot defaults to null with no <OperatorProvider> above it", () => {
+    render(<RootProbe />);
+    expect(screen.getByText("root:null")).toBeInTheDocument();
+  });
+
+  it("OperatorProvider(memberLocalDirRoot=...) threads the configured root through", () => {
+    render(
+      <OperatorProvider operator={false} memberLocalDirRoot="under /home/agent-projects">
+        <RootProbe />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("root:under /home/agent-projects")).toBeInTheDocument();
   });
 });
