@@ -50,6 +50,10 @@ exists under a DIFFERENT account, only that this exact `POST` didn't take.
 
 ### Reclaiming a squatted fingerprint
 
+> **0.6, migration `0046`:** a direct-SQL registration that sets `role='admin'` must ALSO set
+> `role_checked_at = now()`, or the gateway refuses the override as never-checked
+> (`admin override stale`). The API registration path stamps it for you.
+
 The fingerprint primary key is **global** — correct for auth, since a key
 must map to exactly one principal, never two. That means it is also, by
 construction, possible for someone else to register a public key you also

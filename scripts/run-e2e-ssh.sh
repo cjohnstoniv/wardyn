@@ -406,7 +406,12 @@ ADMIN_KEY_FP="$(ssh-keygen -lf "${TMPDIR}/admin_key.pub" | awk '{print $2}')"
 ADMIN_KEY_PUB="$(cat "${TMPDIR}/admin_key.pub")"
 # Same single-quoted-interpolation safety note as step 9's INSERT_SQL: both
 # values are ssh-keygen's own output and cannot contain a single quote.
-ADMIN_INSERT_SQL="INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, created_at) VALUES ('${ADMIN_KEY_FP}', 'e2e-admin-principal', 'admin-e2e-key', '${ADMIN_KEY_PUB}', 'admin', now());"
+# role_checked_at = now(): the 0046 bounded-stale gate refuses an admin
+# override whose stamp is NULL (a never-checked key) or older than
+# WARDYN_SSH_ROLE_TTL — a direct-SQL registration must stamp it, exactly as
+# docs/SSH.md's operator-mechanism note says. (First live run of this arm
+# caught the omission: rc=255, reason "admin override stale".)
+ADMIN_INSERT_SQL="INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, role_checked_at, created_at) VALUES ('${ADMIN_KEY_FP}', 'e2e-admin-principal', 'admin-e2e-key', '${ADMIN_KEY_PUB}', 'admin', now(), now());"
 compose exec -T postgres psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -c "${ADMIN_INSERT_SQL}" \
   >"${TMPDIR}/admin_insert.log" 2>&1
 if [[ $? -ne 0 ]]; then
