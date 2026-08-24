@@ -86,6 +86,17 @@ _SUBS = [
     ("keys don't live in the room", "keys don't liv in the room"),
     # "record" the VERB (/rɪˈkɔːɹd/) where espeak would stress it as the noun:
     ("Only record work you trust", "Only ruh-cord work you trust"),
+    ("You can't record what a policy", "You can't ruh-cord what a policy"),
+    # "live" the VERB in the 03 split's owner line, and the ADJECTIVE in 03d's
+    # "the live GitHub API" — both senses in one round, so both are pinned.
+    ("credentials can live", "credentials can liv"),
+    ("the live GitHub", "the lyve GitHub"),
+    # "read-back"/"read it back" are present tense everywhere in 03a (/riːd/) —
+    # Kokoro reads a bare "read" as past tense after "the"; pin the phrases.
+    ("read-back", "reed-back"),
+    ("read it back", "reed it back"),
+    # The quote marks around 'forbidden' are inaudible; a comma lands the beat.
+    ("Not 'forbidden'.", "Not, forbidden."),
     # "PyPI" reads as "pie-pie" bare:
     ("PyPI", "pie pee eye"),
     # The owner's script uses three-dot trailing ellipses ("useful...") — read
@@ -122,8 +133,8 @@ def speakable(text: str) -> str:
     # validated the same way (2026-08-24).
     _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye",
             "CC1": "see see one", "PAT": "pee eh tee", "PATs": "pee eh tees", "STS": "ess tee ess",
-            "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess"}
-    out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS)\b", lambda m: _SAY[m.group(1)], out)
+            "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess", "npm": "en pee em"}
+    out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
     # Numbers the captions spell as digits but mean as digit STRINGS: a file mode,
     # a port, the cloud-metadata address. Read as quantities they come out as
     # "four hundred forty-three" / "one hundred sixty-nine…" (checked against the
