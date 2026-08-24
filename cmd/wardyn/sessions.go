@@ -29,6 +29,9 @@ func sessionsCmd(client clientFn) *cobra.Command {
 			"row to delete), so this stamps a cutoff time: any session for the target issued\n" +
 			"at or before that moment stops authenticating on its VERY NEXT request, rather\n" +
 			"than lingering until the cookie's own expiry.\n\n" +
+			"Both arms ALSO revoke API tokens: --sub revokes every unrevoked wdn_ token that\n" +
+			"principal holds; --all revokes EVERY unrevoked token in the deployment — the\n" +
+			"calling admin's own included (a token is a human's session in another form).\n\n" +
 			"Requires an OIDC deployment with the session-revocation store wired (404 otherwise).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

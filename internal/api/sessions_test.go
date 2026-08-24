@@ -89,13 +89,13 @@ func TestRevokeSessions_AlsoRevokesTokens(t *testing.T) {
 	gone := time.Now().UTC()
 	a1, a2, b1, ar := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	srv, _, st := sessionsTestServerWithTokens(t, []types.APIToken{
-		{ID: a1, Principal: "alice@corp.example"},
-		{ID: a2, Principal: "alice@corp.example"},
-		{ID: b1, Principal: "bob@corp.example"},
-		{ID: ar, Principal: "alice@corp.example", RevokedAt: &gone}, // already revoked: untouched
+		{ID: a1, Principal: "sub-alice"},
+		{ID: a2, Principal: "sub-alice"},
+		{ID: b1, Principal: "sub-bob"},
+		{ID: ar, Principal: "sub-alice", RevokedAt: &gone}, // already revoked: untouched
 	})
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@corp.example"}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"sub-alice"}`)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
 	}
@@ -123,7 +123,13 @@ func TestRevokeSessions_AdminRevokesSub(t *testing.T) {
 }
 
 func TestRevokeSessions_AdminRevokesAll(t *testing.T) {
-	srv, fake := sessionsTestServer(t)
+	gone := time.Now().UTC()
+	x1, x2, xr := uuid.New(), uuid.New(), uuid.New()
+	srv, fake, st := sessionsTestServerWithTokens(t, []types.APIToken{
+		{ID: x1, Principal: "sub-alice"},
+		{ID: x2, Principal: "sub-bob"},
+		{ID: xr, Principal: "sub-alice", RevokedAt: &gone},
+	})
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"all":true}`)
@@ -132,6 +138,17 @@ func TestRevokeSessions_AdminRevokesAll(t *testing.T) {
 	}
 	if fake.revokedAll != 1 {
 		t.Errorf("revokedAll = %d, want 1", fake.revokedAll)
+	}
+	// The all arm is deployment-wide for tokens too — every LIVE token goes,
+	// whoever holds it (the calling admin's own included); already-revoked
+	// rows are untouched.
+	if len(st.revoked) != 2 {
+		t.Errorf("revoked = %v, want the two live tokens {%s %s}", st.revoked, x1, x2)
+	}
+	for _, id := range st.revoked {
+		if id == xr {
+			t.Error("re-revoked an already-revoked token")
+		}
 	}
 }
 

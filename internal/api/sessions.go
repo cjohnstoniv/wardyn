@@ -5,11 +5,11 @@ package api
 
 import (
 	"context"
-	"github.com/cjohnstoniv/wardyn/internal/types"
-	"time"
-
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // revokeSessionsRequest is POST /api/v1/sessions/revoke's body: exactly one
@@ -55,6 +55,12 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		n, err := s.revokeAPITokensFor(r.Context(), "")
 		if err != nil {
+			// The sessions ARE revoked and 0..n tokens with them — a bare 500
+			// would hide a partially-applied security action from the
+			// append-only log. Record what happened, then fail; the call is
+			// idempotent, so a retry converges on whatever is still live.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", "*", "failure", mustJSON(map[string]any{"scope": "all", "tokens_revoked": n, "error": err.Error()})))
 			writeError(w, http.StatusInternalServerError, "revoke api tokens: "+err.Error())
 			return
 		}
@@ -67,6 +73,9 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		n, err := s.revokeAPITokensFor(r.Context(), body.Sub)
 		if err != nil {
+			// Same partial-application honesty as the all arm above.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", body.Sub, "failure", mustJSON(map[string]any{"scope": "sub", "sub": body.Sub, "tokens_revoked": n, "error": err.Error()})))
 			writeError(w, http.StatusInternalServerError, "revoke api tokens: "+err.Error())
 			return
 		}

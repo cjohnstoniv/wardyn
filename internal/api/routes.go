@@ -76,7 +76,8 @@ func (s *Server) routes() chi.Router {
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
 			// later-added Use applies to r's routes but silently NOT to these.
-			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` plus
+			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — that
+			// grep counts mountAccountRoutes' 2 in this same file too — plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
 			// has gone stale before, W7-S1-1): 26 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,

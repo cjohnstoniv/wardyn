@@ -593,12 +593,13 @@ func withSessionRejected(ctx context.Context, reason string) context.Context {
 }
 
 // SessionRejectedFromContext returns why Middleware rejected a presented
-// session cookie on this request ("invalid_session" for a
-// tampered/malformed cookie, "expired_session" for a valid-but-expired,
-// "revoked_session" for a valid cookie the revocation store has cut off, and
-// "session_revocation_unavailable" when that store errored (fail-closed) — the last two only when Revocations is wired;
-// one), or "" when no session cookie was presented at all (the ordinary
-// non-browser-client case) or the session decoded fine.
+// session cookie on this request: "invalid_session" for a tampered/malformed
+// cookie, "expired_session" for a valid-but-expired one, "revoked_session"
+// for a valid cookie the revocation store has cut off, or
+// "session_revocation_unavailable" when that store errored (fail-closed) —
+// the last two only when Revocations is wired. Returns "" when no session
+// cookie was presented at all (the ordinary non-browser-client case) or the
+// session decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {
 	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
 	return reason

@@ -634,7 +634,9 @@ role, and it is revocable on its own.
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
 revokes every unrevoked token that principal holds — a token is their session in
-another form, so the incident lever covers both in one call.
+another form, so the incident lever covers both in one call. The `all` arm is
+deployment-wide for tokens too: EVERY live token goes, the calling admin's own
+included — plan to re-mint after a global revoke.
 
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
