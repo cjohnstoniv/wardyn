@@ -399,6 +399,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build wardynd (this commit)
         run: docker compose -f deploy/compose/docker-compose.yaml build wardynd
+      - name: Build wardyn-proxy (every launched run's sidecar; driver.go assumes it locally present, never pulls it)
+        run: docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image
       - name: Lay down a CI-local managed envelope at /etc/wardyn
         run: |
           set -euo pipefail
@@ -427,7 +429,15 @@ jobs:
           echo "::error::wardynd did not become healthy"; exit 1
       - name: Assert /policies/default equals the managed file
         run: |
-          diff <(jq -S . /etc/wardyn/policy.json) <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | jq -S .)
+          # handleGetDefaultPolicy re-marshals types.RunPolicySpec, whose
+          # `omitempty` tags drop denied_domains/allowed_methods when [] and
+          # auto_stop_after_sec when 0 even though demo.json spells them out —
+          # so a byte-for-byte diff is red on a healthy stack. Strip those three
+          # keys from BOTH sides when they carry their zero value before
+          # comparing; a real content difference (including a non-empty value
+          # for any of the three) still fails the diff.
+          NORMALIZE='del(.denied_domains | select(. == [])) | del(.allowed_methods | select(. == [])) | del(.auto_stop_after_sec | select(. == 0))'
+          diff <(jq -S "${NORMALIZE}" /etc/wardyn/policy.json) <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | jq -S "${NORMALIZE}")
       - name: Assert a no-policy run resolves to the ceiling (dry-run preflight)
         run: |
           out=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \

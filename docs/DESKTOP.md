@@ -215,11 +215,23 @@ sudo launchctl kickstart -k system/com.wardyn.daemon
 sleep 5
 sudo launchctl print system/com.wardyn.daemon | head -20
 curl -fsS http://127.0.0.1:8080/healthz && echo OK
-curl -fsS http://127.0.0.1:8080/api/v1/policies/default | diff - <(cat /etc/wardyn/policy.json | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))') || true
+# The API re-marshals types.RunPolicySpec, whose `omitempty` tags drop
+# denied_domains/allowed_methods when [] and auto_stop_after_sec when 0 even
+# though demo.json spells them out — so a raw diff is red on a healthy stack.
+# NORMALIZE drops those three keys from both sides when they carry their zero
+# value before comparing.
+NORMALIZE='import json,sys
+d = json.load(sys.stdin)
+for k, zero in (("denied_domains", []), ("allowed_methods", []), ("auto_stop_after_sec", 0)):
+    if d.get(k) == zero:
+        d.pop(k, None)
+print(json.dumps(d, sort_keys=True))'
+diff <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | python3 -c "${NORMALIZE}") <(python3 -c "${NORMALIZE}" < /etc/wardyn/policy.json) || true
 ```
 
-That last line is expected to differ in whitespace only — the point is
-confirming a real launchd job, on a real Mac, against a real Docker Desktop or
-Colima install, actually brings the stack up and serves the managed policy.
+That last line should print no diff at all — the point is confirming a real
+launchd job, on a real Mac, against a real Docker Desktop or Colima install,
+actually brings the stack up and serves the managed policy (once normalized
+for the three `omitempty` keys above, a real content difference still shows).
 Anything else it prints (a launchd load failure, a Colima `WARDYN_DOCKER_SOCK`
 miss, a healthz timeout) is exactly the gap this smoke run exists to find.
