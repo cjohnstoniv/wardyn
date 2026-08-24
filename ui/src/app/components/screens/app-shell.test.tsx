@@ -30,6 +30,7 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
           operator: role === "admin",
           role,
           sessionExpiresAt: null,
+          memberLocalDirRoot: null,
         }}
       />
     </MemoryRouter>,

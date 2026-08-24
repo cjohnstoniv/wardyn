@@ -190,6 +190,12 @@ export const health = {
     // present only for method:"sso". Absent for local/token auth, which has
     // no session to expire.
     session_expires_at?: string;
+    // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
+    // /_MAP constraint (e.g. "under /home/agent-projects"). null/absent when
+    // no root applies to this member (member-role-desktop.md §DECISIONS O1).
+    // Never sent as a value to trust — AddWorkspaceDialog shows it as a hint;
+    // ValidateMemberMountSource enforces at bind time.
+    member_local_dir_root?: string | null;
   } | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
@@ -201,6 +207,7 @@ export const health = {
         role: "admin" | "member";
         email: string;
         session_expires_at?: string;
+        member_local_dir_root?: string | null;
       };
     } catch {
       return null;

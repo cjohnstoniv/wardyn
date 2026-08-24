@@ -69,6 +69,9 @@ export interface ShellMeta {
   // W31-S1-7: when the SSO session dies outright (no refresh) — null for
   // local/token auth, which has no session to expire.
   sessionExpiresAt: Date | null;
+  // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
+  // resolves and stays null (fail-closed: unavailable) if it never does.
+  memberLocalDirRoot: string | null;
 }
 
 function useMeta(): ShellMeta {
@@ -80,6 +83,7 @@ function useMeta(): ShellMeta {
     operator: true,
     role: "admin",
     sessionExpiresAt: null,
+    memberLocalDirRoot: null,
   });
   React.useEffect(() => {
     let alive = true;
@@ -93,6 +97,7 @@ function useMeta(): ShellMeta {
         operator: me?.operator ?? true,
         role: me?.role ?? "admin",
         sessionExpiresAt: me?.session_expires_at ? new Date(me.session_expires_at) : null,
+        memberLocalDirRoot: me?.member_local_dir_root ?? null,
       });
     });
     return () => {
@@ -337,7 +342,7 @@ export function AppShell({
   // Add workspace) sees the real role instead of silently falling back to the
   // context default.
   return (
-    <OperatorProvider operator={meta.operator} principal={meta.principal}>
+    <OperatorProvider operator={meta.operator} principal={meta.principal} memberLocalDirRoot={meta.memberLocalDirRoot}>
     <RoleProvider role={meta.role}>
     <FocusContext.Provider value={focusValue}>
     <div className="flex h-screen flex-col bg-background text-foreground">

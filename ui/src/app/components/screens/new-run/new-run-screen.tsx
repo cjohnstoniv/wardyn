@@ -590,7 +590,7 @@ export function NewRunScreen() {
                   patch({ allowAllEgress: false });
                 }}
                 title="Confined"
-                body="Default-deny. New hosts are held at the door for your approval."
+                body="Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through."
               />
               <RadioCard
                 on={confinement === "saved"}

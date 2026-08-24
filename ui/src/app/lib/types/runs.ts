@@ -112,6 +112,13 @@ export interface AgentRun {
   // Absent (never present as []) when the run has no declared apps or the
   // lookup failed server-side — both render the lane's "no apps" state.
   ui_apps?: UIApp[];
+  // Server-authored one-line reason for a pre-agent-start failure arm
+  // (internal/types/types.go's AgentRun.FailureHint, migration 0044) — set
+  // when the run never got as far as an exit code (e.g. workspace mount
+  // unavailable). Absent/empty for a run that failed WITH an exit code, or
+  // any non-FAILED run. Distinct from RecordRun.failure_hint in
+  // ./workspaces.ts (a different failure arm on a different resource).
+  failure_hint?: string;
 }
 
 // ============================================================

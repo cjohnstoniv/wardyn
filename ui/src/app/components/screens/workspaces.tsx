@@ -33,8 +33,8 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
-import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
-import { useOperator } from "../wardyn/operator-context";
+import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { useOperator, useRole } from "../wardyn/operator-context";
 
 // Icon + label for the three onboardable kinds. "ephemeral" is scratch space
 // discarded after the run, so it gets an hourglass rather than reusing the
@@ -79,6 +79,7 @@ export function workspaceImage(ws: Workspace): { kind: WorkspaceImageKind; label
 
 export function WorkspacesScreen() {
   const operator = useOperator();
+  const role = useRole();
   const navigate = useNavigate();
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -107,18 +108,24 @@ export function WorkspacesScreen() {
 
   const openDetail = (id: string) => navigate(`/workspaces/${encodeURIComponent(id)}`);
 
+  // M3: POST /workspaces is member-allowed now (0027f514) — handleListWorkspaces
+  // returns a member's own rows UNION every operator-owned row, so a member
+  // header can't claim "Your" without overclaiming exclusivity over rows that
+  // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
+  const description =
+    role === "member"
+      ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
+      : "A repo or directory a run can attach. Runs can only attach what's listed here.";
+
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Workspaces"
-        description="A repo or directory a run can attach. Runs can only attach what's listed here."
+        description={description}
         actions={
-          <>
-            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
-              <Plus className="size-4" /> Add workspace
-            </Button>
-          </>
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="size-4" /> Add workspace
+          </Button>
         }
       />
 
@@ -152,13 +159,9 @@ export function WorkspacesScreen() {
           <EmptyState
             icon={FolderOpen}
             title="No workspaces yet."
-            description={
-              operator
-                ? "Add a repository, a local directory, or start empty — a run can attach it right away. Nothing is scanned or built first."
-                : `Add a repository, a local directory, or start empty — a run can attach it right away. ${OPERATOR_ONLY_REASON}`
-            }
+            description="Add a repository, a local directory, or start empty — a run can attach it right away. Nothing is scanned or built first."
             action={
-              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Button onClick={() => setAddOpen(true)}>
                 <Plus className="size-4" /> Add your first workspace
               </Button>
             }
