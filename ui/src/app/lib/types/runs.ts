@@ -286,6 +286,15 @@ export interface RiskItem {
   invariant_ref?: string;
 }
 
+// POST /api/v1/policies/grade response — composer.Grade of a bare spec with no
+// run attached (the policy panel's live safety meter). Same wire fields as
+// PreflightResult's risk pair, but NON-optional: the grade endpoint is new, so
+// there is no older-server tolerance to preserve — it always returns both.
+export interface PolicyGrade {
+  risk_assessment: RiskItem[];
+  overall_risk: RiskLevel;
+}
+
 // The proposed run scalars shared by the run-preview surfaces that echo them
 // back for a human to review before anything launches: the (retired) AI Run
 // Composer's proposal and Record Mode's profile synthesis (ProfileProposal,

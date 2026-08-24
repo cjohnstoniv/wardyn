@@ -28,6 +28,9 @@ vi.mock("../../../lib/api/runs", () => ({
     createRun: vi.fn(),
     listRuns: () => Promise.resolve([]),
     preflightRun: (...a: unknown[]) => preflightRunMock(...a),
+    // The PolicyPanel's SafetyMeter debounces a grade of the current spec; stub
+    // it so the panel's meter has a resolvable call instead of hitting the net.
+    gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
   },
 }));
 const listWorkspacesMock = vi.fn();

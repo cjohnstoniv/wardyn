@@ -684,6 +684,7 @@ export function NewRunScreen() {
                 onPreflight={preflight}
                 preflightBusy={preflighting}
                 preflightDisabled={useSaved && !state.selectedPolicyId}
+                interactive={isInteractive}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: setUseSaved,

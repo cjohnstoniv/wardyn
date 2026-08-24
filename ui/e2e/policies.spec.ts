@@ -374,6 +374,47 @@ test("picking a template chip fills the spec, and an edit to it is reflected on 
   await deletePolicyViaUi(page, name);
 });
 
+test("the safety meter moves toward Weakest when allow_all_egress is flipped on", async ({ page }) => {
+  // The editor's PolicyPanel carries a live SafetyMeter graded by POST
+  // /policies/grade (composer.Grade of the DOCUMENT, debounced). A safe spec
+  // reads "Safest"; flipping egress to allow-all (plus the omitted idle cap =
+  // never-reap) gives it two HIGH items, which is exactly the "Weakest" corner.
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  const meter = dialog.getByTestId("safety-meter");
+
+  const safe = JSON.stringify(
+    {
+      allowed_domains: ["api.anthropic.com"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC3",
+      auto_stop_after_sec: 3600,
+    },
+    null,
+    2,
+  );
+  await dialog.getByLabel("Spec (JSON)").fill(safe);
+  // Grade is async + debounced; toHaveAttribute auto-retries until it lands.
+  await expect(meter).toHaveAttribute("data-safety", "Safest");
+
+  const weak = JSON.stringify(
+    {
+      allowed_domains: [],
+      allow_all_egress: true,
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+    },
+    null,
+    2,
+  );
+  await dialog.getByLabel("Spec (JSON)").fill(weak);
+  await expect(meter).toHaveAttribute("data-safety", "Weakest");
+
+  // Read-only interaction — cancel so the table stays at its clean empty state.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(editorDialog(page)).toBeHidden();
+});
+
 test("create form surfaces the server-side error for an unknown spec key (strict decode)", async ({ page }) => {
   const name = uniqueName("unknownkey");
   // Syntactically valid JSON, structurally valid otherwise, but a key the

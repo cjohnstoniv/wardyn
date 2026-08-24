@@ -15,7 +15,10 @@
 // holds (types.RunPolicySpec), validated by the same validatePolicySpec — so
 // one panel serves both, and the SERVER stays the source of truth for what is
 // legal. The panel only parses (so a syntactically broken document never
-// reaches the API) and derives read-only summaries from what parsed.
+// reaches the API) and derives read-only summaries from what parsed. The ONE
+// live call it makes is the SafetyMeter's debounced grade of the current
+// document (POST /policies/grade) — advisory, and grading the DOCUMENT, which
+// is a different question than the screen's preflight of the RESOLVED run.
 //
 // The screen owns everything that isn't the JSON: the saved-policy list, the
 // preflight call (runs.preflightRun) and its result rendering, the Workspace
@@ -31,6 +34,7 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { cn } from "../ui/utils";
 import { Chip, ConfinementChip, SectionLabel } from "./primitives";
+import { SafetyMeter } from "./safety-meter";
 import { Field, OptionCard } from "./form-primitives";
 
 export type PolicyPanelInstance = "run" | "policies";
@@ -53,21 +57,29 @@ export interface PolicyTemplate {
 // key and machine-specific mounts would 400 under DisallowUnknownFields /
 // validatePolicySpec the moment anyone clicked it.
 //
-// auto_stop_after_sec: carried ONLY where the source example sets a real value
-// (ci.json's 3600). Where the source has 0 the field is OMITTED — absent
-// coalesces to 0 = never reaped (internal/lifecycle), so writing 0 or -1 would
-// change nothing except guaranteeing a member clamp warning on every preflight.
+// auto_stop_after_sec: every template EXCEPT allow-all carries 3600. Under the
+// safety meter's conservative (non-interactive) frame an omitted idle cap grades
+// HIGH on its own (composer/risk.go: never-reap holds minted credentials forever),
+// so without it the shipped starter would read "Elevated" — contradicting the
+// owner's safest axis. allow-all DELIBERATELY omits it: its two highs (allow-all
+// egress + never-reap) are what make "Weakest" reachable from a single template
+// click, and a 3600 there would collapse it to one high. ci/model-provider
+// inherit 3600 from their source examples; minimal/registries gain it here for
+// the meter. Absent still coalesces to 0 = never reaped (internal/lifecycle).
 export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
   {
     id: "minimal",
     label: "Minimal",
     hint: "The model provider and nothing else; unlisted hosts raise an approval.",
-    // The shipped starter (policies.tsx's STARTER_SPEC) — a valid, editable
-    // floor, not a blank document.
+    // The shipped starter (policies.tsx's STARTER_SPEC, and the run wizard's
+    // fresh Custom-policy prefill via new-run-screen's MINIMAL.spec) — a valid,
+    // editable floor, not a blank document. The 3600 idle cap is the meter fix:
+    // it keeps the starter grading "Guarded", not "Elevated" for an omitted cap.
     spec: {
       allowed_domains: ["api.anthropic.com"],
       first_use_approval: "deny_with_review",
       min_confinement_class: "CC2",
+      auto_stop_after_sec: 3600,
       eligible_grants: [],
     },
   },
@@ -107,11 +119,12 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     id: "registries",
     label: "Package registries",
     hint: "Model providers plus the language package registries — the build-and-install set.",
-    // examples/policies/default.json's egress set verbatim. Its github_token
-    // grant is deliberately NOT carried: any repo-covering github_token makes
-    // the run brokered and UNCONDITIONALLY removes github.com and friends from
-    // egress (docs/POLICIES.md "Brokered GitHub") — a surprise this template's
-    // name does not promise.
+    // examples/policies/default.json's egress set. Its github_token grant is
+    // deliberately NOT carried: any repo-covering github_token makes the run
+    // brokered and UNCONDITIONALLY removes github.com and friends from egress
+    // (docs/POLICIES.md "Brokered GitHub") — a surprise this template's name
+    // does not promise. auto_stop_after_sec: 3600 is added here (the source has
+    // no cap) for the same meter reason as minimal — see the array header.
     spec: {
       allowed_domains: [
         "api.anthropic.com",
@@ -130,6 +143,7 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
       first_use_approval: "deny_with_review",
       allowed_methods: [],
       min_confinement_class: "CC2",
+      auto_stop_after_sec: 3600,
       eligible_grants: [],
     },
   },
@@ -370,6 +384,13 @@ export interface PolicyPanelProps {
   // lane with no policy picked — there is no body to dry-run).
   preflightDisabled?: boolean;
   /**
+   * Run instance: the screen's interactive mode, forwarded to the SafetyMeter's
+   * grade hint so a never-reap policy reads its "expected for an interactive
+   * run" rationale instead of the high-risk one. /policies omits it (the
+   * conservative default-false frame — a stored policy has no run mode).
+   */
+  interactive?: boolean;
+  /**
    * Run instance: the "Reuse a saved policy" half of the mode row. The screen
    * owns the policy list and the selection; this is only where it renders and
    * which half of the row is lit.
@@ -389,6 +410,7 @@ export function PolicyPanel({
   onPreflight,
   preflightBusy,
   preflightDisabled,
+  interactive,
   savedPolicy,
   className,
 }: PolicyPanelProps) {
@@ -486,6 +508,16 @@ export function PolicyPanel({
               </Chip>
             )}
           </div>
+
+          {/* The safety meter grades the DOCUMENT as typed (debounced, advisory),
+              distinct from the run instance's Preflight of the RESOLVED run — so
+              on the run instance the meter's title says the difference. A parse
+              failure passes null, which dims it. */}
+          <SafetyMeter
+            spec={parsed.ok ? parsed.spec : null}
+            interactive={interactive}
+            note={instance === "run" ? "Preflight grades the resolved run" : undefined}
+          />
 
           <div className="rounded-lg border border-border">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">

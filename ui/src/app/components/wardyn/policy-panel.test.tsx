@@ -4,9 +4,17 @@
  */
 
 import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+// The panel now renders the SafetyMeter, which debounces a POST /policies/grade.
+// Stub it so no test touches the network — and so a stray post-unmount call from
+// any panel-render test resolves a promise instead of `undefined.then`-crashing.
+const gradePolicyMock = vi.fn();
+vi.mock("../../lib/api/runs", () => ({
+  runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) },
+}));
 
 import {
   FIELD_HELP,
@@ -16,7 +24,27 @@ import {
   type PolicyPanelInstance,
   type PolicyPanelProps,
 } from "./policy-panel";
-import type { RunPolicySpec } from "../../lib/types";
+import type { PolicyGrade, RunPolicySpec } from "../../lib/types";
+
+// A real-shaped medium grade (composer.Grade of a CC2 spec) — the default the
+// meter resolves unless a test overrides it.
+const GUARDED_GRADE: PolicyGrade = {
+  overall_risk: "medium",
+  risk_assessment: [
+    {
+      field: "min_confinement_class",
+      value: "CC2",
+      risk_level: "medium",
+      rationale: "Wall (the default tier — a gVisor sandbox).",
+      invariant_ref: "5",
+    },
+  ],
+};
+
+beforeEach(() => {
+  gradePolicyMock.mockReset();
+  gradePolicyMock.mockResolvedValue(GUARDED_GRADE);
+});
 
 // The panel is fully controlled, so drive it through a tiny stateful harness —
 // otherwise a chip click only ever proves the callback fired, never that the
@@ -46,16 +74,24 @@ describe("PolicyPanel — templates", () => {
     }
   });
 
-  it("templates carry auto_stop_after_sec only where the source example has a real value", () => {
+  it("every template carries auto_stop_after_sec: 3600 EXCEPT allow-all (a load-bearing omission)", () => {
     for (const t of POLICY_TEMPLATES) {
       const parsed = JSON.parse(templateText(t)) as RunPolicySpec;
-      if (t.id === "ci" || t.id === "model-provider") {
-        // ci.json and ci-claude-llm.json both set a real idle cap — and
-        // model-provider is the one template holding a minted credential.
-        expect(parsed.auto_stop_after_sec).toBe(3600);
-      } else {
-        // OMITTED, not 0 and not -1 — absent already means "never reaped".
+      if (t.id === "allow-all") {
+        // DELIBERATE and LOAD-BEARING: allow-all's two highs (allow-all egress +
+        // the omitted idle cap = never-reap) are what make the safety meter's
+        // "Weakest" reachable from a single template click. A 3600 here would drop
+        // it to ONE high and collapse Weakest — so absent is asserted, not 3600.
         expect(Object.keys(parsed)).not.toContain("auto_stop_after_sec");
+      } else {
+        // ci/model-provider inherit 3600 from their source examples; minimal and
+        // registries gain it so the conservative (non-interactive) meter frame
+        // does not grade the shipped starter "Elevated" purely for an omitted cap.
+        // NOTE: minimal is BOTH policies.tsx's STARTER_SPEC and the run wizard's
+        // fresh Custom-policy prefill (new-run-screen spreads MINIMAL.spec) — both
+        // now idle-stop after an hour. Intended; TouchDebounce keeps live sessions
+        // alive, so an attended interactive run is never reaped out from under you.
+        expect(parsed.auto_stop_after_sec).toBe(3600);
       }
     }
   });
@@ -201,5 +237,36 @@ describe("PolicyPanel — run instance extras", () => {
 
     await user.click(screen.getByRole("button", { name: /custom policy/i }));
     expect(onActiveChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("PolicyPanel — safety meter", () => {
+  it("renders the meter and grades the DOCUMENT on the /policies instance (no interactive hint)", async () => {
+    render(<Harness initial={VALID} />);
+    expect(screen.getByTestId("safety-meter")).toBeInTheDocument();
+    await waitFor(() => expect(gradePolicyMock).toHaveBeenCalled(), { timeout: 2000 });
+    // /policies sends nothing for the hint — the conservative default-false frame.
+    expect(gradePolicyMock).toHaveBeenLastCalledWith(expect.any(Object), undefined);
+    await waitFor(() => expect(screen.getByTestId("safety-meter")).toHaveTextContent("Guarded"));
+    // Its title does NOT carry the run instance's Preflight contrast.
+    expect(screen.getByTestId("safety-meter").getAttribute("title")).not.toMatch(
+      /Preflight grades the resolved run/,
+    );
+  });
+
+  it("the run instance grades the document too, and its title names the doc-vs-run difference", async () => {
+    render(<Harness instance="run" initial={VALID} />);
+    const meter = screen.getByTestId("safety-meter");
+    expect(meter.getAttribute("title")).toMatch(/policy document as written/);
+    expect(meter.getAttribute("title")).toMatch(/Preflight grades the resolved run/);
+    await waitFor(() => expect(gradePolicyMock).toHaveBeenCalled(), { timeout: 2000 });
+  });
+
+  it("a parse failure dims the meter and skips the grade call entirely", () => {
+    render(<Harness initial="{ not json" />);
+    const meter = screen.getByTestId("safety-meter");
+    expect(meter).toHaveAttribute("data-safety", "");
+    expect(meter).toHaveTextContent(/fix the json first/i);
+    expect(gradePolicyMock).not.toHaveBeenCalled();
   });
 });

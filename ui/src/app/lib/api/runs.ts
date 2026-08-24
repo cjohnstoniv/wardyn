@@ -12,6 +12,7 @@ import type {
   CreateRunInput,
   CreateRunResult,
   CredentialGrant,
+  PolicyGrade,
   PreflightResult,
   ProfileProposal,
   RunFilesResult,
@@ -170,6 +171,19 @@ export const runs = {
       body: JSON.stringify(runWireBody(input)),
     });
     return asJson<PreflightResult>(res);
+  },
+
+  // POST /api/v1/policies/grade — composer.Grade of a bare spec, no run
+  // attached: the policy panel's live safety meter. Unlike preflight (which
+  // dry-runs a RESOLVED run — mounts, grants, blast-radius raise), this grades
+  // the DOCUMENT exactly as typed. `interactive` is an optional hint (default
+  // false, the conservative frame): it only changes the never-reap item's
+  // rationale — the run wizard sends the screen's mode, /policies sends nothing.
+  async gradePolicy(spec: RunPolicySpec, interactive?: boolean): Promise<PolicyGrade> {
+    const body: Record<string, unknown> = { spec };
+    if (interactive) body.interactive = true;
+    const res = await wfetch("/policies/grade", { method: "POST", body: JSON.stringify(body) });
+    return asJson<PolicyGrade>(res);
   },
 
   // POST /api/v1/runs/{id}/profile — Recording-Mode profile synthesis (ADVISORY,

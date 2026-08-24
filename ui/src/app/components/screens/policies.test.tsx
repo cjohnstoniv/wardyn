@@ -26,6 +26,12 @@ vi.mock("../../lib/api/policies", () => ({
   },
 }));
 
+// The create/edit editor's PolicyPanel renders the SafetyMeter, which debounces
+// a POST /policies/grade; stub it so the editor tests never touch the network.
+vi.mock("../../lib/api/runs", () => ({
+  runs: { gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }) },
+}));
+
 import { PoliciesScreen } from "./policies";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
