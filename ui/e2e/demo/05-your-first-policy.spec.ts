@@ -299,15 +299,15 @@ test("A2 — the safety meter", async () => {
   // it, then surface its own title — it grades the DOCUMENT, not any one run.
   await centerInFrame(meter);
   await spotlight(page, meter);
-  await caption(page, "Every policy you write gets a safety reading, live, as you type.");
+  await caption(page, "Every policy gets a safety rating that updates as you change it.");
   await beat(page, PACE.read);
   await expect(
     meter,
     "the meter's title no longer says it grades the document — the document-vs-preflight distinction is gone",
   ).toHaveAttribute("title", /Safety of the policy document as written/);
-  await caption(page, "It grades the document as written — not any single run that might use it.");
+  await caption(page, "It rates the policy you're writing — not any particular run that might use it.");
   await beat(page, PACE.read);
-  await caption(page, "Safest on the left, weakest on the right.");
+  await caption(page, "More restrictive on the left, more permissive on the right.");
   await beat(page, PACE.read);
 
   // ── THE GRADE-WALKED RAMP ─────────────────────────────────────────────
@@ -323,7 +323,7 @@ test("A2 — the safety meter", async () => {
     "Guarded",
   );
   await spotlight(page, meter);
-  await caption(page, "Our minimal starter reads guarded.");
+  await caption(page, "The Minimal starter lands in the Guarded range.");
   await beat(page, PACE.read);
 
   // Hand-edit the floor to CC3 -> Safest (all low). Read-and-replace the one
@@ -331,14 +331,14 @@ test("A2 — the safety meter", async () => {
   await specBox.fill((await specBox.inputValue()).replace('"CC2"', '"CC3"'));
   await expect(meter, "raising the floor to CC3 did not read Safest").toHaveAttribute("data-safety", "Safest");
   await spotlight(page, meter);
-  await caption(page, "Raise the barrier to its strongest, and there's nothing here to reach out or write with — safest.");
+  await caption(page, "Raise the barrier to its strongest, and the rating moves toward Safest.");
   await beat(page, PACE.read);
 
   // Drop the floor to CC1 -> Elevated (CC1 = exactly one high item).
   await specBox.fill((await specBox.inputValue()).replace('"CC3"', '"CC1"'));
   await expect(meter, "dropping the floor to CC1 did not read Elevated").toHaveAttribute("data-safety", "Elevated");
   await spotlight(page, meter);
-  await caption(page, "Drop to the weakest barrier, and the reading climbs to elevated.");
+  await caption(page, "Drop to the weakest barrier, and the rating moves toward Elevated.");
   await beat(page, PACE.read);
 
   // Allow-all template -> Weakest (allow-all egress + never-reap = two highs).
@@ -350,10 +350,10 @@ test("A2 — the safety meter", async () => {
     "Weakest",
   );
   await spotlight(page, meter);
-  await caption(page, "Open egress to the whole internet, and it reads weakest — the most a policy can hand away.");
+  await caption(page, "Open egress to the whole internet, and the rating moves to Weakest — the most permissive setting.");
   await beat(page, PACE.read);
 
-  await caption(page, "The meter never blocks a save — it just shows you, up front, how much room you're giving a run.");
+  await caption(page, "The meter doesn't block the policy — it shows you how restrictive or permissive the policy is before you save it.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
@@ -533,9 +533,9 @@ test("A4 — save, then reuse", async () => {
   await spotlight(page, null);
 
   // ---- Conclusion — points at 06, which launches this very policy -----------
-  await caption(page, "So that's our first policy — written once, and saved for good.");
+  await caption(page, "So that's our first policy — written once, named, and ready to reuse.");
   await beat(page, PACE.read);
-  await caption(page, "In the next episode, we launch a run that uses it.");
+  await caption(page, "Next, we'll launch a run using this saved policy.");
   await beat(page, PACE.read + 400);
   await silentCard(page, "Next — 06: Your first run");
 });

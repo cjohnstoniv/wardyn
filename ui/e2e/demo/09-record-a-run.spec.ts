@@ -408,10 +408,8 @@ test("cold open + B1 — the card that learns", async () => {
   // you know what a job needs, you write the policy and you're done — episode 08
   // just filmed exactly that. Recording is the answer to NOT knowing, and saying
   // so is what stops this episode reading as a retraction of the last one.
-  // DIALOG-STALE(ordinal: now episode five) — "episode 08" wrote the policy
-  // under the numbering where old-08 was the policies episode; that content
-  // (write rules once, save for good) is now episode 05 "Your first policy".
-  await caption(page, "Episode eight turned rules we already knew into a reusable policy.");
+  // Owner-ratified ordinal (restructure): the policy episode is 05 now.
+  await caption(page, "Episode five turned rules we already knew into a reusable policy.");
   await beat(page, PACE.read);
   await caption(page, "Most of the time, you don't know everything the job will need.");
   await beat(page, BEAT_SHORT);

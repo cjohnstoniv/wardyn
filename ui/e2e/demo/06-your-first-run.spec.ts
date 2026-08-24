@@ -354,9 +354,9 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   //     happens." / "We can hold it for approval." / "We can deny it, but let it
   //     ask." / "Or we can deny it silently.") — the stored policy already fixed
   //     the mode (deny_with_review); the run does not re-choose it
-  await caption(page, "Last episode, we wrote our first policy and saved it under a name.");
+  await caption(page, "Last episode, we wrote our first policy and saved it as first-policy.");
   await beat(page, PACE.read);
-  await caption(page, "This run doesn't need a brand-new one — it can reuse that.");
+  await caption(page, "This run doesn't need a new policy — it can reuse first-policy.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Reuse a saved policy.");
   // The picker renders once this half is lit; the picks are silent (the rail
@@ -378,7 +378,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   await spotlight(page, railPolicy);
   await caption(page, "There it is — first-policy, the one we just built.");
   await beat(page, PACE.read);
-  await caption(page, "The run launches by reference. Nothing on this page is merged into it.");
+  await caption(page, "The run points to that saved policy. Its rules come from the policy itself.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -418,7 +418,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // resolves the STORED spec and shows the enforced-barrier chip. Replaces the
   // old drafted "two things side by side…" line, which described a two-column UI
   // the panel never rendered.
-  await caption(page, "It resolves the reused policy and shows the barrier this run will actually run at.");
+  await caption(page, "It resolves that policy and shows the barrier this run will actually use.");
   await beat(page, PACE.read);
   // An operator's own saved spec is not clamped, so this reads "No adjustments."
   // Asserted BEFORE it is spoken — a stack that clamped something must not be
@@ -428,9 +428,9 @@ test("V06 beat 2 — the envelope, by reference", async () => {
     "preflight came back with adjustments — the policy that runs is not the stored policy",
   ).toBeVisible();
   // [OWNER SLOT — drafted] names what "No adjustments." says (carried from the
-  // old drafted "They match. Nothing was widened on our behalf.", trimmed to
+  // old drafted "They match. Nothing was added or widened when the policy was applied.", trimmed to
   // drop the "they match" two-column framing).
-  await caption(page, "Nothing was widened on our behalf.");
+  await caption(page, "Nothing was added or widened when the policy was applied.");
   await beat(page, PACE.read);
 
   // DIALOG-STALE (the "designed to fail" off-list beat, in original take order;

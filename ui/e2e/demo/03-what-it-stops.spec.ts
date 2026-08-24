@@ -591,7 +591,7 @@ test("V03 act 4 — a key of your own", async () => {
   const page = stage();
 
   await chapter(page, "A key of your own", "The other kind of boundary — a value, not a destination");
-  await caption(page, "Everything so far governed a destination — where a run may reach.");
+  await caption(page, "So far, we've been governing where a run may reach.");
   await beat(page, PACE.read);
   await caption(page, "A secret is the other axis: a value a run may use, without ever holding it.");
   await beat(page, PACE.read);
@@ -627,7 +627,7 @@ test("V03 act 4 — a key of your own", async () => {
   await beat(page, PACE.read);
   await caption(page, "The demos ahead use this key by name.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "None of them can read it. The granted ones can still use it.");
+  await caption(page, "None of them can read it. The ones we authorize can still use it.");
   await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 });
@@ -914,13 +914,13 @@ test("V03 act 8 — a bearer token for a real API", async () => {
   await expect(auditRows).toContainText("secret.read");
   await centerInFrame(auditRows);
   await spotlight(page, auditRows);
-  await caption(page, "The proof is on the record before you type: the secret read and the credential minted at startup.");
+  await caption(page, "The record shows the secret being used outside the box before you type.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   await typeInTerminal(page, await pillCmd(card, 0), card);
   await pollScreen(screen, /HTTP\/[\d.]+ \d\d\d/, "the third-party call never got a response line");
-  await caption(page, "The request left this box with no Authorization header and arrived carrying one.");
+  await caption(page, "The request left this box without an Authorization header. The proxy added one before forwarding it.");
   await beat(page, PACE.read);
   await caption(page, "The proxy stitched it on at the boundary, after the sandbox had already sent it.");
   await beat(page, PACE.read);
@@ -954,9 +954,9 @@ test("V03 act 9 — a PAT that only ever exists in a pipe", async () => {
 
   const card = await openDemo(page, "pat-stdout-only", "A PAT that only ever exists in a pipe");
   await spotlight(page, page.getByTestId("demo-policy-pat-stdout-only"));
-  await caption(page, "git can't be done that way. A clone is an end-to-end tunnel the proxy can't read into.");
+  await caption(page, "A Git clone is different: the proxy can't inspect the credential exchange inside the Git connection.");
   await beat(page, PACE.read);
-  await caption(page, "So the PAT is minted only when git asks — straight into git's pipe, and nowhere else.");
+  await caption(page, "So the PAT is issued only when Git asks — straight into Git's pipe, and nowhere else.");
   await beat(page, PACE.read);
   await caption(page, "And first the helper makes the caller prove who it is.");
   await beat(page, BEAT_SHORT + 400);
@@ -987,7 +987,7 @@ test("V03 act 9 — a PAT that only ever exists in a pipe", async () => {
   // Step 2: same call, now the PAT comes back on stdout.
   await typeInTerminal(page, await pillCmd(card, 2), card);
   await pollScreen(screen, /password=/, "the gated helper call never emitted the PAT on stdout");
-  await caption(page, "Now the PAT comes back — as git-credential lines on standard output, and nowhere else.");
+  await caption(page, "Now the credential helper returns Git's credential lines on standard output — and nowhere else.");
   await beat(page, PACE.read);
   await caption(page, "In a real clone git reads them straight off this pipe, and they're gone.");
   await beat(page, PACE.read);
@@ -1059,7 +1059,7 @@ test("V03 act 10 — the one that touches disk", async () => {
   // Step 2 (pill index 1): the node re-mint → 0400 file.
   await typeInTerminal(page, await pillCmd(card, 1), card);
   await beat(page, PACE.read);
-  await caption(page, "A value-bearing grant is re-mintable by design, so the same route hands the key back.");
+  await caption(page, "This kind of grant can be requested again, so the same route can provide another temporary key.");
   await beat(page, PACE.read);
 
   // Step 3 (pill index 2): ls -l — the resident 0400 file.
@@ -1099,7 +1099,7 @@ test("V03 act 11 — a token the sandbox never sees", async () => {
   const page = stage();
 
   const card = await openDemo(page, "github-app-broker", "A token the sandbox never even sees");
-  await caption(page, "One step further out. A git PAT at least passes through the sandbox; this token never arrives at all.");
+  await caption(page, "One step further out. The PAT is delivered through Git's pipe; this token never enters the sandbox at all.");
   await beat(page, PACE.read);
 
   await spotlight(page, card.getByTestId("demo-policy-github-app-broker"));
@@ -1141,7 +1141,7 @@ test("V03 act 12 — no identity, no credential", async () => {
   await caption(page, "The last rung is the one where nothing is handed out at all.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByTestId("demo-policy-sts-fail-closed"));
-  await caption(page, "A cloud STS grant trades an attested workload identity for short-lived cloud credentials.");
+  await caption(page, "The last kind uses a cloud identity to request short-lived credentials from STS.");
   await beat(page, PACE.read);
   await caption(page, "So it only means anything when something is actually attesting.");
   await beat(page, PACE.read);
@@ -1184,7 +1184,7 @@ test("V03 conclusion", async () => {
   await beat(page, PACE.read);
   await caption(page, "And a secret — used by a run that never once held it.");
   await beat(page, PACE.read);
-  await caption(page, "Kept out five different ways, because five different protocols demand it.");
+  await caption(page, "Five credential types, five different boundaries — because the protocol determines what safe use looks like.");
   await beat(page, PACE.read);
   await caption(page, "None of those were screenshots.");
   await beat(page, PACE.read);
