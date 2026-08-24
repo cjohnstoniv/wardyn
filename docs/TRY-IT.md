@@ -79,9 +79,11 @@ wardyn run --agent claude-code --interactive --policy-file examples/policies/san
 wardyn attach <id>
 ```
 
-Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>)
-launches throwaway sandboxes with an embedded terminal and live approvals — no
-repo, no workspace. Six need no model at all, only the sandbox barrier itself:
+Prefer clicking? The Getting Started wizard's demo steps
+(<http://localhost:8080/setup?step=sealed-box> — `/demos` redirects there)
+launch throwaway sandboxes with an embedded terminal and live approvals — no
+repo, no workspace. Two sections: **Egress demos** and **Secrets demos**. Nine
+need no model at all, only the sandbox barrier itself, including:
 **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
 then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
 door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then

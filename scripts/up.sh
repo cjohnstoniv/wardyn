@@ -776,7 +776,7 @@ cmd_up() {
     log "  Prove the sandbox boundary from the CLI (keyless):"
     log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
     log "  Give it a real Claude:  ${_cli} subscription connect   (then run with sandbox-claude.yaml)"
-    log "  Or click the /demos screen in the UI."
+    log "  Or open Getting Started in the UI — the demo steps live there."
   fi
   [ "${_cli}" = "wardyn" ] && log "  (bin/wardyn wasn't extracted — build one: go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest)"
   unset _cli

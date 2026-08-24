@@ -439,8 +439,8 @@ Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
 `demo-audit-panel`, and it ends with **End demo**. Approvals render as
 `live-approval-row` with **Approve** / **Deny** — always decided BY HOST, never
-by position (see below). Note `demo-card-<id>` does NOT exist here; that wrapper
-belongs to the `/demos` catalog, and the funnel renders `DemoRunControls` bare.
+by position (see below). Note `demo-card-<id>` now lives on the funnel's own
+`DemoDetail` (the `/demos` catalog is gone — Getting Started is the one surface).
 
 | Step | Typed into the terminal | What must happen on camera |
 |---|---|---|
@@ -522,10 +522,10 @@ assumes the obvious thing:
   `has_runs` is false: the second time you run the driver against the same
   stack, `/` lands on Runs. Act 1 falls through to `/setup` rather than
   requiring a full reset just to iterate.
-- **`demo-card-<id>` does not exist in the funnel.** It belongs to
-  `demo-screen.tsx`'s `DemoCard`, which stacks all seven demos on `/demos`. The
-  funnel step renders the shared `DemoRunControls` bare, one demo per step, so
-  on that path the page is the scope. `demo-start-<id>` *is* inside
+- **`demo-card-<id>` lives on the funnel's `DemoDetail` now.** The `/demos`
+  catalog and its `DemoCard` grid are gone (Getting Started is the one demos
+  surface); each demo step wraps in `demo-card-<id>`, so card-scoped locators
+  work on the funnel path too. `demo-start-<id>` *is* inside
   `DemoRunControls` and works on both.
 - **"Lines that can't be crossed" produces NO audit rows for its two headline
   denials** — and that is the block being *stronger* than the card claims, not

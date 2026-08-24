@@ -235,6 +235,19 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     [stepId, status, canSelect],
   );
 
+  // LOW-3 (secrets-demos plan): same-route ?step= navigations. The param is
+  // read once at mount, so a nav to /setup?step=<id> while ALREADY on /setup
+  // (the app-shell "Demos" entry, runs-first-run cards) moved the URL and not
+  // the step — a silent no-op. Route later param changes through selectStep,
+  // which already enforces canSelect and the visited bookkeeping.
+  React.useEffect(() => {
+    const want = searchParams.get("step");
+    if (want && want !== stepId && (stepOrder(status) as string[]).includes(want)) {
+      selectStep(want as SetupStepId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only param changes re-run this
+  }, [searchParams]);
+
   // Read-only fetch — the orchestrator only needs SiteConfig to derive the
   // Integrations badge count; every WRITE to it now happens inside the
   // embedded Integrations step's own "Add integration" dialog, which keeps

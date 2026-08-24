@@ -390,7 +390,7 @@ export const DEMOS: Demo[] = [
     teaches:
       "A brokered api_key grant injects the header on the way OUT of the proxy — the sandbox itself never holds, sees, or can leak the value.",
     overview:
-      "The sandbox is credentialed without ever being handed a credential: the header is stitched onto the outbound request only as it leaves the proxy, after the sandbox's own process already sent it. printenv and a scoped grep both come up empty, and the response carries no trace either — the proof lives in the Audit panel, stamped before you typed a single command.",
+      "The sandbox is credentialed without ever being handed a credential: the header is stitched onto the outbound request only as it leaves the proxy, after the sandbox's own process already sent it. printenv and a scoped grep both come up empty, and the response carries no trace either — the proof lives in the Audit panel, stamped before you typed a single command. Start this one as an OPERATOR — a member launch silently drops the inline grant (the policy clamp), so the injection beats never fire.",
     policy: {
       ...SHARED,
       allowed_domains: ["example.com"],
@@ -407,7 +407,7 @@ export const DEMOS: Demo[] = [
       { cmd: "printenv | sort", text: "No key in the environment." },
       {
         cmd: "grep -rIl --exclude-dir={proc,sys,dev} wardyn-demo-key /etc /home /tmp /usr 2>/dev/null",
-        text: "Nothing resident on disk either — the value was never written into the box.",
+        text: "The secret's name and config aren't resident on disk either. (The VALUE never entering the box is the audit panel's proof, next step.)",
       },
       {
         cmd: "curl -sSI http://example.com",
@@ -433,7 +433,7 @@ export const DEMOS: Demo[] = [
     teaches:
       "requires_approval doesn't hand out a credential on request — it raises a human decision, and even an approved mint returns a RULE, never a value.",
     overview:
-      "This grant needs a live approval before the broker will mint it, and it's single-use once it does. The sandbox asks for it itself, over the same broker route the proxy uses at startup, with no auth of its own — the proxy injects the run's own token. The first ask is refused pending review; approve it and the very next ask succeeds, returning an injection rule with no secret in it; ask a third time and it's refused again, because it already spent itself.",
+      "This grant needs a live approval before the broker will mint it, and it's single-use once it does. The sandbox asks for it itself, over the same broker route the proxy uses at startup, with no auth of its own — the proxy injects the run's own token. The first ask is refused pending review; approve it and the very next ask succeeds, returning an injection rule with no secret in it; ask a third time and it's refused again, because it already spent itself. Start this one as an OPERATOR — a member launch silently drops the inline grant, so there's nothing to approve.",
     policy: {
       ...SHARED,
       allowed_domains: ["example.com"],

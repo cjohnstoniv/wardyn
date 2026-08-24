@@ -1,7 +1,7 @@
 # Wardyn docs
 
 Start at the repo [README](../README.md) — it, the in-product Getting Started
-wizard and `/demos` are the first-run path. Everything here is the next question.
+wizard — with its built-in demo steps — is the first-run path. Everything here is the next question.
 
 | If you want to… | Read |
 |---|---|
