@@ -21,8 +21,9 @@ persona is the audience, not an auditor.
   when a later title plainly owns X is out of scope for this episode; judge
   instead whether THIS episode hands off to it properly (does it say where X
   lives, and does the promise match the title?).
-- A persona who did not watch an episode reports NOT-WATCHED for its lane
-  rather than nothing — silence is indistinguishable from a pass.
+- A persona who did not watch an episode is recorded as NOT-WATCHED for its
+  lane in the ADJUDICATION rather than left blank — silence is
+  indistinguishable from a pass.
 - Optional sub-episodes (lettered — 03b, 03c, 03d today; a syllabus title
   marks them "(optional)", "(desktop)", "(cloud)", "(members)" or "(admin)")
   are watched right after their parent episode, with the core path through the
@@ -91,17 +92,18 @@ round's ADJUDICATION records all six per episode. Lanes are never averaged: an
 episode can pass comprehension and fail security, and it is reported that way.
 A FAIL in any lane blocks the take unless the owner rules it standing (the
 ruling, with its reason, goes in the ADJUDICATION so later rounds can cite it).
-The adjudicator discounts each lane's known blind spot explicitly; the persona
-is never told its flaw.
+The adjudicator discounts each lane's known blind spot explicitly — the list
+lives in `../adjudicator.md`, which a viewer is never given (fidelity rules);
+the persona is never told its flaw.
 
-| Lane | Persona | Passes when | Known blind spot |
-|---|---|---|---|
-| Understandable | Morgan (`morgan-citizen-dev.md`) | could retell the story from the screen, and knows why what was stopped was bad | underweights technical correctness — a convincing analogy can carry a weak mechanism |
-| Learnable / adoptable | Priya (`priya-junior-dev.md`) | could repeat the steps, and knows where she'd need help | equates understandable with correct |
-| Technically credible | Sam (`sam-senior-dev.md`) | mechanism, failure case and evidence shown, not staged away | over-indexes on implementation detail; a viewer, not a code reviewer |
-| Operable | Riley (`riley-platform-engineer.md`) | the setup path is complete and failure behaviour visible; the team could run, upgrade and debug it | may demand operational depth a demo episode cannot carry — route to the desktop/cloud/admin episodes |
-| Security-defensible | Alex (`alex-security-reviewer.md`) | the security claim is proved at the enforcement point and the system's limits are stated | may fail an episode for a claim a later episode owns — the titles-only syllabus rule applies |
-| Organizationally fundable | Dana (`dana-eng-leader.md`) | receipts — who decided what, when — that would survive security review, procurement and audit | over-credits a polished audit UI; does not validate the evidence herself |
+| Lane | Persona | Passes when |
+|---|---|---|
+| Understandable | Morgan (`morgan-citizen-dev.md`) | could retell the story from the screen, and knows why what was stopped was bad |
+| Learnable / adoptable | Priya (`priya-junior-dev.md`) | could repeat the steps, and knows where she'd need help |
+| Technically credible | Sam (`sam-senior-dev.md`) | mechanism, failure case and evidence shown, not staged away |
+| Operable | Riley (`riley-platform-engineer.md`) | the setup path is complete and failure behavior visible; the team could run, upgrade and debug it |
+| Security-defensible | Alex (`alex-security-reviewer.md`) | the security claim is proved at the enforcement point and the system's limits are stated |
+| Organizationally fundable | Dana (`dana-eng-leader.md`) | receipts — who decided what, when — that would survive security review, procurement and audit |
 
 ## Series review (after the final video of a round)
 
@@ -132,8 +134,8 @@ notes. Answer as the persona, in their terms.
   episode (transcript or frames) plus the list of security claims it makes, and
   tries to break each claim: what would an attacker do, what does the episode not
   show, what test would settle it. Output: the claims that fail and the test for
-  each. Run it when a security claim changes or before a security-lane episode
-  ships; Alex's lane is the standing review, the red-team pass is the drill.
+  each. Run it when a security claim changes or before an episode carrying a
+  security claim ships; Alex's lane is the standing review, the red-team pass is the drill.
 - **Accessibility, jargon, pacing, pronunciation** are every viewer's job (see
   "Say it aloud" and the think-aloud rules above), not a persona's — a dedicated
   persona would make them one lane's responsibility instead of everyone's.
