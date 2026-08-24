@@ -151,7 +151,7 @@ test("V03d act 1 — the one that touches disk", async () => {
   // Step 2 (pill index 1): the node re-mint → 0400 file.
   await typeInTerminal(page, await pillCmd(card, 1), card);
   await beat(page, PACE.read);
-  await caption(page, "This kind of grant can be requested again — there's no cap on that — so the same route can provide another key. Every mint is a row in the record.");
+  await caption(page, "This kind of grant can be requested again — there's no cap on that. So the real bound isn't the window: anything running as the agent can ask for another key, and what that costs it is a row in the record, every time.");
   await beat(page, PACE.read);
 
   // Step 3 (pill index 2): ls -l — the resident 0400 file.
@@ -173,9 +173,9 @@ test("V03d act 1 — the one that touches disk", async () => {
   // Step 5 (pill index 4): shred → gone.
   await typeInTerminal(page, await pillCmd(card, 4), card);
   await pollScreen(screen, /\.ssh/, "the shred step never echoed the empty listing");
-  await caption(page, "And gone.");
+  await caption(page, "And gone — shredded, with a failsafe that wipes it even if the clone dies halfway. And honestly: the removal isn't a row in the record. The window is bounded by the clone, not by an audit entry.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The exception is narrow by construction, documented, and the only one there is — and every mint of it is on the record.");
+  await caption(page, "The exception is documented, and the only one there is. And what you actually get: nothing persists between clones, the network is one SSH host on 443, and every ask is a row — abuse is detectable, not impossible.");
   await beat(page, PACE.read + 400);
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
@@ -203,7 +203,7 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "github-app-broker", "kind",
     "kind: GitHub token — scoped to one repo and one permission. Anything in the box can reach that broker route; it only ever yields this repo, with this permission.",
-    "One step past a pipe: this token never enters the box in any form. It's attached on the proxy's outbound leg alone.");
+    "One step past that pipe — in the other detour, a Git token was issued onto a pipe inside the box. This kind never enters the box in any form: it's attached on the proxy's outbound leg alone.");
   await spotlight(page, null);
 
   // The gate is the demo here: Start is disabled and the gate copy explains
@@ -217,7 +217,7 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
   // (noteDemoRun warns "no run id" on a correct take — that warning is the lesson).
   await noteDemoRun(page, "github-app-broker");
   await spotlight(page, card.getByTestId("demo-needs-github-app"));
-  await caption(page, "And because that token comes from the live GitHub API, there's nothing to fake.");
+  await caption(page, "We can't show it here — no GitHub App is configured on this box. Take this one as a description, not a demonstration.");
   await beat(page, PACE.read);
   await caption(page, "Without a GitHub App configured, Start stays disabled — and the screen tells you what to set up rather than faking a run.");
   await beat(page, PACE.read + 400);
@@ -283,7 +283,7 @@ test("V03d conclusion", async () => {
   const page = stage();
 
   await chapter(page, "Back to the main path", "");
-  await caption(page, "That's the last of five credential kinds, each with its own boundary — because the protocol decides what safe use can even look like. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. Back on the main path: episode four gives a run something real to work on. A workspace.");
+  await caption(page, "That's the last credential kind — five in all, counting the pipe from the other detour — each with its own boundary, because the protocol decides what safe use can even look like. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. Back on the main path: episode four gives a run something real to work on. A workspace.");
   await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 04: Add a workspace");

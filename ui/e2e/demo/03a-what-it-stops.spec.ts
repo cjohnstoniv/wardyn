@@ -186,12 +186,12 @@ test("V03a act 2 — four ways the boundary holds", async () => {
   await caption(page, "We'll walk the two boundaries around every run — where it can reach, and what it can hold.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Start with the network. Four demos, each in its own sandbox — one for each thing that can happen to a host a run dials: denied, denied but it can ask, held for a decision, or walled off.");
+  await caption(page, "Start with the network. Four demos, each in its own sandbox — one for each thing that can happen to a host a run dials: denied, denied but it can ask, held for a decision, or walled off — somewhere nobody gets to say yes.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And every decision is visible on screen.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Everything here is typed by hand. The boundary doesn't care who's dialing — an agent gets the same answers.");
+  await caption(page, "Everything here is typed by hand. Enforcement is at the proxy, outside the box — it sees the connection, not who opened it. An agent gets the same answers.");
   await beat(page, PACE.read);
 
   for (const demo of STOP_DEMOS) {
@@ -237,9 +237,9 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       await caption(page, "Before it runs, look at the policy — the whole contract for this run, four lines. You'll write one of these yourself in episode five; here, we're just reading.");
       await beat(page, PACE.read);
       await walkPolicyKey(page, policyCard, demo.id, "min_confinement_class",
-        "The barrier: Fence — the lightest of the three tiers from episode two; the policy calls it CC1. A container sharing your host's kernel, and everything you're about to see holds on it, on purpose.");
+        "The barrier: Fence — the lightest of the three tiers from episode two; the policy calls it CC1. A container sharing your host's kernel, and everything you're about to see works on it, on purpose.");
       await walkPolicyKey(page, policyCard, demo.id, "auto_stop_after_sec",
-        "An idle stop: fifteen minutes without an attach or an outbound call, and Wardyn tears the sandbox down. The number is yours to set.");
+        "An idle stop: fifteen minutes with no terminal attached and no outbound call — local work doesn't keep it alive — and Wardyn tears the sandbox down, with the stop on the record. The number is yours to set.");
       await walkPolicyKey(page, policyCard, demo.id, "allowed_domains",
         "The allowlist — the hosts this run may reach — is empty. Not one destination is permitted.");
       await walkPolicyKey(page, policyCard, demo.id, "first_use_approval",
@@ -250,12 +250,12 @@ test("V03a act 2 — four ways the boundary holds", async () => {
         "Now an unlisted host still fails the first time — but the refusal raises a question for you. Approve it, and the next attempt goes through — and stays approved for the rest of this run. How long a yes can last is episode ten.");
     } else if (demo.id === "held-at-the-door") {
       await walkPolicyKey(page, policyCard, demo.id, "first_use_approval",
-        "Same line again — now wait-for-review: don't refuse it, hold it.",
-        "The request is held at the door while it waits for you — for about thirty seconds. Approve in time and the command never fails; it pauses. Miss it, and the command is refused, but the question stays open for you to decide later.");
+        "Same line again — its third setting, wait-for-review: don't refuse it, hold it.",
+        "The request is held at the door while it waits for you — for about thirty seconds; that window is fixed. Approve in time and the command never fails; it pauses. Miss it, and the command is refused — but the question stays open, and a later yes covers the next attempt, like any other approval.");
     } else if (demo.id === "lines-that-cant-be-crossed") {
       await walkPolicyKey(page, policyCard, demo.id, "allow_all_egress",
         "To reach for it, this policy throws the door open — allow all egress, switched on. Every public host is permitted, on purpose.",
-        "And yet some destinations are still refused. The machine's own neighbours — the cloud metadata address, and every private network range — are denied beneath the policy, whatever it says; checked on the address a name really resolves to, so a public name pointing at a private address is refused the same way.",
+        "And yet some destinations are still refused. The machine's own neighbors — the cloud metadata address, and every private, internal address — are refused underneath the policy: an allow-all switch never reaches them. And it's checked on where a name actually points, not on the name itself — so an ordinary-looking public address that secretly points inside your network is refused the same way.",
         "The one exception is an address you wrote into the allowlist yourself — your own internal mirror, the way episode two's redirect does it. Never a wildcard, never an approval.",
         "Those are the lines that can't be crossed.");
     }
@@ -598,6 +598,9 @@ test("V03a act 5 — the key that never enters the box", async () => {
     "And the scope: which host, which header — and the secret's name. Only its name.",
     "Not the secret itself. The value never appears in the policy, and never enters the box.",
     "And the breadth of that grant, plainly: for this run, anything in the box that dials that host gets the header. A capability as wide as the host you scoped it to — never the secret.");
+  await caption(page,
+    "If something in this box is following instructions that aren't yours, this is what it buys: it can spend the key against that one host, for this one run. It can't take it, can't point it anywhere else, can't keep it. One host, one run — not one key, forever.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "key-never-in-the-box");
@@ -686,13 +689,13 @@ test("V03a conclusion", async () => {
   await caption(page, "They were real requests, inside real sandboxes, under real policies.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "And every one of them ships in the repo — run them yourself, on your own machine.");
+  await caption(page, "And every one of them ships in the repo — the docs' ten-minute try-it guide walks all of them, no keys needed. Run them yourself, on your own machine.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
   await caption(page, "Three optional detours go deeper. The network, three more ways: a real coding agent in the box, a policy recorded from a run, and an approval that lasts one connection.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Authorized, then issued: that key gated by an approval, then a Git token that only ever exists in a pipe. And the kinds that can't use a header — including the one credential that has to be written to a file, briefly. Nothing later depends on them.");
+  await caption(page, "Authorized, then issued: that key gated by an approval, then a Git token issued into a pipe, on demand, never stored. And the kinds that can't use a header — including the one credential that has to be written to a file, briefly; if you clone over SSH, that one is yours. Nothing later depends on them.");
   await beat(page, PACE.read);
   await caption(page, "And we're ready to give it some actual work.");
   await beat(page, PACE.read);

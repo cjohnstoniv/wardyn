@@ -116,7 +116,7 @@ test("V03b act 1 — the agent in the box", async () => {
   await walkPolicyKey(page, card, "agent-in-the-box", "auto_stop_after_sec",
     "Same fifteen-minute idle stop.");
   await walkPolicyKey(page, card, "agent-in-the-box", "allowed_domains",
-    "The change is the allowlist: two entries now, both Anthropic — the API host, and anything under the Anthropic domain.",
+    "The change is the allowlist: two entries now, both Anthropic — the API host, and a wildcard for anything under the Anthropic domain. Allowlist entries can be wildcards; the core's never-a-wildcard rule is only about private addresses.",
     "That's the whole network contract. The agent can reach Anthropic, and nothing else.");
   await walkPolicyKey(page, card, "agent-in-the-box", "first_use_approval",
     "And anything not listed is still always deny — refused the instant it's dialed.");
@@ -144,7 +144,7 @@ test("V03b act 1 — the agent in the box", async () => {
   const offlist = await pillCmd(card, 1);
   await typeInTerminal(page, offlist, card);
   await pollScreen(screen, /\b(403|refused|Could not resolve|Failed to connect)\b/i, "example.com was not refused inside the agent box");
-  await caption(page, "Now the agent's box dials an ordinary host off the allowlist — refused, exactly as it was for the human.");
+  await caption(page, "Now, in the agent's own box, we dial an ordinary host off the allowlist — refused, exactly as in the four tests. The boundary doesn't care whether an agent or a person is typing.");
   await beat(page, PACE.read);
 
   // Step 3 — the record.
@@ -178,7 +178,7 @@ test("V03b act 2 — record a policy", async () => {
 
   await walkPolicyKey(page, card, "record-a-policy", "allow_all_egress",
     "The allowlist is empty, but allow all egress is switched on — wide open on purpose. Wide open to public hosts, that is: the addresses walled off in test four are still refused, policy or no policy.",
-    "You can't record what a policy already blocks.");
+    "You can't watch what a policy already blocks.");
 
   // Boots the sandbox; the record-a-policy proof reads the audit panel, not the
   // terminal, so the screen locator is not needed here.
@@ -261,7 +261,7 @@ test("V03b act 3 — once, or for good", async () => {
   await decide(
     page,
     "Approve",
-    "Approve it — but only this one connection.",
+    "Approve it — through the caret beside Approve, scoped Once: only this one connection.",
     "example.com",
     "once",
     "An approval scoped Once covers one connection — the next one that matches — and then it's spent.",

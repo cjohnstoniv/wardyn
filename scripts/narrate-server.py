@@ -95,6 +95,15 @@ _SUBS = [
     # Kokoro reads a bare "read" as past tense after "the"; pin the phrases.
     ("read-back", "reed-back"),
     ("read it back", "reed it back"),
+    # "use" the VERB (/juːz/) where espeak guesses the noun — validated against
+    # the venv phonemizer 2026-08-24 ("yooz" → /juːz/). NOTE: the r2 adjudication's
+    # H1 pin ("first-use approval" → "first yoos approval") was REJECTED by that
+    # same validation: the phrase already reads /juːs/ correctly, and "yoos"
+    # phonemizes to /juːz/ — the exact inversion it meant to prevent.
+    ("use it, not have it", "yooz it, not have it"),
+    ("demos ahead use this key", "demos ahead yooz this key"),
+    # The colon in the header name is inaudible; a comma lands the pause (r2 H3).
+    ("Authorization: Bearer", "Authorization, Bearer"),
     # The quote marks around 'forbidden' are inaudible; a comma lands the beat.
     ("Not 'forbidden'.", "Not, forbidden."),
     # "PyPI" reads as "pie-pie" bare:

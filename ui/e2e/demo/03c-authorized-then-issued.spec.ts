@@ -116,10 +116,13 @@ test("V03c act 1 — authorized, not issued", async () => {
   await walkPolicyKey(page, card, "authorized-not-issued", "scope",
     "Same scope — that host, that header, and the secret's name; never its value.");
   await walkPolicyKey(page, card, "authorized-not-issued", "requires_approval",
-    "Two lines changed in the grant. Requires approval is now true — a human decides at the moment it's minted, that is, issued.");
+    "Two lines changed in the grant. Requires approval is now true — a human decides at the moment it's minted, that is, issued. And one yes is one mint: single-use comes with the gate, not from a third line.");
   await walkPolicyKey(page, card, "authorized-not-issued", "ttl_seconds",
     "And a time to live: once minted, the proxy's injection rule lasts five minutes, then expires on its own. Spent means one mint — a third ask is refused as already minted — and the time limit caps how long that one mint stays usable.");
   await spotlight(page, null);
+  await caption(page,
+    "And one difference from the core, up front: this grant is asked for. The core's box never knew a secret was involved; this one must request the mint.");
+  await beat(page, PACE.read);
 
   const screen = await startAndBoot(page, card, "authorized-not-issued");
   const mintCmd = await pillCmd(card, 0);
@@ -191,12 +194,12 @@ test("V03c act 2 — a bearer token for a real API", async () => {
 
   await caption(page, "That was the mechanism stripped to its bones — a made-up header on a made-up host.");
   await beat(page, PACE.read);
-  await caption(page, "Here it is the way you'd actually write it.");
+  await caption(page, "Here it is the way you'd actually write it — against a service the proxy can read.");
   await beat(page, BEAT_SHORT);
 
   const card = await openDemo(page, "rest-api-token", "A bearer token for a real API");
   await spotlight(page, page.getByTestId("demo-policy-rest-api-token"));
-  await caption(page, "A plain REST call to a third-party service — a Stripe, a Slack, your own API.");
+  await caption(page, "A plain REST call carrying the header real services expect — an internal API, a metrics endpoint, plain web traffic inside your network.");
   await beat(page, PACE.read);
   await caption(page, "It carries Authorization: Bearer, where the token is a Wardyn secret the box never holds.");
   await beat(page, PACE.read);
@@ -224,7 +227,7 @@ test("V03c act 2 — a bearer token for a real API", async () => {
   await caption(page, "The request left this box without an Authorization header; the proxy stitched one on at the boundary, after the sandbox had already sent it.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "It can do that because this request is plain, unencrypted web traffic — the proxy reads it and edits it. Encrypted traffic Wardyn opens for two kinds of host only: the model providers, and a corporate mirror you configured with its own token. Every other encrypted connection is a tunnel the proxy can't read.");
+  await caption(page, "It can do that because this request is plain, unencrypted web traffic — the proxy reads it and edits it. Encrypted traffic Wardyn opens for two kinds of host only: the model providers, and a corporate mirror you configured with its own token. Every other encrypted connection is a tunnel the proxy can't read. An encrypted third-party API — a Stripe, a Slack — is in that last set: there's no header to edit. Which is exactly why the next credential doesn't use a header at all.");
   await beat(page, PACE.read);
 
   await typeInTerminal(page, await pillCmd(card, 1), card);
@@ -281,7 +284,7 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
   await caption(page, "That's the gate deciding — not an error.");
   await beat(page, BEAT_SHORT);
   // [OWNER SLOT — drafted]
-  await caption(page, "The gate stops a caller that doesn't hold the run's own secret. It doesn't stop the run — that's what the grant is for. What the run gets is the token on a pipe at the moment Git asks, and every mint is on the record.");
+  await caption(page, "The gate stops a caller that doesn't hold the run's own secret — it isn't a boundary against the run; the run is who the grant is for. Anything in the box that can read that secret can mint, as often as it likes. What bounds it is the token's own repo scope — and a row in the record for every mint.");
   await beat(page, PACE.read);
 
   // Step 1: present the gate token.
@@ -293,7 +296,7 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
   // Step 2: same call, now the PAT comes back on stdout.
   await typeInTerminal(page, await pillCmd(card, 2), card);
   await pollScreen(screen, /password=/, "the gated helper call never emitted the PAT on stdout");
-  await caption(page, "Now the credential helper returns Git's credential lines on standard output — and nowhere else.");
+  await caption(page, "Now the credential helper returns Git's credential lines on standard output — the only place Wardyn ever puts them.");
   await beat(page, PACE.read);
   await caption(page, "In a real clone git reads them straight off this pipe, and they're gone.");
   await beat(page, PACE.read);
