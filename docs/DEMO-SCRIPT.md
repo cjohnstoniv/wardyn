@@ -366,6 +366,21 @@ ffmpeg -ss 8 -t 2 -i narrated.mp4 -af volumedetect -f null -   # expect ~-23 dB
 ffmpeg -ss 12.6 -t 1 -i narrated.mp4 -af volumedetect -f null - # expect -91 dB
 ```
 
+Both of those read the *timeline*. To check the **picture** against it — the
+defect neither one can see — measure where each caption actually changed:
+
+```sh
+scripts/demo-drift.py --video ui/test-results/demo-video-10/console.webm \
+                      --timeline ui/test-results/demo-video-10/narration.json
+```
+
+Takes ~2s. `rate 1.0000` is a take in sync; anything past ±1% exits 1 and the
+narration slides that fraction of elapsed time late (take 10 measured 1.0320 —
+6.4s by the end). Run it on the RAW `console.webm` with the pre-ffwd
+`narration.json`: `demo-ffwd.py` re-times cues and picture together, so a
+fast-forwarded pair hides nothing but proves nothing either. `--strip <t>` dumps
+a filmstrip PNG around a picture time to confirm a row by eye.
+
 ## When there is no model quota: `WARDYN_DEMO_SHELL_ACT5=1`
 
 Act 5 normally launches a real Claude Code agent. If the subscription is out of
