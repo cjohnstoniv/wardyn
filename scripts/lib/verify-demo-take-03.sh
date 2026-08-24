@@ -7,8 +7,9 @@
 # 03d (the kinds that can't use a header).
 #
 # OUT OF LINE ON PURPOSE. scripts/verify-demo-take.sh sits within ~20 lines of
-# scripts/check-file-size.sh's 1000-line threshold; check_video_13 lives in its
-# own lib for the same reason. Everything here is a FUNCTION, never a subshell
+# scripts/check-file-size.sh's 1000-line threshold; 0.6's check_video_13 lives in
+# its own lib (scripts/lib/verify-demo-take-13.sh, arriving with prep→main) for
+# the same reason. Everything here is a FUNCTION, never a subshell
 # or a pipeline: ok()/bad() increment PASS/FAIL counters in the caller that must
 # survive to the summary, and a subshell is exactly how this script once
 # reported success over a real failure.
@@ -108,7 +109,7 @@ _v03_cues() {
 # over the per-run audit files, in the API's own ascending time order.
 _v03_py_head() {
   cat <<'PY'
-import json, os, sys
+import json, os, re, sys
 D = sys.argv[1]
 def ev(demo):
     try:
@@ -134,7 +135,10 @@ def rows(demo, *actions, **kw):
         out.append(e)
     return out
 def at(e):
-    return e.get("time") or ""
+    # RFC3339Nano as a comparable string: Go trims trailing zeros, so pad the
+    # fraction to nine digits ("…36.26063Z" must sort after "…36.260631Z"'s peers).
+    t = e.get("time") or ""
+    return re.sub(r"\.(\d+)(Z|[+-]\d\d:\d\d)$", lambda m: "." + m.group(1).ljust(9, "0") + m.group(2), t)
 def t0(l):
     return at(l[0]) if l else ""
 def decides(demo, host, decision):
@@ -149,13 +153,13 @@ PY
 # Compose the preamble and this arm's body into one program and run it, K V
 # lines to $1. Deliberately not a pipeline: the `while read` that follows in
 # each arm calls ok()/bad(), whose counters must survive to the summary.
-# stderr is NOT silenced — a broken program here would otherwise emit zero
-# lines and therefore zero verdicts, which is the failure mode this whole
-# script exists to prevent.
+# stderr is NOT silenced, and a non-zero exit is a bad() of its own — a broken
+# program here would otherwise emit zero (or fewer) lines and therefore zero
+# (or fewer) verdicts, which is the failure mode this whole script exists to prevent.
 _v03_run_py() {
   local prog="/tmp/_demo_v03prog.$$"
   { _v03_py_head; cat; } > "${prog}"
-  python3 "${prog}" "${V03_DIR}" > "$1"
+  python3 "${prog}" "${V03_DIR}" > "$1" || bad "the audit program crashed (exit $?) — every verdict after the crash is silently missing"
   rm -f "${prog}"
 }
 
@@ -164,13 +168,13 @@ _v03_run_py() {
 # basics. Every expectation below is a claim one of those cards makes out loud.
 # ---------------------------------------------------------------------------
 check_video_03a() {
+head_ "Video 03a · narration"
+_v03_cues 95
+
 head_ "Video 03a · the runs this take launched"
 _v03_load sealed-box fail-then-approve held-at-the-door lines-that-cant-be-crossed \
           write-only-by-design key-never-in-the-box || return
 _v03_no_canary
-
-head_ "Video 03a · narration"
-_v03_cues 95
 
 head_ "Video 03a · the audit trail"
 _v03_run_py /tmp/_demo_v03a.$$ <<'PYEOF'
@@ -195,9 +199,12 @@ out("V03A_FTA_ORDER", bool(p and d and a and p < d < a))
 # rehearsal (2026-08-24): a wait_for_review request is held IN FLIGHT and emits
 # NO egress.pending row; the first row is the approval.decide. So the beat is
 # graded on decide → allow, not on a pending that never exists.
-hd = t0(decides("held-at-the-door", "example.com", "APPROVED"))
-ha = t0(rows("held-at-the-door", "egress.allow", host="example.com"))
-out("V03A_HELD_ORDER", bool(hd and ha and hd < ha))
+# Two audit writers (the proxy's egress row, the approver's decide row) land within
+# ~300 ms of each other in either order — join them causally instead: the allow row
+# carries the decide's approval_id.
+hd = decides("held-at-the-door", "example.com", "APPROVED")
+ha = rows("held-at-the-door", "egress.allow", host="example.com")
+out("V03A_HELD_ORDER", bool(hd and ha and any((a.get("data") or {}).get("approval_id") == (hd[0].get("data") or {}).get("approval_id") for a in ha)))
 out("V03A_HELD_WIKI_DENIED", bool(decides("held-at-the-door", "wikipedia.org", "DENIED"))
                               and bool(rows("held-at-the-door", "egress.deny", host="wikipedia.org")))
 out("V03A_HELD_WIKI_CLEAN", not rows("held-at-the-door", "egress.allow", host="wikipedia.org"))
@@ -255,7 +262,7 @@ while read -r k v; do
     V03A_LINES_OPEN)   [[ "$v" == True ]] && ok "lines: example.com allowed by policy — the door really was wide open" || bad "lines: no policy-allowed egress.allow for example.com — allow_all_egress never took effect, so 'and yet' has nothing to contrast with" ;;
     V03A_LINES_HARD)   [[ "$v" == True ]] && ok "lines: no link-local or private address was ever allowed" || bad "A HARD LINE WAS CROSSED — a link-local/private address got an egress.allow with the policy wide open" ;;
     V03A_LINES_META)   case "$v" in
-                         none) ok "lines: nothing logged for 169.254.169.254 — the probe never reached the proxy (docs/DEMO-SCRIPT.md's documented shape)" ;;
+                         none) ok "lines: nothing logged for 169.254.169.254 — the probe died at the network layer (the older build's shape, per docs/DEMO-SCRIPT.md)" ;;
                          builtin:*) ok "lines: 169.254.169.254 refused beneath the policy (rule_source ${v})" ;;
                          *) bad "lines: 169.254.169.254 was decided by '${v}' — the metadata address must be refused by a builtin guard, not by policy (a policy line is a line you could change)" ;;
                        esac ;;
@@ -277,12 +284,12 @@ rm -rf "${V03_DIR}"
 # later own deeply. agent-in-the-box is the series' only model-quota-bound act.
 # ---------------------------------------------------------------------------
 check_video_03b() {
+head_ "Video 03b · narration"
+_v03_cues 34
+
 head_ "Video 03b · the runs this take launched"
 _v03_load agent-in-the-box record-a-policy once-or-for-good || return
 _v03_no_canary
-
-head_ "Video 03b · narration"
-_v03_cues 34
 
 head_ "Video 03b · the audit trail"
 _v03_run_py /tmp/_demo_v03b.$$ <<'PYEOF'
@@ -350,12 +357,12 @@ rm -rf "${V03_DIR}"
 # is WHEN a credential is issued, and to whom.
 # ---------------------------------------------------------------------------
 check_video_03c() {
+head_ "Video 03c · narration"
+_v03_cues 47
+
 head_ "Video 03c · the runs this take launched"
 _v03_load authorized-not-issued rest-api-token pat-stdout-only || return
 _v03_no_canary
-
-head_ "Video 03c · narration"
-_v03_cues 47
 
 head_ "Video 03c · the audit trail"
 _v03_run_py /tmp/_demo_v03c.$$ <<'PYEOF'
@@ -419,14 +426,14 @@ rm -rf "${V03_DIR}"
 # graded on the run they must NOT have created.
 # ---------------------------------------------------------------------------
 check_video_03d() {
+head_ "Video 03d · narration"
+_v03_cues 34
+
 head_ "Video 03d · the runs this take launched"
 _v03_load ssh-briefly-resident || return
 _v03_absent github-app-broker "Start stays disabled without a configured GitHub App, so no sandbox is ever built (the closed door IS the beat)"
 _v03_absent sts-fail-closed "the 422 fires at run-create, before any sandbox exists (the refusal IS the demo)"
 _v03_no_canary
-
-head_ "Video 03d · narration"
-_v03_cues 34
 
 head_ "Video 03d · the audit trail"
 _v03_run_py /tmp/_demo_v03d.$$ <<'PYEOF'

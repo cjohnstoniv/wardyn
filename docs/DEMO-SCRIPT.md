@@ -531,8 +531,8 @@ assumes the obvious thing:
   `DemoRunControls` and works on both.
 - **"Lines that can't be crossed" logs its two headline denials as `egress.deny`
   rows with `rule_source=builtin:private-ip`** — the sandboxes carry the lowercase
-  `http_proxy` too now, so the plain-http probes to `169.254.169.254` and
-  `192.168.1.1` reach the proxy and are refused by the built-in private-address
+  `http_proxy` too now, so a plain-http probe to `169.254.169.254` (or, if typed,
+  `192.168.1.1` — episode 03a types only the metadata one) reaches the proxy and is refused by the built-in private-address
   rule, beneath the policy (`allow_all_egress` cannot open them). `https://example.com`
   leaves via CONNECT and logs `egress.allow`. An earlier build had no proxy in the
   plain-http path and the probes died at the network layer with no row at all —

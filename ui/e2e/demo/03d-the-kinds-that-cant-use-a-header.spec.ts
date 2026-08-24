@@ -64,6 +64,7 @@ import {
   startAndBoot,
   walkPolicyKey,
   frameRun,
+  noteDemoRun,
 } from "./demos";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
@@ -212,6 +213,9 @@ test("V03d act 2 — a token the sandbox never sees", async () => {
     card.getByTestId("demo-needs-github-app"),
     "the github-app gate copy never rendered — is a GitHub App configured on this stack?",
   ).toBeVisible({ timeout: 30_000 });
+  // The gate means no run was ever created: record the ABSENCE for the grader
+  // (noteDemoRun warns "no run id" on a correct take — that warning is the lesson).
+  await noteDemoRun(page, "github-app-broker");
   await spotlight(page, card.getByTestId("demo-needs-github-app"));
   await caption(page, "And because that token comes from the live GitHub API, there's nothing to fake.");
   await beat(page, PACE.read);
@@ -256,6 +260,8 @@ test("V03d act 3 — no identity, no credential", async () => {
   await expect(refused, "the create refusal never rendered on the card — expected a 422 from run-create").toBeVisible({
     timeout: 60_000,
   });
+  // The 422 means no run was ever created: record the ABSENCE for the grader.
+  await noteDemoRun(page, "sts-fail-closed");
   await centerInFrame(refused);
   await spotlight(page, refused);
   await caption(page, "It fires at run-create. No sandbox is ever built.");
