@@ -6,8 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 # UI batch 2 — mock round (D9, D33, D7, D8, M3)
 
 Mock round for five items whose *backend* landed on `feat/v0.6f-ui`'s parent history
-(`75e1c300` D7+D9, `dc50ca1c` D8) or is designed but unbuilt (M3, per
-`docs/design/member-role-desktop.md`). No `ui/src` code in this stage — owner law: the
+(`75e1c300` D7+D9, `dc50ca1c` D8, `0027f514` M3's M1–M4 — ownership + member-safe mounts).
+Only M3's UI half (M5, per `docs/design/member-role-desktop.md`) is unbuilt. No `ui/src`
+code in this stage — owner law: the
 mock is UI source of truth, and the canon strings below become app strings verbatim when
 implementation lands (same shape as `permissions-copy.ts` following
 `permissioning-prompt.md`). Design-verified before implementation begins.
@@ -32,9 +33,14 @@ worktree's base).
   defaults. The gap is copy: `wait_for_review`'s body still reads open-ended.
 - **D33** — no backend gap. Confined's card body just says something the default rule
   (`deny_with_review`) doesn't do.
-- **M3** — nothing shipped. This is a forward mock for the `WARDYN_MEMBER_WORKSPACE_ROOTS`
-  /`_MAP` constraint (member-role-desktop.md §c, §DECISIONS O1/O3) as it will surface in
-  the one screen that authors a member `local_dir` source: `AddWorkspaceDialog`.
+- **M3** — the backend is merged (`0027f514`): `WARDYN_MEMBER_MODE`/`_WORKSPACE_ROOTS`/`_MAP`
+  config (`cmd/wardynd/boot_flags.go`), `owned_by` ownership stamping on `POST /workspaces`
+  (migration `0048`, `internal/api/workspaces.go:379-402`), and `ValidateMemberMountSource`
+  bind-time enforcement (`internal/runner/member_mount.go`, threaded through
+  `internal/api/runs_dispatch.go`). Only the UI (M5) is unbuilt. This is a forward mock for
+  how the merged `WARDYN_MEMBER_WORKSPACE_ROOTS`/`_MAP` constraint (member-role-desktop.md
+  §c, §DECISIONS O1/O3) will surface in the one screen that authors a member `local_dir`
+  source: `AddWorkspaceDialog`.
 
 ---
 
@@ -183,7 +189,7 @@ spending row width on it.
 | id | string |
 |---|---|
 | `d7:telemetry-tag-label` | `Agent telemetry` |
-| `d7:telemetry-tag-title` | `The agent CLI's own diagnostics endpoint, not something this run chose to reach. Approve or deny it like any other host.` |
+| `d7:telemetry-tag-title` | `The agent CLI's usual diagnostics endpoint. Approve or deny it like any other host.` |
 
 ### States covered
 
@@ -224,23 +230,32 @@ doesn't own.
 ```
 BEFORE                                                    AFTER
 ┌ ● Hold it for approval ───────────────────────┐         ┌ ● Hold it for approval ───────────────────────┐
-│ The connection waits, live, until you approve  │         │ The connection waits, live, for up to 30       │
-│ or deny it. Nothing is refused behind your      │    →    │ seconds. Decide in time and it goes through;   │
-│ back.                                           │         │ miss the window and it's refused — the         │
+│ The connection waits, live, until you approve  │         │ The connection waits, live, for the standard   │
+│ or deny it. Nothing is refused behind your      │    →    │ 30-second window. Decide in time and it goes   │
+│ back.                                           │         │ through; miss it and it's refused — the        │
 │                                                  │         │ approval itself stays open for you to decide.  │
 └──────────────────────────────────────────────────┘         └──────────────────────────────────────────────────┘
 ```
 
-The `30 seconds` figure is the shipped default, hard-coded here the same way
-`HOLD_TIMEOUT_MS` already is client-side (with the same ponytail note that pin carries:
-wire it to the policy's real `first_use_hold_seconds` if a caller ever launches with a
-non-default hold — out of scope today because nothing in the wizard sets one yet).
+The `30 seconds` figure is the shipped *default*, hard-coded here the same way
+`HOLD_TIMEOUT_MS` already is client-side — worded as "the standard 30-second window"
+rather than a flat promise, because it isn't universally true: a saved `RunPolicySpec`
+(picked in the wizard's rail — `new-run-screen.tsx:736-745` renders under
+`confinement === "saved"` same as any other selection) can carry its own
+`first_use_hold_seconds` (shipped in `dc50ca1c`), and this card still renders off
+`state.firstUseApproval` regardless of which confinement mode is selected
+(`new-run-screen.tsx:717-722`, patched from the loaded spec at line 158). A saved policy
+authored with a non-default hold makes the flat "30 seconds" wrong on that render path;
+this mock accepts that display gap rather than closing it (wiring the card to the
+selected policy's real `first_use_hold_seconds` is a separate, larger change — same
+"kept out of scope" boundary as the wizard-field question above) and picks wording that
+reads as the common case, not a per-run guarantee.
 
 ### Canon strings — `network-dialog.tsx` (`UNLISTED_RULES`)
 
 | id | current string (lines 63) | new string |
 |---|---|---|
-| `d8:wait-for-review-body` | `The connection waits, live, until you approve or deny it. Nothing is refused behind your back.` | `The connection waits, live, for up to 30 seconds. Decide in time and it goes through; miss the window and it's refused — the approval itself stays open for you to decide.` |
+| `d8:wait-for-review-body` | `The connection waits, live, until you approve or deny it. Nothing is refused behind your back.` | `The connection waits, live, for the standard 30-second window. Decide in time and it goes through; miss it and it's refused — the approval itself stays open for you to decide.` |
 
 No change to `deny_with_review` or `always_deny` bodies (accurate already) or to
 `live-approvals.tsx`'s own `waiting` label / `RUN_COCKPIT.waitingHeld` (`"N waiting ·
@@ -259,22 +274,37 @@ forward-looking promise, and stays true either way.
 
 ## M3 — member local_dir onboarding, root-constrained
 
-Forward mock: no code exists yet on any branch (M1–M4 of `member-role-desktop.md` are all
-unbuilt). This mocks the ONE screen `member-role-desktop.md`'s M5 row names for it —
-`AddWorkspaceDialog` — under the constraints M3 introduces (`WARDYN_MEMBER_WORKSPACE_ROOTS`
-/`_MAP`, the dotfile deny-list, §DECISIONS O1/O3) and the ownership model M2 introduces
-(a member's `POST /workspaces` becomes allowed, stamped `owned_by`).
+UI mock for shipped backend: `0027f514` (M1–M4 of `member-role-desktop.md`) is merged —
+`POST /workspaces` is already member-allowed and stamps `owned_by` (`internal/api/routes.go:254`,
+`internal/api/workspaces.go:379-402`), `ValidateMemberMountSource` already enforces the
+root allowlist and credential-dotfile deny at bind time (`internal/runner/member_mount.go`),
+and `WARDYN_MEMBER_WORKSPACE_ROOTS`/`_MAP` are already read at boot (`cmd/wardynd/boot_flags.go`).
+Only M5 — the UI — is unbuilt. This mocks the ONE screen `member-role-desktop.md`'s M5 row
+names for it — `AddWorkspaceDialog` — under the root/dotfile constraints the merged backend
+already enforces (§DECISIONS O1/O3).
 
 **Placement.**
 
-1. `ui/src/app/components/screens/workspaces.tsx` — the blanket `!operator` gate on "Add
-   workspace" (line 118, and the dialog's own operator-only refusal screen,
-   `add-workspace-dialog.tsx:179-195`) lifts for `POST /workspaces` per
-   `member-role-desktop.md`'s route table ("member-allowed, stamps `owned_by`"). The
-   `PageHeader` description (line 114) becomes role-aware, mirroring the pattern
-   `runs.tsx:268-270` already uses for "Your runs · N": a member sees their own owned
-   workspaces plus any operator-owned ones they hold a grant for (§b's `handleListWorkspaces`
-   disposition), never another member's owned rows.
+1. `ui/src/app/components/screens/workspaces.tsx` has three sites gating today on
+   `!operator` that all need to lift together, because `POST /workspaces` is no longer
+   operator-only: the header's disabled "Add workspace" button (line 118) and its adjacent
+   `OPERATOR_ONLY_REASON` chip (line 117), and the zero-workspaces `EmptyState`'s disabled
+   "Add your first workspace" button (line 161) and its `OPERATOR_ONLY_REASON`-appended
+   description (line 158) — a brand-new member's most likely first view. All four collapse
+   to the operator behavior that already exists at each site (button enabled, no chip, plain
+   description) once `!operator` stops gating workspace creation; no new member-specific
+   copy is needed for the empty state, since it becomes the operator's existing string.
+   Separately, the `PageHeader` description itself (line 114) becomes role-aware, mirroring
+   the pattern `runs.tsx:268-270` uses for "Your runs · N" — except the shipped
+   `handleListWorkspaces` (`internal/api/workspaces.go:268-297`) returns a member's own
+   owned rows **union every operator-owned row**, not a grant-filtered subset: the
+   `capWorkspace` grant gates only *launching* a run against a workspace, never the list
+   (the handler's own comment says so explicitly, to avoid a per-row capability check on
+   the console's hot path). So a header reading "Your workspaces · N" would overclaim
+   exclusivity for rows that are actually shared with every other member. This mock drops
+   "Your" instead: `` (n: number) => `Workspaces · ${n}` `` — still member-scoped (never
+   another member's owned rows, per the union above), just not personal-possessive about
+   operator-owned rows that aren't.
 2. `ui/src/app/components/screens/add-workspace-dialog.tsx` — the `kind === "local_dir"`
    branch (lines 242–252) grows a root-constraint hint and a conditional writable control
    for a member session; the `repo`/`ephemeral` branches and the whole Advanced disclosure
@@ -296,7 +326,7 @@ trust — enforcement is `ValidateMemberMountSource` at bind time
 ```
 OPERATOR                                          MEMBER
 ┌ Workspaces ──────────────────────────┐          ┌ Workspaces ──────────────────────────┐
-│ A repo or directory a run can attach.│          │ Your workspaces · 3                   │
+│ A repo or directory a run can attach.│          │ Workspaces · 3                        │
 │ Runs can only attach what's listed   │          │                       [+ Add workspace]│
 │ here.               [+ Add workspace]│          └────────────────────────────────────────┘
 └────────────────────────────────────────┘
@@ -361,7 +391,7 @@ member-facing "why not" moments)
 | `m3:root-hint` | `(root, string interpolated)` → `` Mounted from this machine into the sandbox. Must be under ${root} — your admin set this boundary. `` |
 | `m3:local-dir-unavailable-option` | `Local directory · unavailable` |
 | `m3:local-dir-unavailable-body` | `Local directories aren't set up for your account. Ask your admin to configure a projects root, or use a repository.` |
-| `m3:workspaces-header-member` | `` (n: number) => `Your workspaces · ${n}` `` (mirrors `runs.tsx`'s `` `Your runs · ${runs.length}` `` exactly) |
+| `m3:workspaces-header-member` | `` (n: number) => `Workspaces · ${n}` `` (deliberately *not* `runs.tsx`'s `` `Your runs · ${n}` `` shape — that list really is member-exclusive; this one includes every operator-owned row too, so "Your" would overclaim) |
 
 ### States covered
 
