@@ -108,6 +108,7 @@ ds-bundle/
 !/docs/design/permissioning-prompt.md
 !/docs/design/permissioning-mock/
 !/docs/design/member-role-desktop.md
+!/docs/design/ui-batch2-mock.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
