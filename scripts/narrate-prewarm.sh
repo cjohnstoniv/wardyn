@@ -52,6 +52,28 @@ PYEOF
 )
 LINES+=("${JOINED[@]}")
 
+# The TERMINAL lane's lines live in the beat scripts, not in a spec, and the
+# cache key is the spoken TEXT — so a beats line that no spec repeats renders
+# inline mid-take, once per line, on camera (the 2026-08-24 pronunciation fix
+# re-keyed every line it touched). Same best-effort rule as above: the typist's
+# say "…" and chapter "Title" "Sub" — spoken as ONE line "Title. Sub."
+# (demo-typist.sh's own join) — with anything carrying a ${…} expansion skipped,
+# since its text is not known until the take runs.
+mapfile -t BEATS < <(
+  python3 - "${REPO_ROOT}"/scripts/demo-beats/*.sh <<'PYEOF'
+import re, sys
+for path in sys.argv[1:]:
+    try: src = open(path).read()
+    except OSError: continue
+    for m in re.finditer(r'^\s*(say|chapter)\s+"([^"\\]*)"(?:\s+"([^"\\]*)")?', src, re.M):
+        kind, a, b = m.groups()
+        line = f"{a}. {b}." if kind == "chapter" and b else a
+        if line and "${" not in line:
+            print(line)
+PYEOF
+)
+LINES+=("${BEATS[@]}")
+
 if [[ "${#LINES[@]}" -eq 0 ]]; then
   echo "prewarm: found no caption text — skipping"
   exit 0
