@@ -293,7 +293,10 @@ export function DemoRunControls({
             row appears, a human decides, the command resumes. At 70vh the strip
             lives below the fold, so the decision happens off screen and the
             resume looks like magic. 42vh keeps both halves in one 1080p frame. */}
-        <AttachTerminal runId={run.id} heightClass="h-[42vh]" />
+        {/* 36vh (not 42) so the policy above, the terminal, and the audit
+            panel below all fit one 1080p frame while a demo runs — the cockpit
+            view. A few command lines read fine at this height. */}
+        <AttachTerminal runId={run.id} heightClass="h-[36vh]" />
         <LiveApprovals
           runId={run.id}
           idleHint="Off-policy egress you trigger surfaces here to approve or deny, live."

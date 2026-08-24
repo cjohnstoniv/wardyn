@@ -143,19 +143,10 @@ export default function DemoDetail({
         </div>
       </Section>
 
-      <Section title="Set up a sandbox like this yourself">
-        <ol className="space-y-1.5">
-          {demo.setupUi.map((step, i) => (
-            <li key={i} className="flex gap-2 text-sm text-muted-foreground">
-              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[0.6875rem] font-medium text-foreground">
-                {i + 1}
-              </span>
-              <span className="min-w-0 leading-snug">{step}</span>
-            </li>
-          ))}
-        </ol>
-      </Section>
-
+      {/* "Try it" sits directly under the policy so a running demo frames the
+          policy, the terminal, and the audit/approvals together — everything
+          relevant in one shot. The manual "set up yourself" steps are the
+          supplementary alternative, so they move to the bottom. */}
       <Section title="Try it">
         <DemoRunControls
           demo={demo}
@@ -169,6 +160,19 @@ export default function DemoDetail({
           onEnd={(runId) => end(demo, runId)}
           onTurnIntoPolicy={setProfileRunId}
         />
+      </Section>
+
+      <Section title="Set up a sandbox like this yourself">
+        <ol className="space-y-1.5">
+          {demo.setupUi.map((step, i) => (
+            <li key={i} className="flex gap-2 text-sm text-muted-foreground">
+              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[0.6875rem] font-medium text-foreground">
+                {i + 1}
+              </span>
+              <span className="min-w-0 leading-snug">{step}</span>
+            </li>
+          ))}
+        </ol>
       </Section>
 
       <ProfileReview runId={profileRunId} onClose={() => setProfileRunId(null)} />
