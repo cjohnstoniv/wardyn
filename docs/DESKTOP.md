@@ -169,11 +169,57 @@ previous document held. Keep it to corporate network facts — proxy, mirrors,
 SCM hosts — and keep posture in the env file, where a missing line is a missing
 line and not a reverted setting.
 
-## What is not built yet
+## The install lane
 
-This document and `deploy/desktop/wardyn.env.example` are the envelope's
-*contract*. The installer that mints `age.key`, lays down `/etc/wardyn/`, and
-registers the daemon with the platform's service manager (a launchd plist on
-macOS, a systemd unit on Linux) is a separate, later piece of work — it does not
-exist in the tree yet. Until it does, treat this as the specification an
-installer has to satisfy, not as a shipped install path.
+Three files, all under [`deploy/desktop/`](../deploy/desktop/):
+
+| File | Role |
+|---|---|
+| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten), and registers [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd at wherever the installer bundle happens to be sitting on disk. |
+| `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
+| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, adding only the `/etc/wardyn:/etc/wardyn:ro` mount `WARDYN_DEFAULT_POLICY` needs to actually see the managed policy file), waits for `/healthz`, and idempotently applies `site-config.json` if MDM has delivered one. |
+
+This is a macOS/launchd installer today; the Linux/systemd path described in
+the topology diagram above is not built yet.
+
+Everything the plist and the wrapper do is exercised, machine-verifiable and
+daemon-free: `scripts/test-desktop-profile.sh` (wired into `make test-scripts`)
+checks the envelope parses, every variable it sets is a real documented one,
+the policy path and the compose mount agree, and the plist is valid XML.
+`.github/workflows/ci.yml`'s `desktop-envelope` job goes further and actually
+boots the compose profile with this commit's example envelope, then proves the
+three things this document claims: `/policies/default` really does serve the
+managed file, a run naming no policy really does resolve to that ceiling, and
+a synthesized profile really is clamped to it (see "Tamper posture" above for
+what "clamped" does and does not mean once the caller is an admin).
+
+## Try it, once, on a real Mac
+
+Everything above is verified against a compose stack on a Linux CI runner.
+Nobody has run the installer against real launchd on a real Mac — that step is
+still owed. Run this once on a macOS machine you're willing to have `sudo`
+install a LaunchDaemon on, and paste back the output (not a summary of it):
+
+```sh
+git clone https://github.com/cjohnstoniv/wardyn.git && cd wardyn
+sudo ./deploy/desktop/install.sh
+
+# MDM hasn't delivered wardyn.env/secret.env/policy.json yet on a bare pilot
+# box — stand in for it by hand, using the example + the same demo.json
+# ceiling the compose stack itself falls back to:
+sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
+sudo sed -i '' 's/\$UPN/you@example.com/' /etc/wardyn/wardyn.env
+sudo cp examples/policies/demo.json /etc/wardyn/policy.json
+
+sudo launchctl kickstart -k system/com.wardyn.daemon
+sleep 5
+sudo launchctl print system/com.wardyn.daemon | head -20
+curl -fsS http://127.0.0.1:8080/healthz && echo OK
+curl -fsS http://127.0.0.1:8080/api/v1/policies/default | diff - <(cat /etc/wardyn/policy.json | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))') || true
+```
+
+That last line is expected to differ in whitespace only — the point is
+confirming a real launchd job, on a real Mac, against a real Docker Desktop or
+Colima install, actually brings the stack up and serves the managed policy.
+Anything else it prints (a launchd load failure, a Colima `WARDYN_DOCKER_SOCK`
+miss, a healthz timeout) is exactly the gap this smoke run exists to find.

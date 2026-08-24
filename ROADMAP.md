@@ -245,6 +245,29 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   sensor ceilings that investigation measured are now stated where operators
   read them — including `kernel.network.connect` staying permanently dead on
   WSL2 + Docker Desktop, which is environmental and measured, not a bug.
+- **Desktop tier: a governed daemon on a managed laptop — the macOS install
+  lane, shipped-half.** What v0.7 was going to build from nothing, 0.6 shipped
+  the first half of: `deploy/desktop/` is a real, documented, machine-checked
+  configuration of the same compose stack every other single-host deployment
+  runs, not a separate build — `WARDYN_LOCAL_MODE`, a per-device `age.key`
+  minted by the installer and never by MDM, and the org's ceiling delivered as
+  an ordinary `policy.json` file ([docs/DESKTOP.md](docs/DESKTOP.md)). The
+  install lane itself — `install.sh`, a launchd `LaunchDaemon`, and the
+  `wardyn-desktop.sh` wrapper it runs — is macOS-only; the Linux/systemd path
+  the topology diagram shows is not built. **Member role: none, by design, on
+  the local-mode variant** — local-mode callers are *always* admins
+  (`Server.requireOperator`), so this tier's default posture has no member/
+  admin split at all, only "the developer is the operator." The envelope's
+  documented SSO variant does carry real OIDC member/admin RBAC (same code
+  path as every other tier), but `wardyn-desktop.sh`'s automatic
+  `site-config apply` only runs under local mode — under SSO it warns and
+  leaves that one step to a human, since the wrapper has no CLI-usable
+  credential once a real login is required. `scripts/test-desktop-profile.sh`
+  (`make test-scripts`) and `ci.yml`'s `desktop-envelope` job (boots the real
+  compose profile and proves `/policies/default`, no-policy resolution and
+  Recording Mode synthesis all honor the managed ceiling) are the honesty
+  gates; a scripted smoke run against a real Mac is the one piece still
+  owed — see [docs/DESKTOP.md](docs/DESKTOP.md) "Try it, once, on a real Mac".
 - **Extras.** The react-router advisory suppression is **deleted**:
   GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0 — the suppression had
   been carried on a stale note claiming only the 7 → 8 major fixed it — so the
@@ -264,11 +287,17 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   v1.0 row, and both [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)
   and [docs/OPERATIONS.md](docs/OPERATIONS.md) keep the honest, code-checked
   "Kubernetes: known gaps" list rather than letting the cloud-base framing imply
-  parity. The two designed-but-unscheduled candidates from the 0.5 campaign stay
-  unscheduled: the sentinel-class PAT lane (proxy-injected git PATs, never
-  resident) and routing an interactive run's tool approvals to the console the
-  way autonomous `hold` runs already do — both slot into 0.7/0.8 when scheduled,
-  not before.
+  parity. Of the two designed-but-unscheduled candidates from the 0.5 campaign,
+  one stays unscheduled — the sentinel-class PAT lane (proxy-injected git PATs,
+  never resident), which slots into 0.7/0.8 when scheduled, not before — and one
+  is now a named, dated decision rather than an open maybe: **C0, routing an
+  interactive run's tool approvals to the console the way autonomous `hold`
+  runs already do, is DEFERRED to v0.7.** Upstream pins `claude`'s
+  `--permission-prompt-tool` to non-interactive use, and the hook-based
+  alternative fails *open* on a timeout — the wrong default for an approval
+  gate. Self-service value collapses anyway: the human deciding the prompt can
+  already attach to the run and answer it directly, so the console route buys
+  convenience, not a capability that doesn't otherwise exist.
 
 ## Planned
 
@@ -277,15 +306,19 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 v0.7 → v0.8 is the remaining path to alpha: the same governance deployed to
 developer desktops (0.7), then the alpha RC (0.8). The cloud base and
-permissioning 0.6 owed are shipped — see "What v0.6 shipped" above.
-Designed-but-unscheduled candidates from the 0.5 campaign — the
-sentinel-class PAT lane (proxy-injected git PATs, never resident) and routing an
-interactive run's tool approvals to the console the way autonomous `hold` runs
-already do — slot into 0.7/0.8 when scheduled, not before.
+permissioning 0.6 owed are shipped — see "What v0.6 shipped" above, which now
+includes the desktop tier's macOS install lane; v0.7 is what's left of it
+(Linux/systemd, the enterprise-distribution polish) rather than the whole
+tier from scratch. The sentinel-class PAT lane (proxy-injected git PATs,
+never resident), the one remaining designed-but-unscheduled candidate from
+the 0.5 campaign, slots into 0.7/0.8 when scheduled, not before. **C0**
+(routing an interactive run's tool approvals to the console) is **DEFERRED to
+v0.7** for the reason stated under "What 0.6 deliberately did not ship"
+above — not unscheduled, decided.
 
 | Milestone | Scope |
 |---|---|
-| **v0.7** | **Enterprise desktop deployment.** The base for orgs deploying Wardyn *onto developer machines* (MacBooks first) the way enterprise application admins actually ship software — managed distribution and managed configuration per current common practice — with the same permissioning system as the k8s cloud mode, enforced locally: the org decides which egress, secrets, and images a developer's agents may use, the developer runs auto-agents inside that envelope. Wardyn becomes the sanctioned way an org lets its developers run agents at all |
+| **v0.7** | **Enterprise desktop deployment — the rest of it.** 0.6 already shipped the macOS half (`deploy/desktop/`: install lane, launchd, the envelope contract — [docs/DESKTOP.md](docs/DESKTOP.md)). What's left: the Linux/systemd installer the topology diagram already names, packaging/signing for real MDM distribution (a Jamf/Intune-ready payload, not a git checkout), and closing the SSO-variant gap where `wardyn-desktop.sh` can't self-apply `site-config.json` without a human login. **C0** (routing interactive tool approvals to the console) also lands here — see "What 0.6 deliberately did not ship" for why it waited |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · hash-chained audit + signed action receipts · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |

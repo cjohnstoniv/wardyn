@@ -458,6 +458,23 @@ the ceiling allows, and `workspace_mounts` dropped entirely — a member's
 policy can only ever get MORE restrictive than the operator's default, never
 less. An admin's own `inline_policy` is not clamped.
 
+**The desktop tier's standing honesty gap: the operator IS the admin.**
+[The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`, one laptop,
+one daemon) has no member role at all — local-mode callers are *always*
+admins (`Server.requireOperator`'s own doc says so), so the unclamped branch
+above is not an edge case there, it is the default. An `inline_policy` the
+developer submits through the normal console/API path is bounded by nothing
+`WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call — no
+root, no file edit, no MDM race. What still holds: the unclamped spec lands
+on the audit feed as `policy.inline` before `run.create`
+([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off the
+sandbox except `wardyn-proxy`, and the session is still recorded — so a
+developer who widens their own ceiling produces evidence that they did, on a
+device they cannot retroactively edit the org's copy of. It is a governance
+control, not a containment boundary against the operator holding the laptop.
+See [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly" for the
+full accounting — this paragraph is the pointer, that one is the source.
+
 ### Capabilities: what one member, or one group, may do
 
 The role split above is deployment-wide. A **capability grant** is per-human:
