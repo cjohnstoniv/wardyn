@@ -326,14 +326,18 @@ test("V03 act 2 — four ways the boundary holds", async () => {
   test.setTimeout(1_200_000);
   const page = stage();
 
-  await chapter(page, "What it stops", "Four boundary behaviors, proved on camera");
+  await chapter(page, "What it stops", "Every guardrail, proved on camera");
   await caption(page, "Setup is one thing.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Now let's see the boundary actually work.");
   await beat(page, PACE.read);
-  await caption(page, "Four small tests.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Four real sandboxes.");
+  // [OWNER SLOT — drafted] Re-framed for the restructure: this episode now
+  // films EVERY guardrail across both groups (egress + secrets), not just the
+  // four-test quartet — the old "Four small tests / Four real sandboxes" opener
+  // undercounted the whole episode. The four stay, scoped to the egress start.
+  await caption(page, "We'll walk every guardrail Wardyn puts around a run — where it can reach, and what it can hold.");
+  await beat(page, PACE.read);
+  await caption(page, "Start with the network. Four small tests, each in its own sandbox.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And every decision is visible on screen.");
   await beat(page, PACE.read);
