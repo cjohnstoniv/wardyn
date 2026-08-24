@@ -316,8 +316,12 @@ default role set, is denied at login instead ("no Wardyn role assigned").
 
 **What admin-only still means** — the writes with the widest blast radius stay
 gated on the role being exactly `admin` (`requireOperator`): the managed
-harness credential, policy create/update/delete, every mutating `/workspaces`
-route (including `approved-egress`/`denied-egress`/`llm-cred`/`requirements`), `PUT
+harness credential, policy create/update/delete, the `/workspaces` routes that
+WIDEN AN EGRESS CEILING, BIND CREDENTIAL MATERIAL or WRITE THE HOST
+(`approved-egress`, `denied-egress`, `llm-cred`, `requirements`, `record` and
+its `promote-egress`, `env-as-code/write`, and the `reassign` below — workspace
+CRUD/scan/build itself is owner-or-admin since 0.6, see "Workspace ownership"),
+`PUT
 /site-config` and its connectivity probes, secret write/delete, `GET
 /metrics`, the permissioning routes below, and bringing a custom devcontainer
 repo to a run (`devcontainer_repo` — `denyMemberRequest`,
@@ -343,6 +347,38 @@ collection endpoint's no-oracle answer), so a member's unfiltered audit feed
 is always empty by design. The console reaches it from a run's Audit tab,
 whose "open full Audit" link carries `?run_id=`. `GET /setup/status` redacts
 operator-diagnostic detail (checks, secret names, runner detail) for a member.
+
+**Workspace ownership (0.6, migration `0048`).** Runs were the only owned noun
+until 0.6; workspaces are the second. `workspaces.owned_by` holds the creating
+MEMBER's principal, and `""` — every pre-0.6 row, and everything an admin
+creates — means **operator-owned**, i.e. exactly today's behavior. On that
+column:
+
+- **CRUD/scan/build are owner-or-admin, not admin-only.** A member creates
+  workspaces they own and may read/edit/delete/scan/build their own
+  (`getWorkspaceAuthorized`/`getWorkspaceReadable`, `internal/api/helpers.go`).
+  Another member's owned workspace answers the **byte-identical 404** a missing
+  id does — the same no-existence-oracle rule runs use. An OPERATOR-owned
+  workspace still answers a member's mutation with the same 403 it did in 0.5,
+  because it is listable and readable by every member and there is no existence
+  to hide. `GET /workspaces` returns the caller's own rows plus the
+  operator-owned ones, never another member's.
+- **A member's `local_dir` source is bounded by operator-set roots.** See
+  `WARDYN_MEMBER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
+  shared list for a principal that has an entry) in [ENV.md](ENV.md). Unset =
+  no member `local_dir` mounts at all (fail closed); writability needs the
+  separate `WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`.
+- **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): it returns
+  the row to the operator (`owned_by=""`) and audits `workspace.reassign` with
+  the departed member in `from_owner`. It is idempotent, so a sweep over a
+  departing member's ids never fails halfway. Note what moves with it: the
+  row's `local_dir` sources stop being member-authored, so the member root and
+  dotfile gates no longer bound them — they become ordinary operator mounts.
+  Reassigning is an authoring act; treat it like creating the workspace.
+- **Cross-user admin access is queryable.** When an admin acts on a
+  member-owned workspace the audit actor stays the ADMIN (there is no
+  impersonation on this path) and the event carries `workspace_owner` naming
+  the member — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
 (`decide()`, `internal/api/approvals.go`): a member may approve or deny an

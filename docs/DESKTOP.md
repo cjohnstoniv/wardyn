@@ -131,6 +131,78 @@ every departure from that envelope is attributable." That is a governance
 control, not a containment boundary against the operator, and it should be sold
 as the first thing and never as the second.
 
+## The member-mode profile (topology m′)
+
+Everything above describes **topology a′: the developer is the operator**. It is
+the default and it is honest about its ceiling — the person at the keyboard sets
+the policy that bounds them.
+
+Some deployments cannot accept that. If the box is org-managed *and* the
+developer must not be able to reconfigure their own sandbox governance, run the
+**member-mode profile**: the same daemon, the same MDM envelope, but the
+governance authority is **elsewhere** — an org IdP and MDM-managed config — and
+the developer is a **member**.
+
+**What changes.** Three settings, and one derived invariant:
+
+| Setting | a′ (default) | m′ (member mode) |
+|---|---|---|
+| `WARDYN_LOCAL_MODE` | `true` — loopback callers are always admins | **`false`**, mandatory. Local mode bypasses public-API auth and would hand the developer admin outright |
+| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `member`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
+| `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
+| `WARDYN_MEMBER_MODE` | unset | **`true`** — asserts the above rather than enforcing anything new |
+
+The invariant the whole profile turns on is: **`isOperator(ctx)` is false for the
+developer's every request.** `WARDYN_MEMBER_MODE` adds no middleware — the
+admin/member split in `internal/api` already does the enforcement — it makes the
+assumption *checkable*, refusing to boot when local mode is on or OIDC is
+unconfigured, either of which would silently make the developer an admin again.
+See `validateMemberModePosture` (`cmd/wardynd/boot_posture.go`).
+
+**What the developer can still do.** Use the product: launch and kill runs,
+onboard workspaces they OWN, read what they own, author a *clamped* inline
+policy. `workspaces.owned_by` (migration `0048`) makes ownership real — CRUD,
+scan and build on their own workspaces, another member's answering the
+byte-identical 404 a missing one does. What they cannot do is anything that
+widens an egress ceiling, binds credential material, or writes the host: those
+`/workspaces` routes, policy CRUD, secret writes and `PUT /site-config` all stay
+admin-only. See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
+
+**Mounting their own project directory.** The one power m′ adds that no other
+tier has is a NON-operator naming a host bind source. It is bounded by
+operator/MDM-set env, never by anything the developer writes:
+
+| Variable | What it bounds |
+|---|---|
+| `WARDYN_MEMBER_WORKSPACE_ROOTS` | the absolute host directories a member's `local_dir` source may resolve into. **Unset = members may not mount host directories at all** (repos and operator-owned workspaces still work) |
+| `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` | per-member roots, JSON `{"<principal>": ["/abs/root"]}`. An entry **REPLACES** the shared list for that principal — per-member exists to narrow |
+| `WARDYN_MEMBER_WRITABLE_ROOTS` | where a member may mark their own mount writable. **Unset = every member mount is read-only** |
+| `WARDYN_MEMBER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
+
+Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** —
+boot warns and starts anyway (a malformed root, by contrast, refuses boot), and a
+root that wide leaves the credential-dotfile deny-list as the only thing between
+a member and `~/.ssh`. [ENV.md](ENV.md) carries the full semantics.
+
+**Offboarding.** A departed member's owned workspaces point at an identity
+nobody can sign in as. `POST /workspaces/{id}/reassign` (admin-only, idempotent)
+returns each to the operator and audits `workspace.reassign` naming the
+`from_owner`.
+
+**The ceiling, restated for m′.** Member mode narrows the API surface the
+developer reaches; it does not change who owns the laptop. They are still root
+on it: they can edit `/etc/wardyn/wardyn.env` and restart the daemon in local
+mode, at which point they are the operator again — MDM re-asserts the file on
+its own schedule and the change is on the record, but nothing prevents the
+window. So m′ buys **a governance boundary that holds for a developer who does
+not go out of their way, and an audit trail for one who does** — the same shape
+of promise as a′, drawn one tier tighter. If your threat model genuinely
+includes the developer, the agent has to execute somewhere they do not
+administer; that is [the Kubernetes shape](../deploy/helm/wardyn/README.md), not
+this one. Residuals #25–#27 in
+[the threat model](../threatmodel/THREAT-MODEL.md) state the member-mount and
+admin-access limits verbatim.
+
 ## The MDM file table
 
 | File | Owner | Mode | Contents | Why |
