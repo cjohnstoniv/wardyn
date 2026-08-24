@@ -404,6 +404,7 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	@echo "Running daemon-free shell regression tests..."
 	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-desktop-profile.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh

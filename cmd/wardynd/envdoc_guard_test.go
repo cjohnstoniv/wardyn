@@ -72,6 +72,10 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
+	// The desktop-tier installer's own image override — read only by
+	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in
+	// ENV.md's "Setup / operator scripts" section.
+	"WARDYN_INSTALL_IMAGE": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
