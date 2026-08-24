@@ -896,21 +896,33 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	// package already warns about, and it deserves the same visibility: an
 	// operator who clicked Always and got a green UI must be able to find out
 	// from the audit stream that nothing was written.
+	//
+	// Every emit below stamps the O5 cross-user marker (auditWorkspaceDataFor).
+	// Deciding an approval is owner-OR-ADMIN (routes.go), so this is the most
+	// common path on which an admin durably rewrites a MEMBER-owned workspace —
+	// an `always` on someone else's run — and "which member's data did this
+	// admin touch" has to stay a query here too, not just on the workspace
+	// routes. The owner comes from the write's own returned row where there is
+	// one, and from a marker-only re-read on the give-up paths.
 	if s.cfg.Store == nil || host == "" {
 		reason := "no store configured"
 		if s.cfg.Store != nil {
 			reason = "approval carries no host in requested_scope"
 		}
 		data["detail"] = reason
-		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure", mustJSON(data)))
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure",
+			auditWorkspaceDataFor(by, s.workspaceOwner(ctx, wsID), data)))
 		return
 	}
-	if _, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, wsID, host, allow, maxApprovedEgress); err != nil {
+	ws, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, wsID, host, allow, maxApprovedEgress)
+	if err != nil {
 		data["detail"] = err.Error()
-		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure", mustJSON(data)))
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "failure",
+			auditWorkspaceDataFor(by, s.workspaceOwner(ctx, wsID), data)))
 		return
 	}
-	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "success", mustJSON(data)))
+	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, action, wsID.String(), "success",
+		auditWorkspaceDataFor(by, ws.OwnedBy, data)))
 }
 
 // learnVerifyEgress is the verify loop's write-back, hooked at the ONE
@@ -957,26 +969,30 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 		// with nothing in the audit trail to explain why the workspace never
 		// learned the host.
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
-			run.WorkspaceID.String(), "failure", mustJSON(map[string]any{
+			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
 				"source": "verify:" + ap.RunID.String(), "detail": "invalid or empty host in requested_scope",
 			})))
 		return
 	}
 	key := "egress:" + host
-	if _, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{
+	// Same O5 marker as the deny·always write-back beside it, and reachable the
+	// same way: a record run an ADMIN launched on a member-owned workspace ends
+	// with the admin approving a host into that member's requirements contract.
+	ws, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{
 		key: {Level: "required", Provenance: "operator_set"},
-	}); err != nil {
+	})
+	if err != nil {
 		// The approval stands either way; the contract write is audited as the
 		// miss it is (cap hit / workspace gone) so the operator can add the row
 		// on Reach instead of wondering why the replay still denies the host.
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
-			run.WorkspaceID.String(), "failure", mustJSON(map[string]any{
+			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
 				"key": key, "source": "verify:" + ap.RunID.String(), "detail": err.Error(),
 			})))
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
-		run.WorkspaceID.String(), "success", mustJSON(map[string]any{
+		run.WorkspaceID.String(), "success", auditWorkspaceDataFor(by, ws.OwnedBy, map[string]any{
 			"key": key, "source": "verify:" + ap.RunID.String(),
 		})))
 }

@@ -61,6 +61,14 @@ type Store interface {
 	// FULL desired list, replacing rather than merging.
 	SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
 	SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error)
+	// SetWorkspaceOwner replaces ONLY the owned_by column (plus updated_at).
+	// The offboarding path (design decision O6): an admin reassigns a departed
+	// member's workspace to the operator by setting owner "". Scoped for the
+	// same reason SetWorkspaceLLMCred is — it must never replay a stale
+	// snapshot over a concurrently-persisted async scan — and separate from
+	// UpdateWorkspace on purpose: the full-row update deliberately does not
+	// carry owned_by, so no ordinary edit can move ownership.
+	SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error)
 	SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)

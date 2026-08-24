@@ -107,23 +107,27 @@ var routeMatrix = map[string]classifiedRoute{
 	// The admin twins of /me/tokens: the deployment-wide inventory names other
 	// humans, and revoke-any is the remediation path for a token whose owner was
 	// demoted or has left (migration 0045's stamp ceiling).
-	"GET /api/v1/tokens":                                        {class: classAdmin},
-	"DELETE /api/v1/tokens/{id}":                                {class: classAdmin},
-	"POST /api/v1/setup/harness-login":                          {class: classAdmin},
-	"PUT /api/v1/setup/harness-credential/{provider}":           {class: classAdmin},
-	"DELETE /api/v1/setup/harness-credential/{provider}":        {class: classAdmin},
-	"POST /api/v1/policies":                                     {class: classAdmin},
-	"PUT /api/v1/policies/{id}":                                 {class: classAdmin},
-	"DELETE /api/v1/policies/{id}":                              {class: classAdmin},
-	"POST /api/v1/sources":                                      {class: classAdmin},
-	"POST /api/v1/sources/{id}/scan":                            {class: classAdmin},
-	"DELETE /api/v1/sources/{id}":                               {class: classAdmin},
-	"POST /api/v1/base-images":                                  {class: classAdmin},
-	"DELETE /api/v1/base-images/{id}":                           {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/llm-cred":                      {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/requirements":                  {class: classAdmin},
+	"GET /api/v1/tokens":                                 {class: classAdmin},
+	"DELETE /api/v1/tokens/{id}":                         {class: classAdmin},
+	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
+	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
+	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
+	"POST /api/v1/policies":                              {class: classAdmin},
+	"PUT /api/v1/policies/{id}":                          {class: classAdmin},
+	"DELETE /api/v1/policies/{id}":                       {class: classAdmin},
+	"POST /api/v1/sources":                               {class: classAdmin},
+	"POST /api/v1/sources/{id}/scan":                     {class: classAdmin},
+	"DELETE /api/v1/sources/{id}":                        {class: classAdmin},
+	"POST /api/v1/base-images":                           {class: classAdmin},
+	"DELETE /api/v1/base-images/{id}":                    {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/approved-egress":        {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/denied-egress":          {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/llm-cred":               {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/requirements":           {class: classAdmin},
+	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
+	// the handler precisely so the member refusal is a CONSTANT 403 that never
+	// varies with whether the named workspace exists.
+	"POST /api/v1/workspaces/{id}/reassign":                     {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record":                       {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/env-as-code/write":            {class: classAdmin},
@@ -744,6 +748,20 @@ func (s *authzStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []stri
 }
 func (s *authzStore) SetWorkspaceLLMCred(context.Context, uuid.UUID, *types.WorkspaceLLMCred) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
+}
+
+// SetWorkspaceOwner is REAL (not a stub) so the reassign tests can assert the
+// column actually moved and that a re-read shows the row operator-owned.
+func (s *authzStore) SetWorkspaceOwner(_ context.Context, id uuid.UUID, owner string) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	ws.OwnedBy = owner
+	s.workspaces[id] = ws
+	return ws, nil
 }
 func (s *authzStore) SetWorkspaceRequirements(context.Context, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound

@@ -554,7 +554,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.update", id.String(), "success", mustJSON(map[string]any{
+		"workspace.update", id.String(), "success", auditWorkspaceData(r, updated.OwnedBy, map[string]any{
 			"name": updated.Name, "sources": len(updated.Sources), "rescan_required": sourcesChanged, "image_changed": imageChanged,
 		})))
 	writeJSON(w, http.StatusOK, updated)
@@ -868,7 +868,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.removeStaleImage(r.Context(), staleImage, "")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.delete", id.String(), "success", nil))
+		"workspace.delete", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, nil)))
 	w.WriteHeader(http.StatusNoContent)
 }
 

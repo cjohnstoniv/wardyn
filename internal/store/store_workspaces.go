@@ -223,6 +223,17 @@ func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.W
 		workspaceLLMCredParam(cred), id))
 }
 
+// SetWorkspaceOwner replaces ONLY the owned_by column (plus updated_at),
+// returning the updated row — the offboarding reassign (decision O6). Scoped
+// like SetWorkspaceLLMCred above, and deliberately the ONLY writer of the
+// column after CreateWorkspace stamps it: UpdateWorkspace's column list omits
+// owned_by, so an ordinary workspace edit can never move ownership.
+func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error) {
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
+		`UPDATE workspaces SET owned_by=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		owner, id))
+}
+
 // SetWorkspaceApprovedEgress replaces ONLY the operator-owned approved-egress
 // column (plus updated_at), returning the updated row. Scoped on purpose: an
 // approval must never clobber a concurrently-persisted scan (an async repo

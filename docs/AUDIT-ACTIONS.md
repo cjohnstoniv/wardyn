@@ -86,17 +86,50 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:431` | internal |
 | `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:557` | internal |
 | `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:871` | internal |
-| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725` | internal |
+| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725`, `internal/api/source_scan.go:288,329,346` | internal |
 | `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:887` | internal |
-| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:959` | internal |
+| `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:971` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
 | `workspace.envcode.write` | The onboarding "env code" (devcontainer/setup snippet) is written for a workspace | `files`, `skipped`, `skipped_files`, `written_files` | `internal/api/workspace_envcode.go:70` | internal |
 | `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back — the D28 non-atomicity this register names) | `domains`, `source` | `internal/api/approvals.go:885`, `internal/api/record.go:604` | internal |
 | `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:883`, `internal/api/workspaces.go:694` | internal |
 | `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:723` | internal |
+| `workspace.reassign` | An admin returns a member-owned workspace to the operator, `owned_by=""` (`POST /workspaces/{id}/reassign`) — the offboarding path for a member who has left | `from_owner` (the departed member's principal; `""` when the row was already operator-owned) | `internal/api/workspace_owner.go:60` | internal |
 | `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:260` | internal |
 | `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:342` | internal |
 | `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:691`, `internal/api/source_scan.go:62` | internal |
+
+**`workspace_owner` — the cross-user marker on every workspace-scoped write.**
+Any event in this section whose target is a MEMBER-OWNED workspace
+(`workspaces.owned_by` non-empty, migration `0048`) carries one extra Data
+field, `workspace_owner`, **whenever the actor is not that owner** — i.e.
+whenever an admin acts on a member's workspace for support or offboarding. That
+includes the approval write-backs (`workspace.egress.approve`,
+`workspace.egress.deny`, `workspace.requirement.write`), which are the most
+common cross-user path of all: deciding an approval is owner-OR-admin, so an
+admin choosing `always` on a member's run durably rewrites that member's
+workspace. One rule stamps them all, in `internal/api/workspace_owner.go` —
+`auditWorkspaceData` for a handler that holds the request,
+`auditWorkspaceDataFor` for a writer that holds the acting principal as a
+string — and it is what makes cross-user admin access QUERYABLE rather than
+merely present in the log: filter `?actor=<admin>` and keep the rows where
+`workspace_owner` is set and differs.
+
+The deliberate exception is two EMIT SITES, not two actions: the `wardynd`-actor
+emits that settle a governed run — `reconcileWorkspaceRun`'s `workspace.scan` and
+`reconcileRecordRun`'s `workspace.record`, both in `internal/api/workspace_run.go`
+— have no acting human to compare the owner against, so they never stamp. The
+human who launched that run is recorded on the run, not on these events. The
+`workspace.scan` ACTION is not exempt: emitted from `scanAttachedSources`
+(`internal/api/source_scan.go`) it carries the requesting human as actor and
+stamps `workspace_owner` like every other row above.
+
+The actor is never rewritten to match. An admin acting on a member's workspace
+is recorded as the ADMIN — there is no impersonation anywhere on this path, and
+`TestWorkspaceOwner_NoImpersonation` (`internal/api/workspace_reassign_test.go`)
+pins it across the write surface. An operator-owned workspace (`owned_by=""`,
+every pre-0.6 row) never stamps the field, so an admin-only deployment's audit
+Data is unchanged.
 
 ## Sessions, SSH & UI relay
 

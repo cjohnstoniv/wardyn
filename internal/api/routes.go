@@ -79,9 +79,9 @@ func (s *Server) routes() chi.Router {
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — that
 			// grep counts mountAccountRoutes' 2 in this same file too — plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 26 direct registrations below +
+			// has gone stale before, W7-S1-1): 27 direct registrations below +
 			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 33. Five workspace routes (create/update/delete/scan/
+			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 34. Five workspace routes (create/update/delete/scan/
 			// build) LEFT this group in 0048 for the owner-or-admin tier — the
 			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
@@ -285,6 +285,12 @@ func (s *Server) routes() chi.Router {
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).
+			// Offboarding (decision O6): return a departed member's owned
+			// workspace to the operator (owned_by=""). Admin-only HERE rather
+			// than in the handler so the refusal is a constant 403 that never
+			// varies with whether the id exists — owning a workspace does not
+			// let a member disown it.
+			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
 			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
 			operatorOnly.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the

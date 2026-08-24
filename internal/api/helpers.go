@@ -356,7 +356,7 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, id.String(), "success", mustJSON(data(val))))
+		action, id.String(), "success", auditWorkspaceData(r, updated.OwnedBy, data(val))))
 	writeJSON(w, http.StatusOK, updated)
 }
 
