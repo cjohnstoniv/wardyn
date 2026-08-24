@@ -116,8 +116,33 @@ def speakable(text: str) -> str:
     # kokoro-onnx uses): "eh"→/eɪ/ is the letter A ("ay" is /aɪ/ — it shipped
     # as "eye eye" once), "see"→/siː/, "ell"→/ɛl/, "pee"→/piː/. To re-check a
     # candidate: phonemizer_fork + espeakng_loader, language en-us.
-    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye"}
-    out = re.sub(r"\b(CI|CLI|APIs|API|AI)\b", lambda m: _SAY[m.group(1)], out)
+    # 2026-08-24 (persona round on the 03 split): the demo captions also speak
+    # CC1 (the barrier's policy token), PAT (Kokoro reads the NAME "Pat"), STS,
+    # SSH, TTL and TLS — same treatment. "ess"→/ɛs/, "aitch"→/eɪtʃ/, "one"/"oh"
+    # validated the same way (2026-08-24).
+    _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye",
+            "CC1": "see see one", "PAT": "pee eh tee", "PATs": "pee eh tees", "STS": "ess tee ess",
+            "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess"}
+    out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS)\b", lambda m: _SAY[m.group(1)], out)
+    # Numbers the captions spell as digits but mean as digit STRINGS: a file mode,
+    # a port, the cloud-metadata address. Read as quantities they come out as
+    # "four hundred forty-three" / "one hundred sixty-nine…" (checked against the
+    # venv's phonemizer 2026-08-24); the captions already write "Four-oh-four".
+    out = re.sub(r"\b0400\b", "oh four oh oh", out)
+    out = re.sub(r"\b443\b", "four four three", out)
+    # Lowercase identifier PARTS (ssh_key, cloud_sts, ttl_seconds, api_key) reach
+    # the engine as bare words after the underscore split below; spell them too,
+    # but never inside a hostname (ssh.github.com, api.anthropic.com).
+    # Policy identifiers the walks speak by name. The initialism parts are
+    # lowercase here, so the uppercase map above never sees them; spell the
+    # known ones explicitly (a generic lowercase rule ate "the pat on the back").
+    for ident, said in (("ssh_key", "ess ess aitch key"), ("cloud_sts", "cloud ess tee ess"),
+                        ("ttl_seconds", "tee tee ell seconds"), ("api_key", "eh pee eye key"),
+                        ("git_pat", "git pee eh tee"), ("the ssh client", "the ess ess aitch client")):
+        out = out.replace(ident, said)
+    # Every other policy key is spoken as words: eligible_grants → "eligible
+    # grants" (the decoration strip below would otherwise fuse them).
+    out = out.replace("_", " ")
     # Drop anything that is decoration rather than words (the recorder's captions
     # are plain, but chapter subtitles and future copy may not be).
     out = re.sub(r"[*_`#]", "", out)
