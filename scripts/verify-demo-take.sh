@@ -93,7 +93,7 @@ for e in ev:
     if a.startswith(("egress", "approval")) or a == "run.workspace.egress":
         seen[(h, a)] += 1
     if a == "approval.decide":
-        scopes.append((h, dd.get("decision_scope", "(none)")))
+        scopes.append((h, dd.get("decision_scope", "(none)"), dd.get("decision", "?")))
 def has(host, action): return seen.get((host, action), 0) > 0
 print("MODEL_ALLOWED", has("api.anthropic.com", "egress.allow"))
 # NOT egress.pending. The ceiling clamp is member-only (inline_policy.go gates
@@ -109,7 +109,11 @@ print("HELD_DECIDED", has("example.com", "approval.decide") or any(a == "run.wor
 print("HELD_ALLOWED", has("example.com", "egress.allow"))
 # Informational: present only if the hold lapsed or a re-raise happened.
 print("HELD_PENDING_INFO", has("example.com", "egress.pending"))
-dd_appr = any(h.endswith("datadoghq.com") and a == "approval.decide" for (h, a) in seen)
+# A deny is ALSO an approval.decide - the action name alone cannot tell approve
+# from deny (both log approval.decide). The demo DENIES the telemetry host on
+# camera, so only the decision field separates a correct take from the
+# .first()-trap take that approved the wrong row. Read the decision, not the action.
+dd_appr = any(h.endswith("datadoghq.com") and dec == "APPROVED" for (h, _s, dec) in scopes)
 print("TELEMETRY_APPROVED", dd_appr)
 print("SCOPES", json.dumps(scopes))
 ' > /tmp/_demo_audit.$$ 2>/dev/null
