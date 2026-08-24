@@ -156,7 +156,17 @@ export function AddWorkspaceDialog({
       kind === "repo"
         ? { type: "repo", source: sourceValue.trim(), ref: branch.trim() || undefined, target, writable: writable || undefined }
         : kind === "local_dir"
-          ? { type: "local_dir", path: sourceValue.trim(), target, writable: writable || undefined }
+          ? {
+              type: "local_dir",
+              path: sourceValue.trim(),
+              target,
+              // The writable checkbox unmounts (not resets) for role==="member"
+              // — same condition as its render guard below — so a checked box
+              // from an earlier repo/ephemeral selection must not ride along
+              // into a member local_dir submit and 400 against a control the
+              // member can no longer even see.
+              writable: role === "member" ? undefined : writable || undefined,
+            }
           : { type: "ephemeral", target, writable: writable || undefined };
     const base_image =
       imageChoice === "devcontainer"

@@ -4,11 +4,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // W31-S1-7: /me used to say nothing about when an SSO session would die, so
@@ -56,6 +60,83 @@ func TestHandleMe_SessionExpiry(t *testing.T) {
 		}
 		if _, present := body["session_expires_at"]; present {
 			t.Fatalf("session_expires_at present with no OIDC session: %#v", body["session_expires_at"])
+		}
+	})
+}
+
+// M3: AddWorkspaceDialog's local_dir root hint reads GET /me's
+// member_local_dir_root — it must be null for an operator and for a
+// rootless member, and the operator's own prose (not a raw path dump) for a
+// member with a configured root.
+func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
+	memberCtx := func() (context.Context, string) {
+		sub := "sub-bob"
+		ctx := withOIDCHuman(context.Background(), sub)
+		ctx = withOIDCRole(ctx, oidc.RoleMember)
+		return ctx, sub
+	}
+
+	t.Run("operator: always null", func(t *testing.T) {
+		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{Roots: []string{"/home/agent-projects"}}}}
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body["member_local_dir_root"] != nil {
+			t.Fatalf("member_local_dir_root = %#v, want nil for an operator", body["member_local_dir_root"])
+		}
+	})
+
+	t.Run("member with no configured root: null", func(t *testing.T) {
+		s := &Server{}
+		ctx, _ := memberCtx()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body["member_local_dir_root"] != nil {
+			t.Fatalf("member_local_dir_root = %#v, want nil with no roots configured", body["member_local_dir_root"])
+		}
+	})
+
+	t.Run("member with a configured root: hint string", func(t *testing.T) {
+		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{Roots: []string{"/home/agent-projects"}}}}
+		ctx, _ := memberCtx()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		got, ok := body["member_local_dir_root"].(string)
+		if !ok || got != "under /home/agent-projects" {
+			t.Fatalf("member_local_dir_root = %#v, want %q", body["member_local_dir_root"], "under /home/agent-projects")
+		}
+	})
+
+	t.Run("member with a per-principal root REPLACING the shared list", func(t *testing.T) {
+		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{
+			Roots:            []string{"/shared/root"},
+			RootsByPrincipal: map[string][]string{"sub-bob": {"/bob/only"}},
+		}}}
+		ctx, _ := memberCtx()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		got, ok := body["member_local_dir_root"].(string)
+		if !ok || got != "under /bob/only" {
+			t.Fatalf("member_local_dir_root = %#v, want %q (per-principal replaces shared)", body["member_local_dir_root"], "under /bob/only")
 		}
 	})
 }
