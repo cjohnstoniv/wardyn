@@ -574,7 +574,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             <DemoDetail
               demo={DEMOS.find((d) => d.id === stepId)!}
               barrierReady={readiness.barrierReady}
-              githubAppReady={!!status?.secrets.github_app}
+              githubAppReady={status ? !!status.secrets.github_app : true}
               onJump={selectStep}
               onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
             />

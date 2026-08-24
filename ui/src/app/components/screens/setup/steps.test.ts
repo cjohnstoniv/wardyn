@@ -258,8 +258,11 @@ describe("stepOrder — conditional demo steps drop out of the walk when unmet",
   it("drops the needsModel step without a model and the needsSecret steps without the secret", () => {
     const order = stepOrder(baseStatus());
     expect(order).not.toContain("agent-in-the-box");
-    expect(order).not.toContain("key-never-in-the-box");
-    expect(order).not.toContain("authorized-not-issued");
+    // EVERY needsSecret demo drops — derived, so a new gated demo is covered
+    // automatically (was: only the two original ids pinned by hand).
+    for (const d of DEMOS.filter((x) => x.needsSecret)) {
+      expect(order).not.toContain(d.id);
+    }
     // The unconditional demos, and everything outside the demos, always stay.
     expect(order).toContain("write-only-by-design");
     expect(order).toContain("record-a-policy");

@@ -84,8 +84,8 @@ Prefer clicking? The Getting Started wizard's demo steps
 launch throwaway sandboxes with an embedded terminal and live approvals — no
 repo, no workspace. Two sections: **Egress demos** and **Secrets demos**.
 Fourteen of the fifteen need no model at all, only the sandbox barrier itself
-(the Secrets ones additionally want a stored secret, which the same wizard walks
-you through adding). The Egress group includes:
+(most of the Secrets ones additionally want a stored secret, which the same wizard
+walks you through adding; a couple gate on a GitHub App, or nothing at all). The Egress group includes:
 **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
 then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
 door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then

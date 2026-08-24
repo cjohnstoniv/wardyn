@@ -184,11 +184,11 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // meant to READ cannot live in something that scrolls away — the take
         // and the e2e both need a stable place to point at.
         setCreateErrors((m) => ({ ...m, [demo.id]: getErrorMessage(e) }));
-        // …and an EXPECTED 422 earns the demo its checkmark. markDemoLaunched
-        // otherwise only fires on create success, which would leave the one
-        // card whose lesson IS the refusal sitting "Optional" forever in a rail
-        // of green checks. The operator saw exactly what it teaches.
-        if (e instanceof HttpError && e.status === 422) {
+        // …and an EXPECTED 422 earns the demo its checkmark — but ONLY for the
+        // card whose lesson IS the refusal (refusalCompletes). Every granted
+        // secrets card is CC3-floored, so on a Fence-only host they all 422 with
+        // "cannot enforce CC3"; that must render the error, never a false green.
+        if (demo.refusalCompletes && e instanceof HttpError && e.status === 422) {
           markDemoLaunched(demo.id);
           onStarted?.(demo.id);
         }

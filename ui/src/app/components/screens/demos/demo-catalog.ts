@@ -146,6 +146,11 @@ export interface Demo {
    *  Secrets, so the gate reads closed for a member either way and its copy
    *  says so instead of sending them to a page they cannot write. */
   needsGitHubApp?: boolean;
+  /** The demo's LESSON is a create-time refusal (sts-fail-closed): an expected
+   *  422 at Start renders on the card AND counts the demo complete. Without this
+   *  flag a 422 only renders the error — a CC3-floored card 422'ing on a
+   *  Fence-only host must NOT falsely earn its checkmark. */
+  refusalCompletes?: boolean;
 }
 
 // Shared across every demo: weakest barrier (runs anywhere), reaped 15 min after
@@ -730,6 +735,7 @@ export const DEMOS: Demo[] = [
   {
     id: "sts-fail-closed",
     section: "secrets",
+    refusalCompletes: true,
     title: "No identity, no credential",
     teaches:
       "A cloud_sts grant needs an attested workload identity — and without one Wardyn refuses the RUN, not the mint: no sandbox ever starts.",
