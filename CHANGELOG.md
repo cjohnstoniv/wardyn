@@ -113,7 +113,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Every OIDC login re-stamps `role`/`role_checked_at` on the principal's
   registered keys; the gateway refuses the override once the stamp is older
   than `WARDYN_SSH_ROLE_TTL` (default 24h). Keys registered before 0.6 carry
-  no stamp and never gain the override until their owner logs in again.
+  no stamp and never gain the override until their owner logs in again. A
+  direct-SQL admin-key registration must stamp `role_checked_at` too — the
+  API path already does; a bare `role='admin'` insert is correctly refused as
+  never-checked, and `docs/SSH.md` now says so explicitly.
 - **Session revocation.** `POST /sessions/revoke` (admin; `wardyn sessions
   revoke --sub … | --all`) invalidates every current console session for one
   principal or for everyone, effective immediately (migration `0049`).
@@ -362,6 +365,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   undiscoverable; and the Secrets list says outright that it is showing only
   the names that member holds. All of it is advisory: the server remains the
   enforcement point.
+- **A live safety meter while you author a policy.** `POST /policies/grade`
+  runs the same `composer.Grade` verdict `preflight` computes for a launch,
+  against a bare, unsaved spec — member-accessible, strictly decoded like
+  every other policy write. The policy panel calls it debounced and paints a
+  4-segment meter (Safest · Guarded · Elevated · Weakest); a parse failure
+  dims it, and the title makes clear it grades the document, not the
+  resolved run Preflight grades.
+- **A Preflight button on the New-Run screen.** A secondary button beside
+  Launch now sends the exact payload Launch would (one shared
+  `buildRunInput` projection, not a hand-copied one) and renders the
+  server's verdict inline — field-path 400s verbatim, or the risk grade,
+  member-clamp warnings, and enforced confinement class via the same
+  `RiskBadge`/`ConfinementChip` the run page uses.
+- **A confined replay now carries an explicit Clean/Caught verdict.**
+  `CleanReplay` stamps each `CONFINED` record-loop replay clean or caught —
+  false on truncation, any deny, any pending, or an allow released only by
+  a live mid-replay approval. The confined chip renders "Replayed clean",
+  "Replayed — caught N" (warning tone), or "Replayed — not clean" with its
+  cause named; the guided action approves just the hosts you select and
+  replays again in one click, and a workspace's session list gains a
+  roll-up line for whether its loop has ever closed clean.
 
 ### Changed
 
@@ -403,6 +427,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   previous release's overrides on top. [docs/OPERATIONS.md](docs/OPERATIONS.md)
   → "`helm upgrade`, and why `--wait` is not optional" carries the recipe and
   the two Helm sharp edges it steps around.
+- **`/runs/new` and `/policies` now author policy through one shared
+  panel.** The wizard's bespoke Confinement/Network cards, presets,
+  Unlisted-host dialog and Record radio are gone, along with `/policies`'
+  separate editor; both screens render the same spec textarea, template
+  chips (Minimal, Model provider, Package registries, CI baseline,
+  Allow-all) and helper rail. On `/runs/new`, editing the spec detaches a
+  chosen saved policy, and the Barrier selector up-clamps to the active
+  floor with a reason line on every disabled tier.
+- **The demos catalog moves into Getting Started; `/demos` now redirects
+  there.** The Getting Started demo phase lists the whole catalog — split
+  into Egress demos and Secrets demos sections — replacing the old frozen
+  five-step subset; `/demos` redirects to `/setup?step=sealed-box`, the
+  same pattern `/integrations` already followed. `DemoDetail` is the one
+  renderer for both sections now.
 
 ### Fixed
 
@@ -569,6 +607,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pending `wait_for_review` approval as an active hold — the proxy's real hold
   times out in 30s while the approval can stay pending for up to 24h — and a
   failed poll stops rendering as "all clear".
+- **Sandboxes get lowercase proxy env too.** `curl` and most HTTP clients
+  (post-httpoxy) deliberately ignore the uppercase `HTTP_PROXY` for plain-
+  `http://` URLs, so an in-sandbox `http://` fetch bypassed the proxy
+  outright and failed DNS instead of being inspected. `http_proxy`/
+  `https_proxy` now join `HTTP_PROXY`/`HTTPS_PROXY` in every run's
+  environment.
+- **The compose stack's RBAC env now actually reaches the container.**
+  `WARDYN_OIDC_ROLE_MAP` and `WARDYN_OIDC_DEFAULT_ROLE` were never
+  plumbed into `wardynd`'s environment in `docker-compose.yaml` — the
+  admin/member RBAC path the README describes was silently inert on
+  compose, the only deployment with the gap (desktop env and the Helm
+  chart both already carried them). Both variables now reach the
+  container.
+- **`AWS_CLI_INSTALL=staged` now actually reaches the aws-sso image
+  build.** The Makefile never forwarded the build-arg to
+  `DOCKER_BUILD_ARGS`, so an offline/strict-allowlist
+  `make agent-images AWS_CLI_INSTALL=staged` silently fell back to
+  downloading the AWS CLI installer over the network instead of using
+  the staged one. The arg now joins the other install-mode args on all
+  four image builds.
 
 ### Security
 

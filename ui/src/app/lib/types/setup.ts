@@ -23,24 +23,6 @@ export interface SetupCheck {
   fix?: string;
 }
 
-// Boot-snapshot readiness of one configured composer backend. key_secret is a
-// secret NAME (never a value); key_resolved is whether it was present at boot.
-export interface ComposerBackendReadiness {
-  name: string;
-  provider: string;
-  model: string;
-  wire: string;
-  // Normalized transport: HTTP wires => "api"; otherwise the cli tool / fake
-  // variant. Absent when the backend didn't report one.
-  transport?: string;
-  // openai/azure backends only: "apikey" | "entra". "" for other providers.
-  auth?: string;
-  enabled: boolean;
-  needs_key: boolean;
-  key_secret?: string;
-  key_resolved: boolean;
-}
-
 // A resident coding-agent CLI detected on the wardynd host PATH. logged_in is
 // ADVISORY (a home-dir credential-file heuristic).
 export interface SetupProvider {
