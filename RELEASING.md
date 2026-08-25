@@ -2,8 +2,9 @@
 
 Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — interfaces
 are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG
-header). Releases are cut **manually** by the maintainer; there is no release workflow
-or `make release` target — **nothing here is automated to push anything**. This
+header). Releases are cut **manually** by the maintainer; there is no `make release`
+target and no workflow that cuts a tag or a Release for you (`release.yml` only
+reacts to a tag you push) — **nothing here is automated to push anything**. This
 document is that process, written down.
 
 ## Prerequisites
@@ -15,12 +16,13 @@ document is that process, written down.
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco` (plus `sbom-stub`, which runs
+  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`, `buildx-smoke`,
+  `trivy` (plus `sbom-stub`, which runs
   **only** on push to `main` — see "Repo settings" below). Two more publish
   workflows are not part of this job list at all (see "Container images"
   below): `publish-image` (`.github/workflows/publish-image.yml`, push to
   `main` only) and `release` (`.github/workflows/release.yml`, triggered by
-  step 3/4's tag push itself, so it cannot be a prerequisite of tagging).
+  step 5's tag push itself, so it cannot be a prerequisite of tagging).
 
 Run the local gate first:
 
@@ -29,13 +31,14 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
                                                    # lane and the `## [Unreleased]` check
 ```
 
-Five CI jobs cannot run locally at all, because they need a live daemon or
+Eight CI jobs cannot run locally at all, because they need a live daemon or
 service: `conformance` (`make test-conformance-docker`), `conformance-k8s`
 (`make test-conformance-k8s`, needs a local `kind` cluster + a registered
 `k8s`-tagged build), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
-cluster), and the Playwright `ui-e2e` job. Without `WARDYN_TEST_PG` the
-Postgres suite prints a loud SKIPPED line.
+cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
+up), `buildx-smoke`, and `trivy` (both docker builds). Without
+`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
 Screenshot freshness is CI-only for a different reason: `ci.yml`'s
 `screenshots-fresh` job compares the PR diff, so it can tell "you changed the
@@ -130,7 +133,7 @@ before step 3.
 
 **Branch protection on `main` is enabled.** A push is gated on the CI merge-gate
 status checks and normally requires a pull request. `enforce_admins` is **off**, so
-the maintainer cutting a release pushes the tag commit to `main` directly (step 4)
+the maintainer cutting a release pushes the tag commit to `main` directly (step 5)
 while contributors go through PRs — this is why `CONTRIBUTING.md`'s check list is a
 real server-side merge block for contributors, and the maintainer's release push
 bypasses the PR requirement. Apply (or re-apply) the protection with the command
@@ -183,11 +186,11 @@ the other:
   `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
   `ghcr.io/cjohnstoniv/agent-claude-code`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
   `ghcr.io/cjohnstoniv/agent-aws-sso`
-  — each tagged with the bare semver (e.g. `0.4.5`, matching `Chart.yaml`'s
-  `appVersion`) and **cosign-signed (keyless)** by digest. Step 4's tag push
+  — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
+  `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
   is what triggers it. It also generates the release CycloneDX SBOM
   (`make sbom`) as a workflow artifact named `wardyn-sbom-vX.Y.Z` — download
-  it from the run and attach it to the GitHub Release (step 5) by hand if you
+  it from the run and attach it to the GitHub Release (step 6) by hand if you
   want it there; nothing here auto-touches the Release object, matching this
   document's "nothing here is automated to push anything" for that step.
   Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`

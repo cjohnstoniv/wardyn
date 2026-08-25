@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the four images, and why each ref is what it is (verified against the
+# ── the five images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -32,8 +32,8 @@ name: Release images
 #     internal/api/runs_policy.go's agentImage() fallback convention:
 #     "ghcr.io/cjohnstoniv/agent-" + ImageKey, and internal/api/harness.go's
 #     catalog sets ImageKey "claude-code"/"codex-cli" for exactly these two
-#     rows (the aws-sso login-only image is deliberately NOT one of the four
-#     — it names no --agent a run selects, see harness.go's own doc comment).
+#     rows (the aws-sso login-only image ships in the matrix too, but names
+#     no --agent a run selects — see harness.go's own doc comment).
 #
 # ── cosign (keyless) ─────────────────────────────────────────────────────────
 # No key material anywhere: `id-token: write` lets the job mint a short-lived

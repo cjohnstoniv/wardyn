@@ -10,7 +10,7 @@ name: Publish wardynd image
 # Runs on push to main only: ":latest" + ":sha-<short-sha>", the CONTINUOUS
 # (unsigned, main-tip) half of image publishing. A vX.Y.Z release TAG push no
 # longer triggers this file — that is now .github/workflows/release.yml's job
-# (cosign-signed, all four images this release ships, not wardynd alone). The
+# (cosign-signed, all five images this release ships, not wardynd alone). The
 # two used to both fire on the same tag push, racing to publish the identical
 # wardynd:X.Y.Z ref, one signed and one not; release.yml is the single
 # tag-triggered publisher now.

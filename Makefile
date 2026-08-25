@@ -206,9 +206,10 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # the release gate. It PUSHES NOTHING and TAGS NOTHING.
 #
 # WARDYN_TEST_PG adds the Postgres lane (CI always runs it; local runs say so
-# loudly when it is skipped). Still not a full CI replica: five jobs need a
+# loudly when it is skipped). Still not a full CI replica: eight jobs need a
 # live daemon or service — conformance, conformance-k8s, envbuild-integration,
-# helm-install-test, and the Playwright ui-e2e — and are CI-only. See
+# helm-install-test, the Playwright ui-e2e, desktop-envelope, buildx-smoke,
+# and trivy — and are CI-only. See
 # RELEASING.md.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
