@@ -425,7 +425,7 @@ jobs:
         run: |
           docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml \
-            -p wardyn-desk-ci up -d --no-build postgres wardynd
+            -p wardyn-desk-ci up -d --no-build postgres registry wardynd
       - name: Wait for healthz
         run: |
           for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
