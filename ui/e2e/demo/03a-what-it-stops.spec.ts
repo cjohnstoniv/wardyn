@@ -366,17 +366,15 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       // step as its third step, so this test rides it.
       await typeInTerminal(page, "curl -sSI --max-time 60 https://wikipedia.org");
       await beat(page, 1200);
-      await caption(page, "Test four: walled off.");
-      await beat(page, BEAT_SHORT);
-      await caption(page, "Now another ordinary host.");
-      await beat(page, BEAT_SHORT);
-      await caption(page, "This one should be refused outright.");
+      await caption(page, "And a question can be answered no. Another ordinary host, same run — deny it.");
       await beat(page, PACE.read);
       await decide(page, "Deny", "Deny.", "wikipedia.org");
       await expect(page.getByTestId("demo-audit-panel")).toContainText(/wikipedia/, { timeout: 30_000 });
       await spotlight(page, page.getByTestId("demo-audit-panel"));
       await caption(page, "The refusal lands beside the approval in the record.");
       await beat(page, PACE.read);
+      await caption(page, "Test four: walled off.");
+      await beat(page, BEAT_SHORT);
       await caption(page, "And then there's the address you really don't want an arbitrary workload reaching:");
       await beat(page, PACE.read);
       await caption(page, "the cloud metadata service.");

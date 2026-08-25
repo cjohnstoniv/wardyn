@@ -99,15 +99,15 @@ test("V03c act 1 — authorized, not issued", async () => {
 
   const card = await openEpisode(page, "authorized-not-issued", "Authorized, not issued");
 
-  await chapter(page, "The same law, five ways", "How a credential is kept depends on the protocol");
+  await chapter(page, "Authorized, then issued", "How a credential is kept depends on the protocol");
   // [OWNER SLOT — drafted] The detour's own opener — the card above moved here
   // from the rest-api-token act, so the ladder is named before its first rung.
   await caption(page, "You've seen a key ride in a header the run never held. Here that grant gets an approval gate and a time limit, then a real third-party call — and then a second way in entirely: a Git token issued straight into a pipe. The three kinds that can use neither are the next detour.");
   await beat(page, PACE.read);
 
-  await caption(page, "Same permission, one field different.");
+  await caption(page, "Same permission — two fields different.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "This one requires approval before that one-time use can be authorized.");
+  await caption(page, "This one requires approval — and the use it authorizes is one-time.");
   await beat(page, PACE.read);
   await walkPolicyKey(page, card, "authorized-not-issued", "eligible_grants",
     "The same eligible grants section as the core.");
