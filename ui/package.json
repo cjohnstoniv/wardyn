@@ -64,7 +64,13 @@
     "overrides": {
       "vite": "6.4.3",
       "@types/react": "18.3.12",
-      "@types/react-dom": "18.3.1"
+      "@types/react-dom": "18.3.1",
+      "brace-expansion@^2": "2.1.2",
+      "brace-expansion@^5": "5.0.7",
+      "undici": "7.29.0",
+      "postcss": "8.5.23",
+      "mermaid": "11.16.1",
+      "dompurify": "3.4.13"
     }
   }
 }
