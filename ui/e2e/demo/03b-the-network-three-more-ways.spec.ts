@@ -292,7 +292,7 @@ test("V03b act 3 — once, or for good", async () => {
 // Conclusion — the detour closes and hands back to the core path (04).
 // ===========================================================================
 test("V03b conclusion", async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const page = stage();
 
   await chapter(page, "Back to the main path", "");

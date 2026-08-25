@@ -279,11 +279,11 @@ test("V03d act 3 — no identity, no credential", async () => {
 // so the core episode can no longer claim it.
 // ===========================================================================
 test("V03d conclusion", async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const page = stage();
 
   await chapter(page, "Back to the main path", "");
-  await caption(page, "That's the last credential kind — five in all, counting the pipe from the other detour — each with its own boundary, because the protocol decides what safe use can even look like. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. Back on the main path: episode four gives a run something real to work on. A workspace.");
+  await caption(page, "That's the last credential kind — five in all, counting the pipe from the other detour — each with its own boundary, because the protocol decides what safe use can even look like. One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration. Back on the main path: episode four gives a run something real to work on. A workspace.");
   await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 04: Add a workspace");

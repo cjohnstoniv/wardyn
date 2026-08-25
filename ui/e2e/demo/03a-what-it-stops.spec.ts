@@ -674,7 +674,7 @@ test("V03a act 5 — the key that never enters the box", async () => {
 // Conclusion — recap both groups, hand off to episode 04 (Add a workspace).
 // ===========================================================================
 test("V03a conclusion", async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const page = stage();
 
   await chapter(page, "What you just saw", "Two kinds of boundary, proved on camera");

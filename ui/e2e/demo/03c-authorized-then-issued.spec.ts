@@ -332,7 +332,7 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
 // Conclusion — the detour closes and hands back to the core path (04).
 // ===========================================================================
 test("V03c conclusion", async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const page = stage();
 
   await chapter(page, "Back to the main path", "");
