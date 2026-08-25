@@ -26,7 +26,7 @@ everything; no `enterprise/` directory; CNCF Sandbox is the governance target.
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
-| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn ssh`, `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn sessions`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -136,20 +136,21 @@ forward-compatibility values; no transition produces them today.
 
 ## Security invariants (every contributor and subagent MUST preserve these)
 
-1. **Secrets never enter the sandbox — with three named, bounded exceptions.**
+1. **Secrets never enter the sandbox — with named, bounded exceptions.**
    Late binding via the broker; third-party API credentials are injected
    proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
    disk, or args — static API keys and OAuth subscription tokens never enter the
    sandbox (env inside shows only an inert placeholder, the real value injected
    on the wire), and broker-scoped credentials are minted and revoked per run,
    where even the one competitor that matches this hygiene (Cloudflare OS) leans
-   on a long-lived human OAuth grant persisted server-side. Three residuals break
-   that rule deliberately — each bounded and disclosed rather than hidden
-   (`threatmodel/THREAT-MODEL.md` §5.1a):
+   on a long-lived human OAuth grant persisted server-side. These residuals break
+   that rule deliberately — each bounded and disclosed rather than hidden; the
+   authoritative, complete table is `threatmodel/THREAT-MODEL.md` §5.1a:
 
    | Exception | Why it can't be brokered | Bound / disclosure |
    |---|---|---|
    | `ssh_key` grant | `ssh` reads the key from disk | RESIDENT private key, written 0400, descendant-scoped, wiped after clone |
+   | `env_secret` grant | a `*_TOKEN`-reading CLI has no helper seam and no one-host header to inject | RESIDENT for the whole run in the sandbox env — no mint/TTL, nothing to revoke; admin-gated by default |
    | Bedrock **access-key** mode | SigV4 request-signing happens in-process, so there is nothing to inject on the wire | `aws-access-key-id`/`aws-secret-access-key` sit in the sandbox env; the preferred bearer mode is never resident |
    | `WARDYN_SUBSCRIPTION_INJECT=off` (`cmd/wardynd/boot_deps.go`) | Opt-in escape hatch, not a limitation: stages a sanitized RESIDENT COPY of the operator's Claude credential — `~/.claude` + `~/.claude.json`, copied read-only by `scripts/stage-claude-creds.sh` from a host staging dir (default `~/.wardyn/claude-creds`). It is a real, refreshable OAuth token, unlike the default's inert sentinel that the proxy replaces on the wire, and it goes stale as the operator's own `claude` rotates its refresh token (re-run the staging script) | The ABSENCE of the `run.llm.subscription_inject` audit event on an otherwise subscription-mounted run (present = proxy-injected; absent = resident copy) |
 

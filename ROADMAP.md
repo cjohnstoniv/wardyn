@@ -18,7 +18,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.3.1** | Repo-scoped git egress via the proxy-side git-broker (`/wardyn/gh/<org>/<repo>`; `github.com` leaves the allowlist), Getting Started demos, container login for a Claude subscription (`claude setup-token` captured in a sandbox), paginated list endpoints (`limit`/`offset` + `X-Wardyn-Truncated`), SDK route-family coverage, mobile console navigation, [docs/ENV.md](docs/ENV.md) | **Shipped (pre-alpha)** |
 | **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes (below) | **Shipped (pre-alpha)** |
 | **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Unreleased (pre-alpha)** — code-complete on `prep/v0.6`; not yet merged to main or tagged. The daemon-free merge gate (`make ci`) is green on this branch — all 22 targets, verified end to end 2026-08-20, gitleaks' full-history scan included; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host, so they are a pre-existing lane defect, not a 0.6 regression |
+| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Shipped (pre-alpha)** — tagged `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series. The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host — a pre-existing lane defect, not a 0.6 regression |
 
 ### What v0.4 shipped
 
@@ -320,7 +320,7 @@ above — not unscheduled, decided.
 |---|---|
 | **v0.7** | **Enterprise desktop deployment — the rest of it.** 0.6 already shipped the macOS half (`deploy/desktop/`: install lane, launchd, the envelope contract — [docs/DESKTOP.md](docs/DESKTOP.md)). What's left: the Linux/systemd installer the topology diagram already names, packaging/signing for real MDM distribution (a Jamf/Intune-ready payload, not a git checkout), and closing the SSO-variant gap where `wardyn-desktop.sh` can't self-apply `site-config.json` without a human login. **C0** (routing interactive tool approvals to the console) also lands here — see "What 0.6 deliberately did not ship" for why it waited |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · hash-chained audit + signed action receipts · separation of duty on the control plane |
+| **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
 
 ### Named gaps without a milestone
@@ -335,17 +335,6 @@ shipped behavior; none is scheduled.
 - **Proxy-side injection of the Bedrock SSO bearer.** Would make the SSO token
   never-resident; the derived role credentials stay resident regardless, because
   SigV4 signs in-process.
-- **No grant delivers a secret as a sandbox env var.** The five grant kinds wire
-  git's credential helper, inject proxy-side, or write a key file — none puts a
-  value in the sandbox environment, so a PAT-authenticated CLI or REST tool
-  cannot be brokered at all. Pasting the token into an interactive terminal is
-  the only workaround, which does not survive an autonomous run.
-  ([field report](docs/adoption/corp-network-onboarding-findings.md))
-- **A `git_pat` approval is single-use, so there is no approve-once-per-sandbox.**
-  The helper is standing but the mint is not: an approval-gated pull-then-push
-  raises two approvals, while `requires_approval: false` auto-issues a real
-  personal credential for the whole session. There is no per-run lease in
-  between. ([field report](docs/adoption/corp-network-onboarding-findings.md))
 - **The `ssh_key` grant is clone-only and does not fit a bind-mounted workspace.**
   The key is written just before the clone and wiped right after, so a `local_dir`
   workspace — which has no clone step — leaves interactive SSH pull/push
@@ -357,11 +346,10 @@ shipped behavior; none is scheduled.
   Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
   added capability grants over a user, an IdP group, or everyone (see "What
   v0.6 shipped") — which is authorization detail on top of those two roles, not
-  a tenancy model. What's still speculative, no design in the tree: SAML/SCIM
-  provisioning, an
-  organization/tenant structure, per-user API tokens (today's only credentials
-  are the shared admin bearer token or an OIDC session — no personal,
-  independently-revocable API token a member could hand to a script), and
+  a tenancy model, and 0.6 added per-user `wdn_` API tokens (personal,
+  independently revocable — see "What v0.6 shipped"). What's still speculative,
+  no design in the tree: SAML/SCIM provisioning, an organization/tenant
+  structure, and
   CUSTOM roles beyond admin/member. The admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,
   no separation of duty from a real admin user (v1.0's row, above).
