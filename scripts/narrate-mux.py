@@ -62,6 +62,7 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--ffmpeg")
     ap.add_argument("--offset-ms", type=int, default=0)
+    ap.add_argument("--drift-fit", help="demo-drift.py --emit-fit JSON: lay cues on the picture's own clock")
     args = ap.parse_args()
 
     ffmpeg = find_ffmpeg(args.ffmpeg)
@@ -70,6 +71,24 @@ def main() -> int:
     if not cues:
         print("narrate-mux: no cues — leaving the video silent", file=sys.stderr)
         return 2
+
+    # The picture's clock and the cue clock disagree by a small, fitted rate
+    # (Playwright's screencast timebase vs the monotonic cue stamps — measured
+    # per take by demo-drift.py). Laying cues at raw tMs leaves the narration
+    # sliding late by rate*t; mapping every cue through the fit puts each line
+    # where its caption actually changes on screen. Applied only when the fit
+    # is reliable — a guessed correction is worse than the drift.
+    fit = None
+    if args.drift_fit and Path(args.drift_fit).exists():
+        fit = json.loads(Path(args.drift_fit).read_text())
+        if fit.get("good_fit"):
+            r, o = fit["rate"], fit["offset_s"] * 1000
+            for c in cues:
+                c["tMs"] = max(0, int(c["tMs"] * r + o))
+            print(f"narrate-mux: cues mapped to the picture's clock (rate {r} offset {fit['offset_s']}s)", file=sys.stderr)
+        else:
+            print("narrate-mux: drift fit marked unreliable — laying cues uncorrected", file=sys.stderr)
+            fit = None
 
     # Two voices at once is the one defect every listener notices. A SMALL
     # collision (the V01 class: a consistent few-hundred-ms accounting bias
@@ -129,6 +148,10 @@ def main() -> int:
     if res.returncode != 0:
         print(res.stderr.strip()[-800:], file=sys.stderr)
         return 1
+    if fit is not None:
+        fit["applied"] = True
+        fit["out"] = args.out
+        Path(args.drift_fit).write_text(json.dumps(fit, indent=1) + "\n")
     print(f"narrate-mux: {len(cues)} cues -> {args.out}")
     return 0
 

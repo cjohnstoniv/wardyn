@@ -323,8 +323,13 @@ clock, so `demo-typist.sh` times its cues from `WARDYN_DEMO_CAPTURE_ZERO`
 not a rounding error: under WSL2 monotonic and realtime run **3% apart** (this
 box: 90.00s monotonic per 86.95s realtime, because WSL2 keeps slewing realtime
 back to the Windows host), and take 10 on 2026-08-24 shipped with the caption
-bubble 6.4s behind its own narration by the end. `scripts/demo-drift.py`
-measures it and `verify-demo-take.sh` now fails a take that does it again.
+bubble 6.4s behind its own narration by the end. A second, smaller rate
+mismatch survives the clock fix (Playwright's screencast timebase vs the cue
+clock, load-dependent — the first post-fix rehearsal measured −1.95%), so the
+pipeline now CORRECTS rather than merely gates: `scripts/demo-drift.py` fits
+the per-take rate/offset (`--emit-fit`), `scripts/narrate-mux.py --drift-fit`
+lays every cue on the picture's own clock, and `verify-demo-take.sh` fails a
+take whose fit was unreliable or whose mux skipped the correction.
 
 **The terminal segment is off by default and that is deliberate.** It is the
 only part of the pipeline that films your screen, and on this host that cannot

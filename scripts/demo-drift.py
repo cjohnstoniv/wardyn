@@ -177,6 +177,10 @@ def main() -> int:
     ap.add_argument("--ffmpeg")
     ap.add_argument("--strip", type=float, help="dump a filmstrip PNG around this picture time")
     ap.add_argument("--quiet", action="store_true", help="just the verdict line")
+    ap.add_argument("--emit-fit", help="write the fitted mapping as JSON (for narrate-mux --drift-fit)")
+    ap.add_argument("--quality-gate", action="store_true",
+                    help="exit on FIT QUALITY (enough cues matched to correct reliably), not on the raw rate — "
+                         "the mux applies the fit, so a large-but-well-measured rate is fine")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -238,6 +242,24 @@ def main() -> int:
         f"{'' if args.quiet else chr(10)}  rate {rate:.4f} ({pct:+.2f}%)  offset {off:+.2f}s  "
         f"matched {matched}/{len(cues_s)} cues  worst lag {worst:.2f}s"
     )
+    good_fit = matched >= max(5, int(0.6 * len(cues_s)))
+    if args.emit_fit:
+        Path(args.emit_fit).write_text(json.dumps({
+            "rate": round(rate, 6), "offset_s": round(off, 3),
+            "matched": matched, "total": len(cues_s), "tol_s": TOL_S,
+            "raw_worst_lag_s": round(worst, 2), "good_fit": good_fit,
+            "applied": False,
+        }, indent=1) + "\n")
+    if args.quality_gate:
+        if good_fit:
+            print(f"  fit reliable ({matched}/{len(cues_s)} cues) — mux corrects to it")
+            return 0
+        print(
+            f"  UNRELIABLE FIT: only {matched}/{len(cues_s)} cues matched a caption change —\n"
+            f"  a mux correction would be a guess. Check the take, not the clocks.",
+            file=sys.stderr,
+        )
+        return 1
     if abs(pct) > 1.0:
         print(
             f"  DRIFT: the picture runs {pct:+.2f}% against the cue clock. The narration slides\n"

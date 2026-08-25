@@ -721,9 +721,25 @@ else: print(0)
     fi
     OFFSET=0
   fi
+  # Browser-only lane: measure the picture-vs-cue clock fit and hand it to the
+  # mux, which lays every cue on the picture's own clock (H-1, pre-record
+  # review). Mixed/terminal lanes skip it: gdigrab stamps realtime, and a
+  # blanket map would warp the terminal cues. The verifier requires the
+  # correction on browser-lane takes via drift-fit.json's applied flag.
+  DRIFT_FIT=""
+  if [[ ! -s "${TERM_TIMELINE:-/nonexistent}" && -s "${TIMELINE%/*}/console.webm" ]]; then
+    if python3 "${REPO_ROOT}/scripts/demo-drift.py" --quiet --quality-gate --ffmpeg "${FFMPEG}" \
+        --emit-fit "${TIMELINE%/*}/drift-fit.json" \
+        --video "${TIMELINE%/*}/console.webm" --timeline "${TIMELINE}"; then
+      DRIFT_FIT="${TIMELINE%/*}/drift-fit.json"
+    else
+      log "drift fit unreliable or unmeasurable — muxing uncorrected (the verifier will flag it)"
+    fi
+  fi
   NARRATED="${FINAL%.mp4}-narrated.mp4"
   if python3 "${REPO_ROOT}/scripts/narrate-mux.py" --ffmpeg "${FFMPEG}" \
-      --video "${FINAL}" --timeline "${MUX_TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}"; then
+      --video "${FINAL}" --timeline "${MUX_TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}" \
+      ${DRIFT_FIT:+--drift-fit "${DRIFT_FIT}"}; then
     FINAL="${NARRATED}"
   else
     log "narration mux failed — the silent video above is still good"
