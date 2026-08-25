@@ -71,10 +71,10 @@ interface DenyTarget {
 // request closed — the approval row itself stays PENDING for up to 24h
 // (approvalExpiryAfter), so nothing server-side flips the mode once the real
 // hold has already timed out.
-// ponytail: hardcoded mirror of the server constant, not a config read —
-// production always calls configureHold with timeout<=0 (keeps this
-// default), so there is nothing to read yet; wire it through if the hold
-// timeout ever becomes operator-configurable.
+// ponytail: hardcoded mirror of the server DEFAULT, not a config read — a
+// policy's first_use_hold_seconds CAN override it (configureHold), so under
+// a longer hold this chip stops flagging at 30s; wire the policy value
+// through if anyone ships a policy that sets it.
 const HOLD_TIMEOUT_MS = 30_000;
 
 // A held request is a wait_for_review first-use approval whose live hold has
