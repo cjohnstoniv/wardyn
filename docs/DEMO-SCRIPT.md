@@ -652,9 +652,9 @@ assumes the obvious thing:
   plain-http path and the probes died at the network layer with no row at all —
   `scripts/lib/verify-demo-take-03.sh` accepts either shape and fails only on an
   *allow* of a link-local/private address or a *policy*-sourced decision. The demo
-  card's overview (`demo-catalog.ts`, "nothing reaches the proxy… no approval to
-  raise or deny") still describes the old shape — a product-copy fix owed to the
-  catalog, not to this doc.
+  card's overview (`demo-catalog.ts`) now describes this shape too — the audited
+  floor refusal, with the literal-address allowlist entry named as the sole
+  exception — fixed in the 0.6 final pass.
 - **Two components look identical and carry different roles.** The Add-workspace
   dialog's source/image cards are `OptionCard` (`form-primitives.tsx`) — an
   `aria-pressed` `<button>`. New Run's Confinement and Network cards are a
