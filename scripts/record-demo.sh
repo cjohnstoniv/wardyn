@@ -655,6 +655,27 @@ fi
 # browser-recording time while the picture starts OFFSET earlier, and the merge
 # below re-times the browser cues a second time. Two clocks, two shifts — out of
 # scope, so those takes publish in real time.
+# The clock fix, ONCE, before any consumer of cue time runs (H-1, pre-record
+# review): fit the raw webm against the raw timeline, then rewrite cues AND
+# ffwd spans onto the picture clock. The ffwd cutter then slices the video at
+# true picture positions and the mux lays audio where captions actually
+# change; verify asserts the RESULT (webm vs corrected cues ~ rate 1.000).
+# Browser-only lane: gdigrab stamps realtime — a terminal take needs no fix.
+if [[ ! -s "${TERM_TIMELINE:-/nonexistent}" && "${RUN_DRIVER}" == 1 \
+      && -s "${DEMO_OUT_DIR}/console.webm" && -s "${DEMO_OUT_DIR}/narration.json" ]]; then
+  step "Reconciling the picture and cue clocks"
+  if python3 "${REPO_ROOT}/scripts/demo-drift.py" --quiet --quality-gate --ffmpeg "${FFMPEG}" \
+      --emit-fit "${DEMO_OUT_DIR}/drift-fit.json" \
+      --video "${DEMO_OUT_DIR}/console.webm" --timeline "${DEMO_OUT_DIR}/narration.json"; then
+    SPANS_ARG=(); [[ -s "${DEMO_OUT_DIR}/speedups.json" ]] && SPANS_ARG=(--spans "${DEMO_OUT_DIR}/speedups.json")
+    python3 "${REPO_ROOT}/scripts/demo-clockfix.py" --fit "${DEMO_OUT_DIR}/drift-fit.json" \
+      --timeline "${DEMO_OUT_DIR}/narration.json" "${SPANS_ARG[@]}" \
+      || log "clockfix refused — publishing on the raw clock (the verifier will flag drift)"
+  else
+    log "drift fit unreliable or unmeasurable — publishing on the raw clock (the verifier will flag it)"
+  fi
+fi
+
 FFWD_TIMELINE=""
 if [[ -s "${DEMO_OUT_DIR}/speedups.json" && -n "${FINAL}" && -s "${FINAL}" && "${RUN_DRIVER}" == 1 ]]; then
   if [[ "${HAVE_TERMINAL}" == 1 || "${JOINED}" == 1 ]]; then
@@ -721,25 +742,9 @@ else: print(0)
     fi
     OFFSET=0
   fi
-  # Browser-only lane: measure the picture-vs-cue clock fit and hand it to the
-  # mux, which lays every cue on the picture's own clock (H-1, pre-record
-  # review). Mixed/terminal lanes skip it: gdigrab stamps realtime, and a
-  # blanket map would warp the terminal cues. The verifier requires the
-  # correction on browser-lane takes via drift-fit.json's applied flag.
-  DRIFT_FIT=""
-  if [[ ! -s "${TERM_TIMELINE:-/nonexistent}" && -s "${TIMELINE%/*}/console.webm" ]]; then
-    if python3 "${REPO_ROOT}/scripts/demo-drift.py" --quiet --quality-gate --ffmpeg "${FFMPEG}" \
-        --emit-fit "${TIMELINE%/*}/drift-fit.json" \
-        --video "${TIMELINE%/*}/console.webm" --timeline "${TIMELINE}"; then
-      DRIFT_FIT="${TIMELINE%/*}/drift-fit.json"
-    else
-      log "drift fit unreliable or unmeasurable — muxing uncorrected (the verifier will flag it)"
-    fi
-  fi
   NARRATED="${FINAL%.mp4}-narrated.mp4"
   if python3 "${REPO_ROOT}/scripts/narrate-mux.py" --ffmpeg "${FFMPEG}" \
-      --video "${FINAL}" --timeline "${MUX_TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}" \
-      ${DRIFT_FIT:+--drift-fit "${DRIFT_FIT}"}; then
+      --video "${FINAL}" --timeline "${MUX_TIMELINE}" --out "${NARRATED}" --offset-ms "${OFFSET}"; then
     FINAL="${NARRATED}"
   else
     log "narration mux failed — the silent video above is still good"
