@@ -128,7 +128,7 @@ What Wardyn does **not** defend against is published in full
 
 ## Status
 
-**v0.6.0 (pre-alpha)** is the last tagged release, adding capability grants,
+**v0.6.0 (pre-alpha)** is the current release, adding capability grants,
 Kubernetes as the base deployment story, `wardyn ssh`, governed UI sandboxes,
 member-owned workspaces and a hash-chained audit log. Two deployment lanes,
 both running real sandboxes, not one inverted into the other:

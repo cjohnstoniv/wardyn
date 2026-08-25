@@ -247,22 +247,24 @@ test("act 3 — the guardrail demos", async () => {
       // assert — the silence is the block being stronger than a logged deny,
       // not a gap in it. https://example.com
       // goes out via CONNECT through the egress proxy, so the proxy decides it
-      // and logs an allow. A direct-to-IP http:// request has no proxy in its
-      // path and the sandbox carries NO DEFAULT ROUTE, so it dies at the
-      // network layer in ~0ms — curl (7), never reaching the proxy that would
-      // have recorded a decision. The terminal is the only witness there is.
-      await expect(page.locator(".xterm-screen").first()).toContainText(/Failed to connect to 169\.254\.169\.254/, {
-        timeout: 60_000,
-      });
+      // and logs an allow. A direct-to-IP http:// request: since the lowercase
+      // http_proxy landed, curl DOES carry it to the proxy, which refuses it
+      // 403 with an audited egress.deny (builtin:private-ip); on an older
+      // stack with no proxy in that path, the gatewayless sandbox drops it at
+      // the network layer — curl (7). Accept either shape (03a's regex).
+      await expect(page.locator(".xterm-screen").first()).toContainText(
+        /HTTP\/1\.1 403|Failed to connect to 169\.254\.169\.254|curl: \(\d+\)/,
+        { timeout: 60_000 },
+      );
       await caption(page, "Egress was wide open — and these two never even got a connection. There is no route off the box for them.");
       await beat(page, PACE.read + 1200);
     }
 
     // The decisions are on the record before we move on. Deliberately skipped
-    // for lines-that-cant-be-crossed: its two headline denials never reach the
-    // proxy (see above), so its panel shows only the allow — and narrating
-    // "every one of those decisions is on the record" over that would be a
-    // claim the trail does not support.
+    // for lines-that-cant-be-crossed: this legacy spec's captions still tell
+    // the old silent-no-route story (owner-gated narration; the current stack
+    // logs an audited egress.deny for those probes — see the 03a split and the
+    // demo card), so narrating the trail here would fight the spoken lines.
     const auditPanel = page.getByTestId("demo-audit-panel");
     if (demo.id !== "lines-that-cant-be-crossed" && (await auditPanel.isVisible().catch(() => false))) {
       await spotlight(page, auditPanel);

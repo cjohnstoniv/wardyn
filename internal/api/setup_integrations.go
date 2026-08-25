@@ -170,13 +170,11 @@ type putIntegrationRequest struct {
 // semantics: naming a mark here CLEARS it from every OTHER stored row in the
 // SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
 //
-// ADOPTION IS EXPLICIT (approved mock): a PUT whose id names a row that exists
-// only as a DERIVATION 409s instead of quietly persisting one. Before this, any
-// write to a derived id — the default-for checkbox being the one every operator
-// hit — silently adopted it, so a row the operator only meant to MARK became a
-// frozen stored copy of a live derivation: the underlying secret/config could
-// then change with the surface still showing the adopted snapshot. POST
-// {id}/adopt is the one promotion path, and it says what it is.
+// ADOPTION: the write IS the adoption now. A PUT whose id so far exists only
+// as a DERIVATION simply stores it — the explicit POST {id}/adopt promotion
+// route left with the integration catalog, and a 409 naming a route the
+// router no longer registers would be a dead end. Same audit event either
+// way; the in-handler comment below carries the full story.
 //
 // integrationIDParam reads the {id} route param UNESCAPED: chi hands handlers
 // the raw path segment, and adopted legacy ids legitimately contain colons

@@ -39,7 +39,7 @@ is *about* would record it in the one place already under suspicion.
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `run.create` | A run row is created (`POST /runs`, or system-created for a follow-on workspace-step run) | `interactive_start`, `seed_auto_tools`, `task_mode`, `tool_approvals` | `internal/api/runs.go:267` | internal |
+| `run.create` | A run row is created (`POST /runs`, or system-created for a follow-on workspace-step run) | `agent`, `repo`, `policy_id`, `confinement_class`, `jti`, `inline_policy`; conditional: `interactive_start`, `seed_auto_tools`, `task_mode`, `tool_approvals` | `internal/api/runs.go:267` | internal |
 | `run.dispatch` | Sandbox dispatch attempted or completed | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:138` | internal |
 | `run.build` | BYOI/devcontainer image build for a run | `byoi_base`, `devcontainer_repo`, `error`, `image` | `internal/api/runs_create.go:777` | internal |
 | `run.complete` | Run reaches a terminal state | `error`, `exit_code`, `panic`, `state` | `internal/api/runs_lifecycle.go:60` | internal |
