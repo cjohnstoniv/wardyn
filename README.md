@@ -80,6 +80,47 @@ That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
 Everything else — env and policy reference, deployment, sample workspaces — is
 indexed in [docs/](docs/README.md).
 
+## Watch it work
+
+Thirteen narrated walkthroughs, about 72 minutes end to end. Every one drives
+the real console against real sandboxes — the policies are live, the refusals
+are real, and the audit rows on screen were written by the run you are watching.
+Start with **03a** if you only watch one; it is the boundary itself.
+
+| Episode | What it shows | Length |
+|---|---|---|
+| [01 — Why govern agents][v01] | The blast radius anything inherits when it runs as you | 5:51 |
+| [02 — Set up the host][v02] | `make setup`, from a bare host to a running control plane | 6:27 |
+| [03a — What it stops][v03a] | **The core.** Four things that happen to a host a run may not reach, then the secret the sandbox is never handed | 11:40 |
+| [03b — The network, three more ways][v03b] | A real agent boxed in, a policy recorded from a run, an approval that lasts one connection | 5:13 |
+| [03c — Authorized, then issued][v03c] | A bearer token attached at the boundary; a PAT that only ever exists in a pipe | 7:26 |
+| [03d — The kinds that can't use a header][v03d] | SSH keys, brokered GitHub tokens, cloud STS — credentials no header injection can carry | 6:10 |
+| [04 — Add a workspace][v04] | Onboarding a source, so a run can mount only what was declared | 4:06 |
+| [05 — Your first policy][v05] | Writing the ceiling every run is clamped to | 3:32 |
+| [06 — Your first run][v06] | One governed run, launched and read back from its record | 3:51 |
+| [07 — Interactive runs][v07] | Attaching a live terminal to a running sandbox | 4:04 |
+| [08 — An autonomous agent][v08] | A real coding agent doing real work inside the boundary | 4:14 |
+| [09 — Record a run][v09] | Run open, derive the minimal policy, replay it confined | 6:06 |
+| [10 — Approvals and egress][v10] | Deciding a held request — once, this run, until, always | 3:40 |
+
+They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.6.0),
+not in the repo, so a clone stays small. Links pin `v0.6.0`; later releases
+re-publish under the same filenames.
+
+[v01]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-01-why-govern-agents.mp4
+[v02]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-02-set-up-the-host.mp4
+[v03a]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-03a-what-it-stops.mp4
+[v03b]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-03b-the-network-three-more-ways.mp4
+[v03c]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-03c-authorized-then-issued.mp4
+[v03d]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-03d-the-kinds-that-cant-use-a-header.mp4
+[v04]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-04-add-a-workspace.mp4
+[v05]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-05-your-first-policy.mp4
+[v06]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-06-your-first-run.mp4
+[v07]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-07-interactive-runs.mp4
+[v08]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-08-autonomous-agent.mp4
+[v09]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-09-record-a-run.mp4
+[v10]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-10-approvals-and-egress.mp4
+
 ## Architecture at a glance
 
 ```mermaid
