@@ -655,12 +655,12 @@ assumes the obvious thing:
   card's overview (`demo-catalog.ts`) now describes this shape too — the audited
   floor refusal, with the literal-address allowlist entry named as the sole
   exception — fixed in the 0.6 final pass.
-- **Two components look identical and carry different roles.** The Add-workspace
-  dialog's source/image cards are `OptionCard` (`form-primitives.tsx`) — an
-  `aria-pressed` `<button>`. New Run's Confinement and Network cards are a
-  different component rendering `role="radio"`, whose accessible name is the
-  title *plus* the hint (`"Confined Default-deny. New hosts are held at the
-  door for your approval."`). Assuming one from the other breaks the driver in
+- **Look-alike cards can carry different roles.** The Add-workspace dialog's
+  source/image cards are `OptionCard` (`form-primitives.tsx`) — an
+  `aria-pressed` `<button>`. (New Run's old Confinement and Network radio
+  cards are GONE — `new-run-screen.tsx`; the policy surface is the PolicyPanel
+  now — so a driver hunting their `role="radio"` finds nothing.) Assuming one
+  surface's role from another breaks the driver in
   whichever direction you guessed. Read the a11y snapshot Playwright writes to
   `test-results/<test>/error-context.md` on failure; it lists every role and
   name on the page and settles it in seconds.
@@ -725,11 +725,11 @@ assumes the obvious thing:
 
 ## Constraints worth knowing before a manual re-shoot
 
-- **`wait_for_review` holds for exactly 30 seconds** (`defaultHoldTimeout`,
-  `internal/egress/proxy/approvals.go`; `proxy.go` passes `0`, meaning "keep the
-  default", so there is no per-run override). The driver approves in about two
-  seconds. A human re-shooting by hand has half a minute, then it falls back to
-  a 403 and needs a retry.
+- **`wait_for_review` holds for 30 seconds by default** (`defaultHoldTimeout`,
+  `internal/egress/proxy/approvals.go`; a policy may override it with
+  `first_use_hold_seconds` — the demo policies set none, so it is 30s here).
+  The driver approves in about two seconds. A human re-shooting by hand has
+  half a minute, then it falls back to a 403 and needs a retry.
 - **Step 2 of the task uses `curl --max-time 90` on purpose** — it has to outlast
   that hold so the *same* request completes on approval.
 - **The agent is not deterministic.** The driver waits on observable state

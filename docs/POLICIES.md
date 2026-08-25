@@ -10,7 +10,7 @@ an inline policy on a create-run request, and `WARDYN_DEFAULT_POLICY`. Unknown
 fields are refused (`DisallowUnknownFields`), so JSON carries no comments — use
 YAML if you want them.
 
-Source of truth: `types.RunPolicySpec` (`internal/types/types.go`); the legal
+Source of truth: `types.RunPolicySpec` (`internal/types/policy.go`); the legal
 values below are what `validatePolicySpec` (`internal/api/policy.go`) enforces at
 write time. A guard test fails if a field here drifts from the struct.
 
@@ -158,8 +158,10 @@ An `ssh_key` or `git_pat` grant for a **different** host (`dev.azure.com`,
 untouched by any of it — every mechanism keys on the same forge, and that
 non-GitHub lane is what `git_pat` is for. There the old shape still applies for
 `ssh_key`: the key is resident for the
-clone only — `agent-run` mints it, writes it `0400`, clones, then shreds it and
-unsets `GIT_SSH_COMMAND` before exec'ing the agent — a real narrowing and not a
+clone only — `agent-run` mints it, writes it `0400`, clones, then removes it
+(`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the
+file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before
+exec'ing the agent — a real narrowing and not a
 confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), an
 auto-mintable grant is re-mintable by design (`MintForGrant` — only
 `requires_approval: true` makes it single-use), and the proxy's mint route
@@ -501,7 +503,7 @@ are ever consulted.
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
 | `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` or `git_pat` grant for the same forge at write time (see "The `ssh_key` and `git_pat` lanes are closed too"). Drop the grant if the run needs direct GitHub fetches. |
-| `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today. |
+| `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today, and a policy carrying one is refused at run-create (422), before any sandbox exists. |
 | `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…"}` | `host` and `secret_name` are required — a scope missing either is rejected at write time (422, `validateInlineSecretRefs`) for a stored policy, an inline run policy, or `WARDYN_DEFAULT_POLICY`. `header` defaults to `Authorization`; `format` defaults to `Bearer %s` (a `%s` template the secret value is substituted into — set it for a scheme other than `Bearer <value>`, e.g. a raw value or a different prefix). Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). With `requires_approval: true`, approving with `decision_scope=run` (`wardyn approve <id> --scope run`) takes a **per-run lease** — one decision, re-mintable for the rest of the run, instead of one approval per git operation; every other scope and every pre-v0.6 decision stays single-use, and the lease dies with the run (see `docs/OPERATIONS.md`). A GitHub `host` (`github.com` or a `*.github.com` host) may not be combined with a `github_token` grant — refused at write, withheld at dispatch, refused at mint (see "The `ssh_key` and `git_pat` lanes are closed too"); every other host is unaffected. |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too"). |
