@@ -459,6 +459,16 @@ test("A4 — save, then reuse", async () => {
   await caption(page, "Every run that uses it can point back to the exact rules that governed it.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
+  // [OWNER SLOT — drafted] 0.6's Policies page grew the ceiling counterpart to
+  // act 3's floor — rung here on the list, where the card is actually visible
+  // (act 3 speaks the floor inside the editor dialog; delta lane 1.1). The card
+  // is a collapsed <details>, so the click opens its YAML on camera.
+  const ceiling = page.getByText("Default (ceiling) policy", { exact: false }).first();
+  await centerInFrame(ceiling);
+  await act(page, ceiling, "One more rail, new here: the default ceiling policy.");
+  await caption(page, "A run created with no policy falls back to it — and a member's inline policy is clamped beneath it.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
   // ── REUSE, BY REFERENCE, ON THE RUN FORM ──────────────────────────────
   // The setup for episode 06: a run just points at the saved policy. This

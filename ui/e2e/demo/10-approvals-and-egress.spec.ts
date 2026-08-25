@@ -333,7 +333,7 @@ test.beforeAll(async () => {
 // Beats 0-5 — the demo sandbox: held, approved, the ladder, denied
 // ---------------------------------------------------------------------------
 
-test("beats 0-5 — held at the door, and the scope ladder", async () => {
+test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () => {
   test.setTimeout(900_000);
   const page = stage();
   // /demos redirects to the held-at-the-door step directly (App.tsx) — go

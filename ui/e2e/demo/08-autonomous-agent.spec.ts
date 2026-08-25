@@ -98,7 +98,7 @@ const BEAT_SHORT = 1400;
 const RUN_TITLE = process.env.WARDYN_DEMO_TITLE || "Add slugify — one off-list host";
 
 /** Filled on camera in beat 1. Short: the field renders two rows. */
-const RUN_DESCRIPTION = "First governed run of the series — real code, one host held at the door.";
+const RUN_DESCRIPTION = "First governed run of the series — real code, one host raised for review.";
 
 /** Captured at Launch (B7) so the closing recap (beat 10's OUTRO) can navigate
  *  back to THIS run instead of speaking its captions over the throwaway proof

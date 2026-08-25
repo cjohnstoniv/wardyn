@@ -469,6 +469,13 @@ drive() {
   # ui/src/app/lib/api/health.ts still carries the old name. All three panes
   # type THIS string; only the key behind it differs.
   local cmd="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
+  # 0.6: the card also renders the CLI shortcut above the raw string
+  # (run-detail-ssh.tsx:207 "Or skip retyping it: wardyn ssh <run-id>") — the
+  # OWNER pane films the shortcut; keys B/C keep the raw string, because their
+  # premise is a bare registered key and no CLI. Falls back to the raw string
+  # when wardyn isn't on PATH; the desk-session dry run proves the choice.
+  local cmd_owner="wardyn ssh ${RUN_ID}"
+  command -v wardyn >/dev/null 2>&1 || cmd_owner="${cmd}"
 
   # --- B1 · the owner attaches --------------------------------------------
   say "Let's start with access to the run itself."
@@ -477,7 +484,7 @@ drive() {
   say "Just registered keys."
   say "My key was registered during setup."
   say "And that's its fingerprint."
-  pane_type "${P_OWNER}" "${cmd}"
+  pane_type "${P_OWNER}" "${cmd_owner}"
   # First connect against an empty known_hosts: the client stops and prints the
   # host key. preflight already proved that key is the one /healthz discloses —
   # the same string the run page's card shows — so "it matches the card" is a
