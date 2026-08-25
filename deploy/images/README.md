@@ -1,7 +1,8 @@
 # Wardyn agent images
 
 This directory contains the OCI image definitions for coding-agent sandboxes
-governed by Wardyn.  Each subdirectory is one agent image.
+governed by Wardyn.  Each subdirectory is one agent image, except `common/`
+(a shared shell library COPY'd into them).
 
 ## Image contract
 

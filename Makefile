@@ -38,6 +38,7 @@ NO_PROXY     ?=
 CLAUDE_INSTALL      ?=
 CODEX_INSTALL       ?=
 CLAUDE_CODE_VERSION ?=
+AWS_CLI_INSTALL     ?=
 # Emit "--build-arg NAME=VALUE" only when VALUE is non-empty, so an unset knob
 # never overrides a Dockerfile default with an empty string.
 _build_arg = $(if $(2),--build-arg $(1)="$(2)",)
@@ -48,7 +49,8 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,NO_PROXY,$(NO_PROXY)) \
 	$(call _build_arg,CLAUDE_INSTALL,$(CLAUDE_INSTALL)) \
 	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
-	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION))
+	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION)) \
+	$(call _build_arg,AWS_CLI_INSTALL,$(AWS_CLI_INSTALL))
 
 # Self-describing help: the description lives on the target line as a `##`
 # comment, so it cannot drift out of step with the target list the way the

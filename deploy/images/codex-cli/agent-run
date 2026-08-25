@@ -39,8 +39,8 @@
 #   Codex CLI reads OPENAI_API_KEY from env.  Wardyn does NOT set this in the
 #   sandbox (secrets never in env, invariant 1).  Operators configure an api_key
 #   CredentialGrant; the proxy mints the key at startup and injects it into
-#   requests to api.openai.com via an InjectionRule.  A /wardyn/llm/openai route
-#   (analogous to the Anthropic route) is planned for v0.5.
+#   requests to api.openai.com via an InjectionRule.  The /wardyn/llm/openai
+#   route is served (runs_dispatch_llm.go sets OPENAI_BASE_URL to it).
 set -euo pipefail
 
 # Shared functions (install_mitm_ca, install_artifact_config,

@@ -19,11 +19,10 @@
 #     3. Configure codex to route through the proxy (HTTP_PROXY env is set by
 #        dispatch; Codex honours it for plain HTTP; for HTTPS the CONNECT tunnel
 #        passes through and the proxy injects credentials on plain-HTTP legs only).
-#   An openai LLM route (/wardyn/llm/openai/<rest>) is FUTURE WORK (v0.5).
-#   Until then, operators who want Codex to use brokered credentials must either:
-#     a. Use a custom base URL pointing at an operator-controlled relay, OR
-#     b. Inject OPENAI_API_KEY via an api_key grant (the operator sets it up and
-#        the proxy's InjectionRule for api.openai.com injects it into requests).
+#   The openai LLM route (/wardyn/llm/openai/<rest>) SHIPS: dispatch points
+#   OPENAI_BASE_URL at it for every non-subscription codex-cli run
+#   (runs_dispatch_llm.go), and the proxy serves it in local_routes.go —
+#   no relay, no key in the sandbox.
 #   This image does NOT set OPENAI_API_KEY — the absence of the key causes codex
 #   to fail closed if no grant is configured, which is the correct default.
 
