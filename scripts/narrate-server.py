@@ -95,6 +95,8 @@ _SUBS = [
     # Kokoro reads a bare "read" as past tense after "the"; pin the phrases.
     ("read-back", "reed-back"),
     ("read it back", "reed it back"),
+    # 03c's audit-panel line reads the panel upward — imperative /riːd/ again.
+    ("so read it upward", "so reed it upward"),
     # "use" the VERB (/juːz/) where espeak guesses the noun — validated against
     # the venv phonemizer 2026-08-24 ("yooz" → /juːz/). NOTE: the r2 adjudication's
     # H1 pin ("first-use approval" → "first yoos approval") was REJECTED by that

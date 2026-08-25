@@ -175,9 +175,9 @@ test("V03c act 1 — authorized, not issued", async () => {
   );
   await centerInFrame(auditRows);
   await spotlight(page, auditRows);
-  await caption(page, "Three asks, three audit rows: refused pending approval, authorized once, then spent.");
+  await caption(page, "Three asks, three decisions on the record — and the mint's own row beside them: refused pending approval, authorized once, then spent.");
   await beat(page, PACE.read);
-  await caption(page, "The first row is the approval gate. The last is the single-use boundary working.");
+  await caption(page, "Newest at the top — so read it upward: the approval gate first; on top, the spent refusal — the single-use boundary working.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   await act(page, card.getByRole("button", { name: "End demo" }));
