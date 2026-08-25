@@ -8,6 +8,63 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-25
+
+First patch on 0.6. Three CI jobs that had never run before the v0.6.0 push went
+red on it; two were real, pre-existing defects. Plus the security sweep and a
+documentation regression.
+
+### Fixed
+
+- **The desktop tier could not boot on older Docker Compose.**
+  `deploy/desktop/docker-compose.yaml` `include:`d the base compose file and then
+  re-declared `services.wardynd` to add one volume — a service-name collision that
+  newer Compose merges and older Compose refuses outright
+  (`services.wardynd conflicts with imported resource`). The mount moves into the
+  base file as `${WARDYN_MANAGED_DIR:-…}:/etc/wardyn:ro`, the same
+  variable-with-harmless-default idiom that file already uses for
+  `WARDYN_WORKSPACES_ROOT` and `WARDYN_BEDROCK_AWS_DIR`; the desktop file is now
+  `include:`-only, so nothing can collide at any Compose version.
+  `wardyn-desktop.sh` exports the variable, and every non-desktop deployment
+  leaves it unset and mounts nothing.
+- **`make compose-config` now validates the desktop entrypoint too.** It only ever
+  parsed the base file and the CI overlay, and the desktop guard was a text grep
+  that never asked Compose to resolve the `include:` — which is why the collision
+  above was invisible to every daemon-free gate and surfaced first in CI.
+- **The agent images' bundled `npm` carried a CRITICAL.** `node-tar` 7.5.11
+  (CVE-2026-59873, gzip-bomb DoS) ships inside npm's own vendored `node_modules`,
+  so no application-level pin reaches it — and the current
+  `node:22-bookworm-slim` still ships it. `claude-code` and `codex-cli` now
+  install `npm@11.19.0`, which vendors the patched 7.5.19. `aws-sso` is
+  debian-based with no npm and is unaffected.
+- **Five development-scope advisories pinned forward** via `pnpm.overrides`, all
+  at patch level with no direct-dependency bump: `brace-expansion` 2.1.2/5.0.7,
+  `undici` 7.29.0, `postcss` 8.5.23, `mermaid` 11.16.1, `dompurify` 3.4.13. These
+  are build/test tooling and the docs diagram gate — nothing in `ui/src` imports
+  any of them, so the shipped bundle is unchanged. `make npm-audit` is unchanged
+  and still `--prod --audit-level=high` by design: development-scope tooling is
+  outside its scope by construction, not by suppression, and there is no ignore
+  list.
+
+### Changed
+
+- **The Quickstart no longer implies a model is required.** Connecting a model was
+  sequenced as step 2 of getting started with no qualifier, while the code has
+  reported it as optional and explicitly non-blocking since 0.4 (`setup status`
+  renders it INFO, never a gap to clear). The model step now follows a working
+  `wardyn run`, is introduced as optional, and says outright that skipping it is a
+  supported end state. The run example now explains that `--task-mode exec` means
+  no agent and no model, and that `--agent` names a sandbox image rather than
+  asserting an AI runs the task.
+- **Wardyn describes itself as a governed-sandbox control plane for any workload**
+  on the surfaces that still said "for coding agents" — the Helm chart's
+  description and keywords, and the GitHub repository description. Coding agents
+  remain the flagship use; they were never the whole product, and the console's
+  own copy already said so.
+- `ROADMAP.md` names the underlying wart: `POST /runs` requires an `agent` field
+  even for `task_mode=exec` runs that have no agent, which is a wire-contract
+  change to fix.
+
 ## [0.6.0] — 2026-08-23
 
 ### Added
