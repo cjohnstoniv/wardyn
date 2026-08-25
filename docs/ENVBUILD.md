@@ -216,6 +216,7 @@ of the residual.
   reintroduces one shared ref across builds. See Builder.pushedBaseRef. A
   real-registry TestBuild_SmokeDockerd validates the exact ref.
 - Build logs are streamed to the io.Writer supplied in BuildSpec.LogSink.
-  If LogSink is nil, build output is discarded.
+  If LogSink is nil, the Builder's DefaultLogSink takes over; only when both
+  are nil is build output discarded.
 - The build container itself is always removed on completion or timeout,
   regardless of success or failure (fail closed on orphaned containers).

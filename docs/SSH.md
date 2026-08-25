@@ -1,7 +1,5 @@
 # SSH gateway
 
-[Watch — Audit & attach (2:00–2:30)](README.md)
-
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
 `wardyn attach`) shows. It authenticates registered **public keys only** (no
@@ -354,7 +352,7 @@ every other audit action in the system and points back here for these.
 
 ## Migration & internals
 
-Registered keys live in `ssh_public_keys` (migration `0032`), keyed by the
+Registered keys live in `ssh_public_keys` (migration `0033`), keyed by the
 SHA256 fingerprint (computed server-side from the parsed key — a caller
 cannot choose or forge one). The gateway and the `/me/ssh-keys` REST surface
 are both in `internal/api` (`sshgateway.go`, `sshgateway_channels.go`,

@@ -26,7 +26,7 @@ this same JSON through this same validator — there is no separate UI schema.
   `composer.Clamp` is the enforcement net, and a member's clamp warnings are
   visible before launch via the **Preflight** button (`POST /runs/preflight`).
 - **"Make a policy from this run"**, on a run's detail page. Synthesizes a
-  policy from that run's observed behavior via `ProfileReview` (`POST
+  policy from that run's observed behavior via `handleSynthesizeProfile` (`POST
   /runs/{id}/profile`) — the honest home for "write the policy from what
   happened," rather than a promise the run screen can't keep.
 

@@ -160,7 +160,7 @@ the exact same Approve/Deny/scope controls every other row has — D7's fix sket
 option was explicitly "a curated chip with copy," not a special-cased lane.
 
 Recognition source: a small closed list of known agent-CLI telemetry hosts (today: just
-`http-intake.logs.us5.datadoghq.com`, the one `DATA-FLOW.md:27` and `DEMO-SCRIPT.md:664`
+`http-intake.logs.us5.datadoghq.com`, the one `DATA-FLOW.md:27` and `DEMO-SCRIPT.md:701`
 already name) — a client-side constant mirroring `HOST_GROUPS`'s shape
 (`network-dialog.tsx:39-57`), not a server round-trip. A row matches by exact host or
 `*.`-suffix, same matching the allow-list already uses.

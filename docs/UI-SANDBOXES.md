@@ -65,7 +65,7 @@ the UI origin.
 ```sh
 TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach-ticket" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
-xdg-open "$WARDYN_UI_URL/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
+xdg-open "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
 ```
 
 `/healthz` publishes the exact form as `ui_sandbox.enter_url_template`, with

@@ -289,13 +289,12 @@ endpoint before launching.
 
 ## Images
 
-`wardynd` itself now publishes to `ghcr.io/cjohnstoniv/wardynd` on every push
-to `main` and every release tag
-([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml) —
-see [RELEASING.md](../RELEASING.md) and the Helm chart's
+`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
+every release tag publishes all five images cosign-signed
+([.github/workflows/release.yml](../.github/workflows/release.yml) — see
+[RELEASING.md](../RELEASING.md) and the Helm chart's
 [README](../deploy/helm/wardyn/README.md)). This BYOA pipeline (`ci-run.sh`)
-does not consume it, though: it still builds wardynd, the `wardyn-proxy`
+does not consume them, though: it still builds wardynd, the `wardyn-proxy`
 sidecar, and the agent image from source on every invocation (a few minutes
-per job) — none of that is wired to pull the published image yet. Doing so,
-plus publishing the proxy/agent images too and signing all of them, is the
-rest of the v0.5 release-pipeline task.
+per job) — wiring it to pull the published images remains open.

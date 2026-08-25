@@ -6,9 +6,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  # wardynd images are published to ghcr by .github/workflows/publish-image.yml:
-  # every push to main → :latest + :sha-<7>, every vX.Y.Z release tag → the bare
-  # semver (matching .Chart.AppVersion). The empty tag below resolves to
+  # wardynd images are published to ghcr: every push to main → :latest +
+  # :sha-<7> (publish-image.yml); every vX.Y.Z release tag → the bare semver
+  # (release.yml, matching .Chart.AppVersion). The empty tag below resolves to
   # .Chart.AppVersion — available on ghcr once that version's tag has been
   # pushed (a maintainer dispatch with extra_tag backfills older releases).
   # Until then, or with a private registry: --set image.tag=latest, or build +

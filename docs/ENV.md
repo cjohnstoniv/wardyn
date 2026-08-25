@@ -9,7 +9,7 @@ read in non-test Go but missing here fails the build, and so does a row here who
 last Go reader was deleted. To regenerate the raw list:
 
 ```sh
-grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' . | grep -v _test.go \
+grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   | tr -d '"' | sort -u
 ```
 
@@ -61,7 +61,7 @@ log them.
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
 | `WARDYN_LOCAL_MODE` | bool | `false` | LOCAL HOST MODE: bypass public-API auth (flag `-local-mode`) |
 | `WARDYN_LOCAL_OPERATOR` | string | `local:<os-user>` | operator principal stamped in local-mode (flag `-local-operator`) |
-| `WARDYN_LOCAL_TRUST_FORWARDER` | bool | `false` | accept a non-loopback peer under local-mode (flag `-local-trust-forwarder`) |
+| `WARDYN_LOCAL_TRUST_FORWARDER` | bool | **binary: `false`; compose: `true`** | accept a non-loopback peer under local-mode (flag `-local-trust-forwarder`) |
 | `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` | bool | `false` | override: allow boot with `-local-mode` explicitly set alongside a configured `WARDYN_OIDC_ISSUER` — i.e. silently disable the configured OIDC/SSO admin-member RBAC deployment and attribute every request to the fixed local operator — normally refused (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`). The auto-enable heuristic (no explicit flag, no admin token, loopback bind) is unaffected — it already excludes a configured issuer on its own (flag `-allow-local-mode-with-oidc`) |
 | `WARDYN_MEMBER_MODE` | bool | `false` | **member-mode desktop**: assert that the human using this daemon is a **member** and the operator authority is elsewhere (an org IdP / MDM-managed config). It adds no middleware — the admin/member split in `internal/api` already enforces everything — it makes the assumption *checkable*: boot is **refused** unless local mode is off (it bypasses public-API auth and would make the loopback developer an admin) **and** OIDC is configured (with no signed-in identity there is no role to derive, so every caller is an admin). See `validateMemberModePosture` (`cmd/wardynd/boot_posture.go`) and [docs/design/member-role-desktop.md](design/member-role-desktop.md) (flag `-member-mode`) |
 | `WARDYN_MEMBER_WORKSPACE_ROOTS` | CSV (absolute paths) | (unset = **members may not mount host directories**) | the absolute host directories a **member's own** `local_dir` workspace source may live under. A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these — so a symlink *inside* a root pointing *out* of every root is refused — and never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), which holds even when a root is set too wide. Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind. Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces. Point it at a dedicated projects directory — **never `$HOME` or `/`**, which boot WARNs about but permits. Operator mounts are never narrowed by it. (`internal/runner/member_mount.go`; flag `-member-workspace-roots`) |
@@ -252,7 +252,7 @@ count means the collector is slow/down and events are being shed after
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `WARDYN_ENVBUILD_BUILD_NETWORK` | string | **binary: (builder default, `none`)**; compose: the `wardyn-internal` bridge (`${WARDYN_NS:-wardyn}-internal`) | build network: `bridge`/`host`/a named network. **Never `host`** on a deployment that also loopback-publishes anything for its own convenience (compose's control-plane Postgres and admin API) — see `threatmodel/THREAT-MODEL.md` residual #13 |
+| `WARDYN_ENVBUILD_BUILD_NETWORK` | string | **binary: (builder default, `none`)**; compose: the envbuild bridge (`${WARDYN_NS:-wardyn}-envbuild`) | build network: `bridge`/`host`/a named network. **Never `host`** on a deployment that also loopback-publishes anything for its own convenience (compose's control-plane Postgres and admin API) — see `threatmodel/THREAT-MODEL.md` residual #13 |
 | `WARDYN_ENVBUILD_BUILD_CPUS` | float | (builder default) | build CPU limit |
 | `WARDYN_ENVBUILD_BUILD_MEMORY_MB` | int | (builder default) | build memory limit (MB) |
 | `WARDYN_ENVBUILD_MAX_CONTEXT_MB` | int | (builder default) | max build-context size (MB) |

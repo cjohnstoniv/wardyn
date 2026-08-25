@@ -5,7 +5,8 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 > **Published automatically — but only for a released version.** CI
 > ([.github/workflows/publish-image.yml](../../../.github/workflows/publish-image.yml))
 > builds and pushes `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
-> (`:latest`, `:sha-<commit>`) and on every `vX.Y.Z` release tag (the bare
+> (`:latest`, `:sha-<commit>`); every `vX.Y.Z` release tag is
+> [release.yml](../../../.github/workflows/release.yml)'s job (the bare
 > semver, e.g. `0.6.0` — matching this chart's default `image.tag`,
 > `.Chart.AppVersion`; see [RELEASING.md](../../../RELEASING.md)). The
 > chart's defaults resolve to a real image once the version in

@@ -118,8 +118,6 @@ wardyn run --agent claude-code --workspace <workspace-id>
 
 ### The audit log can't quietly rot
 
-[Watch — Audit & attach (2:00–2:30)](README.md)
-
 "Append-only" here is enforced by the database, not by convention. A row-level
 Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
 statement-level guard (migration `0004`) rejects `TRUNCATE` — all three are
@@ -797,7 +795,7 @@ nothing), and the gating is completeness-tested: `internal/api/authz_test.go`
 walks every route the router actually registers and fails the build if any one of
 them — all 36 admin-gated routes included — is missing from its `routeMatrix`, so
 a new route must be classified admin/member/owner/anonymous/internal before it can
-ship; `internal/api/rbac_test.go` then proves each of the 24 widest admin-gated
+ship; `internal/api/rbac_test.go` then proves each of the 19 widest admin-gated
 writes really does 403 a member. Worth stating plainly,
 because the field Wardyn is measured against puts exactly these controls behind a
 license — Coder bundles audit logging and template RBAC into a 30-day **Premium**
@@ -1466,10 +1464,11 @@ requirements — not the image — decide whether it exists:
 itself) works out of the box on the compose stack. Four things that used to
 need hand-set knobs, or didn't work at all, ship pre-wired:
 
-- a loopback OCI registry sidecar (`WARDYN_ENVBUILD_CACHE_REPO` defaults to
-  `127.0.0.1:5010/wardyn/devcontainers` — Docker exempts `127.0.0.1`
-  registries from TLS, so no daemon config is needed, and it is not
-  reachable off-host);
+- a loopback OCI registry sidecar (`WARDYN_ENVBUILD_PUSHED_REF` defaults to
+  `127.0.0.1:5010/wardyn/devcontainers`, the host-side pull ref — Docker
+  exempts `127.0.0.1` registries from TLS, so no daemon config is needed, and
+  it is not reachable off-host; wardynd itself pushes via the in-network
+  `WARDYN_ENVBUILD_CACHE_REPO`, `registry:5000/wardyn/devcontainers`);
 - builds default ON (`WARDYN_ENVBUILD` defaults to `true` on compose; the
   bare-binary/host-mode default is still off);
 - the build context is delivered as a tar streamed into the build

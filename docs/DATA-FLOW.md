@@ -25,9 +25,9 @@ Docker network).
 The one telemetry source in the system that is *not* Wardyn's is the agent
 harness's own: Claude Code ships its own Datadog usage telemetry
 (`http-intake.logs.us5.datadoghq.com`), which egress policy sees and can
-gate like any other host — it is Anthropic's product behavior, not Wardyn's,
-and is a distinct, tracked gap (register D7: no default kill-switch or
-curated copy for it yet).
+gate like any other host — it is Anthropic's product behavior, not Wardyn's.
+Wardyn suppresses it by default inside the sandbox (D7); set
+`WARDYN_ALLOW_AGENT_TELEMETRY=1` to let it through.
 
 ## Outbound destinations, by component
 
