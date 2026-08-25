@@ -151,6 +151,15 @@ ARG NO_PROXY=
 ARG CLAUDE_INSTALL=npm
 ARG CLAUDE_CODE_VERSION=2.1.231
 ARG TARGETARCH
+# The base image's own bundled npm (10.9.8) vendors node-tar 7.5.11, which
+# carries CVE-2026-59873 (gzip-bomb DoS) — a CRITICAL the trivy gate fails on,
+# and it is npm's INTERNAL copy, so no application-level pin reaches it. No
+# node:22-bookworm-slim digest ships a fixed one yet (checked upstream latest),
+# so upgrade npm itself: 11.19.0 vendors tar 7.5.19, the patched release.
+# Pinned exactly, and bumped deliberately, like every other version here.
+ARG NPM_VERSION=11.19.0
+RUN npm install -g "npm@${NPM_VERSION}" \
+ && npm --version
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).
 COPY deploy/images/README.md deploy/images/claude-code/claude-bin* /claude-stage/

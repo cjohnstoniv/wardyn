@@ -109,6 +109,13 @@ ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CODEX_INSTALL=npm
+# Same CVE-2026-59873 fix as the claude-code sibling: the base image's bundled
+# npm (10.9.8) vendors node-tar 7.5.11; 11.19.0 vendors the patched 7.5.19. No
+# node:22-bookworm-slim digest ships a fixed one yet, and it is npm's internal
+# copy, so upgrading npm is the only reach. Keep in step with that image.
+ARG NPM_VERSION=11.19.0
+RUN npm install -g "npm@${NPM_VERSION}" \
+ && npm --version
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
