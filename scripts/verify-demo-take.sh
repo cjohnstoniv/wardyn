@@ -914,7 +914,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03b) check_video_03b ;;
   03c) check_video_03c ;;
   03d) check_video_03d ;;
-  02|05|07) head_ "Video ${WARDYN_DEMO_VIDEO}"; printf '    video-specific checks TBD by spec\n' ;;
+  02|05|07) "check_video_floor_${WARDYN_DEMO_VIDEO}" ;;   # cue floors (H-6); content arms still owed
   02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
