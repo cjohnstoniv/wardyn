@@ -81,3 +81,28 @@ ac54c5b4894c60ebd3a5bcfed09e48c2216c88d7:ui/e2e/demo/demos.ts:generic-api-key:53
 181f6440284bcbb4d9add1e6a652a4af14346f0c:ui/e2e/demo/03-what-it-stops.spec.ts:generic-api-key:124
 2bd5671d26e937ff2f4993094676b51366c8cb33:ui/e2e/demo/07-interactive-runs.spec.ts:generic-api-key:128
 e8faade340cba6a05325197665a7b628136a194b:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128
+
+# ── post-0.6-identity-rewrite duplicates ──────────────────────────────────
+# Cutting 0.6 canonicalized author/committer/trailer identity across every
+# not-yet-published commit (personal addresses -> cjohnstoniv@users.noreply.
+# github.com). That rewrote each of those commits, so every SHA in the range
+# changed and the nine entries above stopped matching — a fingerprint is
+# commit-scoped, and no amount of identical file content makes an old one
+# resolve. The findings are unchanged: same file, same rule, same line, same
+# already-accepted reasoning documented above; only the commit moved.
+#
+# BOTH spellings are kept on purpose. The published history carries the
+# rewritten SHAs, while this repo's local campaign branches (feat/v0.6-*,
+# the wt-v06-* worktrees, the pre-rewrite backups) still carry the originals,
+# and `gitleaks git` scans every ref — so dropping either set turns the gate
+# red somewhere. The pre-rewrite half becomes inert once those branches are
+# pruned; it is safe to delete then, and harmless until.
+53e4b815645451caa892f3ca67189cbd03247815:docs/OPERATIONS.md:generic-api-key:1377
+34c6dea8f083f7ca25c3e47d16957a05b8a60eda:deploy/helm/wardyn/templates/secret.yaml:generic-api-key:53
+a0c02c0097a5d2fb7c1651f7f100d59b62464ec2:docs/OPERATIONS.md:generic-api-key:1422
+11eb58b011954470248d5653125eb8ad602cd7e9:scripts/demo-beats/10-audit-and-attach.sh:curl-auth-header:556
+eb1386dd3988d1aeea413d8ce6c2b3041dfca4d9:cmd/wardynd/adapters_test.go:private-key:279
+ad6a7ed32551d25c47d8e841aad20f8b8dc3165d:ui/e2e/demo/demos.ts:generic-api-key:53
+acd1f1335dcca55adca4f2d815aa34948b99c2bc:ui/e2e/demo/03-what-it-stops.spec.ts:generic-api-key:124
+55109ea22262ea0b5e93d2b79e05305c8c48ca4f:ui/e2e/demo/07-interactive-runs.spec.ts:generic-api-key:128
+d54b6a15e2fc415235e8079a86fe50a76897b495:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128
