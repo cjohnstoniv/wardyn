@@ -418,6 +418,10 @@ jobs:
           sed -e 's/\$UPN/ci-operator@example.com/' -e 's/\$SERIALNUMBER/CI0000/' \
             deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
       - name: Boot the desktop compose profile
+        # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;
+        # the included stack mounts it read-only at /etc/wardyn in the container.
+        env:
+          WARDYN_MANAGED_DIR: /etc/wardyn
         run: |
           docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml \

@@ -53,11 +53,21 @@ policy_val="${policy_line#WARDYN_DEFAULT_POLICY=}"
 grep -q '/etc/wardyn/policy.json' "${REPO_ROOT}/docs/DESKTOP.md" \
   || fail "docs/DESKTOP.md no longer mentions /etc/wardyn/policy.json — the MDM file table and the example envelope have drifted apart"
 
-# ── 4. the desktop compose entrypoint actually mounts that same managed dir ─
-grep -qE '^\s*-\s*/etc/wardyn:/etc/wardyn:ro\s*$' "${DESK_DIR}/docker-compose.yaml" \
-  || fail "deploy/desktop/docker-compose.yaml no longer bind-mounts /etc/wardyn:/etc/wardyn:ro — WARDYN_DEFAULT_POLICY would point at a path the container can't see"
+# ── 4. the included stack still mounts that managed dir, and the desktop
+#       entrypoint still sets it ────────────────────────────────────────────
+# The mount lives in the INCLUDED file, not the desktop one: re-declaring
+# services.wardynd beside an `include:` that already declares it is a collision
+# older Compose refuses outright ("conflicts with imported resource"), which
+# broke the desktop-envelope CI job while passing on a newer local Compose.
+grep -qE '^\s*-\s*\$\{WARDYN_MANAGED_DIR:-[^}]+\}:/etc/wardyn:ro\s*$' "${REPO_ROOT}/deploy/compose/docker-compose.yaml" \
+  || fail "deploy/compose/docker-compose.yaml no longer bind-mounts \${WARDYN_MANAGED_DIR}:/etc/wardyn:ro — WARDYN_DEFAULT_POLICY would point at a path the container can't see"
+grep -qE '^\s*export\s+WARDYN_MANAGED_DIR=' "${DESK_DIR}/wardyn-desktop.sh" \
+  || fail "deploy/desktop/wardyn-desktop.sh no longer exports WARDYN_MANAGED_DIR — the managed dir would mount as the empty default"
 grep -qE '^\s*-\s*path:\s*\.\./compose/docker-compose\.yaml\s*$' "${DESK_DIR}/docker-compose.yaml" \
   || fail "deploy/desktop/docker-compose.yaml no longer includes ../compose/docker-compose.yaml — it would no longer be a configuration of the same stack"
+if grep -qE '^\s*services:\s*$' "${DESK_DIR}/docker-compose.yaml"; then
+  fail "deploy/desktop/docker-compose.yaml re-declares services: beside its include: — that collides with the imported stack on older Compose (services.wardynd conflicts with imported resource)"
+fi
 
 # ── 5. the plist is valid XML ────────────────────────────────────────────────
 PLIST="${DESK_DIR}/com.wardyn.daemon.plist"

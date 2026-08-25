@@ -437,6 +437,15 @@ services:
       # harmless empty path (Bedrock ~/.aws stays off until an operator sets the var).
       # See the WARDYN_BEDROCK_AWS_DIR note in this service's environment above.
       - ${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:ro
+      # MDM-managed directory (WARDYN_MANAGED_DIR) — READ-ONLY, the desktop tier's
+      # one addition to this stack. WARDYN_DEFAULT_POLICY there is a HOST path
+      # (/etc/wardyn/policy.json) wardynd reads off disk at boot, so the directory
+      # has to be visible INSIDE the container at that same path. Unlike the two
+      # mounts above, the CONTAINER side is the fixed literal /etc/wardyn — the
+      # policy path is set by the MDM payload, not chosen by the operator — so only
+      # the host side varies. Default is a harmless empty path: every non-desktop
+      # deployment leaves this unset and mounts nothing. See docs/DESKTOP.md.
+      - ${WARDYN_MANAGED_DIR:-/var/empty/wardyn-no-managed-dir}:/etc/wardyn:ro
       - recordings:/data/recordings
       - audit:/data/audit
     ports:

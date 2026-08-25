@@ -4,17 +4,27 @@
 # Desktop-tier entrypoint. The desktop tier is a CONFIGURATION of the same
 # compose stack every other single-host deployment uses (docs/DESKTOP.md "It
 # is a configuration, not a build"), never a separate stack — `include:`
-# pulls in deploy/compose/docker-compose.yaml unmodified, and the one thing
-# added here is the MDM-managed directory.
+# pulls in deploy/compose/docker-compose.yaml unmodified, and that is now the
+# WHOLE file: the MDM-managed directory rides the included stack's own
+# WARDYN_MANAGED_DIR mount, set by the envelope.
 #
 # WARDYN_DEFAULT_POLICY in the desktop envelope
 # (deploy/desktop/wardyn.env.example) is a HOST path — /etc/wardyn/policy.json
 # — that wardynd reads directly off disk at boot (cmd/wardynd/boot_flags.go
 # "path to the default RunPolicy spec JSON"). For the containerized wardynd
 # this compose stack runs to see it, the managed directory has to be visible
-# INSIDE the container at that same path — the same same-path-both-sides
-# convention the included file already uses for WARDYN_WORKSPACES_ROOT and
-# WARDYN_BEDROCK_AWS_DIR.
+# INSIDE the container at that same path. wardyn-desktop.sh exports
+# WARDYN_MANAGED_DIR=/etc/wardyn; every non-desktop deployment leaves it unset
+# and the included file mounts a harmless empty path instead.
+#
+# WHY THE MOUNT LIVES IN THE INCLUDED FILE, not here: re-declaring
+# `services.wardynd` in the same file that `include:`s a stack already
+# declaring it is a service-name collision. Newer Compose merges the two;
+# older Compose refuses outright ("services.wardynd conflicts with imported
+# resource") — a CI runner and a developer laptop disagreed on exactly this
+# and the desktop lane broke in CI only. A variable with a harmless default
+# has no such ambiguity at any version, and it is the idiom the included file
+# already uses for WARDYN_WORKSPACES_ROOT and WARDYN_BEDROCK_AWS_DIR.
 #
 # Read-only: nothing in wardynd ever writes back into the MDM-managed
 # directory. age.key is deliberately NOT read from here — wardyn-desktop.sh
@@ -25,8 +35,3 @@
 # -p <name> config` (no -f needed — this IS the entrypoint compose file).
 include:
   - path: ../compose/docker-compose.yaml
-
-services:
-  wardynd:
-    volumes:
-      - /etc/wardyn:/etc/wardyn:ro

@@ -620,6 +620,10 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@echo "Validating docker-compose config..."
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
+	@# The desktop entrypoint too: it `include:`s the base file, and an include
+	@# that collides with the imported stack only fails when Compose RESOLVES it —
+	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
+	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
 
 # DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.

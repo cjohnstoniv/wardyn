@@ -62,6 +62,9 @@ export WARDYN_WARDYND_IMAGE="${WARDYN_WARDYND_IMAGE:-ghcr.io/cjohnstoniv/wardynd
 wardyn_pick_docker_host  # DOCKER_HOST / WARDYN_DOCKER_SOCK, incl. Colima/Rancher
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/desktop/docker-compose.yaml"  # includes deploy/compose/docker-compose.yaml
+# The included stack mounts the managed dir read-only at this same path inside
+# the container; unset (every non-desktop deployment) it mounts an empty path.
+export WARDYN_MANAGED_DIR="${MANAGED_DIR}"
 compose() { docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -p wardyn-desktop "$@"; }
 
 log "Bringing up the desktop compose stack (image ${WARDYN_WARDYND_IMAGE})"
