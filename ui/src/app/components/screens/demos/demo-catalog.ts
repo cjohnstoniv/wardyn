@@ -535,7 +535,7 @@ export const DEMOS: Demo[] = [
     teaches:
       "The everyday case: a third-party API key wired as a standard Authorization: Bearer header, attached at the boundary and never inside the box.",
     overview:
-      "The demo above proves the law with a made-up header on a made-up host. This is the same law wired the way you'd actually write it: a plain REST call to a third-party service — a Stripe, a Slack, your own internal API — carrying \"Authorization: Bearer <token>\", where the token is a Wardyn secret the sandbox never holds. The request leaves the sandbox with no credential on it and arrives with one. Nothing about that is visible from inside; the Audit panel is the proof. Start this one as an OPERATOR — a member launch silently drops the inline grant (the policy clamp), so the injection never fires.",
+      "The demo above proves the law with a made-up header on a made-up host. This is the same law wired the way you'd actually write it: a plain REST call to a service the proxy can read — an internal API, a metrics endpoint, plain web traffic inside your network — carrying \"Authorization: Bearer <token>\", where the token is a Wardyn secret the sandbox never holds. The request leaves the sandbox with no credential on it and arrives with one. Nothing about that is visible from inside; the Audit panel is the proof. Start this one as an OPERATOR — a member launch silently drops the inline grant (the policy clamp), so the injection never fires.",
     policy: {
       ...SHARED,
       allowed_domains: ["example.org"],
@@ -563,8 +563,8 @@ export const DEMOS: Demo[] = [
         text: "No token in the environment. This is the difference from every SDK you have ever wired: there is no API_TOKEN variable to end up in a log line, a crash dump, or a subprocess.",
       },
       {
-        cmd: "grep -rIl --exclude-dir={proc,sys,dev} wardyn-demo-api-token /etc /home /tmp /usr 2>/dev/null",
-        text: "Nothing resident on disk either — not the value, not the config that names it.",
+        cmd: "grep -rIl --exclude-dir={proc,sys,dev} -e wardyn-demo-api-token -e 'WARDYN[-]V03-' /etc /home /tmp /usr 2>/dev/null",
+        text: "Nothing resident on disk either — not the value, not the config that names it. (The second pattern matches the stored value; the brackets keep the probe from matching itself.)",
       },
       {
         text: "The Audit panel below is where the proof actually lives: secret.read and credential.mint, stamped at STARTUP, before you typed anything. Invisible from inside the box is the point, not a gap in the demo.",
