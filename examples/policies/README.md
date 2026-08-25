@@ -45,22 +45,29 @@ source; the gate is un-bypassable). All three are commented.
 
 The out-of-the-box policy (`WARDYN_DEFAULT_POLICY`, also the ceiling every run
 is clamped to — `composer.Clamp` — when no override is set). `allowed_domains` carries the standard
-registries for common dev tooling — npm/yarn, PyPI, GitHub (clone/API/release
-assets), Go modules, and crates.io — so a first manual run works without an
+registries for common dev tooling — npm/yarn, PyPI, Go modules, crates.io —
+plus the two model APIs (`api.anthropic.com`/`api.openai.com`), so a first
+manual run works without an
 egress-approval round trip for ordinary `npm install`/`pip install`/`go get`/
 `cargo build` traffic. This widens the ALLOWLIST only: `first_use_approval`
 stays `"deny_with_review"` and the policy is still default-deny
 (`allow_all_egress` unset), so any domain outside this list still hits the
-approval flow, never a silent allow.
+approval flow, never a silent allow. (No GitHub hosts here: GitHub clone/API
+for a `github_token` run rides the proxy-side broker route, which moves the
+GitHub hosts into `denied_domains` for that run.)
 
 ## claude-llm.json / claude-llm-inspected.json
 
-Claude coding policies: Anthropic + GitHub + common registry egress, an
-`api_key` grant (no approval) plus an approval-gated `github_token` grant,
-`first_use_approval: "deny_with_review"`. The `-inspected` variant is the
-LLM-egress-inspection example: it adds `llm_inspection` (`mode: "alert"`,
-`detect_secrets: true`, `on_scanner_error: "pass"`) so prompt traffic to the
-model provider is scanned and alerts are logged without blocking.
+Claude coding policies: `api.anthropic.com` + npm/Go registry egress (GitHub
+arrives via the brokered `github_token` grant — contents read, approval-gated
+— not the allowlist), plus a no-approval `api_key` grant
+(`anthropic-api-key`); `first_use_approval: "deny_with_review"`. Both
+`scripts/up.sh`'s `pick_policy` and host mode pick it when a real model path
+is configured (it replaced `composer-dev.json` — same ceiling, honest name).
+The `-inspected` variant is the LLM-egress-inspection example: it adds
+`llm_inspection` (`mode: "alert"`, `detect_secrets: true`,
+`on_scanner_error: "pass"`) so prompt traffic to the model provider is
+scanned and alerts are logged without blocking.
 
 ## ci-claude-llm.json
 
@@ -91,16 +98,6 @@ human), empty egress allowlist (add exactly what the task needs), no grants,
 `CC1` floor so it runs on plain runc CI runners, and a 1-hour
 `auto_stop_after_sec` bound. `scripts/ci-run.sh` uses it as the default
 `--policy-file`.
-
-## claude-llm.json
-
-The developer ceiling for a run that needs a model: `default.json`-style
-registry egress plus `api.anthropic.com`/`api.openai.com`, a no-approval
-`api_key` grant (`anthropic-api-key`) so the run can actually reach a model, and
-an approval-gated `github_token` grant (contents + pull-requests write). Both
-`scripts/up.sh`'s `pick_policy` and host mode pick it when a real model path is
-configured. (It replaced `composer-dev.json`, which was named for the AI Run
-Composer and went with it in 0.5 — same ceiling, honest name.)
 
 ## claude-subscription.template.json
 

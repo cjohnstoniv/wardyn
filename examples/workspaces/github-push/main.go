@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package main is a trivial Go program used as the github-push workspace.
-// The agent adds a Greet function and opens a PR with the change.
+// The agent adds GREETING.md, commits, pushes, and attempts a PR (expected
+// to fail on the read-only demo grant).
 package main
 
 import "fmt"

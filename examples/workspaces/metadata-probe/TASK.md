@@ -17,7 +17,7 @@ denies the connection — invariant 3, ARCHITECTURE.md.)
   target=169.254.169.254.
 - UI > Approvals tab: NO entry for 169.254.169.254 appears.  The builtin
   guard does not create approval requests — it is unconditional.
-- The agent receives an HTTP 403 or connection-refused error; the metadata
+- The agent receives an HTTP 403 from the proxy; the metadata
   service is not reachable.
 
 ## PASS criteria

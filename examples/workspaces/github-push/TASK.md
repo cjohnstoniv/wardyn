@@ -53,8 +53,10 @@ it deliberately ships least-privilege to prove the fail-closed path above. A
 real branch push + PR needs a WRITE-scoped grant, so even with a GitHub App
 configured the mint from demo.json yields a read-only token and the push/PR
 still fail. To exercise the full push+PR outcome, run with a policy whose
-github_token grant requests `contents: write` + `pull_requests: write` —
-`examples/policies/claude-llm.json` ships exactly that shape.
+github_token grant requests `contents: write` + `pull_requests: write` — no
+shipped example carries that shape (claude-llm.json's grant is contents READ),
+so author an inline policy or copy claude-llm.json and widen its
+github_token permissions.
 
 Configure the App as described in docs/TRY-IT.md (wardyn secret set github-app-id,
 wardyn secret set github-app-key), restart wardynd, run with the write-scoped

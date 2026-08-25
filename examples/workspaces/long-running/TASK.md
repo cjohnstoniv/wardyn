@@ -41,8 +41,8 @@ Upload and capture the policy ID:
 ## PASS criteria
 
 1. Run reaches RUNNING state with the agent printing idle.py ticks.
-2. After auto_stop_after_sec (120 s) the run transitions to STOPPED without
-   any human intervention.
+2. After auto_stop_after_sec plus the reaper's debounce (120 s + ~30 s, so
+   ~150 s) the run transitions to STOPPED without any human intervention.
 3. Audit log contains `run.autostop` with actor_type=system.
 4. `docker ps` shows no container for this run (sandbox removed).
 5. The Replay tab in the UI shows the ticks that were captured before the stop.

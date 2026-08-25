@@ -10,7 +10,7 @@ re-teach it was the trade the 2026-08-18 reorder refused.)
 
     wardyn run \
       --agent claude-code \
-      --task "$(sed -n '/^1\./,/^3\./p' TASK.md)"
+      --task "$(sed -n '/^1\. Run/,/^3\. Finish/p' TASK.md)"
 
 The canonical copy of this text lives in `ui/e2e/demo/task.ts` (`DEMO_TASK`) so
 the recording driver and this file cannot drift; the driver types it into the

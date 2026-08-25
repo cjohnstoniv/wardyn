@@ -116,12 +116,9 @@ probe_egress_deny() {
 
     case "$http_code" in
         403|000)
-            pass "Request blocked (code=$http_code): webhook.example.com is denied by egress policy"
-            ;;
-        202|200)
-            info "Request returned $http_code -- first_use_approval may have placed it PENDING"
-            info "Check the Approvals tab in the UI.  If an approval entry exists this is also a PASS."
-            pass "Approval entry raised (code=$http_code) -- data is held, not forwarded"
+            # A held-pending approval ALSO answers 403 (writeApprovalPending);
+            # only the body distinguishes it, and -o /dev/null discards it.
+            pass "Request not forwarded (code=$http_code): denied, or held pending approval -- check the Approvals tab"
             ;;
         *)
             fail "Unexpected HTTP code $http_code -- verify proxy configuration"
