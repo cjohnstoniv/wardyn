@@ -102,6 +102,29 @@ before step 3.
 6. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
    as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
    pre-alpha.
+7. **Publish the demo videos as release assets** (after step 6 — upload needs the
+   Release to exist). Release assets live outside git history, so clones stay small.
+   Stage the shipping take per episode — the newest `PASS` row per id in
+   `local/TAKES-LEDGER.md`'s attempt log, never `ls -t` (failed takes share the
+   folder) — under stable, timestamp-free names, then upload:
+
+   ```sh
+   TAG=vX.Y.Z; SRC=/mnt/c/Users/Chaz/Videos; STAGE=$(mktemp -d)
+   awk -F'|' '$6 ~ /PASS/ && $7 ~ /mp4/ {gsub(/ /,"",$3); gsub(/ /,"",$7); a[$3]=$7}
+              END {for (id in a) print a[id]}' local/TAKES-LEDGER.md |
+   while read -r f; do
+     cp "$SRC/$f" "$STAGE/$(printf '%s' "$f" | sed -E 's/-[0-9]{8}T[0-9]{6}Z(-ffwd)?-narrated//')"
+   done
+   ls -l "$STAGE"          # eyeball: one file per episode, stable names, sane sizes
+   gh release upload "$TAG" "$STAGE"/*.mp4 --clobber
+   ```
+
+   Docs link the **pinned tag** —
+   `https://github.com/cjohnstoniv/wardyn/releases/download/vX.Y.Z/<name>.mp4`.
+   (`releases/latest/download/` resolves only to non-prerelease releases; every
+   Wardyn release is a pre-release, so `latest` 404s.) A later release that
+   re-records an episode re-uploads under the same stable name and bumps the tag
+   in the linking docs (one `sed`).
 
 ## Repo settings (GitHub-side)
 
