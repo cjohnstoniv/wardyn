@@ -328,6 +328,15 @@ above — not unscheduled, decided.
 These are known, documented ceilings. They are listed so they are not mistaken for
 shipped behavior; none is scheduled.
 
+- **`--agent` is required even for runs that have no agent.** `POST /runs` rejects
+  a request without an `agent` name (`internal/api/runs_create_validate.go`), and
+  that holds for `task_mode=exec` too — a plain shell command with no harness and
+  no model still has to name one. In practice the field selects the sandbox IMAGE,
+  so it is doing an image-label job under an agent-shaped name. The effect is
+  cosmetic but it is the single biggest reason the CLI reads AI-first for a
+  non-agent user. Fixing it means either defaulting the label server-side for
+  `exec` runs or renaming the field — a wire-contract change, so not a patch
+  release.
 - **Never-resident Azure DevOps git egress.** Designed, not built. ADO works today
   through the `git_pat` grant, on which the PAT *is* resident in the sandbox. The
   ceiling: ADO has no token-minting API, so the operator PAT's scope is the boundary

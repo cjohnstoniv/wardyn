@@ -32,7 +32,25 @@ make setup   # containerized control plane + UI
 `wardynd` in a compose container, so sandbox callbacks route in-network and
 record/replay work on Docker Desktop + WSL2 NAT.
 
-Give it a model — all first-class at the CLI or in the UI:
+**That is the whole setup.** The barrier is the only requirement — no model, no
+API key, no agent. Put the sandbox rules in a small **YAML** (or JSON) policy and
+hand it to one `wardyn run` — interactive or unattended:
+
+```sh
+wardyn run --agent claude-code --task-mode exec \
+  --task 'echo hello from a governed sandbox' \
+  --policy-file examples/policies/sandbox.yaml --wait
+```
+
+That runs a plain shell command in a governed sandbox: `--task-mode exec` means
+no agent and no model are involved at all. (`--agent` still names which sandbox
+image to launch — it is an image label, not a statement that an AI runs your
+task.) That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
+`wardyn policy render -f <file>` checks it. `--image` brings your own base
+([docs/ENVBUILD.md](docs/ENVBUILD.md)); `make compose-down` stops everything.
+
+**Want an agent to write the code?** *Then* connect a model — optional, and
+equally first-class at the CLI or in the UI:
 
 ```sh
 claude setup-token | wardyn subscription connect   # subscription (never resident)
@@ -41,18 +59,10 @@ echo "$KEY"        | wardyn secret set anthropic-api-key   # API key
 wardyn setup status   # what's configured + the next command per unmet check
 ```
 
-**One file, one command?** Put the sandbox rules in a small **YAML** (or JSON)
-policy and hand it to one `wardyn run` — interactive or unattended:
-
-```sh
-wardyn run --agent claude-code --task-mode exec \
-  --task 'echo hello from a governed sandbox' \
-  --policy-file examples/policies/sandbox.yaml --wait
-```
-
-That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
-`wardyn policy render -f <file>` checks it. `--image` brings your own base
-([docs/ENVBUILD.md](docs/ENVBUILD.md)); `make compose-down` stops everything.
+Skipping this is a supported end state, not an unfinished setup: `setup status`
+reports model access as **optional** and never as a gap to clear. Most of the
+built-in demos need no model either — see
+[TRY-IT.md](docs/TRY-IT.md)'s "governance demo (no keys)".
 
 ### Requirements
 
@@ -86,6 +96,10 @@ Thirteen narrated walkthroughs, about 72 minutes end to end. Every one drives
 the real console against real sandboxes — the policies are live, the refusals
 are real, and the audit rows on screen were written by the run you are watching.
 Start with **03a** if you only watch one; it is the boundary itself.
+
+The series uses a coding agent as its worked example, because that is the case
+most people arrive for. The mechanics on screen — the egress boundary, the
+credential brokering, the audit trail — are the same for any sandboxed workload.
 
 | Episode | What it shows | Length |
 |---|---|---|

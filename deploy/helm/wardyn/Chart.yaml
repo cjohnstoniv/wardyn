@@ -1,11 +1,13 @@
 apiVersion: v2
 name: wardyn
-description: Governance control plane for coding agents
+description: Governed-sandbox control plane for any workload
 type: application
 version: 0.6.0
 appVersion: 0.6.0
 keywords:
   - governance
+  - sandbox
+  - workload-isolation
   - agents
   - security
   - audit
