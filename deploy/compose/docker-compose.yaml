@@ -317,7 +317,7 @@ services:
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a
       # comma-separated list of full addresses and every other signed-in human
-      # becomes a read-only viewer on the harness-credential, policy, workspace
+      # becomes a read-only member on the harness-credential, policy, workspace
       # and site-config writes. See docs/OPERATIONS.md "Who can change what".
       WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_OIDC_OPERATOR_EMAILS:-}"
       # Leaving the list empty WITH OIDC configured refuses to boot
@@ -326,6 +326,10 @@ services:
       # override is plumbed: set it true to keep the old all-operators demo, or
       # (preferred) set WARDYN_OIDC_OPERATOR_EMAILS above.
       WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST: "${WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST:-}"
+      # Admin/member RBAC (docs/ENV.md): role map takes precedence over the
+      # operator allowlist; default role catches unmatched signers-in.
+      WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-}"
+      WARDYN_OIDC_DEFAULT_ROLE: "${WARDYN_OIDC_DEFAULT_ROLE:-}"
       # SSH gateway (docs/SSH.md). Empty WARDYN_SSH_LISTEN (the default) means
       # off — no listener, not even a generated host key — regardless of
       # whether the WARDYN_SSH_PORT mapping above is published. Set both to
@@ -633,6 +637,11 @@ services:
     build:
       context: ../..
       dockerfile: deploy/images/vscode/Dockerfile
+      # Corporate-build pass-through (the code-server fetch dials github.com).
+      args:
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
     image: wardyn/agent-vscode:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]

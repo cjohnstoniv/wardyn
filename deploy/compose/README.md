@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. Every signed-in user has admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` (the legacy allowlist — required at boot under OIDC) or `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) is set, which makes an unlisted signer-in a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM, per-user API tokens) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. Every signed-in user has admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` (the legacy allowlist — required at boot under OIDC) or `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) is set, which makes an unlisted signer-in a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -110,11 +110,10 @@ and destroy *any* container on the host, not just Wardyn's. This is acceptable
 **only** for a local, single-tenant demo on a machine you trust.
 
 - **Never** expose this stack to untrusted networks or run it multi-tenant.
-- A future production path is **Kubernetes** (`deploy/helm/wardyn`), planned to
-  use scoped RBAC and share no host socket **[v0.5+ — planned]** — there is no
-  Kubernetes runner driver yet, so the Helm chart cannot launch sandboxes
-  today. Right now this Docker/Compose data plane (with its docker.sock
-  daemon-trust tradeoff) is the only one that can actually run agents.
+- The production path is **Kubernetes** (`deploy/helm/wardyn`): the k8s runner
+  substrate (`k8s.enabled`, shipped v0.5) uses scoped RBAC and shares no host
+  socket. This Docker/Compose data plane (with its docker.sock daemon-trust
+  tradeoff) remains the primary local/demo path.
 
 See `ARCHITECTURE.md` → "Deployment surface".
 
@@ -162,12 +161,12 @@ to turn on devcontainer image builds for BYOA CI runs (`wardyn run --image
 
 ## OIDC issuer / hostname note
 
-`wardynd` discovers and exchanges tokens with Dex server-side at `http://dex:5556`
-(the compose network alias). The browser is redirected to that same issuer for
-login. For the **browser** login leg to resolve `dex`, either run the browser on
-the compose host with `127.0.0.1 dex` added to `/etc/hosts`, or simply use the
-admin-token CLI path (what `scripts/demo.sh` does) — the headless demo never
-needs the browser.
+The browser talks to the PUBLIC issuer `http://localhost:5556`; `wardynd`
+reaches Dex server-side at `http://dex:5556` (`WARDYN_OIDC_INTERNAL_ISSUER`,
+the compose network alias) and rewrites discovery/token/JWKS URLs between the
+two — so SSO works in the browser with **no `/etc/hosts` edit**. The
+admin-token CLI path (what `scripts/demo.sh` does) never needs the browser at
+all.
 
 ## What the demo proves
 
@@ -209,8 +208,8 @@ degradable**: with it OFF, `wardynd`'s `/healthz` reports
 > **Automatic (preferred):** the compose stack wires a wardynd token *rotator* that
 > keeps the shared `groundtruth_token` volume file fresh (`WARDYN_GROUNDTRUTH_TOKEN_FILE`),
 > and the sidecar re-reads it on a 401 — so you can SKIP the manual seeding below and
-> just start the groundtruth profile; ground truth then survives the ~1h token TTL
->. The static-token path below still works but goes permanently blind after ~1h.
+> just start the groundtruth profile; ground truth then survives the ~1h token
+> TTL. The static-token path below still works but goes permanently blind after ~1h.
 
 ```bash
 # 1. The stack must already be up with a persistent WARDYN_AGE_KEY (see above).
@@ -275,8 +274,8 @@ Honest limits (by design, not hidden):
   so a broken correlation can never again read the same as a blind sensor.
 - The token has the identity provider's ~1h TTL. The compose stack keeps it fresh
   AUTOMATICALLY: wardynd's rotator re-mints and rewrites the shared `groundtruth_token`
-  file and the sidecar re-reads it on a 401, so ground truth does NOT go blind ~1h in
- . The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot
+  file and the sidecar re-reads it on a 401, so ground truth does NOT go blind
+  ~1h in. The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot
   refresh. NOTE: full end-to-end recovery is verified by unit tests (the rotator mints
   + writes; the sidecar reads + refreshes); the live cross-container recovery under a
   real Tetragon sensor needs a privileged eBPF host to exercise.
