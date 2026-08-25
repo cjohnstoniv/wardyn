@@ -24,8 +24,8 @@
 // preflight call (runs.preflightRun) and its result rendering, the Workspace
 // card's mounts/repos, and any post-parse union it does before submit.
 //
-// instance="policies" is consumed by policies.tsx's PolicyEditor; the run
-// instance is still unconsumed pending the /runs/new swap (plan phase 5).
+// instance="policies" is consumed by policies.tsx's PolicyEditor; instance="run"
+// by new-run-screen.tsx's "Policy" SectionCard.
 import * as React from "react";
 import { CircleCheck, CircleX, Globe, Plus, ShieldCheck, Timer } from "lucide-react";
 import type { RunPolicySpec } from "../../lib/types";

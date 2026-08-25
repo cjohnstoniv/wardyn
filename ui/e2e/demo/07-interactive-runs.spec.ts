@@ -68,7 +68,7 @@
  *
  * Driven by `scripts/record-demo.sh --video 07`, which globs this exact
  * filename and names the take wardyn-07-interactive-runs-<stamp>.mp4
- * (docs/README.md links that asset name — do not rename this file). It
+ * (RELEASING.md's release-asset step links that name — do not rename this file). It
  * self-skips without WARDYN_DEMO=1.
  */
 

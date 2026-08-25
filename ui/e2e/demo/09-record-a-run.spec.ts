@@ -56,8 +56,8 @@
  * so every beat the viewer is meant to watch plays at human speed.
  *
  * Driven by `scripts/record-demo.sh --video 09`, which globs this exact
- * filename and names the take wardyn-09-record-a-run-<stamp>.mp4 (docs/README.md
- * already links that asset). Do not rename the file. It self-skips without
+ * filename and names the take wardyn-09-record-a-run-<stamp>.mp4 (RELEASING.md's
+ * release-asset step links that asset). Do not rename the file. It self-skips without
  * WARDYN_DEMO=1 so a bare `pnpm e2e` can never point a headed browser at a
  * developer's live stack and start recording sessions in it.
  *

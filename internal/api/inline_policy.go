@@ -511,10 +511,11 @@ func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef, knownHo
 }
 
 func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPolicySpec) (int, error) {
-	// Collect the secret names referenced by api_key AND git_pat grants (both
-	// resolve a stored secret by name — api_key proxy-side, git_pat via the git
-	// helper). If there are none, there is nothing to check and no secret store
-	// is required.
+	// Collect the secret names referenced by api_key, git_pat AND ssh_key
+	// grants (all three resolve a stored secret by name — api_key proxy-side,
+	// git_pat via the git helper, ssh_key as the resident key + optional
+	// known_hosts). If there are none, there is nothing to check and no secret
+	// store is required.
 	var needed []string
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {

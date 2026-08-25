@@ -56,8 +56,8 @@
  * markup churn does not break it at all.
  *
  * Driven by scripts/record-demo.sh --video 08 (it globs 08-*.spec.ts and names
- * the take wardyn-08-autonomous-agent-<stamp>.mp4 — docs/README.md links that
- * exact asset name, so this FILENAME IS LOAD-BEARING).
+ * the take wardyn-08-autonomous-agent-<stamp>.mp4 — RELEASING.md's
+ * release-asset step publishes that name, so this FILENAME IS LOAD-BEARING).
  */
 
 import { mkdirSync, readFileSync } from "node:fs";

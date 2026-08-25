@@ -108,7 +108,7 @@ function rowLabel(a: ApprovalRequest): string {
 }
 
 // D7 — the agent CLI's own known telemetry endpoints (DATA-FLOW.md:27,
-// DEMO-SCRIPT.md:664). Client-side recognition only — this is identification
+// DEMO-SCRIPT.md:701). Client-side recognition only — this is identification
 // for the tag, not a policy; the row still decides through the normal
 // Approve/Deny controls.
 const KNOWN_TELEMETRY_HOSTS = ["http-intake.logs.us5.datadoghq.com"];
