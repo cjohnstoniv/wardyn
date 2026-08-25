@@ -72,6 +72,11 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
+	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts
+	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go never
+	// reads the var — it reads the POLICY FILE at the path inside that mount
+	// (WARDYN_DEFAULT_POLICY), which is a separate, Go-read var.
+	"WARDYN_MANAGED_DIR": true,
 	// The desktop-tier installer's own image override — read only by
 	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in
 	// ENV.md's "Setup / operator scripts" section.
