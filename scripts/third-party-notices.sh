@@ -126,6 +126,16 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
     echo "None."
   fi
   echo
+  echo "## In-tree components derived from third-party projects"
+  echo
+  echo "Not dependencies — third-party source adapted into this repository, and therefore"
+  echo "carrying that upstream project's notice-retention obligation into every build."
+  echo
+  echo "| path | upstream | licence |"
+  echo "|---|---|---|"
+  echo "| \`ui/src/app/components/ui/\` | shadcn/ui — https://ui.shadcn.com | MIT, Copyright (c) 2023 shadcn |"
+  echo "| \`ui/e2e/demo/assets/player/\` | asciinema-player 3.16.0 | Apache-2.0 |"
+  echo
   echo "## Components invoked as separate processes, not linked"
   echo
   echo "The agent container images apt-install \`asciinema\` (GPL-3.0), which \`wardyn-rec\`"

@@ -1,0 +1,20 @@
+Third-party notices for the Wardyn console
+==========================================
+
+This console bundles the Inter and JetBrains Mono typefaces (@fontsource/inter,
+@fontsource/jetbrains-mono), both licensed under the SIL Open Font License,
+Version 1.1. The full OFL-1.1 text ships alongside this file as OFL-1.1.txt.
+
+  Inter          Copyright (c) 2016 The Inter Project Authors
+                 https://github.com/rsms/inter
+  JetBrains Mono Copyright (c) 2020 The JetBrains Mono Project Authors
+                 https://github.com/JetBrains/JetBrainsMono
+
+Under the OFL, Reserved Font Names may not be reused by derived works.
+
+The console's UI primitives under src/app/components/ui/ are derived from
+shadcn/ui, MIT licensed, Copyright (c) 2023 shadcn — https://ui.shadcn.com
+
+The complete list of third-party components distributed with Wardyn, and their
+verbatim licence texts, is in THIRD-PARTY-NOTICES.md and licenses/texts/ in the
+source repository, and at /usr/share/doc/wardyn/ inside the published images.

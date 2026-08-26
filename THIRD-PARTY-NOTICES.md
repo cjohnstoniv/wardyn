@@ -251,6 +251,16 @@ canonical text for that licence is in `licenses/texts/common/`.
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
 | `scheduler` | 0.23.2 | MIT | https://reactjs.org/ |
 
+## In-tree components derived from third-party projects
+
+Not dependencies — third-party source adapted into this repository, and therefore
+carrying that upstream project's notice-retention obligation into every build.
+
+| path | upstream | licence |
+|---|---|---|
+| `ui/src/app/components/ui/` | shadcn/ui — https://ui.shadcn.com | MIT, Copyright (c) 2023 shadcn |
+| `ui/e2e/demo/assets/player/` | asciinema-player 3.16.0 | Apache-2.0 |
+
 ## Components invoked as separate processes, not linked
 
 The agent container images apt-install `asciinema` (GPL-3.0), which `wardyn-rec`
