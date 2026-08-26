@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -706,7 +706,7 @@ npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dep
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+ci: build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
@@ -844,3 +844,11 @@ diagrams: ## Validate the mermaid diagrams in the public docs (syntax + label-tr
 # Check SPDX license headers on source files (or apply with: make license-headers ARGS=fix).
 license-headers: ## Check SPDX headers on source files; ARGS=fix to apply them
 	./scripts/license-headers.sh $(if $(filter fix,$(ARGS)),--fix)
+
+# THIRD-PARTY-NOTICES.md + licenses/texts/ must match what regeneration produces.
+# This is what discharges the MIT/BSD/ISC/OFL notice-retention duty on the binaries
+# and images we distribute, and it is also the gate that stops a new dependency
+# entering unreviewed: a new dep produces new UNTRACKED licence text, the check goes
+# red, and the dependency's full licence lands in the PR diff for CODEOWNERS review.
+notices: ## Verify THIRD-PARTY-NOTICES.md is current; ARGS=fix to regenerate
+	./scripts/third-party-notices.sh $(if $(filter fix,$(ARGS)),--fix,--check)
