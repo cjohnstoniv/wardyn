@@ -674,8 +674,9 @@ sbom: ## Generate a CycloneDX SBOM via syft
 	syft . -o cyclonedx-json > wardyn-sbom.cdx.json
 
 # Fail closed on a copyleft license in a SHIPPED (prod) UI dependency.
-npm-license: ## Fail closed on copyleft in a SHIPPED (prod) UI dependency
-	@echo "Checking UI production dependency licenses (no copyleft)..."
+npm-license: ## Every shipped (prod) UI dependency licence must be on the shared allowlist
+	@echo "Checking UI production dependency licences against licenses/ALLOWED-LICENSES.txt..."
+	./scripts/check-ui-licenses.sh --self-test
 	./scripts/check-ui-licenses.sh
 
 # The npm half of govulncheck: every Go dep was blocked on advisories at merge

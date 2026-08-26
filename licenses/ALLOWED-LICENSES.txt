@@ -10,6 +10,10 @@
 #   Go, 77 shipped modules : Apache-2.0 42, BSD-3-Clause 22, MIT 16, ISC 2, BSD-2-Clause 1
 #   UI, production deps    : MIT, Apache-2.0, ISC, 0BSD, OFL-1.1
 #
+# BlueOak-1.0.0 and Python-2.0 carry over from the previous UI gate's allowlist —
+# both permissive, both currently dev-only. Kept so replacing the wildcards is not
+# also a silent narrowing.
+#
 # Extend deliberately, with review. CODEOWNERS routes any change here to the maintainer.
 0BSD
 Apache-2.0
@@ -21,3 +25,5 @@ MIT
 MIT-0
 OFL-1.1
 Unlicense
+BlueOak-1.0.0
+Python-2.0
