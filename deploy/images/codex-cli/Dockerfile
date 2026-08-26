@@ -63,6 +63,22 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
 
+# Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
+# s4(d) requires the NOTICE contents to be carried. Publishing an image IS
+# distribution, so they ship inside it. THIRD-PARTY-NOTICES.md carries the
+# MIT/BSD/ISC/OFL notices every bundled dependency requires.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/
+
+# org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
+# Wardyn's own code is licensed under -- enterprise registries and scanners key off
+# it, and a bare "Apache-2.0" here would be a false declaration.
+LABEL org.opencontainers.image.title="agent-codex-cli" \
+      org.opencontainers.image.description="Wardyn agent image: OpenAI Codex CLI" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \
+      org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
+
+
 # tmux: the interactive attach shell falls back through tmux -> bash -> sh
 # (deploy/images/common/attach-bashrc.sh); codex-cli had none, unlike
 # claude-code. openssh-sftp-server + socat: the SSH-gateway lane (see

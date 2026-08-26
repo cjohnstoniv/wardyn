@@ -51,6 +51,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec
 # ── Stage 2: oracle runtime ───────────────────────────────────────────────────
 FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 
+# Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
+# s4(d) requires the NOTICE contents to be carried. Publishing an image IS
+# distribution, so they ship inside it. THIRD-PARTY-NOTICES.md carries the
+# MIT/BSD/ISC/OFL notices every bundled dependency requires.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/
+
+# org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
+# Wardyn's own code is licensed under -- enterprise registries and scanners key off
+# it, and a bare "Apache-2.0" here would be a false declaration.
+LABEL org.opencontainers.image.title="agent-oracle" \
+      org.opencontainers.image.description="Wardyn agent image: conformance oracle" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-2.0-or-later" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \
+      org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
+
+
 # curl + ca-certificates: the egress-boundary oracle probes the proxy.
 # python3: several task solutions rewrite files via a python heredoc.
 # git: parity with the real images (some solutions may init/inspect a repo).

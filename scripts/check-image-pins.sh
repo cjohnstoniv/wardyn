@@ -2,8 +2,10 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# check-image-pins.sh — every image a Dockerfile FROM or a compose file pulls is
-# digest-pinned.
+# check-image-pins.sh — two Dockerfile/compose distribution invariants:
+#   1. every image a Dockerfile FROM or a compose file pulls is digest-pinned;
+#   2. every Dockerfile that produces a PUBLISHED image carries its licence files
+#      and OCI labels.
 #
 # FAILS if a Dockerfile `FROM` (a registry image, not a build-stage alias) or a
 # compose registry image lacks an @sha256 digest. A floating tag lets an
@@ -76,7 +78,45 @@ for compose in ./deploy/compose/docker-compose*.yaml; do
   done < <(grep -E '^[[:space:]]*image:' "$compose" | awk '{print $2}')
 done
 
+# ── published images carry their licence files and OCI labels ───────────────
+#
+# Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution
+# and s4(d) requires the NOTICE contents to be carried. Publishing a container
+# image IS distribution, and every image below shipped without either for three
+# release generations (0.5.0, 0.6.0, 0.6.1) — the first thing any registry
+# scanner reports.
+#
+# org.opencontainers.image.licenses must be present AND must not be a bare
+# "Apache-2.0" on an image that also conveys GPL or vendor-licensed content;
+# enterprise registries key off that field, so a wrong value is worse than none.
+# Only the two distroless product images are legitimately Apache-2.0 alone.
+PUBLISHED_DOCKERFILES=(
+  deploy/compose/Dockerfile.wardynd
+  deploy/compose/Dockerfile.proxy
+  deploy/compose/Dockerfile.tetragon-ingest
+  deploy/images/claude-code/Dockerfile
+  deploy/images/codex-cli/Dockerfile
+  deploy/images/aws-sso/Dockerfile
+  deploy/images/oracle/Dockerfile
+)
+APACHE_ONLY_OK="deploy/compose/Dockerfile.wardynd deploy/compose/Dockerfile.proxy"
+
+for df in "${PUBLISHED_DOCKERFILES[@]}"; do
+  [ -f "$df" ] || { echo "FAIL: $df is listed as producing a published image but does not exist." >&2; fail=1; continue; }
+  grep -qE '^COPY LICENSE NOTICE THIRD-PARTY-NOTICES\.md /usr/share/doc/wardyn/' "$df" \
+    || { echo "FAIL: $df: no 'COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/'. Apache-2.0 s4(a)/(d) requires them to travel with the image." >&2; fail=1; }
+  for label in title description licenses source; do
+    grep -q "org.opencontainers.image.$label=" "$df" \
+      || { echo "FAIL: $df: missing OCI label org.opencontainers.image.$label." >&2; fail=1; }
+  done
+  lic=$(grep -oE 'org\.opencontainers\.image\.licenses="[^"]*"' "$df" | head -1 | sed -E 's/.*="([^"]*)"/\1/')
+  if [ "$lic" = "Apache-2.0" ] && [[ " $APACHE_ONLY_OK " != *" $df "* ]]; then
+    echo "FAIL: $df: declares licenses=\"Apache-2.0\" but is not one of the distroless product images; it conveys base-image GPL and/or vendor-licensed content, so the expression must say so." >&2
+    fail=1
+  fi
+done
+
 if ((fail)); then
   exit 1
 fi
-echo "check-image-pins: OK (all Dockerfile FROMs and compose registry images are digest-pinned)"
+echo "check-image-pins: OK (digest pins; published images carry LICENSE/NOTICE/THIRD-PARTY-NOTICES and OCI labels)"

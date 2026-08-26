@@ -144,6 +144,22 @@ RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardy
 # this image needs no QEMU at all, only the arm64 child of this pinned index.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 
+# Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
+# s4(d) requires the NOTICE contents to be carried. Publishing an image IS
+# distribution, so they ship inside it. THIRD-PARTY-NOTICES.md carries the
+# MIT/BSD/ISC/OFL notices every bundled dependency requires.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/
+
+# org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
+# Wardyn's own code is licensed under -- enterprise registries and scanners key off
+# it, and a bare "Apache-2.0" here would be a false declaration.
+LABEL org.opencontainers.image.title="wardynd" \
+      org.opencontainers.image.description="Wardyn control plane" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \
+      org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
+
+
 # Carry the builder's CA bundle (standard roots + any staged corp CA) into the
 # distroless runtime: wardynd makes its OWN outbound TLS calls (e.g. a configured
 # composer backend) that traverse the corp MITM proxy — it is not behind the
