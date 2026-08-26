@@ -654,6 +654,30 @@ jobs:
   #     in .gitleaksignore (gitleaks' native mechanism), not by path/regex.
   #   licenses — asciinema is a subprocess tool, not a Go dep, so it is not
   #     checked here.
+  # THIRD-PARTY-NOTICES.md + licenses/texts/ must match what regeneration produces.
+  # Needs BOTH toolchains (go-licenses for the Go half, pnpm for the UI half), so it
+  # cannot ride the setup-go-only `gates` matrix below. It is also the gate that stops
+  # an unreviewed dependency landing: a new dep produces new UNTRACKED licence text,
+  # this goes red, and the licence lands in the PR diff for CODEOWNERS to read.
+  notices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # Frozen lockfile: the notices must describe the pinned tree, not a resolved one.
+      - run: pnpm -C ui install --frozen-lockfile
+      - run: make notices
+
   gates:
     runs-on: ubuntu-latest
     strategy:

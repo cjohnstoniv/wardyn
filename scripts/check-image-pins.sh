@@ -103,8 +103,11 @@ APACHE_ONLY_OK="deploy/compose/Dockerfile.wardynd deploy/compose/Dockerfile.prox
 
 for df in "${PUBLISHED_DOCKERFILES[@]}"; do
   [ -f "$df" ] || { echo "FAIL: $df is listed as producing a published image but does not exist." >&2; fail=1; continue; }
-  grep -qE '^COPY LICENSE NOTICE THIRD-PARTY-NOTICES\.md /usr/share/doc/wardyn/' "$df" \
-    || { echo "FAIL: $df: no 'COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/'. Apache-2.0 s4(a)/(d) requires them to travel with the image." >&2; fail=1; }
+  grep -qE '^COPY LICENSE NOTICE THIRD-PARTY-NOTICES\.md LICENSING\.md /usr/share/doc/wardyn/' "$df" \
+    || { echo "FAIL: $df: no 'COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/'. Apache-2.0 s4(a)/(d) requires them to travel with the image." >&2; fail=1; }
+  # The index alone is not the notice. MIT/BSD/ISC/OFL want the verbatim text.
+  grep -qE '^COPY licenses/texts/ /usr/share/doc/wardyn/licenses/' "$df" \
+    || { echo "FAIL: $df: no 'COPY licenses/texts/ /usr/share/doc/wardyn/licenses/'. A table of licence names is not the copyright and permission notice those licences require to accompany the copy." >&2; fail=1; }
   for label in title description licenses source; do
     grep -q "org.opencontainers.image.$label=" "$df" \
       || { echo "FAIL: $df: missing OCI label org.opencontainers.image.$label." >&2; fail=1; }

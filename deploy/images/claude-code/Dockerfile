@@ -67,7 +67,12 @@ FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca440
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
 # distribution, so they ship inside it. THIRD-PARTY-NOTICES.md carries the
 # MIT/BSD/ISC/OFL notices every bundled dependency requires.
-COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+# The VERBATIM texts, not just the index. MIT, BSD, ISC and OFL-1.1 each require
+# their copyright and permission notice to accompany the copy; a table of licence
+# names and URLs is not that notice. licenses/texts/ is ~1.8M and is the only
+# thing here that actually discharges the condition.
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 
 # org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
 # Wardyn's own code is licensed under -- enterprise registries and scanners key off

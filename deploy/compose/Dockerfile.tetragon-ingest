@@ -40,7 +40,12 @@ FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
 # distribution, so they ship inside it. THIRD-PARTY-NOTICES.md carries the
 # MIT/BSD/ISC/OFL notices every bundled dependency requires.
-COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md /usr/share/doc/wardyn/
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+# The VERBATIM texts, not just the index. MIT, BSD, ISC and OFL-1.1 each require
+# their copyright and permission notice to accompany the copy; a table of licence
+# names and URLs is not that notice. licenses/texts/ is ~1.8M and is the only
+# thing here that actually discharges the condition.
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 
 # org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
 # Wardyn's own code is licensed under -- enterprise registries and scanners key off
