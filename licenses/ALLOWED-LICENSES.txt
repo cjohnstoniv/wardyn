@@ -1,0 +1,23 @@
+# Permissive, distribution-safe SPDX identifiers — the SINGLE allowlist, read by BOTH the Go
+# gate (`make licenses`) and the UI gate (`make npm-license`). Two lists that must agree will
+# drift; one cannot.
+#
+# Enumerate ids. Do NOT add wildcards: a bare `BSD` token is an unversioned, legally ambiguous
+# declaration, and `BSD-*` admits BSD-4-Clause (advertising clause) and BSD-Protection
+# (copyleft-ish). An allowlist with a wildcard in it is a denylist wearing a costume.
+#
+# Every id below is present in the current dependency set (see local/oss-review-2026-08/):
+#   Go, 77 shipped modules : Apache-2.0 42, BSD-3-Clause 22, MIT 16, ISC 2, BSD-2-Clause 1
+#   UI, production deps    : MIT, Apache-2.0, ISC, 0BSD, OFL-1.1
+#
+# Extend deliberately, with review. CODEOWNERS routes any change here to the maintainer.
+0BSD
+Apache-2.0
+BSD-2-Clause
+BSD-3-Clause
+CC0-1.0
+ISC
+MIT
+MIT-0
+OFL-1.1
+Unlicense

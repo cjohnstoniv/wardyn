@@ -429,15 +429,31 @@ gitleaks: ## Scan the FULL git history for committed secrets
 	@echo "Scanning full git history for secrets with gitleaks $(GITLEAKS_VERSION)..."
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
 
-# Forbid copyleft / non-permissive Go dependencies. go-licenses has no -tags
-# flag, so the docker-tagged deps (moby/moby/*, containerd/errdefs) and the
-# k8s-tagged deps (k8s.io/client-go et al) are covered by driving the tag
-# through GOFLAGS on the second/third pass (U112).
-licenses: ## Forbid copyleft/non-permissive Go dependencies (all three tag sets)
-	@echo "Checking Go dependency licenses (tagless + -tags docker + -tags k8s)..."
-	go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
-	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
-	GOFLAGS=-tags=k8s go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
+# Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt.
+#
+# This is an ALLOWLIST, not a disallowed-type list, and the difference is
+# load-bearing. go-licenses' own default is --disallowed_types=forbidden,unknown;
+# the previous --disallowed_types=forbidden,restricted here added `restricted`
+# but SILENTLY DROPPED `unknown`, so a module with no detectable licence passed a
+# gate that would have caught it out of the box. `reciprocal` (MPL/EPL/CDDL) was
+# allowed under either. The two flags are mutually exclusive (see
+# `go-licenses check --help`), so closing all three holes means swapping, not
+# adding. Verified zero-cost: all 77 shipped modules classify as type `notice`.
+#
+# go-licenses has no -tags flag, so the docker-tagged deps (moby/moby/*,
+# containerd/errdefs) and the k8s-tagged deps (k8s.io/client-go et al) are
+# covered by driving the tag through GOFLAGS on the later passes (U112). The
+# fourth pass is the real production build invocation (GO_BUILD_TAGS=docker,k8s).
+ALLOWED_LICENSES_FILE ?= licenses/ALLOWED-LICENSES.txt
+GO_LICENSE_ALLOW ?= $(shell grep -vE '^[[:space:]]*(\#|$$)' $(ALLOWED_LICENSES_FILE) | paste -sd,)
+
+licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt (all tag sets)
+	@echo "Checking Go dependency licences against $(ALLOWED_LICENSES_FILE) (tagless + docker + k8s + docker,k8s)..."
+	@test -n "$(GO_LICENSE_ALLOW)" || { echo "ERROR: allowlist $(ALLOWED_LICENSES_FILE) is empty or unreadable — failing closed"; exit 1; }
+	go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --allowed_licenses=$(GO_LICENSE_ALLOW) ./...
+	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --allowed_licenses=$(GO_LICENSE_ALLOW) ./...
+	GOFLAGS=-tags=k8s go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --allowed_licenses=$(GO_LICENSE_ALLOW) ./...
+	GOFLAGS=-tags=docker,k8s go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --allowed_licenses=$(GO_LICENSE_ALLOW) ./...
 
 # Helm chart lint + template-render (must render the load-bearing objects).
 #
