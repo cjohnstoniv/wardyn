@@ -321,6 +321,54 @@ managed file, a run naming no policy really does resolve to that ceiling, and
 a synthesized profile really is clamped to it (see "Tamper posture" above for
 what "clamped" does and does not mean once the caller is an admin).
 
+## Upgrade, rollback, uninstall
+
+**Upgrade is an MDM rewrite of two lines.** `wardyn.env` pins
+`WARDYN_WARDYND_IMAGE` and `WARDYN_PROXY_IMAGE` by digest; push a new envelope
+with new digests and the next timer tick brings the stack up on them. No tag
+moves under the fleet, and the launcher runs `--pull missing`, so a laptop that
+is offline keeps running what it already has instead of failing to start.
+
+**Rollback is the previous digest** — push the old envelope back.
+
+> ⚠️ **Rollback does not roll the database back.** There are **zero** down
+> migrations (`ls internal/db/migrations | grep -c down` → 0) and no version
+> guard, so an older `wardynd` starts against a schema a newer one has already
+> migrated **forward**, unguarded. It generally serves, because migrations have
+> been additive — but that is a property of the migrations so far, not a
+> promise. Treat a rollback across a migration boundary as untested, and
+> capture `wardyn support-bundle` before you do it.
+
+**Stopping.** `wardyn-desktop.sh down` stops the stack and keeps everything.
+`wardyn-desktop.sh down --purge` additionally destroys the Postgres volume:
+every run, every recording, and the whole append-only audit log. Note the
+LaunchDaemon (or systemd timer) re-asserts the stack every 300s, so a plain
+`docker compose down` does not stick — unload the daemon first:
+
+```sh
+sudo launchctl bootout system/com.wardyn.daemon      # macOS
+sudo systemctl disable --now wardyn.timer            # Linux
+sudo /usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh down
+```
+
+**Uninstall keeps your data unless you ask otherwise**, matching `dpkg`/`rpm`
+convention: it stops the stack, unloads the daemon and removes the payload, and
+leaves `/etc/wardyn/age.key` and the Postgres volume in place, so a re-install
+recovers the device. `--purge` removes them.
+
+> ⚠️ **`/etc/wardyn/age.key` deletion is terminal.** It is the only identity
+> that can decrypt this device's secret store, it is minted per-device and
+> never rides in an MDM payload, so no copy exists anywhere else. Removing it
+> orphans every secret stored on that laptop, permanently. That is the intended
+> property — losing one device costs one device — but it means `--purge` has no
+> undo.
+
+**The one-line install (`install.sh`) has the same lifecycle**, in `~/.wardyn`:
+re-run the installer at a new version to upgrade (it rewrites the pins in place
+and leaves your age key, admin token and ports untouched), `docker compose down`
+to stop, and remove `~/.wardyn` yourself to uninstall — with the same warning,
+since `~/.wardyn/.env` holds `WARDYN_AGE_KEY` in cleartext.
+
 ## Try it, once, on a real Mac
 
 Everything above is verified against a compose stack on a Linux CI runner.
@@ -336,7 +384,16 @@ sudo ./deploy/desktop/install.sh
 # box — stand in for it by hand, using the example + the same demo.json
 # ceiling the compose stack itself falls back to:
 sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
-sudo sed -i '' 's/\$UPN/you@example.com/' /etc/wardyn/wardyn.env
+# Three expressions, not one. The example ships both image pins uncommented (a
+# real fleet needs them), and their @sha256:REPLACE_ME placeholders resolve to
+# nothing — so without these the daemon dies on an image pull and the proxy
+# sidecar is unresolvable, on the one piece of REAL-HARDWARE evidence this tier
+# has. Substitute the current release's digests, or a published tag while you
+# are only smoke-testing.
+sudo sed -i '' -e 's/\$UPN/you@example.com/' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.6.4|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.6.4|' \
+               /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 
 sudo launchctl kickstart -k system/com.wardyn.daemon

@@ -415,7 +415,16 @@ jobs:
           # are the same file, so a real difference is a real bug, not a
           # CI-environment artifact.
           sudo cp examples/policies/demo.json /etc/wardyn/policy.json
+          # The envelope ships BOTH image pins uncommented, as a real fleet must
+          # (an unset WARDYN_PROXY_IMAGE makes every run's egress sidecar
+          # unresolvable on a laptop). Their @sha256:REPLACE_ME placeholders are
+          # unresolvable here, and the env file WINS over the compose default —
+          # so rewrite both to the images the steps above just built, or this
+          # job dies on an image pull before any assertion runs, looking like a
+          # registry problem rather than an envelope edit.
           sed -e 's/\$UPN/ci-operator@example.com/' -e 's/\$SERIALNUMBER/CI0000/' \
+              -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=wardyn/wardynd:local|' \
+              -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:local|' \
             deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
       - name: Boot the desktop compose profile
         # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;

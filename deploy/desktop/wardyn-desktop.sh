@@ -13,7 +13,15 @@
 # directory, never touches age.key beyond reading it. That is install.sh's
 # job, once, on first setup — see docs/DESKTOP.md "The MDM file table".
 #
-# Usage: wardyn-desktop.sh [up]   (only subcommand today; unrecognized args error)
+# Usage: wardyn-desktop.sh [up|down [--purge]]
+#
+#   up              bring the stack up (default; what the timer fires)
+#   down            stop it, keeping ALL data
+#   down --purge    stop it and DESTROY the Postgres volume — every run, every
+#                   recording, the whole append-only audit log. Irreversible.
+#                   It does NOT touch /etc/wardyn/age.key: that is the installer's
+#                   to mint and the uninstaller's to remove, and deleting it
+#                   orphans every secret stored on this device forever.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,12 +29,32 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck disable=SC1091 # source= above is relative to this file, not resolvable from CWD
 . "${REPO_ROOT}/scripts/lib/common.sh"  # log/warn/die, wait_healthy, wardyn_pick_docker_host
 
-case "${1:-up}" in
+# `up` was the only subcommand, while the LaunchDaemon re-asserts every 300s.
+# That left NO way to stop the stack — which uninstall, rollback (which must
+# reach a stopped daemon before starting an older one against a
+# migrated-forward DB), an offline-lane test, and `wardynd -rotate-age-key`
+# (which requires a stopped daemon and enforces nothing) all need.
+SUBCOMMAND="${1:-up}"
+PURGE=0
+case "${SUBCOMMAND}" in
   up) ;;
-  *) die "wardyn-desktop.sh: unknown subcommand '$1' (only 'up' is supported)" ;;
+  down)
+    case "${2:-}" in
+      "") ;;
+      --purge) PURGE=1 ;;
+      *) die "wardyn-desktop.sh: unknown flag '$2' for down (only --purge is supported)" ;;
+    esac
+    ;;
+  *) die "wardyn-desktop.sh: unknown subcommand '${SUBCOMMAND}' (up | down [--purge])" ;;
 esac
 
-MANAGED_DIR="/etc/wardyn"
+# /etc/wardyn in production. Overridable because this script already EXPORTS
+# WARDYN_MANAGED_DIR for the included compose file to mount — reading the same
+# variable it exports makes the two consistent, and lets the envelope be
+# exercised end-to-end (a wrapper-driven `up`, which is what the timer actually
+# runs) without writing to /etc on a test box. The LaunchDaemon and the systemd
+# unit set no such variable, so production is unchanged.
+MANAGED_DIR="${WARDYN_MANAGED_DIR:-/etc/wardyn}"
 ENV_FILE="${MANAGED_DIR}/wardyn.env"
 SECRET_FILE="${MANAGED_DIR}/secret.env"
 AGE_FILE="${MANAGED_DIR}/age.key"
@@ -50,14 +78,36 @@ if [ -f "${SECRET_FILE}" ]; then
   set +a
 fi
 
-# The compose wardynd service builds `wardyn/wardynd:local` by default when
-# WARDYN_WARDYND_IMAGE is unset (deploy/compose/docker-compose.yaml) — a
-# mutable tag no MDM envelope should ship pinned to `latest` unless the
-# operator overrides it in wardyn.env. --no-build below refuses to fall back
-# to building that from source on a laptop with no repo checkout, so a real
-# image ref is required; default to the published tag CI publishes on every
-# push to main (docs/CI.md) when the envelope names none.
+# Read the image pins FROM THE ENVELOPE.
+#
+# This used to be `export WARDYN_WARDYND_IMAGE="${WARDYN_WARDYND_IMAGE:-...:latest}"`,
+# which silently defeated the whole point of pinning: compose prefers the SHELL
+# environment over --env-file, and wardyn.env is never sourced into this shell
+# (only secret.env is, above). So the launcher's own `:latest` won over whatever
+# digest the org shipped, on a 300s timer, while the org believed the fleet was
+# pinned. Proven:
+#
+#     env-file only            -> image: ghcr.io/cjohnstoniv/wardynd@sha256:...
+#     shell var also exported  -> image: ghcr.io/cjohnstoniv/wardynd:latest
+#
+# `publish-image.yml` pushes wardynd:latest on EVERY push to main, so that
+# default had managed laptops tracking tip-of-main, unreleased, several times a
+# day.
+#
+# env_get returns empty with exit 0 when the key is absent, so the fallback is
+# explicit: without it the var would be set-but-empty and compose would fall
+# back to wardyn/wardynd:local, which --no-build cannot build and no laptop can
+# pull. env_get is already this file's idiom (see the site-config apply below).
+WARDYN_WARDYND_IMAGE="$(env_get "${ENV_FILE}" WARDYN_WARDYND_IMAGE)"
 export WARDYN_WARDYND_IMAGE="${WARDYN_WARDYND_IMAGE:-ghcr.io/cjohnstoniv/wardynd:latest}"
+# Same for the egress sidecar, which deploy/desktop/ set NOWHERE: the base
+# compose file then handed wardynd `wardyn/wardyn-proxy:local`, a ref no laptop
+# can resolve, so EVERY run's proxy sidecar was unresolvable. CI never caught it
+# because CI builds the proxy from the checkout.
+WARDYN_PROXY_IMAGE="$(env_get "${ENV_FILE}" WARDYN_PROXY_IMAGE)"
+if [ -n "${WARDYN_PROXY_IMAGE}" ]; then
+  export WARDYN_PROXY_IMAGE
+fi
 
 wardyn_pick_docker_host  # DOCKER_HOST / WARDYN_DOCKER_SOCK, incl. Colima/Rancher
 
@@ -67,8 +117,26 @@ COMPOSE_FILE="${REPO_ROOT}/deploy/desktop/docker-compose.yaml"  # includes deplo
 export WARDYN_MANAGED_DIR="${MANAGED_DIR}"
 compose() { docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -p wardyn-desktop "$@"; }
 
+if [ "${SUBCOMMAND}" = "down" ]; then
+  if [ "${PURGE}" -eq 1 ]; then
+    warn "wardyn-desktop.sh: --purge DESTROYS the Postgres volume: every run, every recording, and the whole append-only audit log. This cannot be undone."
+    warn "wardyn-desktop.sh: ${AGE_FILE} is NOT removed — deleting it orphans every secret stored on this device. Remove it deliberately, with the uninstaller."
+    compose down -v
+    log "wardyn-desktop: down (volumes destroyed)"
+  else
+    compose down
+    log "wardyn-desktop: down (data kept; use 'down --purge' to destroy the Postgres volume)"
+  fi
+  exit 0
+fi
+
+# --pull missing, not --pull always: `always` makes every 300s tick a registry
+# round-trip, so an offline laptop dies here under `set -euo pipefail` and the
+# stack does not come up AT ALL even though every image is already local. With
+# the envelope pins above, an upgrade is an MDM rewrite of wardyn.env rather
+# than a tag moving under the fleet, so there is nothing for `always` to catch.
 log "Bringing up the desktop compose stack (image ${WARDYN_WARDYND_IMAGE})"
-compose up -d --no-build --pull always
+compose up -d --no-build --pull missing
 
 PORT="${WARDYN_UP_PORT:-8080}"
 BASE_URL="http://127.0.0.1:${PORT}"
@@ -79,18 +147,34 @@ log "wardynd healthy"
 # Idempotent site-config apply. site-config.json is a full-document REPLACE
 # (docs/DESKTOP.md "Posture switches are env vars, never site-config"), so
 # re-applying the same file on every tick is a safe no-op, not accumulation.
-# Runs the CLI baked into the image, in-container: local mode trusts the
-# loopback-equivalent peer with no token needed (WARDYN_LOCAL_TRUST_FORWARDER
-# in the base compose file); the SSO envelope variant has no CLI-usable
-# credential here and is skipped with a warning — a human applies it via the
-# console after signing in.
+# Runs the CLI baked into the image, in-container. This used to be gated on
+# WARDYN_LOCAL_MODE=true, skipping the m-prime (SSO) variant with "the SSO
+# envelope variant has no CLI-usable credential here" — and that PREMISE was
+# wrong, which is why the gate is gone rather than worked around.
+#
+# The credential exists on both variants:
+#   local mode  the loopback-equivalent peer is trusted with no token
+#               (WARDYN_LOCAL_TRUST_FORWARDER in the base compose file)
+#   m-prime     WARDYN_ADMIN_TOKEN ships in /etc/wardyn/secret.env, is sourced
+#               above, and compose interpolates it into the wardynd container —
+#               so `compose exec` INHERITS it and the CLI reads it from the
+#               environment. It authenticates even with OIDC configured: a
+#               rejected session cookie falls through to admin-token auth.
+#
+# No `-e` flag is needed or wanted: this shell has no such variable (only
+# secret.env is sourced into it), and the container already carries it.
+#
+# UPSTREAM PROXY: site-config may set a corporate proxy, and the corp-proxy hop
+# defers the post-DNS IP re-vet to that proxy — so this auto-apply asserts that
+# residual on every laptop, every boot, with no human in the loop. That is a
+# deliberate, recorded decision (docs/DESKTOP.md); the org authored the file MDM
+# pushed.
+#
+# site-config.json is a full-document REPLACE, so re-applying the same file on
+# every tick is a safe no-op, not accumulation.
 if [ -f "${SITE_CONFIG}" ]; then
-  if [ "$(env_get "${ENV_FILE}" WARDYN_LOCAL_MODE)" = "true" ]; then
-    compose exec -T wardynd /usr/local/bin/wardyn site-config apply "${SITE_CONFIG}" \
-      || warn "wardyn-desktop.sh: site-config apply failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
-  else
-    warn "wardyn-desktop.sh: WARDYN_LOCAL_MODE is not 'true' — skipping automatic site-config apply (the SSO envelope variant has no CLI-usable credential here; apply ${SITE_CONFIG} via the console after signing in)"
-  fi
+  compose exec -T wardynd /usr/local/bin/wardyn site-config apply "${SITE_CONFIG}" \
+    || warn "wardyn-desktop.sh: site-config apply failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
 else
   log "No ${SITE_CONFIG} delivered yet — skipping site-config apply"
 fi

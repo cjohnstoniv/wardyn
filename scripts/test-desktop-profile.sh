@@ -169,17 +169,6 @@ grep -q 'secret\.env' "${MPRIME}" \
 grep -q 'WARDYN_ADMIN_TOKEN' "${MPRIME}" \
   || fail "m-prime envelope never mentions WARDYN_ADMIN_TOKEN at all — an operator following it ships the published demo-admin-token to every laptop"
 
-# (e) Both image pins are present and are DIGESTS. A mutable tag on a 300s timer
-#     is what A3 exists to close; the proxy pin additionally has no working
-#     default at all on this tier.
-for v in WARDYN_WARDYND_IMAGE WARDYN_PROXY_IMAGE; do
-  val="$(mp_get "${v}")"
-  [ -n "${val}" ] || fail "m-prime envelope does not pin ${v} — the launcher then falls back to a mutable tag (wardynd) or an unpullable local-build ref (proxy)"
-  case "${val}" in
-    *@sha256:*) ;;
-    *) fail "m-prime ${v}='${val}' is not digest-pinned; a mutable tag means a rebuild upstream silently changes what every laptop runs" ;;
-  esac
-done
 
 # ── 7b. the listeners the tier's own promise depends on ────────────────────
 # Both listener vars default to EMPTY in the included stack, and empty means
@@ -194,6 +183,30 @@ for f in "${ENV_EXAMPLES[@]}"; do
     || fail "$(basename "${f}") sets no WARDYN_SSH_LISTEN — compose still publishes 2222, so the tier ships a port that refuses every connection and `wardyn ssh` does not answer"
   grep -qE '^WARDYN_SSH_ADVERTISE=' "${f}" \
     || fail "$(basename "${f}") sets no WARDYN_SSH_ADVERTISE — the console's 'Attach from your terminal' pane then prints no usable ssh command"
+done
+
+# ── 7c. every envelope pins BOTH images, by DIGEST ─────────────────────────
+# Presence is asserted as hard as the format. A check that only validates the
+# VALUE passes vacuously on an unset variable — which is the exact defect here:
+# deploy/desktop/ set WARDYN_PROXY_IMAGE nowhere, so the base compose file
+# handed wardynd `wardyn/wardyn-proxy:local`, a ref no laptop can resolve, and
+# EVERY run's egress sidecar was unresolvable. The stack still reached healthy
+# and the console still loaded; the first RUN was the first symptom.
+#
+# Digest, not tag: publish-image.yml pushes wardynd:latest on every push to
+# main, so a mutable tag has managed laptops tracking tip-of-main, unreleased,
+# several times a day, on a 300s timer.
+for f in "${ENV_EXAMPLES[@]}"; do
+  n="$(basename "${f}")"
+  for v in WARDYN_WARDYND_IMAGE WARDYN_PROXY_IMAGE; do
+    val="$(grep -E "^${v}=" "${f}" | tail -1 | cut -d= -f2-)"
+    [ -n "${val}" ] \
+      || fail "${n} does not set ${v} — the launcher then falls back to a mutable tag (wardynd) or to wardyn/wardyn-proxy:local, which no laptop can pull, making every run's egress sidecar unresolvable"
+    case "${val}" in
+      *@sha256:*) ;;
+      *) fail "${n}: ${v}='${val}' is not digest-pinned — a mutable tag means a rebuild upstream silently changes what every laptop runs, on a 300s timer" ;;
+    esac
+  done
 done
 
 # ── 8. no envelope pins an image this project does not publish ─────────────

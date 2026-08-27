@@ -249,9 +249,26 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, errProxyImageUnset
 	}
 
-	// Best-effort image presence: pull the agent image if absent. Proxy image
-	// is assumed locally present (operator-provided) to avoid surprise pulls.
+	// Best-effort image presence: pull the agent image if absent.
 	if err := d.ensureImage(ctx, spec.Image); err != nil {
+		return runner.Sandbox{}, err
+	}
+	// ...and the proxy sidecar, which used to be "assumed locally present
+	// (operator-provided) to avoid surprise pulls". That assumption held only for
+	// a repo checkout, which builds it. NOTHING ever fetched it otherwise:
+	// deploy/compose/docker-compose.yaml parks the proxy-image stanza in
+	// profiles: ["build-only"], so `docker compose pull` resolves three images and
+	// never this one; `--no-build` cannot build it; and it went straight into
+	// ContainerCreate below. So on the one-line install and on the desktop tier
+	// the stack reached healthy, the console loaded, and the FIRST RUN failed at
+	// sandbox creation with an unresolvable ref.
+	//
+	// One line at the chokepoint that already has the right semantics ("failures
+	// to pull surface as errors — fail closed, never run a sandbox we could not
+	// provision"). It no-ops where the image is already resident, so a checkout
+	// and CI (which builds it) are unaffected, and k8s is untouched — kubelet
+	// pulls the sidecar there.
+	if err := d.ensureImage(ctx, d.cfg.ProxyImage); err != nil {
 		return runner.Sandbox{}, err
 	}
 

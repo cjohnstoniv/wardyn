@@ -189,6 +189,55 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **The desktop tier's image pin did not work at all.** `wardyn-desktop.sh`
+  `export`ed `WARDYN_WARDYND_IMAGE` with a `:latest` default *before* running
+  `compose --env-file`, and **compose prefers the shell environment over
+  `--env-file`** — so the launcher's `:latest` always beat whatever digest the
+  org shipped, on a 300s timer, while the org believed the fleet was pinned.
+  `publish-image.yml` pushes `wardynd:latest` on every push to `main`, so that
+  default had managed laptops tracking tip-of-main, unreleased, several times a
+  day. The launcher now reads both pins **from the envelope**.
+
+- **Every run's egress sidecar was unresolvable on a managed laptop, and
+  nothing pulled it on either install path.** `deploy/desktop/` set
+  `WARDYN_PROXY_IMAGE` nowhere, so the base compose file handed `wardynd`
+  `wardyn/wardyn-proxy:local`. Worse, *nothing ever fetched the proxy image*:
+  the `proxy-image` stanza sits in `profiles: ["build-only"]` so `compose pull`
+  skips it, `--no-build` cannot build it, and the driver called
+  `ensureImage(spec.Image)` only. The stack reached healthy, the console
+  loaded, and the **first run failed at sandbox creation** — on the one-line
+  install too, where the ref was pinned correctly and fetched by nobody. Both
+  envelopes now pin it by digest, and the driver pulls it at the chokepoint that
+  already fails closed. Verified both directions: with the fix the image is
+  absent, gets pulled, and the run COMPLETEs; without it the run fails with
+  `create proxy: No such image`.
+
+- **`--pull always` on a 300s timer bricked an offline laptop.** Under
+  `set -euo pipefail` an unreachable registry killed the launcher, so the stack
+  did not come up **even though every image was already local**. Now
+  `--pull missing`; with envelope pins there is nothing for `always` to catch.
+
+- **There was no way to stop the stack.** `up` was the only subcommand while the
+  daemon re-asserted every 300s — so uninstall, rollback, the offline lane and
+  `wardynd -rotate-age-key` had no way to reach a stopped daemon.
+  `wardyn-desktop.sh down` keeps all data; `down --purge` destroys the Postgres
+  volume and says so first. It never removes `age.key`.
+
+- **Site-config never applied on the member-mode profile, for a reason that was
+  not true.** The apply was gated on `WARDYN_LOCAL_MODE=true`, skipping m′ with
+  *"the SSO envelope variant has no CLI-usable credential here"*. It has one:
+  `WARDYN_ADMIN_TOKEN` ships in `secret.env`, compose interpolates it into the
+  container, `compose exec` inherits it, and it authenticates even with OIDC
+  configured. The gate is deleted — no new flag, since the container already
+  carries the variable.
+
+- **Re-running the one-line installer at a new version ran the new topology on
+  the old images.** It overwrote `docker-compose.yaml` at the new tag but its
+  `if [ ! -f .env ]` guard skipped the entire `.env` write *including the image
+  pins* — and told the user "Wardyn is running". The upgrade path now rewrites
+  exactly the version-derived lines, adds listeners an older install lacks, and
+  leaves the age key, admin token and ports untouched.
+
 - **Only one of three agent names resolved on a published install.**
   `internal/api/harness.go` ships three catalog rows; `agent-claude-code` and
   `agent-none` both 404 on every published deployment, leaving `codex-cli` as
