@@ -68,8 +68,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// clone wiring in dispatch is already nil/empty-safe (it surfaces no repo env
 	// when run.Repo is blank), so an empty repo simply runs in the mounted
 	// workspace (or an empty one).
-	if req.Agent == "" {
-		writeError(w, http.StatusBadRequest, "agent is required")
+	if msg := agentRequirementError(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return req, "", "", false
 	}
 
@@ -190,7 +190,72 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		req.Interactive = true
 		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn attach <run-id>` or pass a task"
 	}
+	if msg := interactiveToolApprovalsError(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return req, "", "", false
+	}
 	return req, reqCC, warning, true
+}
+
+// agentRequirementError reports why a request may not omit `agent`, or "" when
+// it may.
+//
+// D1: exec mode runs the task as a plain shell command — no agent harness, no
+// model call — so naming an agent there was a formality that made the CLI read
+// AI-first to someone who wanted a governed shell. docs/CI.md documented the
+// workaround it forced: an exec run naming an agent it never uses, in the
+// document whose entire audience is exec.
+//
+// NOT A BLANKET DEFAULT, for two reasons that are easy to get wrong:
+//
+//  1. Defaulting to "claude-code" would be a SECURITY decision, not a
+//     convenience: the agent feeds the managed-subscription eligibility test, so
+//     every agentless exec run would become eligible for the operator's live
+//     subscription credential.
+//  2. Defaulting to "byoa"/"none" resolves to an image that DOES NOT EXIST. The
+//     ghcr convention fallback yields agent-byoa / agent-none, both unpublished
+//     — and the catalog's BYOA row is {ID: "none"}, so even the "correct" key
+//     404s. The run would 201 and then fail at pull, which an acceptance test
+//     asserting 201 would happily pass.
+//
+// So: require an image the run can actually start from, and keep the 400
+// otherwise, naming what is missing. Harness mode is unchanged — a harness run
+// with no agent is a sandbox that comes up and runs no agent.
+func agentRequirementError(req createRunRequest) string {
+	if req.Agent != "" {
+		return ""
+	}
+	if req.TaskMode != "exec" {
+		return "agent is required"
+	}
+	if strings.TrimSpace(req.Image) != "" || len(req.Workspaces) > 0 {
+		return ""
+	}
+	return "agent is required unless the run names an image to run in: pass --image, attach a workspace, or pass --agent"
+}
+
+// interactiveToolApprovalsError refuses tool_approvals=hold on an interactive
+// run, which used to be accepted and silently discarded: applyDispatchModeEnv
+// writes WARDYN_TOOL_APPROVALS only when !interactive, so the caller got a 201
+// and none of the supervision they asked for. A field accepted and thrown away
+// is worse than one refused — the caller believes the run is gated.
+//
+// The run does NOT become unsupervised: interactive tool use is supervised by
+// default (the agent parks its own approval prompt in the pane until a human
+// attaches), and the interactive lever is the inverted SeedAutoTools. So this
+// refuses a contradiction rather than closing a hole.
+//
+// Its CALLER must run this AFTER the empty-task→interactive coercion: a request
+// with no task and interactive=false becomes interactive there, so a check
+// sited earlier passes and the field is still dropped — the exact hole, one
+// step later.
+func interactiveToolApprovalsError(req createRunRequest) string {
+	if !req.Interactive || req.ToolApprovals != "hold" {
+		return ""
+	}
+	return "tool_approvals=hold is not supported for an interactive run: it applies to autonomous runs only, " +
+		"and an interactive run's tool use is already supervised in the attach pane. " +
+		"Drop tool_approvals, or launch without --interactive."
 }
 
 // denyMemberRequest is the REQUEST-LEVEL half of a member's launch gate: the

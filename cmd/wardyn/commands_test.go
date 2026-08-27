@@ -260,25 +260,32 @@ func TestRunCmd_RejectsMalformedPolicyID(t *testing.T) {
 	}
 }
 
-// run requires only --agent now (--repo is optional: an ephemeral scratch run).
-// A missing --agent must fail BEFORE any request; a missing --repo must NOT.
-func TestRunCmd_RequiresAgentOnly(t *testing.T) {
+// D1 INVERTED THIS. --agent is no longer a cobra required flag, because an
+// exec run with an --image needs no agent and cobra would refuse it before the
+// request was ever built — the server's own rule could never be reached. The
+// SERVER is now the authority: it 400s and names what is missing, and it is
+// also the only party that knows whether an attached workspace supplies an
+// image. So a missing --agent must now REACH the server rather than
+// short-circuit at the CLI.
+func TestRunCmd_AgentIsServerValidated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 
-	// Missing --agent → error, no request. --agent is now a cobra required
-	// flag, so the error is cobra's standard required-flag message.
-	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--repo", "org/name")
-	if err == nil {
-		t.Fatal("expected error when --agent missing, got nil")
-	}
-	if !strings.Contains(err.Error(), `required flag(s) "agent" not set`) {
-		t.Errorf("error = %q, want the required-flag message", err)
+	// Missing --agent → the request FIRES, carrying no agent. (This server
+	// fixture answers 201; a real one applies the D1 rule.)
+	if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--task-mode", "exec",
+		"--image", "ubuntu:24.04", "--task", "echo hi"); err != nil {
+		t.Fatalf("an exec run with an image and no --agent must reach the server, got: %v", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)
 	srv.mu.Unlock()
-	if n != 0 {
-		t.Errorf("server saw %d requests, want 0 (validation must short-circuit)", n)
+	if n != 1 {
+		t.Fatalf("server saw %d requests, want 1 — the CLI must no longer short-circuit a missing --agent", n)
+	}
+	var sent map[string]any
+	_ = json.Unmarshal(srv.last().body, &sent)
+	if a, ok := sent["agent"]; ok && a != "" {
+		t.Errorf("agent = %v, want absent/empty — the CLI must not invent one", a)
 	}
 
 	// Missing --repo but --agent present → the request fires (ephemeral run).

@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -130,6 +131,36 @@ func TestCreateRun_ToolApprovals_Validation(t *testing.T) {
 			`{"agent":"codex-cli","task":"echo hi","tool_approvals":"hold"}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 for tool_approvals=hold on codex-cli, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// C.3: the field used to be ACCEPTED AND SILENTLY DISCARDED on an
+	// interactive run — applyDispatchModeEnv writes WARDYN_TOOL_APPROVALS only
+	// when !interactive, so the caller got a 201 and none of the supervision they
+	// asked for. A field accepted and thrown away is worse than one refused: the
+	// caller believes the run is gated.
+	t.Run("hold is refused for an interactive run", func(t *testing.T) {
+		h := newHarness(t)
+		w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken,
+			`{"agent":"claude-code","task":"echo hi","interactive":true,"tool_approvals":"hold"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for tool_approvals=hold on an interactive run, got %d: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "tool_approvals") {
+			t.Errorf("the 400 must NAME the field the caller got wrong, got: %s", w.Body.String())
+		}
+	})
+
+	// The same request with NO task, which runs_create_validate.go COERCES to
+	// interactive. A guard sited before that coercion passes here and the field
+	// is still dropped — the identical hole, one step later. This is why the
+	// guard runs after it.
+	t.Run("hold is refused for a run coerced to interactive by having no task", func(t *testing.T) {
+		h := newHarness(t)
+		w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken,
+			`{"agent":"claude-code","tool_approvals":"hold"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400: an empty task is coerced to interactive, where hold is inert. got %d: %s", w.Code, w.Body.String())
 		}
 	})
 

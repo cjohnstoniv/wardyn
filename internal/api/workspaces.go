@@ -49,14 +49,6 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 // when a workspace request declares no source at all.
 const defaultEphemeralTarget = "/home/agent/work"
 
-// maxBaseImageSteps / maxBaseImageStepLen cap a custom base image's layered
-// Dockerfile lines — sane ceilings against a hostile/misbehaving request, not
-// a sizing of any real recipe.
-const (
-	maxBaseImageSteps   = 32
-	maxBaseImageStepLen = 2000
-)
-
 // decodeWorkspaceRequest decodes and validates a workspace request body.
 // Unknown JSON fields are rejected (decodeStrictMsg, mirroring
 // decodePolicyRequest's typo-safety) and everything is validated before any
@@ -232,19 +224,12 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 			return "base_image.image must not contain control characters or whitespace"
 		}
 	}
-	if len(b.Steps) > 0 {
-		if b.Kind != "custom" {
-			return "base_image.steps is only valid for kind=custom"
-		}
-		if len(b.Steps) > maxBaseImageSteps {
-			return fmt.Sprintf("base_image.steps: too many steps (max %d)", maxBaseImageSteps)
-		}
-		for _, step := range b.Steps {
-			if len(step) > maxBaseImageStepLen {
-				return fmt.Sprintf("base_image.steps: a step exceeds the max length (%d)", maxBaseImageStepLen)
-			}
-		}
-	}
+	// D3: base_image.steps validation is GONE, because the thing it validated is
+	// never executed. See types.BaseImageEntry.Steps — operator RUN lines would
+	// run on the HOST daemon during the wrap, outside every confinement tier, so
+	// they must never be wired. Validating the length of instructions nobody runs
+	// only made the surface look live. The field itself stays: it participates in
+	// the base-image catalog's UNIQUE identity (see the store).
 	return ""
 }
 

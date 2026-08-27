@@ -278,10 +278,14 @@ If you already run wardynd somewhere, skip `ci-run.sh` and use the CLI
 directly — it is fully non-interactive with `WARDYN_URL` +
 `WARDYN_ADMIN_TOKEN`:
 
+`--task-mode exec` runs the task as a plain shell command, so **no `--agent` is
+needed** — the image is what the run needs, and naming an agent it never invokes
+was a formality this documentation used to demonstrate.
+
 ```sh
-wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+wardyn run --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --dry-run   # resolve + check, launch nothing
-wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+wardyn run --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
 wardyn run get <id> --json     # final state, resolved image
 wardyn run grants <id>         # what the run was ELIGIBLE for

@@ -120,6 +120,50 @@ managed Kubernetes; every item below was verified against the code before it was
   it validates the repository, not the workflow.
 
 
+### Changed
+
+- **Scan-seeded egress now requires operator provenance, by default.**
+  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` shipped in 0.6 fully built and **off**,
+  because turning it on narrows egress for existing workspaces. 0.7 turns it on:
+  the asymmetry was the anomaly. The **secret** side of the very same `switch`
+  has always applied this provenance check unconditionally and calls the
+  boundary *"security-critical — do not relax"* — and the reason is identical
+  for egress. A hostile, or simply never-reviewed, repo could widen its own
+  run's allowlist just by naming a host in a committed file, with no operator
+  ever acting. **Upgrade impact:** a workspace whose egress requirements are
+  `scan_seeded` stops having them auto-added, and the run's warnings name what
+  was skipped; an operator declaring the host is the intended fix. Set
+  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS=false` to restore the old behaviour.
+
+- **`--agent` is no longer required for a `task_mode=exec` run that names an
+  image.** exec runs the task as a plain shell command — no agent harness, no
+  model call — so naming an agent was a formality, and `docs/CI.md` documented
+  the workaround it forced (`--agent claude-code --image ubuntu:24.04
+  --task-mode exec`, in the document whose whole audience is exec). It is **not
+  a blanket default**: defaulting to `claude-code` would make every agentless
+  run eligible for the operator's live subscription credential, and defaulting
+  to `byoa`/`none` resolves to an image that does not exist (both 404 on the
+  registry). Harness mode still requires an agent.
+
+### Fixed
+
+- **`tool_approvals=hold` on an interactive run was accepted and silently
+  discarded.** Dispatch writes `WARDYN_TOOL_APPROVALS` only for non-interactive
+  runs, so the caller got a 201 and none of the supervision they asked for. It
+  is now a 400 naming the field. The run does not become unsupervised —
+  interactive tool use is already supervised in the attach pane — so this
+  refuses a contradiction rather than closing a hole. The guard sits **after**
+  the empty-task→interactive coercion, because a guard placed before it passes
+  and the field is still dropped.
+
+- **The custom base-image `steps` surface pretended to do something.**
+  Validation, caps and UI copy implied operator-authored Dockerfile lines would
+  be applied; nothing applies them, and nothing may — operator `RUN` lines would
+  execute on the **host** daemon during the wrap, outside every confinement
+  tier. The user-facing surface is gone. **The field itself stays**, documented
+  as catalog identity: it is part of the `base_images` UNIQUE index, so deleting
+  it would make every upsert write NULL and mint duplicate catalog rows.
+
 ### Added
 
 - **The desktop tier is packageable.** `scripts/build-desktop-package.sh` builds

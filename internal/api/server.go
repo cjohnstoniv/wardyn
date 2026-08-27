@@ -397,15 +397,25 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
-	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, default
-	// false), when true, makes applyWorkspaceRequirements apply the SAME
-	// provenance gate to a scan_seeded EGRESS requirement that it already
-	// applies to a scan_seeded SECRET requirement (runs_create.go): only an
-	// operator_set requirement is auto-added at launch, and a scan_seeded one
-	// (the workspace scanner reading untrusted repo content) is skipped.
-	// Default off preserves today's behavior — every enabled egress
-	// requirement is auto-added regardless of provenance — so flipping the
-	// default would silently narrow egress for existing workspaces on upgrade.
+	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT TRUE
+	// SINCE 0.7) makes applyWorkspaceRequirements apply the same provenance gate
+	// to a scan_seeded EGRESS requirement that the SECRET side has always applied
+	// unconditionally (runs_create.go): only an operator_set requirement is
+	// auto-added at launch, and a scan_seeded one — the workspace scanner reading
+	// UNTRUSTED repo content — is skipped.
+	//
+	// It shipped off, because flipping it narrows egress for existing workspaces
+	// on upgrade. 0.7 flips it anyway: the asymmetry was the anomaly. The secret
+	// side calls this exact boundary "security-critical — do not relax", for a
+	// reason that applies verbatim to egress — a hostile or simply never-reviewed
+	// repo could widen a run's allowlist just by naming a host in a committed
+	// file, with no operator ever acting.
+	//
+	// The upgrade cost is real and bounded: a workspace whose egress
+	// requirements are scan_seeded stops having them auto-added, and the run's
+	// warnings say which were skipped. The fix is an operator declaring the host
+	// (making it operator_set), which is the action the gate exists to require.
+	// Set false to restore pre-0.7 behavior.
 	RequireOperatorSetEgress bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the

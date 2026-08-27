@@ -22,16 +22,15 @@ import (
 // CHECK constraint refuses it structurally.
 
 // validateBaseImageWrite mirrors the workspace's own base-image shape checks
-// (validateWorkspaceBaseImage's rules, catalog-shaped): a known reusable kind,
-// a non-empty image ref with no control characters, and custom steps under the
-// same caps the wizard's build-steps editor enforces server-side.
+// (validateWorkspaceBaseImage's rules, catalog-shaped): a known reusable kind and
+// a non-empty image ref with no control characters.
+//
+// The step caps are gone (D3): they justified themselves as "the same caps the
+// wizard's build-steps editor enforces", and that editor does not exist — nor
+// could the steps ever run. See types.BaseImageEntry.Steps.
 func validateBaseImageWrite(b types.BaseImageEntry) string {
 	switch b.Kind {
-	case "registry", "byo":
-		if len(b.Steps) > 0 {
-			return "steps are custom-kind only"
-		}
-	case "custom":
+	case "registry", "byo", "custom":
 	default:
 		return `kind must be "registry", "custom", or "byo" — "recommended" is derived per workspace, never a catalog entry`
 	}
@@ -44,14 +43,6 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 	}
 	if !repoFieldSafe(img) {
 		return "image must not contain whitespace or control characters"
-	}
-	if len(b.Steps) > maxBaseImageSteps {
-		return fmt.Sprintf("too many steps (max %d)", maxBaseImageSteps)
-	}
-	for i, step := range b.Steps {
-		if len(step) > maxBaseImageStepLen {
-			return fmt.Sprintf("steps[%d]: too long (max %d chars)", i, maxBaseImageStepLen)
-		}
 	}
 	return ""
 }

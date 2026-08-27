@@ -154,12 +154,14 @@ export interface WorkspaceBaseImageInput {
   kind: WorkspaceBaseImageKind;
   // Required for every kind except "recommended".
   image?: string;
-  // "custom" only — Dockerfile RUN/ENV/ARG lines an operator can attach to
-  // `image`. NOT CURRENTLY APPLIED: no build path layers them on; a "custom"
-  // image builds and runs identically to "byo" (see
-  // internal/types/workspace.go's WorkspaceBaseImage.Steps doc). Accepted and
-  // persisted so it round-trips.
-  steps?: string[];
+  // `steps` is DELIBERATELY ABSENT from this mirror (D3). The server still
+  // carries it — it is a component of the base_images UNIQUE identity — but it
+  // is never applied to an image and no UI surface reads or writes it. Modelling
+  // it here only advertised a capability that does not exist. Verified before
+  // removing: nothing in ui/src reads base-image steps, and the UI performs no
+  // base-image WRITE at all, so there is no round-trip this could drop a field
+  // out of. Re-add it ONLY alongside a write path that preserves it — dropping
+  // it on a round-trip mints a duplicate catalog row.
 }
 
 export type RequirementLevel = "required" | "optional";

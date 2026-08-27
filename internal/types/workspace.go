@@ -162,16 +162,22 @@ type WorkspaceBaseImage struct {
 	// Image is the base image reference. Meaning depends on Kind: the FROM for
 	// "custom", the image itself for "registry"/"byo", unused for "recommended".
 	Image string `json:"image,omitempty"`
-	// Steps are additional Dockerfile RUN/ENV/ARG lines an operator can attach
-	// to a "custom" base image. NOT CURRENTLY APPLIED: no build path layers
-	// them onto Image (resolveWorkspaceImage, internal/api/workspace_run_image.go
-	// wraps Image verbatim, same as "byo") — running operator-authored RUN
-	// lines would execute on the HOST Docker daemon during that wrap, outside
-	// every confinement tier, the same host-RCE class assertWrapSafeBase
-	// (internal/envbuild/builder.go) refuses a hostile ONBUILD trigger for.
-	// Steps is accepted and persisted on the base-image catalog row so it
-	// round-trips, but today a "custom" image builds and runs identically to
-	// "byo": Image verbatim, Steps silently inert.
+	// Steps is CATALOG IDENTITY ONLY. It is never applied to an image, and it
+	// must not be — this is a deliberate refusal, not an unfinished feature.
+	//
+	// Running operator-authored RUN lines would execute on the HOST Docker daemon
+	// during the wrap (resolveWorkspaceImage wraps Image verbatim), outside every
+	// confinement tier — the same host-RCE class assertWrapSafeBase refuses a
+	// hostile ONBUILD trigger for. So a "custom" image builds and runs
+	// identically to "byo": Image verbatim.
+	//
+	// The FIELD stays, and deleting it would be a live bug rather than a
+	// cleanup: it participates in the base_images UNIQUE identity index
+	// alongside (kind, image). Stop writing it and every upsert records NULL,
+	// so a pre-existing row carrying non-empty steps stops conflict-matching and
+	// the next passthrough resolve mints a DUPLICATE catalog row for the same
+	// (kind, image). The user-facing surface that pretended these did something
+	// was removed in 0.7 (D3); the identity component was not.
 	Steps []string `json:"steps,omitempty"`
 }
 

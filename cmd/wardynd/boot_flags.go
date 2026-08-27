@@ -237,7 +237,7 @@ func parseBootFlags() *bootFlags {
 		// higher-trust posture (repo content is reviewed, or the exfil risk
 		// inline_policy.go's filterMemberGrants comment names matters more than
 		// the convenience) opts in here.
-		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", false, "require a workspace egress requirement's provenance to be operator_set before applyWorkspaceRequirements auto-adds it at launch — a scan_seeded egress host (the workspace scanner reading untrusted repo content) is skipped instead. Mirrors the existing operator_set-only gate on scan_seeded SECRET requirements. Off = today's behavior: any enabled egress requirement is auto-added regardless of provenance (default)."),
+		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before applyWorkspaceRequirements auto-adds it at launch — a scan_seeded egress host (the workspace scanner reading untrusted repo content) is skipped instead. Mirrors the operator_set-only gate the SECRET side has always applied unconditionally. ON by default since 0.7; set false to restore pre-0.7 behavior, where any enabled egress requirement was auto-added regardless of provenance."),
 
 		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
 		// billed via AWS). Both must be set to enable it; the AWS credentials

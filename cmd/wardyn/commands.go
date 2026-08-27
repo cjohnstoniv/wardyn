@@ -84,7 +84,9 @@ func runCmd(client clientFn) *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// --repo is optional: a run with no repo comes up in an ephemeral
-			// scratch dir. --agent is required (enforced via MarkFlagRequired).
+			// scratch dir. --agent is required EXCEPT for --task-mode exec with an
+			// --image (or a workspace), where there is no agent harness to name;
+			// the server is the authority and returns a 400 naming what is missing.
 			if wait && interactive {
 				return fmt.Errorf("--wait and --interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
@@ -190,7 +192,6 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124)")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
-	_ = cmd.MarkFlagRequired("agent")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client))

@@ -262,10 +262,12 @@ type CreateRunRequest struct {
 	// --dangerously-skip-permissions; "hold" routes every tool call through
 	// Wardyn's approval FSM instead, so an operator decides each one before it
 	// runs. Rejected for codex-cli (no external tool-approval contract) and
-	// structurally inert for an interactive run (that run's own supervised-seed
-	// posture is SeedAutoTools's job, not this field's). Request-scoped like
-	// TaskMode — never persisted on the run row, carried to the sandbox as
-	// WARDYN_TOOL_APPROVALS.
+	// ALSO rejected for an interactive run: that run's supervised-seed posture is
+	// SeedAutoTools's job, so this field could never take effect there. It used
+	// to be accepted and silently discarded, which is worse than refusing it —
+	// the caller got a 201 and none of the supervision they asked for.
+	// Request-scoped like TaskMode — never persisted on the run row, carried to
+	// the sandbox as WARDYN_TOOL_APPROVALS.
 	ToolApprovals string `json:"tool_approvals,omitempty"`
 	// Workspaces carries PER-WORKSPACE options — which of a workspace's
 	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
