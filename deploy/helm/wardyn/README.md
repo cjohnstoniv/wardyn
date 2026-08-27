@@ -638,6 +638,15 @@ Runs still have to declare `ui_apps` in policy
 matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on
 its own opens nothing.
 
+> **And no such image is published.** `release.yml`'s publish matrix is
+> `wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and
+> `agent-aws-sso`; `agent-vscode` is not in it, and `deploy/images/vscode/`
+> builds `FROM wardyn/agent-claude-code:local`, itself unpublished. So enabling
+> `uiSandbox` on a cluster that pulls only published images opens a gateway with
+> nothing to serve. Build the UI image yourself and push it to a registry your
+> nodes can pull, and pin it in `WARDYN_AGENT_IMAGES` or per-run. Publishing
+> them is deferred to 0.8.
+
 ### What is actually proven on Kubernetes
 
 The relay is not a new network path: it is `Runner.ExecStream` carrying bytes to

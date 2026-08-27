@@ -13,6 +13,16 @@ set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`,
 `WARDYN_SSH_ADVERTISE`). With it unset there is no listener and no new attack
 surface: the daemon does not even generate a host key.
 
+> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now
+> ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two
+> halves, in opposite directions:
+> `ssh` **exec** output and **sftp** payloads are **not recorded** (and sftp
+> uploads are not byte-counted), so work done over those paths leaves no
+> session evidence — do not present Remote-SSH as the recommended developer
+> path without saying so. The interactive SSH **shell** *is* recorded, unmasked,
+> and there is **no delete-one route**: a secret pasted into it is stored in
+> cleartext, permanently.
+
 ## 1. Register a public key
 
 **SSO deployment (OIDC configured):** Account menu → **SSH keys** → **Add

@@ -131,6 +131,62 @@ every departure from that envelope is attributable." That is a governance
 control, not a containment boundary against the operator, and it should be sold
 as the first thing and never as the second.
 
+### Where those three claims stop being true
+
+Each bullet above has an edge. Read them before quoting the summary to an
+auditor.
+
+- **"Produces evidence that they did" — unless the evidence is dropped or
+  self-approved.** The webhook sink is **at-most-once past a 4096-event
+  buffer**: on a laptop that sleeps and flies, drops surface only on `/metrics`
+  (nothing scrapes a laptop) and as a warning in the desktop log. A disk spool
+  that drains on recovery is the at-least-once upgrade and is **deferred**.
+  Separately, a member can **self-approve** their own `wait_for_review` egress
+  request unless `WARDYN_EGRESS_SECOND_HUMAN` is set — and that check is
+  **bypassed by the `admin-token` principal**, which on this tier is MDM-held
+  automation. It constrains humans in the console, not the management plane.
+- **"Egress still goes through the proxy" — for the SANDBOX.** When a run
+  declares `ui_apps`, the relayed app's JavaScript executes in the *operator's
+  own browser*, which Wardyn does not confine at all: that traffic is outside
+  `wardyn-proxy` and outside any egress policy. The relay is **off by default
+  on this tier** (see the envelope) precisely so this is an opt-in, but it stops
+  being true the moment it is enabled.
+- **"The session is still recorded" — the SHELL is; exec and sftp are not.**
+  Turning on `WARDYN_SSH_LISTEN` makes both halves fleet-wide: `ssh` exec output
+  and sftp payloads are **not** recorded and sftp uploads are not byte-counted,
+  while the interactive SSH shell **is** recorded, unmasked, with **no
+  delete-one route** — a secret pasted into a recorded terminal is stored in
+  cleartext, permanently. And a `wardynd` restart mid-run (an MDM upgrade
+  window, a crash, a laptop waking) wipes the in-memory masking snapshot, after
+  which the stream passes through **unmasked** with a `success` audit event,
+  because nothing in that path can tell "no secrets for this run" from "not my
+  run".
+
+Three more the tier inherits rather than introduces: the SSH gateway's admin
+override is a **bounded-stale 24h role stamp**, never a live check; whoever
+`POST`s a given SSH public key **first owns that fingerprint forever**, and the
+only remediation is operator-side and out of band — which on m′ the developer
+explicitly is not; and compose serves the console and the UI relay on a
+**shared origin**, a documented residual of this topology.
+
+### Named gap: the browser lane is not available on this tier
+
+`wardyn ssh` works on a managed laptop as of 0.7. The **browser** half of
+UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN`
+commented out rather than pretending otherwise.
+
+The reason is images, not code. The relay itself is built and tested, but no
+`agent-vscode` or noVNC image is published — `release.yml`'s matrix is
+`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso` —
+and `deploy/images/vscode/Dockerfile` builds `FROM wardyn/agent-claude-code:local`,
+itself unpublished. A managed laptop has no repo and no build path: the launcher
+runs `--no-build` specifically so it "refuses to fall back to building from
+source on a laptop with no repo checkout". So enabling the listener here would
+publish a port with nothing to serve.
+
+It works today on a **developer checkout** (`make agent-images` then
+`make test-e2e-ui-sandbox`). Publishing the UI images is deferred to 0.8.
+
 ## The member-mode profile (topology m′)
 
 Everything above describes **topology a′: the developer is the operator**. It is

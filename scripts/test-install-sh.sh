@@ -84,6 +84,43 @@ header_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+/install\.sh' "
 [ "$readme_v" = "$header_v" ] \
   || fail "README.md pins install.sh at v${readme_v} but ${INSTALL}'s header says v${header_v} — RELEASING.md step 1b sweeps both"
 
+# ── 6b. the listeners, and the CLI that uses them ────────────────────────
+# install.sh wrote WARDYN_SSH_PORT and WARDYN_UI_SANDBOX_PORT but no _LISTEN
+# vars. The PORT vars only publish a host port; the LISTEN vars are what start a
+# listener, and empty means off — not even a generated host key. So the one-line
+# install shipped published ports that refused every connection, while the docs
+# promised a governed sandbox reachable from your own terminal.
+grep -qE '^WARDYN_SSH_LISTEN=' "$INSTALL" \
+  || fail "$INSTALL writes no WARDYN_SSH_LISTEN — compose still publishes 2222, so the install ships a port that refuses every connection"
+grep -qE '^WARDYN_SSH_ADVERTISE=' "$INSTALL" \
+  || fail "$INSTALL writes no WARDYN_SSH_ADVERTISE — the console's attach pane then prints no usable ssh command"
+
+# It also installed NO host binary, so `wardyn ssh <run-id>` had no client on
+# the very machine that enables the gateway: the only command path was
+# `docker compose exec`, which is in-container and root-only.
+# Anchored, and BOTH halves: a bare substring match on "install_cli" is
+# satisfied by a renamed-out `_disabled_install_cli`, and defining the function
+# without calling it installs nothing.
+grep -qE '^install_cli\(\) \{' "$INSTALL" \
+  || fail "$INSTALL defines no install_cli function — 'wardyn ssh' then has no client on a no-clone box"
+grep -qE '^install_cli$' "$INSTALL" \
+  || fail "$INSTALL defines install_cli but never calls it — the CLI is never installed"
+
+# The CLI is fetched over the network and put on PATH, so it MUST be verified.
+# The release ships a cosign-signed SHA256SUMS; use it, and FAIL CLOSED.
+grep -q 'SHA256SUMS' "$INSTALL" \
+  || fail "$INSTALL downloads the CLI without consulting SHA256SUMS — it would put an unverified binary on PATH"
+grep -q 'checksum mismatch' "$INSTALL" \
+  || fail "$INSTALL has no checksum-mismatch refusal — a substituted binary would install silently"
+# A mismatch must DIE, not warn-and-continue.
+grep -q 'die "checksum mismatch' "$INSTALL" \
+  || fail "$INSTALL does not die on a checksum mismatch; installing an unverified binary is worse than having no CLI"
+# SHA256SUMS lists names as `<hash>  ./<name>`. A lookup that ignores the ./
+# prefix silently finds nothing and skips the CLI (which is how this was first
+# written); a SUBSTRING match would let the wrong asset's hash satisfy it.
+grep -q 'sub(/\^\\.\\//' "$INSTALL" \
+  || fail "$INSTALL's checksum lookup does not strip the leading ./ from SHA256SUMS names — it will match nothing and silently skip the CLI"
+
 # ── 7. the agent images it seeds are ones we actually publish ────────────
 # install.sh seeded WARDYN_AGENT_IMAGES with codex-cli and aws-sso only. That
 # left `claude-code` — the catalog's first row and the default agent — resolving

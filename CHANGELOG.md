@@ -122,6 +122,23 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **The desktop tier can now be reached from your own terminal.** Both listener
+  variables default to empty in the included stack, and **empty means off — no
+  listener, not even a generated host key**. The desktop envelope and the
+  one-line installer set neither, while both published `127.0.0.1:2222`. So the
+  tier shipped a **port that refused every connection**, on the release whose
+  stated outcome is that a developer reaches a governed sandbox from their own
+  tools. `WARDYN_SSH_LISTEN`/`_ADVERTISE` are now set in both, with the
+  recording ceiling stated beside them.
+
+- **The one-line installer installs the `wardyn` CLI.** It previously installed
+  **no host binary at all** — the only command path was `docker compose exec`,
+  which is in-container and root-only — so `wardyn ssh <run-id>` had no client
+  on the very machine that enables the gateway. The binary is fetched per
+  os/arch and **verified against the release's cosign-signed `SHA256SUMS`**; a
+  mismatch is fatal, and an unavailable `SHA256SUMS` skips the CLI rather than
+  installing it unverified.
+
 - **The member-mode (m′) desktop envelope now exists.**
   `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
   an MDM-injected admin token the developer never reads, four member-mount

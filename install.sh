@@ -98,6 +98,15 @@ WARDYN_PG_PORT=${WARDYN_PG_PORT:-5432}
 WARDYN_REGISTRY_PORT=${WARDYN_REGISTRY_PORT:-5010}
 WARDYN_SSH_PORT=${WARDYN_SSH_PORT:-2222}
 WARDYN_UI_SANDBOX_PORT=${WARDYN_UI_SANDBOX_PORT:-8081}
+# The PORT vars above only publish the host port. The LISTEN vars below are what
+# actually start a listener — empty means off, and the host key is not even
+# generated. Setting one without the other gives a published port that refuses
+# every connection, which is what this installer shipped in 0.6.3.
+WARDYN_SSH_LISTEN=:2222
+WARDYN_SSH_ADVERTISE=127.0.0.1:${WARDYN_SSH_PORT:-2222}
+# The UI-sandbox relay stays OFF: no agent-vscode or noVNC image is published,
+# so the listener would have nothing to serve. See docs/UI-SANDBOXES.md.
+# WARDYN_UI_SANDBOX_LISTEN=:8081
 # Published images — this install pulls, it never builds.
 WARDYN_WARDYND_IMAGE=ghcr.io/${REPO%/*}/wardynd:${SEMVER}
 WARDYN_PROXY_IMAGE=ghcr.io/${REPO%/*}/wardyn-proxy:${SEMVER}
@@ -116,8 +125,76 @@ docker compose pull --quiet 2>/dev/null || docker compose pull
 say "Starting"
 docker compose up -d --no-build
 
+# The CLI. Without it this install has NO host binary at all: the only command
+# path is `docker compose exec`, which is in-container and root-only, so
+# `wardyn ssh <run-id>` — the whole point of the SSH listener above — has no
+# client on the machine that just enabled it. Release assets are per os/arch and
+# covered by the cosign-signed SHA256SUMS, so verify before installing.
+install_cli() {
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) say "No published wardyn CLI for $(uname -m); skipping (the console still works)"; return 0 ;;
+  esac
+  case "$os" in linux|darwin) ;; *) say "No published wardyn CLI for ${os}; skipping"; return 0 ;; esac
+
+  asset="wardyn-${os}-${arch}"
+  base="https://github.com/${REPO}/releases/download/${VERSION}"
+  tmp="${HOME_DIR}/.wardyn-cli.$$"
+  curl -fsSL "${base}/${asset}" -o "${tmp}" 2>/dev/null || {
+    say "Could not download the ${asset} CLI; skipping (the console still works)"
+    rm -f "${tmp}"; return 0
+  }
+
+  # Verify against the release's SHA256SUMS. A failure here is FATAL, not a
+  # skip: silently installing an unverified binary onto PATH is worse than
+  # having no CLI at all.
+  if sums=$(curl -fsSL "${base}/SHA256SUMS" 2>/dev/null) && [ -n "${sums}" ]; then
+    # SHA256SUMS lists names as `<hash>  ./<name>`, so strip the leading ./ and
+    # match the basename EXACTLY — a substring match would let
+    # wardyn-linux-amd64 be satisfied by a line for some other asset.
+    want=$(printf '%s\n' "${sums}" | awk -v a="${asset}" '{n=$2; sub(/^\.\//,"",n); if (n==a) print $1}' | head -1)
+    if [ -n "${want}" ]; then
+      if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "${tmp}" | awk '{print $1}')
+      else got=$(shasum -a 256 "${tmp}" | awk '{print $1}'); fi
+      [ "${want}" = "${got}" ] || { rm -f "${tmp}"; die "checksum mismatch for ${asset} (want ${want}, got ${got}) — refusing to install it"; }
+    else
+      say "SHA256SUMS lists no ${asset}; skipping the CLI rather than installing it unverified"
+      rm -f "${tmp}"; return 0
+    fi
+  else
+    say "Could not fetch SHA256SUMS; skipping the CLI rather than installing it unverified"
+    rm -f "${tmp}"; return 0
+  fi
+
+  chmod 0755 "${tmp}"
+  # Prefer a dir already on PATH and writable WITHOUT sudo — this script has not
+  # asked for privilege anywhere else and should not start here.
+  for d in /usr/local/bin "${HOME}/.local/bin" "${HOME_DIR}/bin"; do
+    [ -d "${d}" ] || mkdir -p "${d}" 2>/dev/null || continue
+    [ -w "${d}" ] || continue
+    mv -f "${tmp}" "${d}/wardyn" 2>/dev/null || continue
+    CLI_PATH="${d}/wardyn"
+    return 0
+  done
+  rm -f "${tmp}"
+  say "No writable directory on PATH for the CLI; skipping (the console still works)"
+}
+CLI_PATH=""
+say "Installing the wardyn CLI"
+install_cli
+
 say "Wardyn is running: http://127.0.0.1:${PORT}"
 echo
+if [ -n "${CLI_PATH}" ]; then
+  echo "  CLI:          ${CLI_PATH}"
+  case ":${PATH}:" in
+    *":$(dirname "${CLI_PATH}"):"*) ;;
+    *) echo "                (not on your PATH — add: export PATH=\"$(dirname "${CLI_PATH}"):\$PATH\")" ;;
+  esac
+  echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${WARDYN_SSH_PORT:-2222})"
+fi
 echo "  Admin token:  grep WARDYN_ADMIN_TOKEN ${HOME_DIR}/.env"
 echo "  Stop:         cd ${HOME_DIR} && docker compose down"
 echo "  Verify what you pulled: https://github.com/${REPO}/blob/${VERSION}/docs/VERIFY.md"

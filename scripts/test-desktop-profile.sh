@@ -181,6 +181,21 @@ for v in WARDYN_WARDYND_IMAGE WARDYN_PROXY_IMAGE; do
   esac
 done
 
+# ── 7b. the listeners the tier's own promise depends on ────────────────────
+# Both listener vars default to EMPTY in the included stack, and empty means
+# off — no listener, not even a generated host key. The compose topology
+# publishes 127.0.0.1:2222 and :8081 regardless, so an envelope that sets
+# neither ships PUBLISHED PORTS THAT REFUSE EVERY CONNECTION while
+# docs/DESKTOP.md promises the developer reaches a governed sandbox from their
+# own terminal. Phase A used to touch no listener and Phase B no envelope, so
+# nothing joined them: that seam is what this asserts.
+for f in "${ENV_EXAMPLES[@]}"; do
+  grep -qE '^WARDYN_SSH_LISTEN=' "${f}" \
+    || fail "$(basename "${f}") sets no WARDYN_SSH_LISTEN — compose still publishes 2222, so the tier ships a port that refuses every connection and `wardyn ssh` does not answer"
+  grep -qE '^WARDYN_SSH_ADVERTISE=' "${f}" \
+    || fail "$(basename "${f}") sets no WARDYN_SSH_ADVERTISE — the console's 'Attach from your terminal' pane then prints no usable ssh command"
+done
+
 # ── 8. no envelope pins an image this project does not publish ─────────────
 # release.yml's publish matrix is wardynd, wardyn-proxy, agent-base,
 # agent-codex-cli, agent-aws-sso. agent-claude-code is NOT in it — 0.6.2 stopped

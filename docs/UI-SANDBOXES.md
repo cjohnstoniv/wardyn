@@ -21,6 +21,18 @@ the only thing keeping that code away from the console's session storage and
 admin actions is that it arrives on a different browser origin. See
 [Bounds](#bounds) for what that separation does and does not buy.
 
+> **Not available on the desktop tier (0.7).** The relay is built and tested,
+> but no `agent-vscode` or noVNC image is published, and a managed laptop has no
+> repo and no build path — `wardyn-desktop.sh` runs `--no-build` on purpose. So
+> `deploy/desktop/wardyn.env*.example` ship `WARDYN_UI_SANDBOX_LISTEN` commented
+> out rather than publishing a port with nothing to serve. This lane works on a
+> **developer checkout** (`make agent-images`, then `make test-e2e-ui-sandbox`).
+> Publishing the UI images is deferred to 0.8; see
+> [docs/DESKTOP.md](DESKTOP.md) "Named gap: the browser lane".
+>
+> The **one-line installer** (`install.sh`) is the same: it writes
+> `WARDYN_UI_SANDBOX_PORT` but leaves the listener off, for the same reason.
+
 ## 1. Declare the app
 
 A run's policy names the apps the gateway may relay —
