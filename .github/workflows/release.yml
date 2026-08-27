@@ -231,8 +231,12 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          # A dry run builds BOTH platforms and exports nothing. `load: true`
+          # cannot work here: the docker exporter refuses a manifest list, which
+          # is exactly what a multi-arch build produces. Building without an
+          # exporter still validates every Dockerfile and every RUN step, which is
+          # what this rehearsal is for.
           push: ${{ inputs.dry_run != true }}
-          load: ${{ inputs.dry_run == true }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
