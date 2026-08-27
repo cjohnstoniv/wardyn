@@ -11,6 +11,13 @@ An untagged control is shipped. Per the project's
 anti-overclaim rule, any untagged claim not actually enforced in code is a bug,
 not prose license — report it.
 
+**Scope.** This document is the threat model of the WARDYN IMPLEMENTATION: its
+assets, its trust boundaries, its residuals. It is deliberately Wardyn-shaped and
+does not travel. For the portable layer — shared terminology, threat categories
+for agent systems generally, and who owns which control — see
+[AGENT-THREAT-MODEL.md](AGENT-THREAT-MODEL.md), whose every category carries a
+coverage verdict pointing back into this document.
+
 ---
 
 ## 0. Why We Publish This

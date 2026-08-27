@@ -22,6 +22,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Reason about agent risk in general — shared terminology and threat categories | [../threatmodel/AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) |
 | Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |
 | See what is shipped vs. planned | [../ROADMAP.md](../ROADMAP.md), [../CHANGELOG.md](../CHANGELOG.md) |
 

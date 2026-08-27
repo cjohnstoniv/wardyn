@@ -202,6 +202,27 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **`threatmodel/AGENT-THREAT-MODEL.md`** — a portable threat model for agent
+  systems generally: terminology, fourteen threat categories, and who owns which
+  control. The shipped `THREAT-MODEL.md` is excellent and is a threat model **of
+  the Wardyn implementation** — its assets are our artifacts, its boundaries are
+  named after our env vars, and one residual is about the coverage of a single Go
+  test. It is structurally unusable by anyone not running Wardyn, and it has no
+  glossary and no attack-category taxonomy at all.
+
+  The new document travels; every category still carries a **Wardyn coverage
+  verdict** citing code, because a taxonomy with no verdict is a whitepaper.
+  Verdicts are exactly three values — `mitigated`, `partial` (must name the
+  bypass class), `not addressed` (must say by-design or by-omission) — and the
+  document carries **twice as many non-mitigated verdicts as mitigated ones**.
+  That asymmetry is the reason to trust the rest.
+
+  Two of them are gaps worth naming here: **denial of wallet** (there is no
+  token-spend or model-call budget anywhere — an agent holding a valid model
+  credential can exhaust it) and **approval fatigue** (the platform leans heavily
+  on human approvals with no rate limit, no batching guard, no anomaly signal and
+  no separation of duty).
+
 - **`docs/PLUGGABILITY.md` answers the four-layer question directly** — physical
   sandbox / ingress-egress / LLM gateway / MCP tool gateway — with the honest
   score: **one of four is genuinely pluggable.** It also promotes the strongest
