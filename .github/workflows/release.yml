@@ -256,13 +256,25 @@ jobs:
       # apt package in the base image and every globally-installed npm CLI, which
       # is exactly where the non-permissive components live.
       - name: SBOM for the pushed digest
-        if: inputs.dry_run != true
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
           SYFT_VERSION: v1.46.0
         run: |
           curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
             | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            # Nothing was pushed, so there is no digest to scan. The UI-lockfile
+            # half needs no image and is the half that shipped broken, so a dry
+            # run still exercises it and its assertion.
+            if [ "${{ matrix.name }}" = wardynd ]; then
+              syft dir:ui -o cyclonedx-json > ui-sbom.json
+              n=$(jq '[.components[]|select(.purl//""|startswith("pkg:npm"))]|length' ui-sbom.json)
+              test "$n" -gt 0 || { echo "dry run: syft dir:ui found zero npm packages"; exit 1; }
+              echo "dry run: ui lockfile scan found $n npm packages"
+            fi
+            echo '{"components":[]}' > "sbom-${{ matrix.name }}.cdx.json"
+            exit 0
+          fi
           syft "registry:${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
           # wardynd embeds the console as a Vite bundle, which strips every
           # package.json — so scanning the IMAGE finds zero npm packages however
