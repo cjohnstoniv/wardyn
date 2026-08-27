@@ -300,6 +300,15 @@ grep -q 'AGE-SECRET-KEY-1' "${PKGR}" \
 # The `deploy/` level in the payload is load-bearing: wardyn-desktop.sh computes
 # REPO_ROOT as ../.. from itself, so a payload rooted at .../wardyn/desktop/
 # resolves to /usr/local/lib and the wrapper dies sourcing common.sh.
+# The payload carries a COMPILED Go binary, so neither package is
+# arch-independent. Both were first written `Architecture: all` / `BuildArch:
+# noarch`. rpmbuild refuses that outright; dpkg does NOT — and that is the worse
+# failure, because an `all` .deb installs happily on arm64 and only then does the
+# CLI fail to run.
+grep -qF 'Architecture: ${GOARCH_PKG}' "${PKGR}" \
+  || fail "${PKGR}'s .deb no longer declares a real architecture — an 'all' package ships an amd64 binary to arm64 hosts and dpkg will not stop it"
+grep -qF 'BuildArch:      ${RPM_ARCH}' "${PKGR}" \
+  || fail "${PKGR}'s .rpm no longer declares a real architecture"
 grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
   || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
 

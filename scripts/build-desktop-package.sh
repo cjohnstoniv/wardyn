@@ -5,7 +5,7 @@
 # build-desktop-package.sh — build the desktop tier's MDM-distributable payload
 # as a .deb and a tarball.
 #
-#   scripts/build-desktop-package.sh [--version X.Y.Z] [--out DIR]
+#   scripts/build-desktop-package.sh [--version X.Y.Z] [--out DIR] [--rpm]
 #
 # 🔴 THE PAYLOAD IS BUILT FROM A CLEAN GIT TREE, NEVER BY COPYING THE WORKING
 # DIRECTORY. deploy/compose/.env is a real file on a maintainer's box — 0600,
@@ -40,7 +40,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
-    *) echo "usage: $0 [--version X.Y.Z] [--out DIR]" >&2; exit 1 ;;
+    --rpm) WANT_RPM=1; shift ;;
+    *) echo "usage: $0 [--version X.Y.Z] [--out DIR] [--rpm]" >&2; exit 1 ;;
   esac
 done
 [ -n "$VERSION" ] || VERSION="$(sed -n 's/.*Version = "\([^"]*\)".*/\1/p' internal/version/version.go | head -1)"
@@ -83,13 +84,25 @@ fi
 # The tier installed NO host binary: the only command path was `compose exec`,
 # which is in-container and root-only, so `wardyn ssh` had no client and
 # `wardyn secret set` (A5's own remedy) was unreachable.
-echo "==> Building the wardyn CLI"
+# ARCHITECTURE. The payload carries a COMPILED Go binary, so neither package is
+# arch-independent. Both were first written as `Architecture: all` / `BuildArch:
+# noarch` — rpmbuild refuses that outright ("Arch dependent binaries in noarch
+# package"), and dpkg does NOT, which is the worse failure: an `all` .deb
+# installs happily on arm64 and then the CLI does not run.
+GOARCH_PKG="$(go env GOARCH)"
+case "${GOARCH_PKG}" in
+  amd64) RPM_ARCH=x86_64 ;;
+  arm64) RPM_ARCH=aarch64 ;;
+  *) echo "unsupported GOARCH ${GOARCH_PKG} for packaging" >&2; exit 1 ;;
+esac
+
+echo "==> Building the wardyn CLI (${GOARCH_PKG})"
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "${PAYLOAD}/usr/local/bin/wardyn" ./cmd/wardyn
 chmod 0755 "${PAYLOAD}/usr/local/bin/wardyn"
 chmod 0755 "${PREFIX}/deploy/desktop/"*.sh
 
 # ── tarball ────────────────────────────────────────────────────────────────
-TARBALL="${OUT}/${PKG}-${VERSION}.tar.gz"
+TARBALL="${OUT}/${PKG}-${VERSION}-${GOARCH_PKG}.tar.gz"
 tar -C "${PAYLOAD}" -czf "${TARBALL}" .
 echo "==> ${TARBALL}"
 
@@ -105,7 +118,7 @@ Package: ${PKG}
 Version: ${VERSION}
 Section: devel
 Priority: optional
-Architecture: all
+Architecture: ${GOARCH_PKG}
 Maintainer: The Wardyn Authors <noreply@github.com>
 Depends: docker.io | docker-ce | podman
 Description: Wardyn desktop tier — governed agent sandboxes on a managed laptop
@@ -131,7 +144,91 @@ set -e
   /usr/local/lib/wardyn/deploy/desktop/install.sh --uninstall || true
 PRERM
 chmod 0755 "${PAYLOAD}/DEBIAN/postinst" "${PAYLOAD}/DEBIAN/prerm"
-DEB="${OUT}/${PKG}_${VERSION}_all.deb"
+DEB="${OUT}/${PKG}_${VERSION}_${GOARCH_PKG}.deb"
 fakeroot dpkg-deb --build "${PAYLOAD}" "${DEB}" >/dev/null
 echo "==> ${DEB}"
 dpkg-deb --contents "${DEB}" | awk '{print $NF}' | grep -cE '^\./' | sed 's/^/    entries: /'
+
+# ── .rpm, built inside a Fedora container ──────────────────────────────────
+# rpmbuild is absent on the maintainer's host and there is no reason to install
+# it there: a throwaway container is the whole answer, and it also pins the
+# rpmbuild version rather than inheriting whatever the host has.
+#
+# Opt-in via --rpm because it costs a container pull, and because a Debian-only
+# fleet has no use for it.
+if [ "${WANT_RPM:-0}" = "1" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "==> --rpm needs docker (rpmbuild is not installed on this host by design)" >&2
+    exit 1
+  fi
+  echo "==> Building the .rpm in a Fedora container"
+  SPEC="${STAGE}/wardyn-desktop.spec"
+  # Version must not contain '-': rpm uses it as the name/version/release
+  # separator, so 0.7.0-dev has to become 0.7.0~dev.
+  RPMVER="${VERSION//-/\~}"
+  cat > "${SPEC}" <<SPECEOF
+# The payload is a PREBUILT Go binary plus scripts — there is no source to
+# extract debuginfo from, and Fedora's automatic debuginfo pass fails the build
+# outright on "Empty %files file ... debugsourcefiles.list" rather than skipping.
+%global debug_package %{nil}
+# ...and for the same reason, do not strip or re-process the binary.
+%global __os_install_post %{nil}
+
+Name:           ${PKG}
+Version:        ${RPMVER}
+Release:        1
+Summary:        Wardyn desktop tier - governed agent sandboxes on a managed laptop
+License:        Apache-2.0
+BuildArch:      ${RPM_ARCH}
+Source0:        $(basename "${TARBALL}")
+Requires:       /usr/bin/docker
+AutoReqProv:    no
+
+%description
+Installs the compose payload, the converge job (systemd timer) and the wardyn
+CLI. It does NOT deliver the MDM envelope: /etc/wardyn/wardyn.env, secret.env,
+policy.json and site-config.json are the management plane's files, and age.key
+is minted per-device by the post-install and never travels in a payload.
+
+%prep
+%setup -q -c
+
+%install
+mkdir -p %{buildroot}
+cp -a usr %{buildroot}/
+
+%post
+# Mints age.key (per-device, never from a payload) and registers the timer.
+/usr/local/lib/wardyn/deploy/desktop/install.sh || :
+
+%preun
+# \$1 == 0 is an uninstall; anything else is an upgrade, where tearing the stack
+# down would be wrong. KEEPS /etc/wardyn and the Postgres volume either way:
+# --purge stays a deliberate operator act, never a side effect of dnf remove.
+if [ "\$1" = "0" ]; then
+  /usr/local/lib/wardyn/deploy/desktop/install.sh --uninstall || :
+fi
+
+%files
+/usr/local/bin/wardyn
+/usr/local/lib/wardyn
+
+%changelog
+* Wed Jan 01 2025 The Wardyn Authors <noreply@github.com> - ${RPMVER}-1
+- See CHANGELOG.md
+SPECEOF
+  docker run --rm \
+    -v "${TARBALL}:/src/$(basename "${TARBALL}"):ro" \
+    -v "${SPEC}:/src/wardyn-desktop.spec:ro" \
+    -v "${OUT}:/out" \
+    fedora:41 sh -c "
+      set -eu
+      dnf install -q -y rpm-build tar >/dev/null 2>&1
+      mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+      cp /src/$(basename "${TARBALL}") /root/rpmbuild/SOURCES/
+      cp /src/wardyn-desktop.spec /root/rpmbuild/SPECS/
+      rpmbuild -bb /root/rpmbuild/SPECS/wardyn-desktop.spec >/dev/null
+      cp /root/rpmbuild/RPMS/*/*.rpm /out/
+    " || { echo "==> rpm build failed" >&2; exit 1; }
+  echo "==> $(ls "${OUT}"/*.rpm 2>/dev/null | head -1)"
+fi

@@ -257,7 +257,7 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
-- **The desktop tier is packageable.** `scripts/build-desktop-package.sh` builds
+- **The desktop tier is packageable** as a `.deb`, an `.rpm` and a tarball. `scripts/build-desktop-package.sh` builds
   a `.deb` and a tarball, **from a clean git tree — never by copying the working
   directory**. `deploy/compose/.env` is a real file on a maintainer's box: 0600,
   gitignored, carrying a **live `WARDYN_AGE_KEY`**. Copying the compose dir
@@ -267,6 +267,16 @@ managed Kubernetes; every item below was verified against the code before it was
   "never via MDM". `git archive` cannot pick up an untracked file, so the
   guarantee is structural; a payload scan for a real age identity and for a
   literal `.env` backs it up.
+
+  The `.rpm` builds inside a throwaway Fedora container (`--rpm`), so `rpmbuild`
+  need not be installed on the maintainer's host and its version is pinned rather
+  than inherited.
+
+  Both packages declare a **real architecture**. They were first written
+  `Architecture: all` / `BuildArch: noarch` while shipping a compiled Go binary —
+  `rpmbuild` refuses that outright, and **dpkg does not**, which is the worse
+  failure: an `all` `.deb` installs happily on arm64 and only then does the CLI
+  fail to run.
 
   The payload keeps the `deploy/` level because `wardyn-desktop.sh` computes
   `REPO_ROOT` as `../..`, and it ships the **`wardyn` CLI** — the tier installed
