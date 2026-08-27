@@ -61,8 +61,13 @@ const (
 	ruleSourceApprovals   = "brokered:approvals"
 	ruleSourceRecordings  = "brokered:recording"
 	ruleSourceScanResults = "brokered:scan-result"
-	ruleSourceSSOToken    = "brokered:sso-token"
-	ruleSourceLLM         = "brokered:llm"
+	// A tool call decided by the run's own tool_rules, with no human asked.
+	// Distinct source strings per effect so the decision log answers "how many
+	// calls did policy wave through" without parsing anything.
+	ruleSourceToolAllow = "policy:tool-allow"
+	ruleSourceToolDeny  = "policy:tool-deny"
+	ruleSourceSSOToken  = "brokered:sso-token"
+	ruleSourceLLM       = "brokered:llm"
 	// ruleSourceLLMBlocked marks an LLM request refused by content inspection;
 	// ruleSourceLLMBlind marks an opaque CONNECT to an LLM host that inspection
 	// could not see into (honest coverage signal).
@@ -262,6 +267,9 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 	// about nothing. Refuse it here rather than persisting an undecidable card.
 	if scope.Tool == "" && scope.Cmd == "" {
 		http.Error(w, "tool approval needs a tool or a cmd", http.StatusBadRequest)
+		return
+	}
+	if handled := p.decideByToolRules(w, r, scope.Tool); handled {
 		return
 	}
 	fwd, err := json.Marshal(struct {

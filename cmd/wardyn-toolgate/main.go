@@ -169,6 +169,12 @@ func (g *gate) decide(params json.RawMessage) any {
 	a := p.Arguments
 
 	id, err := g.create(a)
+	if d, ok := err.(decidedError); ok {
+		// The run's own tool_rules decided it; no human was asked and no
+		// approval row exists. Same terminal handling as a polled decision, so
+		// there is exactly one place that maps a state onto a behaviour.
+		return g.resultFor(d.state, a, "policy")
+	}
 	if err != nil {
 		return permissionResult(deny("could not raise the approval: " + err.Error()))
 	}
@@ -177,15 +183,8 @@ func (g *gate) decide(params json.RawMessage) any {
 	for time.Now().Before(end) {
 		state, err := g.state(id)
 		if err == nil {
-			switch state {
-			case "APPROVED":
-				// updatedInput must echo the input for the action to proceed
-				// unchanged — an allow with no input is treated as a rewrite.
-				return permissionResult(map[string]any{"behavior": "allow", "updatedInput": a.Input})
-			case "DENIED":
-				return permissionResult(deny("denied by the Wardyn operator"))
-			case "EXPIRED":
-				return permissionResult(deny("approval expired undecided — denied"))
+			if res, terminal := g.resultForTerminal(state, a, "the Wardyn operator"); terminal {
+				return res
 			}
 		}
 		// PENDING, or a transient poll error: keep waiting. The proxy route is
@@ -213,12 +212,36 @@ func (g *gate) create(a callArgs) (string, error) {
 	}
 	var out struct {
 		ID string `json:"id"`
+		// State is set ONLY when the run's own tool_rules already decided this
+		// call, in which case the proxy answers terminally and creates no
+		// approval row — there is nothing for a human to decide and nothing to
+		// poll. Absent on every other response, which is why it is read first
+		// and the id requirement applies only when it is missing.
+		State string `json:"state"`
 	}
-	if err := json.Unmarshal(b, &out); err != nil || out.ID == "" {
+	if err := json.Unmarshal(b, &out); err != nil {
+		return "", fmt.Errorf("approval create: unreadable response")
+	}
+	if out.State != "" {
+		return "", decidedError{state: out.State}
+	}
+	if out.ID == "" {
 		return "", fmt.Errorf("approval create: no id in response")
 	}
 	return out.ID, nil
 }
+
+// decidedError carries a terminal state the PROXY already decided from the run's
+// tool_rules. It is an error only in the control-flow sense — create returns no
+// id because no approval was created.
+//
+// Deliberately a distinct type rather than a sentinel string: the caller must
+// not confuse "policy decided this" with "the create failed", because the two
+// have opposite fail-safe directions — a failure denies, and a policy decision
+// might allow.
+type decidedError struct{ state string }
+
+func (e decidedError) Error() string { return "decided by policy: " + e.state }
 
 // state polls GET /wardyn/v1/approvals/{id} — the existing brokered read the
 // egress WAIT flow already uses — and returns the approval's state string.
@@ -268,4 +291,35 @@ func deny(msg string) map[string]any {
 func permissionResult(body map[string]any) any {
 	b, _ := json.Marshal(body)
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": string(b)}}}
+}
+
+// resultFor maps a state the caller KNOWS is terminal onto a permission result.
+func (g *gate) resultFor(state string, a callArgs, by string) any {
+	res, terminal := g.resultForTerminal(state, a, by)
+	if !terminal {
+		// Unreachable for the two callers, and a deny if it ever is: an
+		// unrecognised state must never read as permission.
+		return permissionResult(deny("unrecognised approval state " + state + " — denied"))
+	}
+	return res
+}
+
+// resultForTerminal maps an approval state onto a permission result, reporting
+// whether the state was terminal at all.
+//
+// One place decides what a state MEANS, so the policy path and the polled path
+// cannot drift — an allow that echoes the input in one and not the other would
+// silently turn an approval into a rewrite.
+func (g *gate) resultForTerminal(state string, a callArgs, by string) (any, bool) {
+	switch state {
+	case "APPROVED":
+		// updatedInput must echo the input for the action to proceed unchanged —
+		// an allow with no input is treated as a rewrite.
+		return permissionResult(map[string]any{"behavior": "allow", "updatedInput": a.Input}), true
+	case "DENIED":
+		return permissionResult(deny("denied by " + by)), true
+	case "EXPIRED":
+		return permissionResult(deny("approval expired undecided — denied")), true
+	}
+	return nil, false
 }

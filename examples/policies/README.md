@@ -132,3 +132,25 @@ Two things this example deliberately does NOT do:
 
 `auto_stop_after_sec` is set because an editor session is the easiest thing in
 the product to leave open overnight.
+
+## `autonomous-tool-rules.json` — an autonomous run that is not all-or-nothing
+
+Launch it with `--tool-approvals hold`. Without `tool_rules` that setting means
+**every** gated call wakes a human, which nobody sustains — and an operator who
+tires of approving sets `auto` instead, which gates nothing at all. This policy
+is the middle: reading is free, writing and shell ask, web fetch is refused, and
+anything unlisted asks.
+
+The `"*"` rule is last and set to `hold`, deliberately. A default of `allow`
+would mean a tool added by a future harness release is permitted before anyone
+has looked at it; `hold` means it surfaces as a question instead. Ordering in the
+file is cosmetic — an exact match always beats `"*"` — but reading it last
+matches how it behaves.
+
+`WebFetch` is `deny` rather than absent to make the point that these are two
+different statements: absent means "ask me", `deny` means "the answer is already
+no, do not ask". The second is what stops a prompt-injected agent from generating
+approval requests until someone clicks yes.
+
+Confinement is CC2 rather than CC1 because this profile is for a run left
+genuinely unattended.

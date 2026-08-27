@@ -96,6 +96,9 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePolicyWorkspaces(spec); err != nil {
 		return err
 	}
+	if err := validateToolRules(spec.ToolRules); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
@@ -108,6 +111,16 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 // targets (each of which the console renders and the gateway would launch).
 const maxUIAppsPerPolicy = 8
 
+// maxToolRulesPerPolicy / maxToolRuleNameLen bound tool_rules. A harness
+// exposes on the order of a dozen tools, so 32 is generous for an exhaustive
+// policy and still small enough that the list rides a per-run JSON document
+// into the proxy sidecar without thought. These are hostile-input ceilings, not
+// a sizing of any real policy.
+const (
+	maxToolRulesPerPolicy = 32
+	maxToolRuleNameLen    = 64
+)
+
 // uiAppNameRE constrains a UI app name to a short lower-case slug. The name is
 // NOT cosmetic: it is interpolated into the launcher path the gateway execs
 // inside the sandbox (/usr/local/bin/wardyn-ui-<name>) and into the enter
@@ -115,6 +128,44 @@ const maxUIAppsPerPolicy = 8
 // impossible by construction here — validated at every policy ingest, not
 // sanitised later at the exec site.
 var uiAppNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+
+// validateToolRules enforces tool_rules' structural invariants at the same
+// chokepoint every other policy field passes through.
+//
+// The rules that matter, and why each is a refusal rather than a normalisation:
+//   - the effect is a CLOSED ENUM. An unrecognised effect silently ignored is a
+//     rule that reads as enforcement and is not — the worst possible outcome for
+//     a security field.
+//   - a duplicate tool is REFUSED, not last-wins. Two rules for one tool means
+//     the author believes something untrue about which applies.
+//   - the count and the name length are capped, because this rides a per-run
+//     JSON document into a sidecar.
+func validateToolRules(rules []types.ToolRule) error {
+	if len(rules) > maxToolRulesPerPolicy {
+		return fmt.Errorf("tool_rules: %d rules exceeds the maximum of %d", len(rules), maxToolRulesPerPolicy)
+	}
+	seen := map[string]bool{}
+	for i, r := range rules {
+		name := strings.TrimSpace(r.Tool)
+		if name == "" {
+			return fmt.Errorf("tool_rules[%d]: tool is required (use \"*\" for the default)", i)
+		}
+		if len(name) > maxToolRuleNameLen {
+			return fmt.Errorf("tool_rules[%d]: tool name exceeds %d chars", i, maxToolRuleNameLen)
+		}
+		if name != r.Tool {
+			return fmt.Errorf("tool_rules[%d]: tool %q has leading or trailing whitespace; the match is exact, so it would never fire", i, r.Tool)
+		}
+		if seen[name] {
+			return fmt.Errorf("tool_rules[%d]: duplicate rule for tool %q — two rules for one tool means one of them does nothing", i, name)
+		}
+		seen[name] = true
+		if !types.ValidToolEffect(r.Effect) {
+			return fmt.Errorf("tool_rules[%d]: invalid effect %q (want allow, hold or deny)", i, r.Effect)
+		}
+	}
+	return nil
+}
 
 // validateUIApps enforces the structural invariants of ui_apps at every point
 // a policy enters the system (stored policy write, inline run policy,

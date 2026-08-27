@@ -55,6 +55,10 @@ type Policy struct {
 	deniedWildPort   []wildPort
 	allowedMeth      map[string]struct{} // empty == all methods allowed
 	firstUse         types.FirstUseMode
+	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
+	// Nil/empty means "no rules", which is today's behaviour: every gated call
+	// raises an approval. The "*" key is the default for unmatched tools.
+	toolRules map[string]types.ToolEffect
 	// allowAll switches evalHost from default-deny (allowlist only) to "allow
 	// all (deny-list only)": a non-denied host resolves to hostAllow even when
 	// it is not in allowedExact/allowedWild. Deny still beats allow, the
@@ -75,6 +79,15 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:      make(map[string]struct{}),
 		firstUse:         spec.FirstUseApproval.Normalize(),
 		allowAll:         spec.AllowAllEgress,
+	}
+	// Compiled into a map rather than scanned: validatePolicySpec already refuses
+	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the
+	// whole matching semantics.
+	if len(spec.ToolRules) > 0 {
+		p.toolRules = make(map[string]types.ToolEffect, len(spec.ToolRules))
+		for _, r := range spec.ToolRules {
+			p.toolRules[r.Tool] = r.Effect
+		}
 	}
 	for _, d := range spec.AllowedDomains {
 		exact, wild, port := classifyDomain(d)
@@ -114,6 +127,29 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 // FirstUseMode reports how unknown domains are handled (always_deny /
 // deny_with_review / wait_for_review), normalized (never empty).
 func (p *Policy) FirstUseMode() types.FirstUseMode { return p.firstUse }
+
+// ToolEffectFor reports what a run's policy says about one tool call, and
+// whether a rule matched at all.
+//
+// Match order: the exact tool name, then the "*" default. There is no pattern
+// matching — see ToolRule's doc for why a glob over tool names is the wrong
+// shape here.
+//
+// A run with NO rules returns ok=false, and the caller must fall back to today's
+// behaviour (raise an approval). That fallback is what makes this field additive:
+// a policy authored before it behaves exactly as it did.
+func (p *Policy) ToolEffectFor(tool string) (types.ToolEffect, bool) {
+	if p == nil || len(p.toolRules) == 0 {
+		return "", false
+	}
+	if e, ok := p.toolRules[tool]; ok {
+		return e, true
+	}
+	if e, ok := p.toolRules["*"]; ok {
+		return e, true
+	}
+	return "", false
+}
 
 // builtinEvaluator is the default egress.Evaluator: it wraps the compiled
 // RunPolicySpec Policy. It decides only the host verdict + method; the proxy

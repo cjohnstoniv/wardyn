@@ -1,0 +1,22 @@
+{
+  "allowed_domains": [
+    "proxy.golang.org",
+    "registry.npmjs.org"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC2",
+  "eligible_grants": [],
+  "auto_stop_after_sec": 3600,
+  "tool_rules": [
+    { "tool": "Read", "effect": "allow" },
+    { "tool": "Glob", "effect": "allow" },
+    { "tool": "Grep", "effect": "allow" },
+    { "tool": "Edit", "effect": "hold" },
+    { "tool": "Write", "effect": "hold" },
+    { "tool": "Bash", "effect": "hold" },
+    { "tool": "WebFetch", "effect": "deny" },
+    { "tool": "*", "effect": "hold" }
+  ]
+}

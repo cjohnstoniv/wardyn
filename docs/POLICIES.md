@@ -55,6 +55,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
+| `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -545,6 +546,56 @@ opened, what the image has to ship, and what is (and is not) recorded.
 | `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
+
+## `tool_rules` — `[]ToolRule`
+
+**What problem this solves.** `tool_approvals` has exactly two settings and no
+middle. `auto` runs every tool with no gate at all; `hold` routes **every** gated
+call to a human. On a real task the first is more autonomy than most operators
+want and the second is more interruptions than a human sustains — and an operator
+who tires of approving picks `auto` for everything, which is the worst of the
+two. `tool_rules` is the middle.
+
+```json
+{
+  "tool_approvals": "hold",
+  "tool_rules": [
+    { "tool": "Read",     "effect": "allow" },
+    { "tool": "Glob",     "effect": "allow" },
+    { "tool": "Bash",     "effect": "hold"  },
+    { "tool": "WebFetch", "effect": "deny"  }
+  ]
+}
+```
+
+"Read freely, ask before shell, never fetch the web" — and the human is asked
+only about the calls that warrant asking.
+
+**Where it is evaluated: outside the sandbox.** Rules are compiled into the
+run's policy and applied by `wardyn-proxy` on the brokered approval route, so a
+compromised agent cannot rewrite the rules that govern it. An `allow` or a `deny`
+is answered immediately and **creates no approval card**; both still appear in
+the decision log (`policy:tool-allow` / `policy:tool-deny`), so "policy waved
+this through" is exactly as visible as "a human approved it".
+
+**It narrows; it never widens.** Rules are consulted only for a run already in
+`hold`, so adding one cannot make a supervised run autonomous. The worst a
+mistaken rule can do is ask a human more often, or refuse a call the agent
+wanted.
+
+**Matching.** Exact and case-sensitive on the tool name the harness reports.
+There is no pattern matching — a glob over tool names invites a rule that reads
+narrower than it matches, and a harness exposes a small enumerable set. The one
+wildcard is the literal `"*"`, which sets the default for unmatched tools; put
+`{"tool": "*", "effect": "deny"}` last for an allowlist-shaped policy.
+
+**Empty is today's behaviour**, exactly: every gated call under `hold` goes to a
+human. A policy written before this field behaves identically.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
+| `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
 

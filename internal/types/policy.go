@@ -210,6 +210,65 @@ type RunPolicySpec struct {
 	// without them one runaway or prompt-injected agent can OOM-kill the host,
 	// fork-bomb the host PID space, or fill host storage and take down sibling runs.
 	Resources *ResourceLimits `json:"resources,omitempty"`
+	// ToolRules narrows an autonomous run's tool use from a BINARY to a policy.
+	//
+	// `tool_approvals` alone has exactly two settings and no middle: `auto` runs
+	// every tool with no gate at all, and `hold` routes EVERY gated call to a
+	// human. On a real task the first is more autonomy than an operator wants and
+	// the second is more interruptions than a human answers — which is how
+	// approval fatigue starts, and an operator who tires of approving picks
+	// `auto` for everything.
+	//
+	// A rule names a TOOL and an effect: allow it outright, hold it for a human,
+	// or deny it outright. So "read freely, ask before shell, never fetch the
+	// web" becomes expressible, and the human is asked only about the calls that
+	// warrant asking.
+	//
+	// OPERATOR-AUTHORED and evaluated OUTSIDE the sandbox — proxy-side, on the
+	// same brokered route the approval already travels — so a compromised agent
+	// cannot rewrite its own rules. Empty (the default) preserves today's exact
+	// behaviour: every gated call under `hold` goes to a human.
+	//
+	// It narrows; it never widens. A rule is consulted ONLY for a run that is
+	// already in `hold`, so adding one cannot turn a supervised run autonomous —
+	// the worst a bad rule can do is ask a human more often, or refuse a call the
+	// agent wanted.
+	ToolRules []ToolRule `json:"tool_rules,omitempty"`
+}
+
+// ToolEffect is what a matching ToolRule does with the call.
+type ToolEffect string
+
+const (
+	// ToolAllow runs the call with no human in the loop. It is still recorded.
+	ToolAllow ToolEffect = "allow"
+	// ToolHold raises an approval and blocks — today's behaviour for every call.
+	ToolHold ToolEffect = "hold"
+	// ToolDeny refuses the call without asking anyone.
+	ToolDeny ToolEffect = "deny"
+)
+
+// ValidToolEffect reports whether e is one of the three effects. A closed enum,
+// checked at every ingest point: an unrecognised effect must be a 400, never a
+// silently-ignored rule that reads as enforcement.
+func ValidToolEffect(e ToolEffect) bool {
+	switch e {
+	case ToolAllow, ToolHold, ToolDeny:
+		return true
+	}
+	return false
+}
+
+// ToolRule is one entry in ToolRules: a tool NAME and what to do with it.
+//
+// Tool is matched EXACTLY and case-sensitively against the name the harness
+// reports (e.g. "Read", "Bash", "WebFetch"). Deliberately not a pattern: a
+// glob over tool names invites a rule that reads narrower than it matches,
+// and the set of tools a harness exposes is small and enumerable. The one
+// wildcard is the literal "*", which sets the default for unmatched tools.
+type ToolRule struct {
+	Tool   string     `json:"tool"`
+	Effect ToolEffect `json:"effect"`
 }
 
 // Clone returns a deep copy: every slice/pointer field is reallocated, so the
@@ -232,6 +291,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
+	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
 		// Deep-copy the nested slice fields too, or this "clone" still aliases
