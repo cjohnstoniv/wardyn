@@ -297,148 +297,24 @@ ok "Mode: host (local) — advanced; containerized is the default"
 hd "Setting up local (host) mode"
 
 # ── Model access: connect at RUNTIME, not during install ─────────────────────
-# Host mode is a single-user desktop, so a shared subscription is legitimate here —
-# but the installer still does not copy your credential dir. You connect in the
-# console, which signs in inside a sandbox and stores the token age-encrypted.
-# The staging path survives for demo recordings only (see stage-claude-creds.sh).
+# The installer no longer copies your Claude login. Connecting a subscription is a
+# runtime action you take in the console, which signs in inside a sandbox and
+# stores the token age-encrypted — rather than a copy of your host credential dir
+# made behind a prompt during an install.
+#
+# The staging path still exists for demo recordings
+# (scripts/stage-claude-creds.sh), but it requires WARDYN_ALLOW_SHARED_SUBSCRIPTION
+# now, so an ordinary install cannot reach it.
 if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN && $CLAUDE_CRED_FILE; then
   hd "Model access — Claude login detected"
-  say "  Wardyn will NOT copy it during setup. Connect it in the console:"
+  say "  Wardyn will NOT copy it. Connect your subscription in the console:"
   say "    Settings -> Model provider -> Claude subscription -> Sign in"
   say "  Your host ~/.claude is never staged, copied, or read by this installer."
-elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
-  ok "Claude is set up for AWS Bedrock on this host — model access is via Bedrock, not a Claude login (auto-configured below in local mode)."
-elif $HAVE_CLAUDE; then
-  warn "Claude CLI present but no model auth detected — run 'claude login', use an API key, or configure AWS Bedrock (export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL)."
-else
-  info "No Claude CLI on PATH (add an API key in the UI later to enable model access)"
-fi
-
-# ── barrier install guidance (sudo — never run silently) ─────────────────────
-missing_barriers=()
-$HAVE_RUNSC || missing_barriers+=("Wall/gVisor")
-{ $HAVE_KATA || ! $HAVE_KVM; } || missing_barriers+=("Vault/Kata")
-if [ "${#missing_barriers[@]}" -gt 0 ]; then
-  hd "Optional: install stronger barriers (needs sudo — run these yourself)"
-  say "  Wardyn works now with the barriers above. To add the missing ones on a"
-  say "  ${B}native dockerd${R} (not Docker Desktop), register the runtime in"
-  say "  /etc/docker/daemon.json and restart docker. Examples:"
-  $HAVE_RUNSC || say "    ${C}Wall (gVisor):${R} install runsc, then add  \"runsc\": { \"path\": \"/usr/bin/runsc\" }"
-  { $HAVE_KATA || ! $HAVE_KVM; } || say "    ${C}Vault (Kata):${R}  install kata-containers, then add  \"kata\": { \"runtimeType\": \"io.containerd.kata.v2\" }"
-  say "  (Skip for now — you can add them later and re-run this command.)"
-fi
-
-# ── DECIDE: containerized is the DEFAULT (and recommended) mode — the compose
-# stack, where sandbox→control-plane callbacks route in-network (the fix for the
-# Docker Desktop + WSL2 NAT workspace-Verify/Record breakage) and model access is
-# set up at the CLI (`wardyn subscription connect`, api-key, Bedrock). HOST mode
-# (wardynd runs as you; uses your resident Claude login directly) is an advanced
-# escape hatch. ONE front door: with a TTY and no explicit WARDYN_SETUP_MODE we
-# ask (Enter = containerized); headless defaults to containerized too. TEAM (a
-# packaged one-command team setup) does not exist, but admin/member RBAC + SSO
-# shipped in v0.5 — see docs/OPERATIONS.md §Multi-user for the recipe.
-if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
-  hd "Where should the control plane run?"
-  say "    1) containerized — the compose stack (default, recommended)"
-  say "    2) host          — advanced: wardynd runs as you, using your resident Claude login"
-  if $IS_WSL && $IS_DESKTOP; then
-    info "WSL2 + Docker Desktop (NAT) detected: keep 1 —"
-    info "host mode's workspace Verify/Record callbacks don't route there."
-  fi
-  while :; do
-    printf "  Choice [1/2] (Enter = 1): "
-    read -r _mode || _mode=""
-    case "${_mode}" in
-      ""|1|container*)    WARDYN_SETUP_MODE=container; break;;
-      2|host|local)       WARDYN_SETUP_MODE=local; break;;
-      *)                  warn "Please answer 1 or 2.";;
-    esac
-  done
-fi
-case "${WARDYN_SETUP_MODE:-container}" in
-  container)
-    # ── Which host folder may Wardyn onboard? ─────────────────────────────
-    # The containerized daemon is SEALED: it sees only what this root mounts
-    # in, and with none configured every local-directory onboard fails with a
-    # "not visible from the sealed daemon" 422. Ask ONCE here (the front
-    # door), remember the answer in deploy/compose/.env, and let an explicit
-    # WARDYN_WORKSPACES_ROOT env win without prompting (scripts/CI).
-    if [ -z "${WARDYN_WORKSPACES_ROOT:-}" ] && [ -t 0 ]; then
-      _prev_root="$(env_get "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT 2>/dev/null || true)"
-      hd "Which folder may Wardyn onboard as local directories?"
-      say "  Runs can only mount directories UNDER this folder (a parent of your projects"
-      say "  works well). Leave empty to keep the daemon sealed — repo onboarding still"
-      say "  works, and you can re-run 'make setup' to change it any time."
-      if [ -n "${_prev_root}" ]; then
-        printf "  Folder [%s]: " "${_prev_root}"
-      else
-        printf "  Folder [sealed]: "
-      fi
-      read -r _root || _root=""
-      _root="${_root:-${_prev_root}}"
-      # ~ expansion for a typed path; a pasted absolute path passes through.
-      case "${_root}" in "~"|"~/"*) _root="${HOME}${_root#\~}";; esac
-      if [ -n "${_root}" ]; then
-        if [ "${_root}" = "${HOME}" ]; then
-          warn "That is your whole home directory — too broad to mount into the daemon."
-          warn "Pick a projects folder under it (e.g. ${HOME}/projects); keeping the previous setting."
-          _root="${_prev_root}"
-        elif [ ! -d "${_root}" ]; then
-          warn "${_root} is not a directory; keeping the previous setting."
-          _root="${_prev_root}"
-        fi
-      fi
-      WARDYN_WORKSPACES_ROOT="${_root}"
-      export WARDYN_WORKSPACES_ROOT
-    fi
-    if [ -n "${WARDYN_WORKSPACES_ROOT:-}" ]; then
-      env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT "${WARDYN_WORKSPACES_ROOT}"
-      ok "Local directories under ${WARDYN_WORKSPACES_ROOT} can be onboarded (remembered in deploy/compose/.env)"
-    fi
-
-    hd "Containerized mode — delegating to scripts/up.sh up"
-    info "wardynd runs in a container on wardyn-internal: sandbox→control-plane callbacks route"
-    info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). Set up model"
-    info "access with 'wardyn subscription connect' (Claude subscription), an api-key secret, or"
-    info "Bedrock — interactively after launch or headless via WARDYN_SUBSCRIPTION_TOKEN."
-    exec ./scripts/up.sh up
-    ;;
-  local|host) ;;
-  team)
-    hd "A packaged one-command team setup does not exist"
-    warn "There is no team-mode installer here — but admin/member RBAC + SSO (Dex/OIDC,"
-    warn "WARDYN_OIDC_ROLE_MAP) shipped in v0.5 on top of the same compose control plane."
-    warn "See docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the recipe."
-    warn "What this script sets up today, both single-user: CONTAINERIZED mode ('make setup' /"
-    warn "Enter at the prompt — the compose stack, the default) and HOST mode"
-    warn "(WARDYN_SETUP_MODE=local — advanced: wardynd runs as you, your Claude login injected"
-    warn "per-request at the proxy)."
-    exit 2
-    ;;
-  *)
-    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid. Supported: container (the"
-    warn "compose stack — the default), or local/host (advanced host mode). 'team' prints the"
-    warn "admin/member RBAC + SSO recipe (docs/OPERATIONS.md §Multi-user) instead of installing anything."
-    exit 2
-    ;;
-esac
-ok "Mode: host (local) — advanced; containerized is the default"
-
-# ── ACT (host mode only; no packaged team installer, so there is no team branch here —
-# admin/member RBAC + SSO run on the same compose stack, see docs/OPERATIONS.md §Multi-user) ──
-# local / host mode
-hd "Setting up local (host) mode"
-
-# ── Model access: connect at RUNTIME, not during install ─────────────────────
-# Host mode is a single-user desktop, so a shared subscription is legitimate here —
-# but the installer still does not copy your credential dir. You connect in the
-# console, which signs in inside a sandbox and stores the token age-encrypted.
-# The staging path survives for demo recordings only (see stage-claude-creds.sh).
-if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN && $CLAUDE_CRED_FILE; then
-  hd "Model access — Claude login detected"
-  say "  Wardyn will NOT copy it during setup. Connect it in the console:"
-  say "    Settings -> Model provider -> Claude subscription -> Sign in"
-  say "  Your host ~/.claude is never staged, copied, or read by this installer."
+  say ""
+  say "  A shared subscription credential is limited to single-user desktop"
+  say "  deployments. On Kubernetes, or with SSO configured, give each person their"
+  say "  own key (wardyn secret set anthropic-api-key) or use Bedrock — the harness"
+  say "  vendor requires each end user to authenticate with their own credential."
 elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
   # Auto-detect the host's Bedrock setup and offer to configure Wardyn end to end —
   # region, model, and creds — so the operator doesn't hand-run `wardyn secret set`.

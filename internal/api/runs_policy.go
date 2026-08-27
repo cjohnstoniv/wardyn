@@ -398,7 +398,10 @@ func mustJSON(v any) json.RawMessage {
 // costs an afternoon and teaches nobody anything. Fail at run creation with the
 // actual reason and the actual fix instead.
 var unpublishedConventionImages = map[string]string{
-	"claude-code": "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, which is not open-source and whose terms are not readable from the image. Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md",
+	"claude-code": "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, " +
+		"which is not open-source and whose terms are not readable from the image. " +
+		"Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — " +
+		"or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md",
 }
 
 // unpublishedAgentImage reports why the resolved image cannot be pulled, or ""
@@ -414,4 +417,13 @@ func unpublishedAgentImage(agent string, images map[string]string) string {
 		key = def.ImageKey
 	}
 	return unpublishedConventionImages[key]
+}
+
+// withUnpublishedImageWarning appends the unpublished-image explanation when one
+// applies, so the caller stays a single line.
+func withUnpublishedImageWarning(warnings []string, agent string, images map[string]string) []string {
+	if why := unpublishedAgentImage(agent, images); why != "" {
+		return append(warnings, why)
+	}
+	return warnings
 }

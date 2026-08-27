@@ -73,23 +73,40 @@ func TestContributingConformanceGateNotStale(t *testing.T) {
 	}
 }
 
-// TestReleaseNotesDoNotOverclaimSBOMAttachment is the regression proof for
-// W30-S1-4: release.yml deliberately does NOT attach the release SBOM to the
-// GitHub Release object (see that workflow's own header comment) — it uploads
-// a workflow artifact for hand-attachment. CHANGELOG.md and ROADMAP.md must
-// not claim otherwise.
-func TestReleaseNotesDoNotOverclaimSBOMAttachment(t *testing.T) {
+// TestReleaseNotesMatchSBOMReality is the inverse of the guard it replaces.
+//
+// The original asserted that CHANGELOG.md and ROADMAP.md must call the SBOM a
+// "workflow artifact", because release.yml deliberately did NOT attach one to the
+// Release. That was true and worth pinning at the time. As of 0.6.2 release.yml
+// attests a per-digest SBOM with cosign AND uploads it as a release asset, with a
+// job step that fails if the asset did not land — so the old assertion now pins
+// docs to a claim that is no longer true, which is the opposite of what a
+// doc-truth guard is for.
+//
+// Same job, flipped: the docs must not still describe the SBOM as a
+// hand-attached workflow artifact.
+func TestReleaseNotesMatchSBOMReality(t *testing.T) {
+	wf := readRepoDoc(t, ".github/workflows/release.yml")
+	// Guard the guard: if the workflow ever stops attaching, this test is the
+	// thing that should be revisited, not silently inverted again.
+	if !strings.Contains(wf, "gh release upload") {
+		t.Skip("release.yml no longer uploads release assets; revisit this guard rather than the docs")
+	}
 	for _, path := range []string{"CHANGELOG.md", "ROADMAP.md"} {
 		doc := readRepoDoc(t, path)
+		// CHANGELOG entries for SHIPPED releases are a historical record: at 0.6.0
+		// the SBOM really was a hand-attached workflow artifact, and rewriting that
+		// to match today would make the changelog lie about the past. Only the
+		// unreleased section describes what is true now.
+		if path == "CHANGELOG.md" {
+			doc = unreleasedSection(doc)
+		}
 		if !strings.Contains(doc, "SBOM") {
-			continue // this doc's SBOM mention may move; only assert when present
+			continue
 		}
-		if strings.Contains(doc, "attaches a CycloneDX SBOM release asset") ||
-			strings.Contains(doc, "attaches a CycloneDX SBOM") {
-			t.Errorf("%s claims release.yml attaches the SBOM to the Release; it only uploads a workflow artifact", path)
-		}
-		if !strings.Contains(doc, "workflow") || !strings.Contains(doc, "artifact") {
-			t.Errorf("%s's SBOM mention should call the SBOM a workflow artifact, matching what release.yml actually does", path)
+		if strings.Contains(doc, "deliberately not auto-attached") ||
+			strings.Contains(doc, "attach it by hand") {
+			t.Errorf("%s still says the SBOM is a hand-attached workflow artifact; release.yml attaches it and asserts it landed", path)
 		}
 	}
 }
@@ -141,4 +158,19 @@ func TestRunHostMapsAwsSsoImage(t *testing.T) {
 	if !strings.Contains(doc, `\"aws-sso\":\"wardyn/agent-aws-sso:local\"`) {
 		t.Error(`scripts/run-host.sh's default WARDYN_AGENT_IMAGES omits "aws-sso":"wardyn/agent-aws-sso:local"`)
 	}
+}
+
+// unreleasedSection returns CHANGELOG.md's "## [Unreleased]" body — everything up
+// to the first released heading. Shipped entries are history and are not rewritten
+// to match later behaviour.
+func unreleasedSection(doc string) string {
+	i := strings.Index(doc, "## [Unreleased]")
+	if i < 0 {
+		return ""
+	}
+	rest := doc[i+len("## [Unreleased]"):]
+	if j := strings.Index(rest, "\n## ["); j >= 0 {
+		return rest[:j]
+	}
+	return rest
 }

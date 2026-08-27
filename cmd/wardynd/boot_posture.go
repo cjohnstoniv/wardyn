@@ -171,13 +171,20 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 // rendering identically to "the operator never logged in".
 func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, allowShared bool) (bool, string) {
 	if runnerTarget == "k8s" {
-		return false, "the Kubernetes runner is a multi-user deployment: a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+		return false, "the Kubernetes runner is a multi-user deployment: a shared subscription credential would " +
+			"serve other people's runs, which the harness vendor's terms prohibit. " +
+			"Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
 	}
 	if oidcConfigured {
-		return false, "OIDC/SSO is configured, which declares that more than one human uses this deployment: a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+		return false, "OIDC/SSO is configured, which declares that more than one human uses this deployment: " +
+			"a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. " +
+			"Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
 	}
 	if localMode || allowShared {
 		return true, ""
 	}
-	return false, "subscription injection is limited to a single-user desktop/local deployment (WARDYN_LOCAL_MODE). This daemon serves an authenticated multi-user API, so a shared subscription credential would serve other people's runs. Use an API key or Bedrock — or, for a demo box that is genuinely single-user, set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true"
+	return false, "subscription injection is limited to a single-user desktop/local deployment " +
+		"(WARDYN_LOCAL_MODE). This daemon serves an authenticated multi-user API, so a shared " +
+		"subscription credential would serve other people's runs. Use an API key or Bedrock — or, " +
+		"for a demo box that is genuinely single-user, set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true"
 }

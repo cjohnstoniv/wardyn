@@ -200,7 +200,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// were true of nothing a member ever saw. The strings are
 	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
-	warnings := append(policyWarns, s.warnWorkspaceCollision(ctx, runID, workspacePath)...)
+	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(ctx, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
 	if taskWarning != "" {
 		warnings = append(warnings, taskWarning)
 	}
@@ -300,9 +300,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
-	if why := unpublishedAgentImage(req.Agent, s.cfg.AgentImages); why != "" {
-		warnings = append(warnings, why)
-	}
 	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
 	if responded {
 		return

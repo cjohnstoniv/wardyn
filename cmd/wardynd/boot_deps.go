@@ -395,18 +395,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// call sites — subscription.Provider.Current() shells out to the resident
 	// `claude` and ROTATES that file, so a provider that exists is a provider that
 	// can mutate the operator's personal credential.
-	var subToken subscription.Provider
-	if subPostureOK {
-		st, subErr := subscription.New(subscription.Config{})
-		if subErr != nil {
-			slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
-				slog.Any("err", subErr),
-			)
-			st = nil
-		}
-		subToken = st
-	}
-	of.subToken = subToken
+	of.subToken = newSubscriptionProvider(subPostureOK)
 	// Default ON: unset (and the compose ${…:-off} passthrough when actually set
 	// to a truthy) injects proxy-side. off/0/false/no disable it; garbage exits 2
 	// via EnvBool rather than silently staying ON. (Previously only the literal
@@ -514,4 +503,26 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 		"policy_engine": {Selected: "builtin"},
 		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}
+}
+
+// newSubscriptionProvider builds the resident-subscription token provider, or nil
+// when this deployment's posture forbids sharing one operator's credential.
+//
+// Returning nil is the point, not an optimisation: subscription.Provider.Current()
+// shells out to the resident `claude` and ROTATES the operator's own
+// ~/.claude/.credentials.json, so a provider that exists is a provider that can
+// mutate their personal credential. Not constructing it makes "this deployment
+// cannot read or refresh that file" a property of the process.
+func newSubscriptionProvider(postureOK bool) subscription.Provider {
+	if !postureOK {
+		return nil
+	}
+	p, err := subscription.New(subscription.Config{})
+	if err != nil {
+		slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
+			slog.Any("err", err),
+		)
+		return nil
+	}
+	return p
 }
