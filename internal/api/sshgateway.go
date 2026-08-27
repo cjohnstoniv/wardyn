@@ -395,6 +395,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		// counter rather than needing a second one.
 		case "session":
 			if !s.sshAcquireSession(runID) {
+				s.sshAuditChannelRejected(connCtx, runID, principal, "session")
 				_ = newCh.Reject(ssh.ResourceShortage,
 					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
 				continue
@@ -405,6 +406,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 			})
 		case "direct-tcpip":
 			if !s.sshAcquireSession(runID) {
+				s.sshAuditChannelRejected(connCtx, runID, principal, "direct-tcpip")
 				_ = newCh.Reject(ssh.ResourceShortage,
 					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
 				continue
@@ -424,6 +426,29 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 			_ = newCh.Reject(ssh.UnknownChannelType, "unsupported channel type "+newCh.ChannelType())
 		}
 	}
+}
+
+// sshAuditChannelRejected records a per-run channel-cap refusal.
+//
+// Neither rejection site audited before 0.7: the client saw ResourceShortage
+// and the deployment saw nothing. That was survivable while the gateway was off
+// by default — but the desktop envelope now ships WARDYN_SSH_LISTEN ON, so this
+// runs on every managed laptop, and "the developer's tooling silently stopped
+// opening channels" is exactly the kind of thing an operator needs a row for.
+// It also makes the cap's behaviour ASSERTABLE: a test can prove the counter is
+// shared across channel TYPES by reading the audit trail rather than inferring
+// it from a client-side error string.
+//
+// channelType distinguishes the two callers, which is the whole point — a
+// "session" refusal and a "direct-tcpip" refusal drawing on one counter is the
+// property being recorded.
+func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType string) {
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel_rejected",
+		runID.String(), "failure", mustJSON(map[string]any{
+			"channel_type": channelType,
+			"reason":       "per-run concurrent channel cap",
+			"max":          maxSSHSessionsPerRun,
+		})))
 }
 
 // sshAcquireSession reports whether runID may open one more concurrent SSH

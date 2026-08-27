@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"strings"
 	"testing"
 
@@ -90,4 +92,45 @@ func TestConnectDenyRefusalHeaders(t *testing.T) {
 	if !strings.Contains(status, "X-Wardyn-Host: blocked.test") {
 		t.Fatalf("CONNECT deny missing X-Wardyn-Host header: %q", status)
 	}
+}
+
+// B4: "denied" alone is ambiguous. EIGHT distinct outcomes collapse into it,
+// and they call for completely different actions — ask the operator to allowlist
+// a host, versus stop trying because a human already refused, versus fix a
+// broken policy. The reason header carries the decision log's own RuleSource so
+// the sandbox can tell them apart.
+func TestEgressRefusalHeaders_CarryTheReason(t *testing.T) {
+	cases := []struct {
+		name, reason string
+	}{
+		{"not on the allowlist", "policy:default-deny"},
+		{"an explicit deny-list hit", "policy:denied"},
+		{"a human refused the approval", "approval:denied"},
+		{"the private-IP guard", "builtin:private-ip"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			log := &egress.DecisionLog{Decision: egress.Deny, RuleSource: tc.reason}
+			setEgressRefusalHeadersWithReason(w, egressRefusalDenied, "example.org", decisionReason(log))
+			if got := w.Header().Get(egressHeaderStatus); got != egressRefusalDenied {
+				t.Errorf("%s = %q, want %q", egressHeaderStatus, got, egressRefusalDenied)
+			}
+			if got := w.Header().Get(egressHeaderReason); got != tc.reason {
+				t.Errorf("%s = %q, want %q — without it every deny looks identical to the sandbox", egressHeaderReason, got, tc.reason)
+			}
+		})
+	}
+
+	// A nil log must not panic and must not invent a reason.
+	t.Run("no reason available is omitted, not faked", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		setEgressRefusalHeadersWithReason(w, egressRefusalPending, "example.org", decisionReason(nil))
+		if got := w.Header().Get(egressHeaderReason); got != "" {
+			t.Errorf("%s = %q, want empty when no decision log is in scope", egressHeaderReason, got)
+		}
+		if got := w.Header().Get(egressHeaderStatus); got != egressRefusalPending {
+			t.Errorf("the status header must still be set, got %q", got)
+		}
+	})
 }

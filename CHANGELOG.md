@@ -120,7 +120,34 @@ managed Kubernetes; every item below was verified against the code before it was
   it validates the repository, not the workflow.
 
 
+### Added
+
+- **A blocked egress request now says WHICH rule blocked it.** Eight distinct
+  outcomes collapsed into one `X-Wardyn-Egress: denied`, and they call for
+  completely different actions — ask the operator to allowlist a host, versus
+  stop retrying because a human already refused, versus fix a broken policy.
+  `X-Wardyn-Egress-Reason` carries the decision log's own rule source
+  (`policy:default-deny`, `policy:denied`, `approval:denied`,
+  `builtin:private-ip`, …). Same static strings the audit trail already records,
+  so nothing new is disclosed. Documented in `docs/UI-SANDBOXES.md`, which is
+  where developers most often meet the egress policy.
+
+- **`examples/policies/ui-sandbox.json`** — the first shipped example declaring
+  a `ui_apps` block. `grep -rl ui_apps examples/policies/` previously returned
+  nothing, so the one policy field the UI-sandbox feature turns on had no worked
+  example anywhere.
+
+- **An SSH channel refused by the per-run cap is now audited**
+  (`ssh.channel_rejected`, naming the channel type). A refusal used to be
+  invisible to the deployment: the client saw `ResourceShortage` and nothing was
+  recorded. That mattered less while the gateway was off by default — the
+  desktop envelope now ships it **on**.
+
 ### Changed
+
+- **In-editor extension installation is documented as unsupported by default.**
+  It reaches marketplace CDNs no shipped policy allowlists. The fix is baking
+  extensions into the image, not pasting a rotating CDN list into a policy.
 
 - **Scan-seeded egress now requires operator provenance, by default.**
   `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` shipped in 0.6 fully built and **off**,

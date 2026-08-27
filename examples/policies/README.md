@@ -105,3 +105,30 @@ A TEMPLATE, not a usable policy — do not point `WARDYN_DEFAULT_POLICY` at it.
 `scripts/stage-claude-creds.sh` replaces `__WARDYN_CRED_DIR__` with a
 machine-specific read-only staging dir and writes the real policy to
 `~/.wardyn/claude-subscription.json`.
+
+## `ui-sandbox.json` — relaying an in-container editor to the browser
+
+The only shipped example that declares `ui_apps`. Before it, `grep -rl ui_apps
+examples/policies/` returned nothing, so the one policy field the UI-sandbox
+feature turns on had no worked example anywhere.
+
+`ui_apps` names a loopback port INSIDE the sandbox that the gateway may relay —
+`{name, port, path}`, operator-authored, never a command. `name` selects the
+launcher the image must ship as `/usr/local/bin/wardyn-ui-<name>`: **declaring
+an app does not install one**, and an image without that launcher fails closed
+with the path it looked for. `code` matches `deploy/images/vscode/`.
+
+Two things this example deliberately does NOT do:
+
+- **It does not open the extension marketplace.** `allowed_domains` covers
+  package registries a build needs, not Microsoft's rotating marketplace CDNs.
+  In-editor extension installation is **not supported by default** — see
+  [docs/UI-SANDBOXES.md](../../docs/UI-SANDBOXES.md). Bake the extensions you
+  need into the image instead; that is auditable, and it survives a CDN change.
+- **It grants nothing.** `eligible_grants` is empty. A browser-relayed editor is
+  a place to read and edit code, and adding a credential to it widens the
+  blast radius of a UI the operator's own browser renders — see the relay's
+  residuals in `threatmodel/THREAT-MODEL.md`.
+
+`auto_stop_after_sec` is set because an editor session is the easiest thing in
+the product to leave open overnight.

@@ -1,0 +1,18 @@
+{
+  "allowed_domains": [
+    "registry.npmjs.org",
+    "proxy.golang.org"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [],
+  "auto_stop_after_sec": 3600,
+  "ui_apps": [
+    {
+      "name": "code",
+      "port": 8080
+    }
+  ]
+}

@@ -33,6 +33,50 @@ admin actions is that it arrives on a different browser origin. See
 > The **one-line installer** (`install.sh`) is the same: it writes
 > `WARDYN_UI_SANDBOX_PORT` but leaves the listener off, for the same reason.
 
+## Diagnosing a blocked request
+
+A relayed editor is the place developers most often meet the egress policy, and
+"it just fails" is the worst possible way to meet it. Every refusal from
+`wardyn-proxy` carries its reason in response headers — visible with
+`curl -sD- https://…` from inside the sandbox:
+
+| Header | Values |
+|---|---|
+| `X-Wardyn-Egress` | `denied` (permanently blocked) or `approval-pending` (raised for a human — retry after it is decided) |
+| `X-Wardyn-Host` | the host the decision applies to |
+| `X-Wardyn-Egress-Reason` | which rule decided it |
+
+The **reason** matters because `denied` alone is ambiguous, and the right next
+action differs completely:
+
+| Reason | What it means | What to do |
+|---|---|---|
+| `policy:default-deny` | the host is simply not on the allowlist | ask the operator to add it |
+| `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
+| `approval:denied` | a human reviewed this host and said no | stop retrying |
+| `policy:method` | the host is allowed, the HTTP method is not | |
+| `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
+| `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
+
+Those are the same static strings the decision log records, so nothing is
+disclosed here that the audit trail does not already hold.
+
+## Extensions are not installable by default
+
+An in-editor extension install reaches Microsoft's marketplace CDNs, which are
+**not allowlisted by any shipped policy** — so it fails, with
+`X-Wardyn-Egress-Reason: policy:default-deny`.
+
+That is deliberate, and the fix is not to paste a CDN list into your policy: the
+hostnames rotate, so an allowlist copied today silently stops matching, and you
+would be granting a broad content-delivery surface to reach a handful of
+packages. **Bake the extensions you need into the image instead** — it is
+auditable, reproducible, and survives a CDN change. `deploy/images/vscode/` is
+the reference.
+
+If you must allow it anyway, treat any host list as an **example rather than a
+supported set**, and expect to maintain it.
+
 ## 1. Declare the app
 
 A run's policy names the apps the gateway may relay —

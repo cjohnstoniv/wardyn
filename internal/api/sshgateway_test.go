@@ -1308,3 +1308,108 @@ func containsPrefix(env []string, prefix string) bool {
 	}
 	return false
 }
+
+// TestSSHGateway_MixedChannelTypesShareOneCap is B2′.
+//
+// TestSSHGateway_MaxSessionsPerRunEnforced above exercises "session" channels
+// ONLY. Nothing proved that "direct-tcpip" (-L forwards) draws on the SAME
+// per-run counter — which is the whole structural finding: Wardyn's cap is
+// per-RUN and shared across channel TYPES, inverting the OpenSSH model, where
+// MaxSessions scopes to session channels and a direct-tcpip is dispatched
+// straight to the forward path. That inversion is why a client which opens
+// shells and forwards together (VS Code Remote-SSH being the motivating case)
+// can exhaust a cap that looks generous for shells alone.
+//
+// It also pins the audit, which did not exist before 0.7: a refusal used to be
+// invisible to the deployment.
+func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{
+		attachFn: func() (runner.Session, error) { return newFakeShellSession(), nil },
+		execFn:   func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeEchoExecSession(), nil },
+	}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	// Fill the cap with a MIX: one fewer session than the cap, then a forward.
+	// If the two types had separate counters, both would fit with room to spare
+	// and the assertion below would not fire.
+	var sessions []*ssh.Session
+	var conns []net.Conn
+	defer func() {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < maxSSHSessionsPerRun-1; i++ {
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+		// StdinPipe, not a bare Shell(): see the sibling test — an empty Stdin
+		// buffer EOFs immediately and frees the slot before the next iteration,
+		// which makes the cap look unenforced.
+		if _, err := sess.StdinPipe(); err != nil {
+			t.Fatalf("session %d stdin pipe: %v", i, err)
+		}
+		if err := sess.Shell(); err != nil {
+			t.Fatalf("session %d shell: %v", i, err)
+		}
+		sessions = append(sessions, sess)
+	}
+	conn, err := client.Dial("tcp", "127.0.0.1:9999")
+	if err != nil {
+		t.Fatalf("the forward that fills the cap must succeed: %v", err)
+	}
+	conns = append(conns, conn)
+
+	// The cap is now full via N-1 sessions PLUS one forward. Both of the next
+	// two must be refused, whichever type they are.
+	t.Run("a further session is refused", func(t *testing.T) {
+		if _, err := client.NewSession(); err == nil {
+			t.Errorf("a session opened past the shared cap of %d — the forward above did not consume a slot, so the counter is NOT shared across channel types", maxSSHSessionsPerRun)
+		}
+	})
+	t.Run("a further forward is refused", func(t *testing.T) {
+		if c, err := client.Dial("tcp", "127.0.0.1:9999"); err == nil {
+			_ = c.Close()
+			t.Errorf("a forward opened past the shared cap of %d — the sessions above did not consume slots, so the counter is NOT shared across channel types", maxSSHSessionsPerRun)
+		}
+	})
+
+	// ...and the refusal is visible to the deployment, not just to the client.
+	t.Run("the refusal is audited, naming the channel type", func(t *testing.T) {
+		ev := waitForAudit(t, h.audit, run.ID, "ssh.channel_rejected", "failure")
+		if ev.Action == "" {
+			t.Fatalf("a channel-cap refusal emitted no audit event: the client sees ResourceShortage and the deployment sees nothing. events=%s",
+				auditDump(h.audit.snapshot(), run.ID))
+		}
+		var got []types.AuditEvent
+		for _, e := range h.audit.snapshot() {
+			if e.Action == "ssh.channel_rejected" {
+				got = append(got, e)
+			}
+		}
+		var sawSession, sawForward bool
+		for _, ev := range got {
+			if strings.Contains(string(ev.Data), `"session"`) {
+				sawSession = true
+			}
+			if strings.Contains(string(ev.Data), `"direct-tcpip"`) {
+				sawForward = true
+			}
+		}
+		if !sawSession || !sawForward {
+			t.Errorf("audit must distinguish the refused channel type (session=%v direct-tcpip=%v) — that distinction IS the shared-counter evidence", sawSession, sawForward)
+		}
+	})
+}
