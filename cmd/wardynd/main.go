@@ -250,10 +250,31 @@ func run() error {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 
+	// SHARED-SUBSCRIPTION posture. Decided here because its three inputs only
+	// converge at this point: runnerTarget comes from buildRunnerFromFlags above,
+	// lm.enabled from resolveLocalMode, and the issuer from the flags. Computed
+	// BEFORE buildOptionalFeatures so the credential providers are never even
+	// constructed on a deployment that may not share one operator's subscription.
+	subPostureOK, subPostureReason := subscriptionInjectPosture(
+		runnerTarget, strings.TrimSpace(*f.oidcIssuer) != "", lm.enabled, *f.allowSharedSubscription)
+	if !subPostureOK {
+		slog.Info("wardynd: shared subscription credential injection is DISABLED for this deployment posture",
+			slog.String("reason", subPostureReason),
+		)
+	} else if !lm.enabled {
+		// Reached only via WARDYN_ALLOW_SHARED_SUBSCRIPTION. Warn at the same volume
+		// as the demo-admin-token warning: the operator has waived a refusal that
+		// exists because of a third party's terms, not merely Wardyn's own policy.
+		slog.Warn("wardynd: WARDYN_ALLOW_SHARED_SUBSCRIPTION is set — ONE operator's Anthropic subscription will be injected into runs on a daemon that is not -local-mode. "+
+			"The harness vendor's terms require each end user to authenticate with their own credential; you are asserting this box is single-user. Demo boxes only.",
+			slog.String("operator", lm.operator),
+		)
+	}
+
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// subscription/managed LLM credential providers, advisory AI scan
 	// fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
-	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies)
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies, subPostureOK)
 	if err != nil {
 		return err
 	}
@@ -294,20 +315,22 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:         auditSpool,
-		AuditDrainRecorder: auditDrainRec,
-		AuditSinkDrops:     sinkDropsReporter(fan),
-		Runner:             run,
-		AdminToken:         *f.adminToken,
-		LocalMode:          lm.enabled,
-		LocalOperator:      lm.operator,
-		TrustDomain:        *f.trustDomain,
-		DefaultPolicy:      defaultPolicy,
-		RunnerTarget:       runnerTarget,
-		UIDir:              *f.uiDir,
-		ControlPlaneURL:    *f.controlURL,
-		RecordingStore:     feats.recStore,
-		OIDC:               feats.authn,
+		AuditSpool:                auditSpool,
+		AuditDrainRecorder:        auditDrainRec,
+		AuditSinkDrops:            sinkDropsReporter(fan),
+		Runner:                    run,
+		AdminToken:                *f.adminToken,
+		LocalMode:                 lm.enabled,
+		SubscriptionPostureOK:     subPostureOK,
+		SubscriptionPostureReason: subPostureReason,
+		LocalOperator:             lm.operator,
+		TrustDomain:               *f.trustDomain,
+		DefaultPolicy:             defaultPolicy,
+		RunnerTarget:              runnerTarget,
+		UIDir:                     *f.uiDir,
+		ControlPlaneURL:           *f.controlURL,
+		RecordingStore:            feats.recStore,
+		OIDC:                      feats.authn,
 		// D16: same store buildOptionalFeatures wired into oidc.Config.Revocations
 		// (the read side Middleware checks), given here to internal/api so the
 		// admin revoke-sessions endpoint has the write side. nil exactly when

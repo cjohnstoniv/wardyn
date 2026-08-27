@@ -120,6 +120,28 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
 			return
 		}
+		// POSTURE PIN: refuse to resolve a SHARED subscription credential unless this
+		// deployment is single-user (subscriptionInjectPosture, cmd/wardynd). Sits on
+		// the same chokepoint as the host pin above and for the same reason — this is
+		// the ONE place every producer of a sentinel grant converges. Dispatch-time
+		// gating alone would miss four of them: a stored policy naming the sentinel,
+		// a member-supplied integration_id, a Record Mode profile that captured the
+		// grant, and the managed lane's default fallback. It also misses the drift
+		// case entirely: a grant authored while the daemon was single-user is
+		// re-resolved by the still-running proxy after a restart into a multi-user
+		// posture, because resident tokens carry an expiry and the injector refreshes.
+		//
+		// MUST precede provider.Current() below: Current() shells out to the resident
+		// `claude` and ROTATES the operator's own ~/.claude/.credentials.json. Refusing
+		// after it would still mutate their personal credential on behalf of a run we
+		// just decided was not entitled to it.
+		if !s.cfg.SubscriptionPostureOK {
+			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+				"secret.read", sentinel, "failure",
+				mustJSON(map[string]any{"reason": "shared-subscription-posture", "grant_id": grantID, "source": source, "detail": s.cfg.SubscriptionPostureReason})))
+			writeError(w, http.StatusForbidden, "shared subscription credentials are not available in this deployment: "+s.cfg.SubscriptionPostureReason)
+			return
+		}
 		if provider == nil {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 				"secret.read", sentinel, "failure",

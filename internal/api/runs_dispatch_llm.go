@@ -106,7 +106,13 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// REQUIRES TLS-MITM of api.anthropic.com so the proxy can swap the credential;
 	// it is the safe default whenever a token provider is wired. Escape hatch:
 	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
-	t.injectSub = modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
+	// SubscriptionPostureOK first: on a multi-user deployment we do not author the
+	// grant at all, so the run degrades to reconcileLLMAccess's honest "no model
+	// access" note instead of dying at the proxy with "injection status 403" —
+	// buildInjector fails closed on any non-200, and an operator reads that as a
+	// Wardyn bug rather than a deliberate refusal. The sink still refuses; this
+	// layer exists so the refusal is legible.
+	t.injectSub = s.cfg.SubscriptionPostureOK && modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
 	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
 	// operator to run `claude setup-token` in the attach shell and mint one. Point
@@ -159,7 +165,11 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// api.anthropic.com to the allow-list below, and a fallback must not silently
 	// widen a policy the operator authored as sealed. Operator-staged subscription
 	// mounts are policy-blessed and unaffected.
-	managed := modelRun && !t.harnessLogin && !t.subscription && !t.bedrockReady &&
+	// Posture first, for the same reason as injectSub above — and it matters more
+	// here: this lane is a DEFAULT FALLBACK for every claude-code run, needing no
+	// policy, no integration id and no flag, so on a multi-user stack it silently
+	// serves the operator's subscription to every member.
+	managed := s.cfg.SubscriptionPostureOK && modelRun && !t.harnessLogin && !t.subscription && !t.bedrockReady &&
 		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent) &&
 		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
 	t.injectManaged = managed

@@ -134,6 +134,9 @@ func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *test
 		ID: "acme-sub-host", Kind: types.IntegrationKindAnthropicSubscription,
 		Config: map[string]any{"lane": "resident_host"},
 	}})
+	// Single-user desktop posture — the only shape in which a shared subscription
+	// credential may be used at all (subscriptionInjectPosture, cmd/wardynd).
+	s.cfg.SubscriptionPostureOK = true
 	s.cfg.DefaultPolicy = types.RunPolicySpec{
 		AllowedDomains:  []string{"api.anthropic.com"},
 		WorkspaceMounts: []types.WorkspaceMount{{Source: "/host/.claude", Target: claudeCredTarget}},
@@ -145,6 +148,31 @@ func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *test
 	}
 	if !specHasMountTarget(spec, claudeCredTarget) {
 		t.Fatal("resident_host lane must inject the ceiling's Claude credential mount (applyLLMCredMount)")
+	}
+}
+
+// The same lane, off-posture. This branch re-injects the operator's ceiling
+// ~/.claude mounts AFTER the clamp by design, which means any authenticated
+// member can reach the resident subscription lane by naming an integration_id
+// alone — no policy of their own required. On a multi-user deployment that is
+// one person's credential dir mounted into someone else's sandbox, so the mount
+// must not be injected at all. Note this is a FILESYSTEM copy, not a token the
+// injection sink ever sees: the sink guard cannot cover it.
+func TestApplyWorkspaceCreds_ResidentHostIntegration_RefusedOffPosture(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-sub-host", Kind: types.IntegrationKindAnthropicSubscription,
+		Config: map[string]any{"lane": "resident_host"},
+	}})
+	s.cfg.SubscriptionPostureOK = false
+	s.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains:  []string{"api.anthropic.com"},
+		WorkspaceMounts: []types.WorkspaceMount{{Source: "/host/.claude", Target: claudeCredTarget}},
+	}
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-sub-host"}}
+	_ = foldRef(s, spec, ws, "claude-code")
+	if specHasMountTarget(spec, claudeCredTarget) {
+		t.Fatal("off-posture, the resident_host lane must NOT mount the operator's ~/.claude into the run")
 	}
 }
 

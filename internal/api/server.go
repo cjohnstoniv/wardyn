@@ -198,6 +198,25 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
+	// SubscriptionPostureOK reports whether this deployment may resolve a SHARED
+	// subscription credential (one operator's live Anthropic OAuth token) into an
+	// agent run. Decided once at boot by subscriptionInjectPosture (cmd/wardynd) —
+	// false on the k8s runner, false when an OIDC issuer is configured, and false
+	// off local mode unless WARDYN_ALLOW_SHARED_SUBSCRIPTION waives that one clause.
+	//
+	// This is a COMPLIANCE boundary, not only a security one: the harness vendor's
+	// terms require each end user to authenticate with their own credential, so a
+	// multi-user deployment sharing one subscription puts the OPERATOR in breach.
+	// It is enforced at three depths — providers are not constructed at boot,
+	// dispatch does not author a sentinel grant, and the injection sink refuses to
+	// resolve one. The sink is the load-bearing layer: four other code paths can
+	// put a sentinel grant on a run without consulting dispatch (a stored policy
+	// naming it, an integration_id, a recorded profile, the managed fallback).
+	SubscriptionPostureOK bool
+	// SubscriptionPostureReason says WHY injection is unavailable, so the setup and
+	// integrations surfaces can explain it instead of rendering identically to
+	// "the operator never logged in". Empty when SubscriptionPostureOK is true.
+	SubscriptionPostureReason string
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.

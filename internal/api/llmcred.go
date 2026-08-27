@@ -490,7 +490,14 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 		return types.Integration{}, "", nil
 	}
 	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, req.Agent)
-	if kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host" {
+	// POSTURE: this branch re-injects the operator's ceiling ~/.claude mounts AFTER
+	// the clamp, deliberately (see applyLLMCredMount's contract) — which means any
+	// authenticated member can reach the resident subscription lane by passing
+	// integration_id alone, with no policy of their own. That is exactly the
+	// sharing the posture rule forbids, so refuse it here rather than relying on
+	// the sink: the mount is a filesystem copy of the operator's credential dir,
+	// not a token the injection endpoint ever sees.
+	if kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host" && s.cfg.SubscriptionPostureOK {
 		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true)
 	}
 	return integ, kind, bedrockRef
@@ -583,8 +590,11 @@ func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[s
 // operator's LIVE OAuth token proxy-side (the safe default: MITM auto-enabled,
 // sandbox holds an inert sentinel) vs. fall back to the resident-copy behavior
 // (no token provider wired, or the WARDYN_SUBSCRIPTION_INJECT=off escape hatch).
+// SubscriptionPostureOK is ANDed in so this predicate keeps telling the operator
+// the truth: off-posture the providers are never constructed, so the token would
+// not resolve anyway, and reporting "will inject" would be an overclaim.
 func (s *Server) subscriptionInjectEnabled() bool {
-	return s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
+	return s.cfg.SubscriptionPostureOK && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 }
 
 // composeLLMAccess is the structured model-access verdict for a run's resolved

@@ -133,6 +133,9 @@ func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
 	// the ONLY way this run authenticates is the Wardyn-managed subscription —
 	// exactly the lane resolveLLMTransport's `managed` gate covers.
 	cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}
+	// Single-user desktop posture: the managed lane is a shared-subscription path,
+	// so off-posture it is not wired at all and llm_mode would correctly read "none".
+	cfg.SubscriptionPostureOK = true
 	srv := New(cfg)
 
 	// confined=false: AllowAllEgress, satisfying resolveLLMTransport's managed

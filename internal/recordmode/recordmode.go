@@ -420,6 +420,18 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 			warnings = append(warnings, fmt.Sprintf("minted grant %s not found among run grants; omitted from eligible_grants", id))
 			continue
 		}
+		// NEVER carry a shared-subscription sentinel into a stored profile. The
+		// sentinel resolves to ONE operator's live Anthropic OAuth token at the
+		// injection sink, so copying it here would turn a recorded run into a
+		// durable, shareable, policy-id-addressable grant on that person's personal
+		// credential — usable by anyone who can launch a run against the profile,
+		// long after the recording. A "least-privilege profile" carrying that is
+		// mis-sold by its own name. The sink refuses off-posture anyway; this stops
+		// the grant being written down at all.
+		if gs.Kind == types.GrantAPIKey && grantNamesOAuthSentinel(gs) {
+			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a shared subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry one operator's live credential)", id))
+			continue
+		}
 		spec.EligibleGrants = append(spec.EligibleGrants, gs)
 		if gs.Kind == types.GrantGitHubToken {
 			warnings = append(warnings, fmt.Sprintf("eligible grant %s (github_token) carries scope permissions %s; confirm they intersect the least-privilege need", id, githubPermSummary(gs.Scope)))
@@ -526,4 +538,21 @@ func sortedUUIDs(set map[uuid.UUID]bool) []uuid.UUID {
 	return slices.SortedFunc(maps.Keys(set), func(a, b uuid.UUID) int {
 		return strings.Compare(a.String(), b.String())
 	})
+}
+
+// grantNamesOAuthSentinel reports whether an api_key grant's scope names one of
+// the SENTINEL secret names that resolve to a live Anthropic OAuth token rather
+// than to a stored secret (see types.SubscriptionOAuthSecret / ManagedOAuthSecret
+// and the injection sink in internal/api/injection.go).
+//
+// Unparseable scope reads as "yes": a grant whose scope we cannot inspect is not
+// a grant to write into a durable least-privilege profile.
+func grantNamesOAuthSentinel(gs types.GrantSpec) bool {
+	var scope struct {
+		SecretName string `json:"secret_name"`
+	}
+	if err := json.Unmarshal(gs.Scope, &scope); err != nil {
+		return true
+	}
+	return scope.SecretName == types.SubscriptionOAuthSecret || scope.SecretName == types.ManagedOAuthSecret
 }

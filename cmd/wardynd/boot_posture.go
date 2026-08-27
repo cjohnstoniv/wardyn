@@ -131,3 +131,53 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 	}
 	return nil
 }
+
+// subscriptionInjectPosture decides whether this deployment may resolve a SHARED
+// subscription credential into an agent run at all.
+//
+// Wardyn's subscription lanes inject ONE operator's live Anthropic OAuth token,
+// proxy-side, from a server-global provider. On a single-user desktop that is the
+// operator using their own subscription on their own machine. In a multi-user
+// deployment it is that operator's subscription serving OTHER people's runs —
+// which Anthropic's conditions for running Claude Code in agent infrastructure
+// prohibit (each end user must authenticate with their own credential; customers
+// may not intermediate Claude usage on their end users' behalf). The enterprise
+// running Wardyn inherits that breach, and Wardyn's own audit trail records it.
+//
+// Three clauses, and LocalMode ALONE is not enough for any of them:
+//
+//  1. Not the k8s substrate. The Helm chart carries no WARDYN_LOCAL_MODE key, but
+//     templates/deployment.yaml renders .Values.env VERBATIM, so
+//     `--set env.WARDYN_LOCAL_MODE=true` boots a cluster into local mode, and
+//     resolveLocalMode only refuses a SPECIFIC globally-routable bind (a pod's
+//     unspecified :8080 warns). "k8s can't reach LocalMode" is therefore false,
+//     and this clause is NOT waivable by the override below.
+//  2. No OIDC issuer configured. WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC exists
+//     precisely to permit local mode alongside a configured issuer — a multi-user
+//     SSO deployment with auth bypassed. Gating on LocalMode alone would re-enable
+//     sharing for the exact configuration this refusal exists to forbid. Also NOT
+//     waivable.
+//  3. Local mode, OR the explicit shared-subscription override. Compose is NOT
+//     local mode by default (demo-admin-token, WARDYN_LOCAL_MODE=false), so
+//     without the second disjunct the demo stack would break and the operator's
+//     obvious "fix" would be to set WARDYN_LOCAL_MODE=true — turning authentication
+//     off entirely. A safety gate must never create an incentive to weaken auth.
+//
+// The override is a PROMISE, not an enforcement: nothing stops someone setting it
+// in values.env. That is exactly why clauses 1 and 2 sit inside the predicate
+// where it cannot reach them.
+//
+// Returns the reason on refusal so the status surfaces can say WHY rather than
+// rendering identically to "the operator never logged in".
+func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, allowShared bool) (bool, string) {
+	if runnerTarget == "k8s" {
+		return false, "the Kubernetes runner is a multi-user deployment: a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+	}
+	if oidcConfigured {
+		return false, "OIDC/SSO is configured, which declares that more than one human uses this deployment: a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+	}
+	if localMode || allowShared {
+		return true, ""
+	}
+	return false, "subscription injection is limited to a single-user desktop/local deployment (WARDYN_LOCAL_MODE). This daemon serves an authenticated multi-user API, so a shared subscription credential would serve other people's runs. Use an API key or Bedrock — or, for a demo box that is genuinely single-user, set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true"
+}

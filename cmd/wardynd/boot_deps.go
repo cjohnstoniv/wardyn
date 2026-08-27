@@ -220,7 +220,7 @@ type optionalFeatures struct {
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
 // verbatim from run() — construction order and log lines are unchanged.
-func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, secureCookies bool) (optionalFeatures, error) {
+func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
 	var of optionalFeatures
 
 	// Recording store (pluggable seam; default "pg" — see boot_flags.go). pg
@@ -386,12 +386,25 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// Constructed unconditionally; it only reads/refreshes when a subscription run
 	// resolves its injection. Escape hatch: WARDYN_SUBSCRIPTION_INJECT=off keeps
 	// the legacy resident-copy behavior.
-	subToken, subErr := subscription.New(subscription.Config{})
-	if subErr != nil {
-		slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
-			slog.Any("err", subErr),
-		)
-		subToken = nil
+	//
+	// NOT constructed at all when subscriptionInjectPosture (boot_posture.go) says
+	// this deployment may not share one operator's credential. Refusing at the sink
+	// would be enough to stop a run getting the token, but refusing to CONSTRUCT is
+	// what makes "this deployment cannot read or refresh the operator's ~/.claude"
+	// a statement about the process rather than a boolean someone can chase through
+	// call sites — subscription.Provider.Current() shells out to the resident
+	// `claude` and ROTATES that file, so a provider that exists is a provider that
+	// can mutate the operator's personal credential.
+	var subToken subscription.Provider
+	if subPostureOK {
+		st, subErr := subscription.New(subscription.Config{})
+		if subErr != nil {
+			slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
+				slog.Any("err", subErr),
+			)
+			st = nil
+		}
+		subToken = st
 	}
 	of.subToken = subToken
 	// Default ON: unset (and the compose ${…:-off} passthrough when actually set
@@ -405,7 +418,14 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// PROXY-SIDE in deployments (compose) whose distroless wardynd has no host
 	// ~/.claude for subToken above. Store-only (no Server dependency, no cycle);
 	// nil when there is no secret store.
-	of.managedToken = api.NewManagedCredProvider(secrets, "anthropic")
+	// Posture-gated for the same reason as subToken above: the managed lane is a
+	// DEFAULT FALLBACK for every claude-code run (runs_dispatch_llm.go), needing no
+	// policy, no integration id and no flag, so on a multi-user stack it is the
+	// broadest sharing path of the two — and WARDYN_SUBSCRIPTION_INJECT never
+	// covered it.
+	if subPostureOK {
+		of.managedToken = api.NewManagedCredProvider(secrets, "anthropic")
+	}
 
 	// Advisory AI scan fallback (opt-in): wired to the fail-open
 	// workspacescan.AdviseProfile with a bounded timeout so a slow/hung CLI can

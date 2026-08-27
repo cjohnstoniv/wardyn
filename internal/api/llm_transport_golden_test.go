@@ -355,6 +355,12 @@ func ptrUUID() *uuid.UUID { id := uuid.New(); return &id }
 func TestLLMTransportGolden(t *testing.T) {
 	got := map[string]llmTransportGoldenCell{}
 	for _, c := range llmGoldenCases() {
+		// The matrix pins the TRANSPORT logic, so every cell runs in the single-user
+		// desktop posture that permits a shared subscription at all. The off-posture
+		// half is TestLLMTransport_NoSharedSubscriptionOffPosture below, which asserts
+		// the whole matrix collapses to "no subscription credential" — cheaper than
+		// doubling this golden, and it fails loudly if a new lane appears.
+		c.cfg.SubscriptionPostureOK = true
 		srv := New(c.cfg)
 		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, CreatedBy: "alice@example.com", WorkspaceID: c.workspaceID}
 		policy := &types.RunPolicySpec{
@@ -370,4 +376,34 @@ func TestLLMTransportGolden(t *testing.T) {
 		got[c.name] = snapshotLLMTransport(llm, sandboxEnv, policy.AllowedDomains)
 	}
 	compareOrUpdateGolden(t, "testdata/llm_transport_golden.json", got)
+}
+
+// Off-posture, EVERY cell of the transport matrix must resolve to no shared
+// subscription credential — both the resident lane and the managed fallback,
+// across every agent, task mode and credential environment the golden covers.
+//
+// This is the cheap high-coverage negative: a new lane, or a new cell that wires
+// a credential some other way, fails here without anyone having to remember to
+// think about posture. Asserting the collapse is stronger than asserting a
+// handful of named cases, because the thing being defended is "no path reaches
+// it", not "these paths do not".
+func TestLLMTransport_NoSharedSubscriptionOffPosture(t *testing.T) {
+	for _, c := range llmGoldenCases() {
+		c.cfg.SubscriptionPostureOK = false
+		srv := New(c.cfg)
+		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, CreatedBy: "alice@example.com", WorkspaceID: c.workspaceID}
+		policy := &types.RunPolicySpec{
+			AllowedDomains:  []string{"git.example.com"},
+			WorkspaceMounts: c.mounts,
+		}
+		sandboxEnv := map[string]string{}
+		llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, c.injections,
+			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
+		if llm.injectSub {
+			t.Errorf("%s: injectSub true off-posture — one operator's subscription would be injected into this run", c.name)
+		}
+		if llm.injectManaged {
+			t.Errorf("%s: injectManaged true off-posture — the managed fallback is the broadest sharing path and needs no opt-in", c.name)
+		}
+	}
 }
