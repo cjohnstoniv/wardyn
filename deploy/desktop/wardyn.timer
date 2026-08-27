@@ -1,0 +1,26 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn.timer — the analogue of the plist's RunAtLoad + StartInterval 300.
+#
+#   OnBootSec       = RunAtLoad (converge once the box is up)
+#   OnUnitActiveSec = StartInterval (re-assert every 300s)
+#
+# Persistent=false on purpose: this is a converge loop, not a missed-job
+# catch-up. A laptop that was asleep does not need to replay every tick it
+# missed — it needs ONE converge, which OnBootSec already gives it.
+
+[Unit]
+Description=Re-assert the Wardyn desktop-tier stack every 5 minutes
+Documentation=https://github.com/cjohnstoniv/wardyn/blob/main/docs/DESKTOP.md
+Requires=wardyn.service
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=300s
+AccuracySec=30s
+Persistent=false
+Unit=wardyn.service
+
+[Install]
+WantedBy=timers.target

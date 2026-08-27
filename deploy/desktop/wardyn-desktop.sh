@@ -109,7 +109,38 @@ if [ -n "${WARDYN_PROXY_IMAGE}" ]; then
   export WARDYN_PROXY_IMAGE
 fi
 
+# An explicit envelope value wins over auto-detection. This is the escape hatch
+# for the tier's likeliest install failure: this script runs as ROOT (a
+# LaunchDaemon, or a system systemd unit), while Docker Desktop, Colima,
+# rootless Docker and Podman all expose a PER-USER socket. Auto-detection shells
+# `docker context inspect`, which as root reads ROOT's contexts, not the
+# enrolled user's — so it silently resolves the wrong daemon, or none.
+#
+# CI never surfaces this: its daemon is root-reachable and the question does not
+# arise. MDM sets WARDYN_DOCKER_SOCK in wardyn.env when the fleet's runtime is
+# per-user. docs/DESKTOP.md "Which Docker socket" has the matrix.
+_env_sock="$(env_get "${ENV_FILE}" WARDYN_DOCKER_SOCK)"
+if [ -n "${_env_sock}" ]; then
+  export WARDYN_DOCKER_SOCK="${_env_sock}"
+  export DOCKER_HOST="unix://${_env_sock}"
+fi
+unset _env_sock
+
 wardyn_pick_docker_host  # DOCKER_HOST / WARDYN_DOCKER_SOCK, incl. Colima/Rancher
+
+# Refuse LOUDLY rather than hang or half-start. Without this the failure is a
+# compose error fifty lines in, or worse, a converge that "succeeds" against a
+# daemon that is not the one the developer uses.
+if ! docker info >/dev/null 2>&1; then
+  die "wardyn-desktop.sh: no reachable Docker daemon.
+  Tried: DOCKER_HOST='${DOCKER_HOST:-<unset>}', WARDYN_DOCKER_SOCK='${WARDYN_DOCKER_SOCK:-<unset>}'.
+  This script runs as root; Docker Desktop, Colima, rootless Docker and Podman
+  all expose a PER-USER socket that root cannot see by default. Set
+  WARDYN_DOCKER_SOCK in ${ENV_FILE} to that socket's absolute path
+  (e.g. /Users/<user>/.colima/default/docker.sock, or
+  /run/user/<uid>/docker.sock for rootless Linux) and MDM will carry it to
+  every device. See docs/DESKTOP.md 'Which Docker socket'."
+fi
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/desktop/docker-compose.yaml"  # includes deploy/compose/docker-compose.yaml
 # The included stack mounts the managed dir read-only at this same path inside

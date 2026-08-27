@@ -299,27 +299,62 @@ line and not a reverted setting.
 
 ## The install lane
 
-Three files, all under [`deploy/desktop/`](../deploy/desktop/):
+Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 | File | Role |
 |---|---|
-| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten), and registers [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd at wherever the installer bundle happens to be sitting on disk. |
+| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
 | `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
+| [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue. `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer. `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and `scripts/test-desktop-profile.sh` asserts they do not. Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own. |
 | [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz`, and idempotently applies `site-config.json` if MDM has delivered one. |
 
-This is a macOS/launchd installer today; the Linux/systemd path described in
-the topology diagram above is not built yet.
+Both platforms ship. `install.sh` branches on `uname -s`: the macOS path is
+unchanged, and the Linux path installs the systemd unit + timer. They are
+genuinely different files rather than one portable script because the
+divergence is not cosmetic — `chown root:wheel` is a **hard failure** on Debian
+and Ubuntu, which have no `wheel` group, under `set -euo pipefail`.
 
 Everything the plist and the wrapper do is exercised, machine-verifiable and
 daemon-free: `scripts/test-desktop-profile.sh` (wired into `make test-scripts`)
 checks the envelope parses, every variable it sets is a real documented one,
-the policy path and the compose mount agree, and the plist is valid XML.
+the policy path and the compose mount agree, the plist is valid XML, and — where `systemd-analyze` is present — the rendered systemd units verify.
 `.github/workflows/ci.yml`'s `desktop-envelope` job goes further and actually
 boots the compose profile with this commit's example envelope, then proves the
 three things this document claims: `/policies/default` really does serve the
 managed file, a run naming no policy really does resolve to that ceiling, and
 a synthesized profile really is clamped to it (see "Tamper posture" above for
 what "clamped" does and does not mean once the caller is an admin).
+
+## Which Docker socket
+
+**This is the tier's likeliest install failure, and it is invisible in CI.**
+
+The converge job runs as **root** — a LaunchDaemon on macOS, a system systemd
+unit on Linux — because it reads `/etc/wardyn/age.key` at `0600`. But Docker
+Desktop, Colima, rootless Docker and Podman all expose a **per-user** socket.
+Auto-detection shells `docker context inspect`, which as root reads *root's*
+contexts, not the enrolled user's. CI's daemon is root-reachable, so the
+question never arises there.
+
+| Runtime | Root-reachable? | Set `WARDYN_DOCKER_SOCK`? |
+|---|---|---|
+| Docker Engine (Linux, default) | yes (`/var/run/docker.sock`) | no |
+| Docker Desktop (macOS, default socket) | yes | no |
+| Colima | **no** — `~/.colima/<profile>/docker.sock` | yes, absolute path |
+| Rootless Docker / Podman (Linux) | **no** — `/run/user/<uid>/docker.sock` | yes, absolute path |
+
+`wardyn-desktop.sh` reads `WARDYN_DOCKER_SOCK` **from the envelope** — so MDM
+carries it to every device — and it takes precedence over auto-detection. If
+nothing resolves, it **refuses to start and prints what it tried**, rather than
+converging against the wrong daemon or hanging. That refusal is deliberate: a
+converge that "succeeds" against a daemon the developer never uses is worse
+than one that fails.
+
+**Decision, recorded:** the unit is **system-scope**, matching the macOS
+LaunchDaemon. A user-scope unit would resolve the per-user socket for free, but
+it cannot read `/etc/wardyn` at `0600`, and MDM enrolment targets a device
+rather than a login session. Fleets on a per-user runtime set one envelope
+variable instead.
 
 ## Upgrade, rollback, uninstall
 

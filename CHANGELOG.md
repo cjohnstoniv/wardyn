@@ -122,6 +122,28 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **The desktop tier installs on Linux.** `deploy/desktop/install.sh` hard-refused
+  every non-Darwin host (*"the Linux/systemd path is not built yet"*), so a tier
+  whose own topology diagram showed Linux had no Linux path. It now branches on
+  `uname -s` and ships `wardyn.service` + `wardyn.timer` — `Type=oneshot` driven
+  by the timer, mirroring launchd's `RunAtLoad` + `StartInterval 300`, logging to
+  journald. The two platforms' intervals are asserted equal so they cannot drift.
+
+- **There is an uninstaller.** `grep -rn uninstall deploy/` previously returned
+  nothing on either platform. `install.sh --uninstall` stops the converge job and
+  the stack and **keeps** `age.key` and the Postgres volume, so a re-install
+  recovers the device; `--purge` destroys both, after saying exactly what becomes
+  unrecoverable.
+
+- **`WARDYN_DOCKER_SOCK` is honored from the envelope.** The converge job runs as
+  root while Docker Desktop, Colima, rootless Docker and Podman all expose a
+  **per-user** socket — and auto-detection shells `docker context inspect`, which
+  as root reads *root's* contexts. CI never surfaces this (its daemon is
+  root-reachable). The launcher now prefers an envelope value and, when nothing
+  resolves, **refuses and prints what it tried** rather than converging against
+  the wrong daemon. Documented in `docs/DESKTOP.md` "Which Docker socket", with
+  the decision — system-scope unit — recorded.
+
 - **The desktop tier can now be reached from your own terminal.** Both listener
   variables default to empty in the included stack, and **empty means off — no
   listener, not even a generated host key**. The desktop envelope and the

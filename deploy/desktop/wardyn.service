@@ -1,0 +1,50 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn.service — the systemd analogue of com.wardyn.daemon.plist.
+#
+# Like the plist, it does NOT run wardynd. It runs wardyn-desktop.sh, which
+# brings the compose stack up; wardynd's own container carries
+# `restart: unless-stopped`, so Docker keeps IT alive across a container crash.
+# This unit's only job is making sure the STACK is up — at boot (via
+# wardyn.timer's OnBootSec) and on each timer tick after that: the same
+# "re-assert, don't assume" posture MDM uses for the files it owns, and the
+# same shape a not-yet-delivered wardyn.env or missing age.key gets retried
+# against rather than left wedged.
+#
+# Type=oneshot, driven by wardyn.timer, rather than a long-running service:
+# `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does.
+# A Restart= on a oneshot that legitimately exits would fight the timer.
+#
+# __WARDYN_DESKTOP_SH__ is a placeholder — install.sh renders it to
+# /etc/systemd/system with the real absolute path substituted. Committed with
+# the placeholder it is still a valid unit file; scripts/test-desktop-profile.sh
+# checks that the placeholder is still there for install.sh's sed to find.
+
+[Unit]
+Description=Wardyn desktop-tier compose stack
+Documentation=https://github.com/cjohnstoniv/wardyn/blob/main/docs/DESKTOP.md
+# The stack IS containers, so the container runtime must be up first. Both are
+# listed because a laptop may run either; a missing unit in After= is ignored,
+# so naming both is safe and neither is required to exist.
+After=network-online.target docker.service containerd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__WARDYN_DESKTOP_SH__ up
+# The envelope is root-owned at 0644/0600 under /etc/wardyn and the unit reads
+# age.key, so this is a SYSTEM unit running as root — matching the macOS
+# LaunchDaemon. See docs/DESKTOP.md "Which Docker socket" for what that means
+# on a box whose container runtime is rootless.
+User=root
+# journald, not a file: `journalctl -u wardyn` is where a Linux operator looks,
+# and it rotates on its own — which is the log-growth problem the macOS side
+# needs a newsyslog fragment for.
+StandardOutput=journal
+StandardError=journal
+# A failed converge must not wedge the timer; the next tick retries.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

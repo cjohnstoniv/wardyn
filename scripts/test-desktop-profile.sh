@@ -226,4 +226,58 @@ for f in "${ENV_EXAMPLES[@]}"; do
   fi
 done
 
+# ── 9. the Linux/systemd lane ──────────────────────────────────────────────
+# deploy/desktop/install.sh hard-refused every non-Darwin host, so the tier had
+# no Linux path at all. These assert the units exist, still carry the
+# placeholder install.sh's sed looks for, and — where systemd is present —
+# actually parse.
+UNIT="${DESK_DIR}/wardyn.service"
+TIMER="${DESK_DIR}/wardyn.timer"
+[ -f "${UNIT}" ]  || fail "${UNIT} not found — the Linux converge job has no unit"
+[ -f "${TIMER}" ] || fail "${TIMER} not found — wardyn.service is a oneshot; without the timer nothing ever fires it"
+
+grep -q '__WARDYN_DESKTOP_SH__' "${UNIT}" \
+  || fail "${UNIT} lost its install.sh placeholder (__WARDYN_DESKTOP_SH__) — install.sh's sed would silently no-op and ExecStart would point at nothing"
+# The plist's RunAtLoad + StartInterval 300 has to survive the translation, or
+# the two platforms converge on different schedules.
+grep -q '^OnBootSec=' "${TIMER}"       || fail "${TIMER} sets no OnBootSec — the launchd side converges at load (RunAtLoad); Linux must too"
+grep -q '^OnUnitActiveSec=300' "${TIMER}" || fail "${TIMER} does not re-assert every 300s — the plist's StartInterval is 300, and the two platforms must not drift"
+grep -q '^Type=oneshot' "${UNIT}"      || fail "${UNIT} is not Type=oneshot — 'wardyn-desktop.sh up' converges and exits, and a Restart= would fight the timer"
+grep -q '^User=root' "${UNIT}"         || fail "${UNIT} does not run as root — it reads /etc/wardyn/age.key (0600) and must match the macOS LaunchDaemon"
+
+# install.sh must actually branch, not just stop refusing Linux.
+DESK_INSTALL="${DESK_DIR}/install.sh"
+# Anchored on the ENABLE, not the string: "wardyn.timer" also appears in the
+# uninstall path and in the destination path, so a bare match survives deleting
+# the registration entirely.
+grep -q 'systemctl enable --now wardyn.timer' "${DESK_INSTALL}" \
+  || fail "${DESK_INSTALL} never ENABLES wardyn.timer — the Linux branch would install unit files that nothing ever fires"
+grep -q 'chown root:root' "${DESK_INSTALL}" \
+  || fail "${DESK_INSTALL} has no root:root chown for the Linux units — 'wheel' does not exist on Debian/Ubuntu and would hard-fail under set -euo pipefail"
+# Same: "--uninstall" appears in the usage header and the closing hints, so
+# match the DISPATCH that makes it do anything.
+grep -q 'MODE=uninstall' "${DESK_INSTALL}" \
+  || fail "${DESK_INSTALL} has no uninstall dispatch (grep -rn uninstall deploy/ used to return nothing at all)"
+grep -q 'down --purge' "${DESK_INSTALL}" \
+  || fail "${DESK_INSTALL}'s uninstall cannot purge — the age.key/volume decision has no implementation"
+
+# ...and if this host runs systemd, the RENDERED units must parse.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  _t="$(mktemp -d)"
+  sed "s#__WARDYN_DESKTOP_SH__#${DESK_DIR}/wardyn-desktop.sh#" "${UNIT}" > "${_t}/wardyn.service"
+  cp "${TIMER}" "${_t}/wardyn.timer"
+  # Filter this HOST's unrelated unit warnings; only our two files' verdict counts.
+  if ! systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' | grep -q .; then
+    :  # no output => clean
+  else
+    systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' >&2
+    rm -rf "${_t}"
+    fail "the rendered systemd units do not verify"
+  fi
+  rm -rf "${_t}"
+  echo "test-desktop-profile: systemd units verify"
+else
+  echo "test-desktop-profile: systemd-analyze absent — unit syntax not verified on this host"
+fi
+
 echo "test-desktop-profile: m-prime invariants PASS"
