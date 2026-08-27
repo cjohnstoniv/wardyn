@@ -332,10 +332,12 @@ agent parks its own prompt in the attach pane. So there was nothing to build on.
 What 0.7 shipped instead is the honest half: `tool_approvals=hold` on an
 interactive run used to be accepted and silently discarded, and is now refused.
 
-**The sentinel-class PAT lane** (proxy-injected git PATs, never resident) remains
-the one designed-but-unscheduled candidate from the 0.5 campaign. It is **not in
-0.7**: its discriminator is a daemon env var rather than a per-run field, so
-nothing about it is release-trapped, and it slots into 0.8 when scheduled.
+**The sentinel-class PAT lane** (proxy-injected git PATs, never resident) — the
+last designed-but-unscheduled candidate from the 0.5 campaign — **shipped in
+0.7**. A `git_pat` for a non-GitHub forge is now minted proxy-side and injected
+on the outbound leg, closing the asymmetry with `github_token`. It makes the
+credential non-resident; it does not make it least-privilege, because Wardyn
+cannot narrow a scope the operator issued.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
@@ -347,7 +349,7 @@ exist.
 
 | Milestone | Scope |
 |---|---|
-| **v0.7** | **Enterprise desktop deployment — the rest of it.** Built and awaiting release: the Linux/systemd installer and uninstaller, an MDM-distributable `.deb`/tarball built from a clean tree, the member-mode (m′) envelope, the SSH gateway actually reachable on the tier, digest-pinned images with a working upgrade path, a browser desktop (noVNC) as an image variant, and **C0**'s outcome — the interactive `tool_approvals` contradiction is now refused rather than silently discarded. Still owed and **operator-gated**: the macOS `.pkg` (needs an Apple Developer ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run. See the release's CHANGELOG for the full list |
+| **v0.7** | **Enterprise desktop deployment — the rest of it.** Built and awaiting release: the Linux/systemd installer and uninstaller, an MDM-distributable `.deb`/`.rpm`/tarball built from a clean tree, per-tool policy (`tool_rules`) so an autonomous run is no longer all-or-nothing, never-resident git PATs for non-GitHub forges, the member-mode (m′) envelope, the SSH gateway actually reachable on the tier, digest-pinned images with a working upgrade path, a browser desktop (noVNC) as an image variant, and **C0**'s outcome — the interactive `tool_approvals` contradiction is now refused rather than silently discarded. Still owed and **operator-gated**: the macOS `.pkg` (needs an Apple Developer ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run. See the release's CHANGELOG for the full list |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
@@ -386,10 +388,15 @@ shipped behavior; none is scheduled.
   `claude-code` would make an agentless run eligible for the operator's live
   subscription credential, and defaulting it to `byoa`/`none` resolves to an
   image that is not published.
-- **Never-resident Azure DevOps git egress.** Designed, not built. ADO works today
-  through the `git_pat` grant, on which the PAT *is* resident in the sandbox. The
-  ceiling: ADO has no token-minting API, so the operator PAT's scope is the boundary
-  — never-resident is achievable, per-repo auto-expiring scoping is not.
+- **Azure DevOps and GitLab PATs are non-resident but not scoped.** **0.7 built
+  the never-resident half**: a `git_pat` for a non-GitHub forge is minted
+  proxy-side and injected on the outbound leg, so the credential no longer enters
+  the sandbox. What this entry now names is the half that remains and cannot be
+  built the same way: ADO has no token-minting API, so the operator PAT's scope
+  is the boundary. Per-repo, auto-expiring scoping is achievable on GitHub
+  because an installation token can be minted narrow; it is not achievable on a
+  PAT Wardyn merely holds. The `WARDYN_GIT_PAT_BROKER` broker is therefore a
+  residency control, never a least-privilege one.
 - **Proxy-side injection of the Bedrock SSO bearer.** Would make the SSO token
   never-resident; the derived role credentials stay resident regardless, because
   SigV4 signs in-process.
