@@ -261,6 +261,52 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
+  # The chart, published as an OCI artifact so installing does not require cloning.
+  #
+  # Until 0.6.2 the images were published and the CHART was not, which made the
+  # documented install `git clone && helm install ./deploy/helm/wardyn`. That is a
+  # strange asymmetry to hand an operator: the artifacts they run are pullable, but
+  # the thing that installs them is not. Helm speaks OCI natively and GHCR hosts
+  # charts, so this is a package + push.
+  chart:
+    name: Publish the Helm chart (OCI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # cosign keyless
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package and push
+        id: push
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          # The chart's own version must match the tag, or `helm install --version`
+          # silently resolves to something other than the release being cut.
+          chart_ver="$(grep -E '^version:' deploy/helm/wardyn/Chart.yaml | awk '{print $2}')"
+          test "$chart_ver" = "$ver" \
+            || { echo "Chart.yaml version=$chart_ver but the tag is $ver — bump it (RELEASING.md step 1b)"; exit 1; }
+          helm package deploy/helm/wardyn -d dist/
+          helm push "dist/wardyn-${ver}.tgz" oci://ghcr.io/cjohnstoniv/charts 2>&1 | tee push.log
+          echo "digest=$(grep -oE 'sha256:[a-f0-9]{64}' push.log | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Sign the chart (keyless, by digest)
+        run: cosign sign --yes "ghcr.io/cjohnstoniv/charts/wardyn@${{ steps.push.outputs.digest }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: chart
+          path: dist/*.tgz
+          if-no-files-found: error
+
   # Everything a consumer needs, ON the Release object rather than in a workflow
   # artifact that expires and needs a GitHub login to reach. Before this job,
   # v0.6.1's release assets were empty and v0.6.0's were 13 demo .mp4 files — an
@@ -268,7 +314,7 @@ jobs:
   # all, and nobody could verify what they did pull without reading RELEASING.md.
   release-assets:
     name: Release assets (SBOMs, checksums, notices)
-    needs: [images]
+    needs: [images, chart]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -280,7 +326,7 @@ jobs:
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: sbom-*
+          pattern: "{sbom-*,chart}"
           merge-multiple: true
           path: assets
       - name: Assemble the asset set

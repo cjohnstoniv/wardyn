@@ -70,7 +70,10 @@ before step 3.
    commit as the rename.
 1b. **Bump the shipped version strings** to `X.Y.Z`, in the same commit as the
    CHANGELOG rename: `internal/version/version.go` (`const Version`),
-   `deploy/helm/wardyn/Chart.yaml` (both `version:` AND `appVersion:`), and
+   `deploy/helm/wardyn/Chart.yaml` (both `version:` AND `appVersion:` — the
+   chart-publish job now REFUSES to push if `version:` does not equal the tag,
+   since `helm install --version` would otherwise resolve to a different chart
+   than the release being cut), and
    `ui/package.json` (`"version"`). `cmd/wardyn/version_test.go`'s
    `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
    all four agree with the CHANGELOG's newest section — but only catch a

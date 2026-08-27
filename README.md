@@ -191,7 +191,10 @@ both running real sandboxes, not one inverted into the other:
 - **`deploy/compose`** — the local 10-minute trial. The only lane that runs on
   a laptop without a real cluster, and the only one with recorded demos
   (the Getting Started demo steps).
-- **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment
+- **Kubernetes**: `helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn
+  --version <release>` — the chart is published as a signed OCI artifact, so no
+  clone and no `helm repo add`. See
+  **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment
   story: `make kind-quickstart` for a one-command real-cluster install, or a
   production Helm install onto your own Kubernetes. Not yet at Compose parity
   (see the chart README's "Known gaps").

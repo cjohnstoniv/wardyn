@@ -14,6 +14,7 @@ Nothing here needs an account, a token, or a GitHub login.
 | `ghcr.io/cjohnstoniv/agent-base` | the agent runner contract, **no coding agent** |
 | `ghcr.io/cjohnstoniv/agent-codex-cli` | agent-base + OpenAI Codex CLI (Apache-2.0) |
 | `ghcr.io/cjohnstoniv/agent-aws-sso` | agent-base + AWS CLI v2, for the SSO login flow |
+| `ghcr.io/cjohnstoniv/charts/wardyn` | the Helm chart, as an OCI artifact |
 
 There is deliberately **no published image containing Anthropic's Claude Code
 CLI** — it is not open source, and its terms are not even readable from inside an
@@ -62,7 +63,26 @@ How it was built, in the format GitHub's own tooling reads:
 gh attestation verify oci://ghcr.io/cjohnstoniv/wardynd:0.6.2 --repo cjohnstoniv/wardyn
 ```
 
-## 4. Verify the release assets
+## 4. Verify the Helm chart
+
+The chart is an OCI artifact signed by the same workflow:
+
+```sh
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/cjohnstoniv/charts/wardyn:0.6.2
+```
+
+Then install it directly — `oci://` is native Helm, no `helm repo add`:
+
+```sh
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version 0.6.2 \
+  --namespace wardyn --create-namespace \
+  --set auth.adminToken.secretRef.name=wardyn-auth
+```
+
+## 5. Verify the release assets
 
 Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`,
 `NOTICE`, and a signed `SHA256SUMS`:
@@ -77,7 +97,7 @@ cosign verify-blob \
   SHA256SUMS
 ```
 
-## 5. If your scanner flags GO-2026-5932
+## 6. If your scanner flags GO-2026-5932
 
 It will, and it is a false positive that we have written down rather than
 suppressed. `golang.org/x/crypto/openpgp` is unmaintained with no fix available,

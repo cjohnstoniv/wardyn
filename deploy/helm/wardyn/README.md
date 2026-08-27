@@ -145,6 +145,22 @@ kubectl create secret docker-registry regcred -n wardyn \
 
 ## Installation
 
+From 0.6.2 the chart is published as an OCI artifact, so installing needs no
+clone:
+
+```bash
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version 0.6.2 \
+  --namespace wardyn --create-namespace \
+  --set auth.adminToken.secretRef.name=wardyn-auth
+```
+
+The chart is cosign-signed by the same release workflow that signs the images;
+`docs/VERIFY.md` covers checking it. `oci://` is native Helm — no `helm repo add`.
+
+Installing from a clone (`./deploy/helm/wardyn`) still works and is what you want
+when developing the chart itself. Every example below uses the local path for
+that reason; swap in the `oci://` ref and `--version` to install a release.
+
 If you built your own image above, point `image.repository`/`image.tag` at
 what you just pushed (omit both to use the chart's defaults, which resolve
 for a released version — see the callout at the top):
