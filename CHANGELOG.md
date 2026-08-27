@@ -108,8 +108,10 @@ managed Kubernetes; every item below was verified against the code before it was
   `NPM_REGISTRY`; empty is identical to unset.
 - **The release pipeline can be rehearsed.** `release.yml` gains a
   `workflow_dispatch` with `dry_run` (default true): it builds every image, the
-  CLI cross-builds and the chart package, runs the SBOM merge and its zero-npm
-  assertion, and pushes, signs, attests and uploads **nothing**.
+  CLI cross-builds and the chart package, runs the UI-lockfile scan and its
+  zero-npm assertion, and pushes, signs, attests and uploads **nothing**. The
+  SBOM *merge* needs a pushed digest, so a dry run stubs the per-image SBOMs
+  and skips it.
 
   This pipeline could previously only be exercised by tagging, so its bugs were
   unobservable until a real tag pushed — which is why 0.6.2 shipped images with no
@@ -147,6 +149,15 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **`docs/EXPORT.md` recorded an export-control obligation that does not exist.**
+  It listed a BIS/NSA notification as *"PENDING — not yet sent"*, open since
+  0.6.2. EAR §742.15(b)(1) places publicly available 5D002 encryption source code
+  outside the EAR outright, and BIS's final rule of 29 March 2021 narrowed the
+  email notification to §742.15(b)(2) — source code performing **"non-standard
+  cryptography"** only. Wardyn implements no cryptographic algorithm of its own
+  and modifies none, so it is not triggered. The page now says so, and names the
+  condition that would re-open it.
+
 
 ## [0.6.4] — 2026-08-27
 

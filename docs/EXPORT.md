@@ -10,7 +10,7 @@ before a human reads them.
 | field | value |
 |---|---|
 | ECCN | **5D002** (information security software) |
-| Licence exception | **EAR §742.15(b)** — publicly available encryption source code |
+| EAR status | **Not subject to the EAR** — §742.15(b)(1), publicly available encryption source code |
 | Licence required | **No** |
 | CCATS | Not required; no classification request was submitted |
 | Encryption registration | Not required for publicly available source under §742.15(b) |
@@ -21,16 +21,27 @@ which is the condition §742.15(b) turns on.
 
 ## Notification
 
-EAR §742.15(b) requires that BIS and the NSA be notified of the internet location
-of publicly available encryption source code.
+**None is required.** This page previously recorded a pending BIS/NSA notification. That
+obligation does not apply to Wardyn, and the entry was wrong.
 
-- Recipients: `crypt@bis.doc.gov`, `enc@nsa.gov`
-- URL notified: `https://github.com/cjohnstoniv/wardyn`
-- Date notified: **PENDING — not yet sent.**
+§742.15(b)(1) places publicly available 5D002 encryption source code outside the EAR outright.
+The email notification to BIS and the ENC Encryption Request Coordinator was removed as a general
+condition by BIS's final rule of 29 March 2021; what survives is §742.15(b)(2), which requires it
+**only** for source code that provides or performs *"non-standard cryptography."*
 
-This is tracked as an open item. The classification above is unaffected by it, but
-the notification is a real obligation and this file will record the date once it
-has been sent, rather than implying it has been.
+Part 772 defines that term as *"any implementation of 'cryptography' involving the incorporation or
+use of proprietary or unpublished cryptographic functionality, including encryption algorithms or
+protocols that have not been adopted or approved by a duly recognized international standards body
+(e.g., IEEE, IETF, ISO, ITU, ETSI, 3GPP, TIA, and GSMA) and have not otherwise been published."*
+
+Wardyn contains none. Every primitive in the inventory below is a published algorithm adopted by a
+recognised standards body and consumed from a third-party library; Wardyn implements no
+cryptographic algorithm of its own and modifies none. §742.15(b)(2) is therefore not triggered.
+
+- Applicable notification: **none.**
+- **Re-open this if that ever stops being true** — a bespoke construction, a modified primitive, or
+  an unpublished protocol would trigger §742.15(b)(2). The recipients would then be
+  `crypt@bis.doc.gov` and `enc@nsa.gov`, notified of `https://github.com/cjohnstoniv/wardyn`.
 
 ## Cryptographic inventory
 
