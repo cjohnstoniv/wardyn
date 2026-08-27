@@ -1,0 +1,29 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/cjohnstoniv/wardyn/security/vex/wardyn.openvex.json",
+  "author": "The Wardyn Authors",
+  "role": "Project maintainers",
+  "timestamp": "2026-08-26T00:00:00Z",
+  "version": 1,
+  "tooling": "hand-authored from govulncheck call-graph output; see threatmodel/THREAT-MODEL.md",
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-5932",
+        "name": "GO-2026-5932",
+        "description": "golang.org/x/crypto/openpgp is unmaintained and unsafe by design. No fix available."
+      },
+      "products": [
+        { "@id": "pkg:golang/github.com/cjohnstoniv/wardyn" },
+        { "@id": "pkg:oci/wardynd?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/wardyn-proxy?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/agent-base?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/agent-codex-cli?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/agent-aws-sso?repository_url=ghcr.io/cjohnstoniv" }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The golang.org/x/crypto MODULE is a build dependency by two paths — filippo.io/age imports chacha20poly1305, hkdf, curve25519 and scrypt, and Wardyn imports golang.org/x/crypto/ssh directly for the SSH gateway. Neither pulls in the openpgp SUBPACKAGE, which is where the advisory lives. `go mod why golang.org/x/crypto/openpgp` reports 'main module does not need package golang.org/x/crypto/openpgp', and govulncheck's symbol-level analysis reports 'Your code is affected by 0 vulnerabilities' — GO-2026-5932 appears only in the module-level 'modules you require' tally, never in the call-graph-verified findings. govulncheck runs in CI on every push, so this stays true rather than being a one-time observation."
+    }
+  ]
+}

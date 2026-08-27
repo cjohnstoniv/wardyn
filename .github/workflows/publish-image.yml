@@ -46,6 +46,11 @@ on:
 permissions:
   contents: read
   packages: write
+  # cosign keyless needs an OIDC token. Without this, :latest was published
+  # UNSIGNED on every merge to main — and :latest is what deploy/desktop/install.sh
+  # pulls, so the one image a desktop install actually fetches was the one nobody
+  # could verify.
+  id-token: write
 
 jobs:
   publish-image:
@@ -87,9 +92,18 @@ jobs:
             printf '%s\n' "${tags[@]}"
             echo "TAGEOF"
           } >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        id: build
         with:
           context: .
           file: deploy/compose/Dockerfile.wardynd
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+      # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>
+      # carry a verifiable signature rather than being the one publishing lane
+      # that produced unsigned artifacts.
+      - name: Sign the pushed image (keyless, by digest)
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_REF}"

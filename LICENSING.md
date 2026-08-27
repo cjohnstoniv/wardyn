@@ -80,6 +80,10 @@ binary:
   before pulling or redistributing those images. The two product images
   (`wardynd`, `wardyn-proxy`) contain no such component.
 
+You do not have to take any of this on trust: every published image is
+cosign-signed and carries an attested CycloneDX SBOM and build provenance.
+[`docs/VERIFY.md`](docs/VERIFY.md) is the copy-pasteable procedure.
+
 The complete component inventory is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with verbatim licence texts in
 `licenses/texts/`. Both are generated, CI-verified against drift, and shipped

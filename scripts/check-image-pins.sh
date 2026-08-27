@@ -123,7 +123,26 @@ for df in "${PUBLISHED_DOCKERFILES[@]}"; do
   fi
 done
 
+# ── every published image is vulnerability-scanned ──────────────────────────
+#
+# These are two hand-edited lists in two workflows, so they WILL drift: before
+# 0.6.2 the scan covered exactly one image, and it was the one we stopped
+# publishing. An image shipped to a public registry having never been scanned is
+# the failure this catches.
+CI_WF=.github/workflows/ci.yml
+if [ -f "$RELEASE_WF" ] && [ -f "$CI_WF" ]; then
+  published=$(grep -oE '^[[:space:]]{10}- name: [a-z0-9-]+$' "$RELEASE_WF" | awk '{print $3}' | sort -u)
+  scanned=$(awk '/^  trivy:/{f=1} f&&/^  [a-z]/&&!/^  trivy:/{f=0} f' "$CI_WF" \
+            | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$scanned"))
+  if [ -n "$missing" ]; then
+    echo "FAIL: image(s) published by $RELEASE_WF but never scanned in $CI_WF's trivy matrix:" >&2
+    printf '  %s\n' $missing >&2
+    fail=1
+  fi
+fi
+
 if ((fail)); then
   exit 1
 fi
-echo "check-image-pins: OK (digest pins; published images carry LICENSE/NOTICE/THIRD-PARTY-NOTICES and OCI labels)"
+echo "check-image-pins: OK (digest pins; published images carry their licences + OCI labels; every published image is scanned)"

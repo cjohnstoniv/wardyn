@@ -126,14 +126,21 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   hides operator-only surfaces (policy/workspace/secret CRUD, BYOI), and
   approvals render per-kind (egress-domain approvals a member can act on,
   credential/tool_call ones they can only view).
-- **Signed, published release images.** `.github/workflows/release.yml`
-  builds and publishes the four images a release ships (`wardynd`,
-  `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
-  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag push, cosign-signs each
-  keylessly (Fulcio/Rekor via the Actions OIDC token — no long-lived signing
-  key to manage), and publishes a CycloneDX SBOM (`make sbom`) as a
-  downloadable workflow artifact (deliberately not auto-attached to the
-  GitHub Release — attach it by hand if wanted). linux/amd64 only today.
+- **Signed, published, attested release images.** `.github/workflows/release.yml`
+  builds and publishes the five images a release ships (`wardynd`,
+  `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`) to
+  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag push, multi-arch
+  (linux/amd64 + linux/arm64), and cosign-signs each keylessly (Fulcio/Rekor via
+  the Actions OIDC token — no long-lived signing key to manage). Each digest
+  additionally carries an attested CycloneDX SBOM scanned from the PUSHED IMAGE
+  (not the source tree, which omits every base-image package) and
+  `attest-build-provenance`. The Release itself carries those SBOMs,
+  `THIRD-PARTY-NOTICES.md`, and a cosign-signed `SHA256SUMS`.
+  `docs/VERIFY.md` is the consumer-side procedure.
+
+  No image containing a proprietary vendor CLI is published:
+  `agent-claude-code` is a local build recipe (`make agent-images`), and
+  `agent-base` ships in its place.
 
 ### What v0.6 shipped
 

@@ -222,18 +222,103 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
+      # A signature proves WHO built the image and says nothing about what is
+      # inside it — yet a green cosign verify is routinely read as "supply chain
+      # verified". The attestation below is what makes the signature say anything
+      # about contents, and it is what an enterprise scanner can actually consume.
+      #
+      # syft is pointed at the PUSHED DIGEST, not at the source tree. `syft .`
+      # (the old `make sbom`) describes something nobody can pull: it omits every
+      # apt package in the base image and every globally-installed npm CLI, which
+      # is exactly where the non-permissive components live.
+      - name: SBOM for the pushed digest
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+          SYFT_VERSION: v1.46.0
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
+            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          syft "registry:${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
+          # A scan that finds nothing is a scan that ran against the wrong thing.
+          test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
+            || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
+      - name: Attest the SBOM to the digest
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
+      # Build provenance: how it was built, not merely who signed it. Separate
+      # from cosign because this is the format GitHub's own verification consumes.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Upload the SBOM for the release-assets job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.cdx.json
+          if-no-files-found: error
 
-  sbom:
-    name: SBOM (release asset)
+  # Everything a consumer needs, ON the Release object rather than in a workflow
+  # artifact that expires and needs a GitHub login to reach. Before this job,
+  # v0.6.1's release assets were empty and v0.6.0's were 13 demo .mp4 files — an
+  # enterprise that cannot pull from a public registry had no ingestion path at
+  # all, and nobody could verify what they did pull without reading RELEASING.md.
+  release-assets:
+    name: Release assets (SBOMs, checksums, notices)
+    needs: [images]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write   # gh release upload
+      id-token: write   # cosign sign-blob (keyless)
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Generate CycloneDX SBOM (make sbom; syft version pinned in the Makefile)
-        run: make sbom
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3
+      - name: Collect the per-image SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: wardyn-sbom-${{ github.ref_name }}
-          path: wardyn-sbom.cdx.json
+          pattern: sbom-*
+          merge-multiple: true
+          path: assets
+      - name: Assemble the asset set
+        run: |
+          set -euo pipefail
+          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE assets/
+          cd assets
+          # One SBOM per published image. If the matrix grows and this does not,
+          # the count assertion below is what says so.
+          want=$(grep -cE '^          - name: [a-z0-9-]+$' ../.github/workflows/release.yml)
+          have=$(ls -1 sbom-*.cdx.json | wc -l)
+          test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }
+          sha256sum ./* > SHA256SUMS
+      - name: Sign the checksums (keyless)
+        working-directory: assets
+        run: |
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+      - name: Upload to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # RELEASING.md cuts the Release by hand; create a draft if the tag ran
+          # ahead of that so the assets are never homeless.
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --prerelease --notes-from-tag
+          gh release upload "$TAG" assets/* --clobber
+      - name: Assert every required asset actually landed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
+          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE; do
+            grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
+          done
+          echo "$have"

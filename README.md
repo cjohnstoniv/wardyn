@@ -202,7 +202,20 @@ L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md
 
 ## License and governance
 
-Apache-2.0. Contributor sign-off via DCO (`Signed-off-by`). No `enterprise/`
-directory, no hosted backend — every control above is in this repo and runs on
-your infrastructure, or it doesn't run. There is no paid product. CNCF Sandbox
-is the governance target. Contributions welcome — see `CONTRIBUTING.md`.
+**Apache-2.0, and free for anyone to use for any purpose, commercial use
+included — at any scale, with no fee, no seat limit, no registration and no
+telemetry.** There is no paid edition, no `enterprise/` directory and no hosted
+backend: every control above is in this repo and runs on your infrastructure, or
+it doesn't run. There is also no CLA, which means no single party — including the
+maintainer — can relicense this project's accumulated work later.
+
+[`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant,
+what the artifacts contain, redistribution obligations, patents, warranty, and the
+disclosed risks. [`TRADEMARKS.md`](TRADEMARKS.md) covers what you may call things,
+which Apache-2.0 §6 deliberately does not.
+
+Every published image is cosign-signed with an attested SBOM and build
+provenance — [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check that yourself.
+
+Contributor sign-off via DCO (`Signed-off-by`). CNCF Sandbox is the governance
+target, not a status. Contributions welcome — see `CONTRIBUTING.md`.

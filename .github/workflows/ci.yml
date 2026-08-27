@@ -619,16 +619,36 @@ jobs:
   #
   # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
   # is not arch-specific, so scanning one arch finds the same advisories.
+  #
+  # Scans EVERY image the release publishes, not one of them. Previously only
+  # agent-claude-code was scanned — which, after 0.6.2, is the one image we no
+  # longer publish. wardynd, wardyn-proxy, agent-codex-cli and agent-aws-sso were
+  # shipped to a public registry having never been scanned at all, and the stated
+  # rationale (distroless, no OS package surface) was true of two of them.
   trivy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+          - name: wardyn-proxy
+            dockerfile: deploy/compose/Dockerfile.proxy
+          - name: agent-base
+            dockerfile: deploy/images/base/Dockerfile
+          - name: agent-codex-cli
+            dockerfile: deploy/images/codex-cli/Dockerfile
+          - name: agent-aws-sso
+            dockerfile: deploy/images/aws-sso/Dockerfile
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Build the agent image locally (scan target — never pushed)
-        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:trivy-scan .
+      - name: Build the image locally (scan target — never pushed)
+        run: docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: wardyn/agent-claude-code:trivy-scan
+          image-ref: wardyn/${{ matrix.name }}:trivy-scan
           format: table
           severity: CRITICAL
           ignore-unfixed: true
