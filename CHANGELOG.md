@@ -120,6 +120,29 @@ managed Kubernetes; every item below was verified against the code before it was
   it validates the repository, not the workflow.
 
 
+### Added
+
+- **The member-mode (m′) desktop envelope now exists.**
+  `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
+  an MDM-injected admin token the developer never reads, four member-mount
+  bounds — while the tree contained **zero** matching lines under
+  `deploy/desktop/`. The only shipped variant was "SSO instead of local mode",
+  which sets OIDC and stops, so the m′ profile rendered as-is produced a member
+  who **cannot mount their own project directory** — the one power m′ exists to
+  add.
+
+  `deploy/desktop/wardyn.env.m-prime.example` is a second COMPLETE envelope, not
+  a commented variant block: `scripts/test-desktop-profile.sh` parses only
+  uncommented `^VAR=` lines, so a commented m′ would have been invisible to every
+  syntax and `docs/ENV.md` parity assertion — shipping unchecked while the suite
+  printed PASS.
+
+  It carries `WARDYN_ADMIN_TOKEN` **only as a pointer to `secret.env`**, never as
+  a value: compose falls back to the *published* literal `demo-admin-token`, and
+  on a loopback bind that default warns and boots, so an envelope that omits the
+  token hands every developer operator rights and m′'s whole invariant is false
+  on every device.
+
 ### Fixed
 
 - **The setup connectivity probe blamed the proxy for its own failures.** It pulled
@@ -149,6 +172,16 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **`scripts/test-desktop-profile.sh` checked only one envelope.** It read a
+  single hardcoded `wardyn.env.example`, so any second variant shipped with no
+  syntax check, no ENV.md parity check and no policy-path check. It now loops
+  over `wardyn.env*.example` (not `*.env.example`, which does **not** match
+  `wardyn.env.m-prime.example`) and asserts the loop ran more than once, so the
+  next filename cannot silently reopen the hole. New m′ assertions cover the
+  member-root **width** — `/` or a home directory leaves the dotfile deny-list as
+  the only thing between a member and the operator's `~/.ssh`, and an
+  `.env.example` copied fleet-wide by MDM is exactly where that propagates.
+
 - **The BYOI wrap produced images that could not pass their own contract
   selftest.** `FinalizeBase` COPYed the `wardyn-git-helper` binary onto `PATH`
   but wired nothing to it, so git never called it. Any run whose policy declares
