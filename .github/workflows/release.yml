@@ -131,8 +131,20 @@ jobs:
           # returns "latest" only then); pushing it keeps that last-resort tag
           # pullable too. wardynd/wardyn-proxy don't need it: the Helm chart pins
           # their tag to .Chart.AppVersion (the release semver).
-          - name: agent-claude-code
-            dockerfile: deploy/images/claude-code/Dockerfile
+          # agent-claude-code is NOT published, deliberately. It bundles Anthropic's
+          # Claude Code CLI, which is not open-source: the package declares
+          # "SEE LICENSE IN README.md" and neither that file nor a LICENSE ships in
+          # the image, so a puller cannot read the terms they would be bound by.
+          # Wardyn publishes no image containing a proprietary vendor CLI. The
+          # Dockerfile stays as a LOCAL build recipe (`make agent-images`), which is
+          # also the honest arrangement: the operator installs that CLI under their
+          # own agreement with its vendor. agent-base below is what ships instead.
+          #
+          # 0.5.0/0.6.0/0.6.1 of agent-claude-code remain on GHCR — retracting them
+          # would break existing pulls of already-released versions, and they are
+          # documented in deploy/images/THIRD-PARTY-TERMS.md.
+          - name: agent-base
+            dockerfile: deploy/images/base/Dockerfile
             build-args: ""
             float-latest: "true"
           - name: agent-codex-cli

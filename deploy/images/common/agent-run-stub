@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# /usr/local/bin/agent-run for wardyn/agent-base — a stub that fails loudly.
+#
+# The image contract requires every agent image to expose `agent-run "<task>"`.
+# agent-base deliberately ships no coding agent, so it cannot implement one. It
+# ships this instead of nothing, because "command not found" from inside a
+# sandbox is a much worse thing to debug than a sentence telling you what is
+# missing.
+#
+# Derived images REPLACE this file. See deploy/images/claude-code/agent-run for a
+# complete implementation of the contract.
+set -euo pipefail
+
+cat >&2 <<'MSG'
+agent-run: this is wardyn/agent-base, which ships no coding agent.
+
+agent-base carries the Wardyn runner contract — wardyn-rec, wardyn-git-helper,
+wardyn-scan, wardyn-toolgate, the agent user, the git credential helper — and
+nothing that talks to a model. Layer your own agent on top:
+
+    FROM ghcr.io/cjohnstoniv/agent-base:<version>
+    RUN npm install -g <your-agent-cli>
+    COPY your-agent-run /usr/local/bin/agent-run
+
+Wardyn publishes no image containing a proprietary vendor CLI, so you install
+that CLI under your own agreement with its vendor. To build the Claude Code
+image locally instead, run:  make agent-images
+
+See deploy/images/README.md for the full contract.
+MSG
+exit 64  # EX_USAGE: a configuration problem, not a run failure

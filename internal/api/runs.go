@@ -300,6 +300,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
+	if why := unpublishedAgentImage(req.Agent, s.cfg.AgentImages); why != "" {
+		warnings = append(warnings, why)
+	}
 	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
 	if responded {
 		return

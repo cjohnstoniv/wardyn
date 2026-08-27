@@ -381,3 +381,37 @@ func mustJSON(v any) json.RawMessage {
 	}
 	return b
 }
+
+// unpublishedConventionImages are the agentImage() convention refs Wardyn does
+// NOT publish, mapped to why.
+//
+// agentImage() falls back to ghcr.io/cjohnstoniv/agent-<key>:<version> for any
+// agent with no explicit WARDYN_AGENT_IMAGES entry. That is right for every image
+// we ship — but agent-claude-code bundles Anthropic's Claude Code CLI, which is
+// not open-source software (its package declares "SEE LICENSE IN README.md", and
+// neither that file nor a LICENSE ships inside the image), so this project does
+// not redistribute it from a public registry. The Dockerfile remains as a local
+// build recipe.
+//
+// Without this check the operator's first symptom is an ImagePullBackOff or a
+// registry 404 on a tag that looks like it should exist — a support ticket that
+// costs an afternoon and teaches nobody anything. Fail at run creation with the
+// actual reason and the actual fix instead.
+var unpublishedConventionImages = map[string]string{
+	"claude-code": "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, which is not open-source and whose terms are not readable from the image. Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md",
+}
+
+// unpublishedAgentImage reports why the resolved image cannot be pulled, or ""
+// when it can. Only fires for the CONVENTION fallback: an operator who set an
+// explicit WARDYN_AGENT_IMAGES entry has supplied their own image and this has
+// nothing to say about it.
+func unpublishedAgentImage(agent string, images map[string]string) string {
+	if _, explicit := images[agent]; explicit {
+		return ""
+	}
+	key := agent
+	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
+		key = def.ImageKey
+	}
+	return unpublishedConventionImages[key]
+}

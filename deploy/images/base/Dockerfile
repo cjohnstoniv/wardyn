@@ -1,4 +1,22 @@
-# wardyn/agent-claude-code: Claude Code coding-agent image.
+# wardyn/agent-base: the Wardyn agent image contract, with NO vendor CLI.
+#
+# WHY THIS EXISTS. The agent-claude-code image bundles Anthropic's Claude Code
+# CLI, which is not open-source software: its package declares
+# "SEE LICENSE IN README.md" and neither that file nor a LICENSE ships inside the
+# image, so someone pulling it cannot even read the terms they are bound by. That
+# is not a thing this project is willing to redistribute from a public registry,
+# so agent-claude-code is a LOCAL BUILD RECIPE (`make agent-images`) rather than a
+# published artifact, and this image is what gets published in its place.
+#
+# It carries everything the runner contract needs — wardyn-rec, wardyn-git-helper,
+# wardyn-scan, wardyn-toolgate, agent-run, the agent user, the credential helper,
+# tmux, asciinema — and no coding agent. Layer your own on top:
+#
+#     FROM ghcr.io/cjohnstoniv/agent-base:<version>
+#     RUN npm install -g <your-agent-cli>
+#
+# You then install the vendor CLI under your OWN agreement with that vendor,
+# which is the only arrangement that is actually clean for both of us.
 #
 # Stage 1: build wardyn-rec and wardyn-git-helper from the repository root.
 # Both are pure-Go CGO_ENABLED=0 builds so the binaries are fully static and
@@ -77,9 +95,9 @@ COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 # org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
 # Wardyn's own code is licensed under -- enterprise registries and scanners key off
 # it, and a bare "Apache-2.0" here would be a false declaration.
-LABEL org.opencontainers.image.title="agent-claude-code" \
-      org.opencontainers.image.description="Wardyn agent image: Claude Code" \
-      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND LicenseRef-Anthropic-Terms" \
+LABEL org.opencontainers.image.title="agent-base" \
+      org.opencontainers.image.description="Wardyn agent base image: the image contract with no vendor CLI" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \
       org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
 
@@ -169,8 +187,6 @@ ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
-ARG CLAUDE_INSTALL=npm
-ARG CLAUDE_CODE_VERSION=2.1.231
 ARG TARGETARCH
 # The base image's own bundled npm (10.9.8) vendors node-tar 7.5.11, which
 # carries CVE-2026-59873 (gzip-bomb DoS) — a CRITICAL the trivy gate fails on,
@@ -183,42 +199,6 @@ RUN npm install -g "npm@${NPM_VERSION}" \
  && npm --version
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).
-COPY deploy/images/README.md deploy/images/claude-code/claude-bin* /claude-stage/
-RUN set -eu; \
-    if [ "$CLAUDE_INSTALL" = "native" ]; then \
-        if [ -f /claude-stage/claude-bin ]; then \
-            install -m 0755 /claude-stage/claude-bin /usr/local/bin/claude; \
-            echo "installed host-staged native claude"; \
-        else \
-            case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-                amd64) plat=linux-x64;; \
-                arm64) plat=linux-arm64;; \
-                *) echo "unsupported arch '${TARGETARCH:-unknown}' for native claude" >&2; exit 1;; \
-            esac; \
-            base="https://downloads.claude.ai/claude-code-releases"; \
-            ver="$CLAUDE_CODE_VERSION"; \
-            case "$ver" in stable|latest) ver="$(curl -fsSL "$base/$ver")";; esac; \
-            curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
-            sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
-            [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
-            curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
-            echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
-            chmod 0755 /usr/local/bin/claude; \
-            rm -f /tmp/claude-manifest.json; \
-            echo "installed native claude $ver ($plat), checksum-verified"; \
-        fi; \
-    else \
-        if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
-        if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
-        if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
-        echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
-    fi
-
-# The node:22-bookworm-slim base image ships a `node` user at uid=1000.
-# Rename it to `agent` and relocate the home directory to /home/agent so the
-# sandbox contract (USER agent, uid 1000, home /home/agent, work /home/agent/work)
-# is satisfied without creating a second uid-1000 user (which useradd rejects).
 RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
@@ -236,7 +216,10 @@ COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
 # agent-run: the thin shell wrapper used by the Wardyn driver to launch one task.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
 COPY deploy/images/common/agent-run-lib.sh /usr/local/bin/agent-run-lib.sh
-COPY deploy/images/claude-code/agent-run /usr/local/bin/agent-run
+# agent-base ships no coding agent, so it cannot implement agent-run. The stub
+# fails with an explanation rather than leaving "command not found" to debug;
+# a derived image replaces it.
+COPY deploy/images/common/agent-run-stub /usr/local/bin/agent-run
 # The attach shell (interactive bash) sources this: it waits for the workspace to
 # finish preparing (repo clone) and cd's into it, so an attach that lands mid-clone
 # never shows an empty ~/work. See deploy/images/common/attach-bashrc.sh.
@@ -274,7 +257,7 @@ RUN git config --system credential.helper \
 # (CLAUDE_CODE_USE_BEDROCK) modes it UNSETs ANTHROPIC_BASE_URL so claude reaches
 # the real backend through the HTTPS_PROXY CONNECT tunnel.  This ENV is the
 # fallback only for api-key mode.
-ENV ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic
+# No provider base URL is preset: that is the derived image's choice.
 
 WORKDIR /home/agent/work
 
