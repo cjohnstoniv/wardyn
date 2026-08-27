@@ -398,15 +398,21 @@ test("act 5 — a real run", async () => {
   // (1) initialWizardState() defaults to mode "interactive" (wizard-types.ts),
   // which launches an IDLE sandbox waiting for a human to type. The agent never
   // executes the task, so nothing reaches for example.com and the held approval
-  // this act is built around can never appear. Batch is what makes it an
+  // this act is built around can never appear. Autonomous is what makes it an
   // unattended agent run.
   //
-  // (2) Batch must be clicked BEFORE the task is filled: an interactive run has
+  // The alternation carries the old mode name through the rename: copy.ts's
+  // RUN_MODE.autonomous.label is "Autonomous", and ui/src renders the old name
+  // nowhere any more — so a matcher anchored on it alone matched nothing, and
+  // would have failed on shoot day rather than in CI. This spec runs in the
+  // `demo` Playwright project, which no gate executes.
+  //
+  // (2) Autonomous must be clicked BEFORE the task is filled: an interactive run has
   // no Task field at all now (the server ignores task for one), so the box does
   // not exist until this click.
   await act(
     page,
-    page.getByRole("radio", { name: /^Batch/ }),
+    page.getByRole("radio", { name: /^(Autonomous|Batch)/ }),
     "Unattended: the agent does the work on its own, and I only step in when the policy stops it.",
   );
 

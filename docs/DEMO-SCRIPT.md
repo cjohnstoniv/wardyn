@@ -24,7 +24,7 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 | The same vocabulary for host-shell beats (`--terminal-script`) | [`scripts/demo-typist.sh`](../scripts/demo-typist.sh) |
 | Task text, workspace path, the five demo commands | [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) |
 | The workspace the run attaches | [`examples/workspaces/demo-node/`](../examples/workspaces/demo-node/) |
-| Playwright `demo` project (headed, 1920×1080, `:8080`) | [`ui/playwright.config.ts`](../ui/playwright.config.ts) |
+| Playwright `demo` project (headless, 1920×1080, `:8080`) | [`ui/playwright.config.ts`](../ui/playwright.config.ts) |
 
 ## The series harness
 
@@ -62,7 +62,7 @@ and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`,
 `decide()`). Both were lifted out of `walkthrough.spec.ts` unchanged. **A spec
 that imports `stage.ts` keeps its own `test.skip(!process.env.WARDYN_DEMO, …)`
 guard** — without it, a bare `pnpm exec playwright test --project=demo` points a
-headed browser at a developer's live stack and starts clicking Launch.
+headless browser at a developer's live stack and starts clicking Launch.
 
 ### The clean slate belongs to video 02
 
@@ -387,7 +387,7 @@ Anything materially below 1080 tall means the page is not filling the canvas.
   `gdigrab`, only an mjpeg-in/webm-out encoder.
 - **Acts 1–6 are recorded by the browser itself**, which is the only capture
   here that another window cannot ruin (see the section above).
-- **The browser is a headed Chromium on WSLg.** `DEMO_CDP=http://<host>:9222`
+- **The browser is a headless Chromium.** `DEMO_CDP=http://<host>:9222`
   instead attaches to the real Windows Chrome that
   `~/tester/bin/chrome-cdp.sh --launch` brings up — better-looking chrome, same
   driver, but no browser-side recording, so that lane is desktop-grab only.
@@ -576,19 +576,12 @@ setup** → lands on Runs.
 ### Act 5 — a real run
 
 **New run** → `/runs/new`. **Title** (required — Launch is disabled without one),
-run type **Agent task**, **Batch** (see the rename note below), **Task**
+run type **Agent task**, **Autonomous**, **Task**
 textarea, workspace combobox, confinement **Confined**, then **Edit hosts…** →
 dialog **Network for this run**: allow the `api.anthropic.com` chip, pick **Hold
 it for approval**, **Save hosts**. Then **Launch run**.
 
-> **Pending rename:** Track B renames this mode **Batch → Autonomous**. The
-> driver matches `getByRole("radio", { name: /^Batch/ })`, so the day that lands
-> it fails loudly at exactly one line rather than recording an interactive run
-> that never executes the task — but every **Batch** in this document, and in
-> `walkthrough.spec.ts`, is stale from that moment. Re-shooting against a build
-> that already has the rename? Read **Batch** as **Autonomous** throughout.
-
-> **Order matters:** **Batch** is clicked BEFORE the Task box is filled. An
+> **Order matters:** **Autonomous** is clicked BEFORE the Task box is filled. An
 > interactive run has no Task field at all (the server ignores task for one), so
 > the textarea does not exist until the mode changes.
 
@@ -686,10 +679,9 @@ assumes the obvious thing:
 - **Run mode defaults to `interactive`** (`initialWizardState()`, wizard-types.ts),
   which launches an IDLE sandbox waiting for a human to type. The agent never
   executes the task, so nothing reaches for `example.com` and the held approval
-  never appears — the run just sits there. Act 5 selects **Batch** explicitly
-  (**Autonomous** once Track B's rename lands — see Act 5 above).
-  This is now STRUCTURAL as well as semantic: the Task field only exists in batch
-  mode, so filling it before the **Batch** click targets nothing. An interactive
+  never appears — the run just sits there. Act 5 selects **Autonomous** explicitly.
+  This is STRUCTURAL as well as semantic: the Task field only exists in autonomous
+  mode, so filling it before the **Autonomous** click targets nothing. An interactive
   run instead offers **Start with** (the agent CLI, or a bare terminal).
 - **Every run needs a title** (`DEMO_TITLE`, `ui/e2e/demo/task.ts`). Launch stays
   disabled and reads *"Give this run a title."* until one is typed, and the title
