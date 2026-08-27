@@ -297,10 +297,14 @@ endpoint before launching.
 
 `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
 ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-every release tag publishes all five images cosign-signed
+every release tag publishes all five images (`wardynd`, `wardyn-proxy`,
+`agent-base`, `agent-codex-cli`, `agent-aws-sso`) cosign-signed, each with an
+attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
 ([.github/workflows/release.yml](../.github/workflows/release.yml) — see
 [RELEASING.md](../RELEASING.md) and the Helm chart's
 [README](../deploy/helm/wardyn/README.md)). This BYOA pipeline (`ci-run.sh`)
 does not consume them, though: it still builds wardynd, the `wardyn-proxy`
 sidecar, and the agent image from source on every invocation (a few minutes
-per job) — wiring it to pull the published images remains open.
+per job). `scripts/up.sh` now pulls the published images instead, falling back to
+a build when any is missing; `ci-run.sh` has not yet been switched to the same
+path, so a pipeline still pays the build. Wiring it up is open work.

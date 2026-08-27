@@ -102,6 +102,18 @@ before step 3.
 5. **Push** the branch and the tag:
    `git push origin release/X.Y && git push origin vX.Y.Z`
    (and `git push origin main` if step 2's commit landed there).
+   Pushing the tag is what triggers `release.yml`, which now does more than build
+   and sign: per published digest it attests a CycloneDX SBOM scanned from the
+   **pushed image** (not the source tree, which sees no OS packages) and a build
+   provenance statement, then a `release-assets` job uploads those SBOMs,
+   `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE` and a cosign-signed `SHA256SUMS`
+   to the Release — creating a draft Release first if you have not cut one yet —
+   and **fails if any of them did not land**. So the supply-chain assets are no
+   longer yours to remember; the demo videos in step 7 still are.
+
+   If that job is red, the Release is missing assets `docs/VERIFY.md` tells
+   consumers to check. Treat it as a failed release, not a cosmetic warning.
+
 6. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
    as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
    pre-alpha.
