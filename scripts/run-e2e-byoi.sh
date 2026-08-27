@@ -86,6 +86,11 @@ DOCKER
 
 pass=0; fail=0
 check() { if eval "$2"; then log "PASS: $1"; pass=$((pass+1)); else printf '\033[1;31m[FAIL]\033[0m %s\n' "$1"; fail=$((fail+1)); fi; }
+# skip is for an assertion this BASE IMAGE cannot host, never for one that is
+# merely inconvenient. It prints loudly and is counted, so a lane that quietly
+# stops proving things is visible instead of reading as green.
+skip() { printf '\033[1;33m[SKIP]\033[0m %s — %s\n' "$1" "$2"; skipped=$((skipped+1)); }
+skipped=0
 
 # wait_run ID JQ_PREDICATE — poll the run until the predicate holds (60s cap),
 # leaving the run JSON in RUN_JSON. Replaces fixed sleeps, which flake on a slow
@@ -120,9 +125,21 @@ check "run1 launched a sandbox (containment checks can run)" '[[ -n "$SB1" ]]'
 if [[ -n "$SB1" ]]; then
   ROUTES="$(docker exec "$SB1" sh -c 'ip route 2>/dev/null || true')"
   check "run1 sandbox has no default route" '! grep -q "^default" <<<"$ROUTES"'
-  # proxy trust: curl to Anthropic over the combined bundle succeeds; off-allowlist denied.
-  check "run1 curl api.anthropic.com trusts the proxy CA" 'docker exec "$SB1" sh -c "curl -s -o /dev/null -w %{http_code} https://api.anthropic.com/ 2>/dev/null" | grep -qE "^(4|2)"'
-  check "run1 off-allowlist host is proxy-denied" 'docker exec "$SB1" sh -c "curl -s -m 5 -o /dev/null -w %{http_code} https://example.org/ 2>/dev/null" | grep -qvE "^200"'
+  # Proxy trust: curl to Anthropic over the combined bundle succeeds; an
+  # off-allowlist host is denied.
+  #
+  # ubuntu:24.04 SHIPS NO CURL, so for the stock-base scenario these two could
+  # never pass — they were permanently red and had been since this lane was
+  # written. That matters now that the lane is wired into CI: two assertions
+  # that can only fail train everyone to ignore the job. Probe for curl and say
+  # so; scenario 2's harness base carries curl and proves the same two
+  # properties for real, so the coverage moves rather than disappearing.
+  if docker exec "$SB1" sh -c 'command -v curl >/dev/null 2>&1'; then
+    check "run1 curl api.anthropic.com trusts the proxy CA" 'docker exec "$SB1" sh -c "curl -s -o /dev/null -w %{http_code} https://api.anthropic.com/ 2>/dev/null" | grep -qE "^(4|2)"'
+    check "run1 off-allowlist host is proxy-denied" 'docker exec "$SB1" sh -c "curl -s -m 5 -o /dev/null -w %{http_code} https://example.org/ 2>/dev/null" | grep -qvE "^200"'
+  else
+    skip "run1 proxy-CA trust + off-allowlist deny" "the stock base ubuntu:24.04 ships no curl; scenario 3 proves both on a live sandbox whose base has one"
+  fi
 fi
 api POST "/api/v1/runs/${ID1}/kill" '{}' >/dev/null 2>&1 || true
 
@@ -145,6 +162,35 @@ check "run3 launched a sandbox (entrypoint check can run)" '[[ -n "$SB3" ]]'
 if [[ -n "$SB3" ]]; then
   EP="$(docker inspect -f '{{json .Config.Entrypoint}}' "$SB3" 2>/dev/null)"
   check "run3 entrypoint CLEARED by the wrap" '[[ "$EP" == "null" || "$EP" == "[]" ]]'
+  # The proxy-CA-trust and off-allowlist-deny proofs live HERE, not on scenario
+  # 1 (ubuntu:24.04 ships no curl) and not on scenario 2 (a batch run whose
+  # sandbox is already torn down by the time wait_run returns TERMINAL). This
+  # run is interactive, so its sandbox is alive, and the hostile base is built
+  # around curl by construction.
+  # These two assertions replace a pair that could never pass. The originals
+  # read curl's %{http_code} and expected 4xx/2xx for a DENIED host — but a
+  # refused CONNECT tunnel yields no HTTP status at all, so curl reports "000".
+  # Worse, this script runs under `set -uo pipefail`, so curl's own non-zero
+  # exit (56/22 on a refused tunnel) failed the pipeline before grep was even
+  # consulted: BOTH checks were red whatever the proxy did. They were also
+  # hosted on ubuntu:24.04, which ships no curl, so they had never once run.
+  #
+  # Assert the two properties that are actually observable instead, on the ALLOW
+  # and DENY sides of the same policy.
+  if docker exec "$SB3" sh -c 'command -v curl >/dev/null 2>&1' 2>/dev/null; then
+    # ALLOW side: a host the run's policy permits reaches through the proxy.
+    # proxy.golang.org is examples/policies/demo.json's allowed_domains entry —
+    # the same file the desktop tier ships as its managed ceiling.
+    check "run3 an allowed host reaches through the proxy" \
+      'docker exec "$SB3" sh -c "curl -s -m 15 -o /dev/null -w %{http_code} https://proxy.golang.org/" 2>/dev/null | grep -qE "^2"'
+    # DENY side: an off-allowlist host is refused AND says why. The reason
+    # header is the sandbox's only signal for "retry after approval" vs
+    # "permanently blocked" (internal/egress/proxy/egress_headers.go).
+    check "run3 an off-allowlist host is refused with a reason header" \
+      'docker exec "$SB3" sh -c "curl -sv -m 8 -o /dev/null https://example.org/ 2>&1 | grep -i x-wardyn-egress" 2>/dev/null | grep -qiE "denied|approval-pending"'
+  else
+    skip "run3 proxy allow/deny behaviour" "the hostile base carries no curl — rebuild it with one, or these two properties go unproven"
+  fi
 fi
 # zero contact to the attacker host in the run's egress audit. `api` uses curl
 # -sf, which prints NOTHING on an HTTP error — so assert the audit is actually
@@ -162,5 +208,5 @@ wait_run "$ID4" "$TERMINAL" || warn "run4 did not reach a terminal state within 
 ST4="$(jq -r '.state // ""' <<<"$RUN_JSON")"
 check "run4 nonexistent ref is FAILED (no 500)" '[[ "$ST4" == "FAILED" ]]'
 
-log "BYOI e2e: ${pass} passed, ${fail} failed"
+log "BYOI e2e: ${pass} passed, ${fail} failed, ${skipped} skipped"
 [[ ${fail} -eq 0 ]] || exit 1
