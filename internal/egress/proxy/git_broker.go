@@ -344,34 +344,48 @@ func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (string, in
 // approval_id) when approval-gated and pending, or an error for anything the
 // caller cannot itself retry (network failure, malformed response).
 func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token string, expMs int64, status int, body []byte, err error) {
+	tok, user, exp, st, b, e := p.callMintGitFull(ctx, grantID)
+	_ = user
+	return tok, exp, st, b, e
+}
+
+// callMintGitFull is callMintGit plus the git username a git_pat mint returns.
+// Split so the GitHub lane, which always authenticates as x-access-token, keeps
+// its narrower signature and cannot accidentally consume a username.
+func (p *Proxy) callMintGitFull(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, status int, body []byte, err error) {
 	reqBody, err := json.Marshal(map[string]string{"grant_id": grantID.String()})
 	if err != nil {
-		return "", 0, 0, nil, err
+		return "", "", 0, 0, nil, err
 	}
 	resp, err := p.forwardToControlPlane(ctx, http.MethodPost,
 		"/api/v1/internal/credentials/mint", reqBody, "application/json")
 	if err != nil {
-		return "", 0, 0, nil, err
+		return "", "", 0, 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, resp.StatusCode, respBody, nil
+		return "", "", 0, resp.StatusCode, respBody, nil
 	}
 	var mr struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
+		// Username is set for a git_pat mint (the host's expected git username:
+		// "pat" for Azure DevOps, "oauth2" for GitLab, or an operator override).
+		// Empty for a github_token mint, which always authenticates as
+		// x-access-token.
+		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(respBody, &mr); err != nil {
-		return "", 0, 0, nil, fmt.Errorf("decode mint response: %w", err)
+		return "", "", 0, 0, nil, fmt.Errorf("decode mint response: %w", err)
 	}
 	if mr.Token == "" {
-		return "", 0, 0, nil, fmt.Errorf("mint response missing token")
+		return "", "", 0, 0, nil, fmt.Errorf("mint response missing token")
 	}
 	if t, perr := time.Parse(time.RFC3339, mr.ExpiresAt); perr == nil {
 		expMs = t.UnixMilli()
 	}
-	return mr.Token, expMs, http.StatusOK, nil, nil
+	return mr.Token, mr.Username, expMs, http.StatusOK, nil, nil
 }
 
 // waitForGitApproval polls approvalID (the SAME control-plane route

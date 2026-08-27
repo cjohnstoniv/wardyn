@@ -57,6 +57,27 @@ type Config struct {
 	// stays proxy-side. Compiled at dispatch from the run's github grants. Empty =>
 	// the git-broker route always 403s (no repo brokered).
 	GitGrants map[string]uuid.UUID `json:"git_grants,omitempty"`
+	// PATGrants is the git_pat broker's per-HOST allowlist: canonical lower-case
+	// host -> the git_pat grant id to mint from, backing the /wardyn/git/ route.
+	//
+	// It is the non-GitHub half of the same idea as GitGrants, and it exists to
+	// close an asymmetry rather than to add a feature: a github_token never
+	// enters the sandbox, while a git_pat for GitLab or Azure DevOps was handed
+	// to the in-sandbox credential helper and was therefore resident for the
+	// life of the run. The grant kind's own doc calls that "the OPPOSITE of
+	// api_key", because git-over-HTTPS is an opaque CONNECT tunnel the proxy
+	// cannot inject Basic-auth into.
+	//
+	// This route removes the tunnel: agent-run rewrites those hosts to a
+	// PLAIN-HTTP broker path, so the proxy terminates the request, mints
+	// server-side and injects the credential itself. The PAT never reaches the
+	// sandbox.
+	//
+	// Per-HOST rather than per-repo, deliberately: unlike a GitHub App
+	// installation token, a PAT carries whatever scope the operator issued it
+	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
+	// confinement the credential does not have. Empty => the route always 403s.
+	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -136,4 +157,12 @@ func (c *Config) applyDefaultsAndValidate() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
+}
+
+// PATGrant is one host's git_pat brokering: which grant to mint from, and the
+// git username that host expects alongside the PAT (Azure DevOps wants "pat",
+// GitLab wants "oauth2", and an operator may override either).
+type PATGrant struct {
+	GrantID  uuid.UUID `json:"grant_id"`
+	Username string    `json:"username,omitempty"`
 }

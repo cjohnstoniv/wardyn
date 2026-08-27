@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -83,6 +82,10 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
+	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
+	// which is also what a deployment with the lane switched off looks like.
+	patGrants map[string]PATGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -147,6 +150,10 @@ type Options struct {
 	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> grant id)
 	// backing the /wardyn/gh/ route. See Proxy.gitGrants.
 	GitGrants map[string]uuid.UUID
+	// PATGrants is the git_pat broker's per-HOST allowlist backing /wardyn/git/.
+	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
+	// per-repo.
+	PATGrants map[string]PATGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -228,6 +235,15 @@ func newProxy(opts Options) *Proxy {
 			gitGrants[k] = id
 		}
 	}
+	// Same canonicalisation as the repo keys above: a host is matched
+	// case-insensitively, so the map key is lowercased once here rather than at
+	// every lookup.
+	patGrants := make(map[string]PATGrant, len(opts.PATGrants))
+	for k, g := range opts.PATGrants {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
+			patGrants[k] = g
+		}
+	}
 	p := &Proxy{
 		runID:           opts.RunID,
 		policy:          opts.Policy,
@@ -242,6 +258,7 @@ func newProxy(opts Options) *Proxy {
 		mitmPorts:       mitmPorts,
 		mitmLLM:         opts.MITMLLM,
 		gitGrants:       gitGrants,
+		patGrants:       patGrants,
 		gitTokens:       make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL: strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:        opts.RunToken,
@@ -813,182 +830,3 @@ func copyHeader(dst, src http.Header) {
 		}
 	}
 }
-
-// Server bundles a Proxy with its http.Server and async decision sink for
-// lifecycle management.
-type Server struct {
-	proxy *Proxy
-	http  *http.Server
-	sink  *decisionSink
-	// renewStop stops the run-token renewer started by NewServer; renewStopped
-	// closes once it has exited. Both are set ONCE in NewServer (never from
-	// ListenAndServe) because production runs ListenAndServe in one goroutine and
-	// calls Shutdown from another — writing them at serve time would race the read
-	// in Shutdown. Nil when no renewer was started.
-	renewStop    context.CancelFunc
-	renewStopped chan struct{}
-}
-
-// NewServer wires a Proxy from a validated Config and dependencies. It mints
-// injection credentials once (fail-closed on error) before returning.
-func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
-	pol := CompilePolicy(cfg.Policy)
-
-	// ONE live token for the whole sidecar: the config's run token is the seed,
-	// and the renewer (started by ListenAndServe) rotates it in place before its
-	// short TTL lapses. Every control-plane caller below shares this source, so a
-	// renew reaches all of them at once — the sink, the injector's subscription
-	// re-resolves, the approval client, and the brokered local routes.
-	ts := newTokenSource(cfg.RunToken)
-
-	sink := newDecisionSink(cfg.ControlPlaneURL, ts, cfg.DecisionBufferSize, client, stdout)
-
-	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
-	if err != nil {
-		_ = sink.close(context.Background())
-		return nil, fmt.Errorf("build injector: %w", err)
-	}
-
-	// Build the OPTIONAL outbound content-inspection engine. Off unless the
-	// policy carries an llm_inspection block. Register the operator-declared
-	// workspace secret values in the proxy-global mask registry FIRST so they
-	// (a) form the scan corpus and (b) are masked from decision-log output
-	// defense-in-depth — then snapshot (buildInjector already registered any
-	// injected credentials above). A global kill-switch (WARDYN_LLM_SCAN=off) is
-	// applied upstream in cmd/wardyn-proxy by clearing cfg.Policy.LLMInspection.
-	var scanner *contentscan.Engine
-	if spec := cfg.Policy.LLMInspection; spec != nil {
-		for _, v := range spec.WorkspaceSecretValues {
-			procRegistry.AddGlobal([]byte(v))
-		}
-		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(uuid.Nil))
-		if eerr != nil {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("build content scanner: %w", eerr)
-		}
-		scanner = eng
-		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
-			// Configured to inspect but the effective secret corpus is empty —
-			// scanning is a no-op. Surface it so the operator is not misled.
-			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled",
-				slog.String("mode", spec.Mode))
-		}
-	}
-
-	// TLS-MITM CA: build whenever the per-run PEMs are provided. MITM now serves
-	// TWO purposes — content inspection (scanner) AND subscription credential
-	// injection (which must terminate TLS to swap the Authorization header for the
-	// live host token). Dispatch only delivers the PEMs when one of those is
-	// wanted, so their presence is the authoritative signal. With a nil scanner
-	// the terminated tunnel is forward+inject only (inspectLLM no-ops).
-	var ca *certAuthority
-	if cfg.MITMCACertPEM != "" && cfg.MITMCAKeyPEM != "" {
-		ca, err = newCertAuthority([]byte(cfg.MITMCACertPEM), []byte(cfg.MITMCAKeyPEM))
-		if err != nil {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("build mitm CA: %w", err)
-		}
-		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM enabled (content inspection and/or subscription credential injection)")
-	}
-
-	// Upstream/parent corp proxy (optional). Parse+validate; register any
-	// embedded credential in the mask registry so it can never leak into a
-	// decision log or stdout. The credential is held proxy-memory-only.
-	up, err := parseUpstreamProxy(cfg.UpstreamProxyURL)
-	if err != nil {
-		_ = sink.close(context.Background())
-		return nil, fmt.Errorf("upstream proxy: %w", err)
-	}
-	if up != nil {
-		for _, v := range up.maskValues() {
-			procRegistry.AddGlobal(v)
-		}
-		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
-			slog.String("upstream_addr", up.addr))
-	}
-
-	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
-	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
-		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
-
-	p := newProxy(Options{
-		RunID:           cfg.RunID,
-		Policy:          pol,
-		Approval:        ap,
-		Injector:        inj,
-		Sink:            sink,
-		Scanner:         scanner,
-		CA:              ca,
-		MITMHosts:       cfg.MITMHosts,
-		MITMLLM:         cfg.MITMLLM,
-		GitGrants:       cfg.GitGrants,
-		ControlPlaneURL: cfg.ControlPlaneURL,
-		RunToken:        ts,
-		Upstream:        up,
-	})
-	if ca != nil && len(cfg.MITMHosts) > 0 {
-		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
-			slog.Int("host_count", len(cfg.MITMHosts)))
-	}
-
-	srv := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: p,
-		// The agent-facing listener is the untrusted side of the boundary. With
-		// ReadTimeout 0 there is NO header deadline unless this is set, so a
-		// partial-header connection would pin a goroutine forever in a 256 MiB
-		// sidecar. Independent of ReadTimeout, and cleared by the CONNECT hijack —
-		// tunnels and streaming bodies are unaffected. Matches the inner MITM
-		// server (mitm.go).
-		ReadHeaderTimeout: 30 * time.Second,
-		ReadTimeout:       0, // streaming/tunnels: no whole-request deadline
-		WriteTimeout:      0,
-		IdleTimeout:       90 * time.Second,
-	}
-	out := &Server{proxy: p, http: srv, sink: sink}
-
-	// Start the run-token renewer, which keeps this sidecar's short-TTL token
-	// fresh for the life of the run. Without it every control-plane call (mints,
-	// approvals, decision logs, subscription re-resolves) starts 401ing once the
-	// startup token's 1h TTL lapses, with no recovery. It starts here — like the
-	// decision sink's own goroutine — so it is running before the first request
-	// and is torn down by Shutdown; the caller's ctx is a STARTUP context, so the
-	// renewer gets its own lifetime instead.
-	if cfg.ControlPlaneURL != "" {
-		rctx, cancel := context.WithCancel(context.Background())
-		out.renewStop = cancel
-		out.renewStopped = make(chan struct{})
-		go func() {
-			defer close(out.renewStopped)
-			runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
-		}()
-	}
-	return out, nil
-}
-
-// ListenAndServe starts serving and blocks until the server stops.
-func (s *Server) ListenAndServe() error {
-	if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
-}
-
-// Shutdown gracefully stops the HTTP server, stops the token renewer, and drains
-// the decision sink.
-func (s *Server) Shutdown(ctx context.Context) error {
-	if s.renewStop != nil {
-		s.renewStop()
-		<-s.renewStopped
-	}
-	httpErr := s.http.Shutdown(ctx)
-	sinkErr := s.sink.close(ctx)
-	if httpErr != nil {
-		return httpErr
-	}
-	return sinkErr
-}
-
-// Addr returns the configured listen address.
-func (s *Server) Addr() string { return s.http.Addr }

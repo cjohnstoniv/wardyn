@@ -116,6 +116,50 @@ run a brokered policy with `allow_all_egress`, the broker route is the only
 *convenient* route, not the only one — it is what git itself uses, since a
 clone/push URL carries a name, never a bare IP.
 
+### `git_pat` is never-resident too, as of 0.7
+
+Through 0.6 the two git lanes had opposite credential postures, and the
+asymmetry was the gap rather than a design:
+
+| Lane | Credential |
+|---|---|
+| `github_token` | minted proxy-side, injected on the outbound leg — **never in the sandbox**, per-repo, ref-confined, ≤1h |
+| `git_pat` (GitLab, Azure DevOps, Bitbucket) | handed to the **in-sandbox** credential helper — **resident** for the life of the run, at whatever scope the operator's PAT carries |
+
+The grant kind's own doc explains why it started that way: git-over-HTTPS is an
+opaque `CONNECT` tunnel, and a proxy cannot inject Basic-auth into one.
+
+**The fix removes the tunnel rather than injecting into it.** `agent-run`
+rewrites a granted host to a plain-HTTP broker path
+(`url.<proxy>/wardyn/git/<host>/.insteadOf https://<host>/`), so the proxy
+terminates the request itself, mints the PAT server-side, and sets Basic auth on
+the outbound leg. The sandbox speaks cleartext to its **own sidecar** over a
+loopback-equivalent hop and never holds the credential.
+
+The grant ids are **withheld from the sandbox environment** when the broker is
+on. That is the half that matters: leaving them would let the in-sandbox helper
+mint the PAT exactly as before, and the credential would be resident despite the
+broker. The sandbox sees only `WARDYN_GIT_PAT_BROKER_HOSTS`, a host list that
+carries no grant id and cannot mint anything.
+
+**What this does NOT do.** A PAT carries whatever scope the operator issued it
+with, and Wardyn cannot narrow it — there is no ADO or GitLab equivalent of a
+scoped installation token. So this makes the credential **non-resident**; it does
+not make it least-privilege. That is why the allowlist is per **host** rather
+than per repo: a per-repo key would imply a confinement the credential does not
+have.
+
+The broker admits the same smart-HTTP surface the GitHub lane does — refs
+discovery and the two pack endpoints, nothing else. A broker that forwarded
+arbitrary paths would be a credentialed proxy to the whole forge, REST API
+included.
+
+`WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 resident lane. It exists
+because the broker changes the git transport for those hosts, and a forge that
+behaves unexpectedly under the rewrite must not leave a fleet unable to clone.
+There is deliberately **no automatic fallback**: falling back would silently
+return the PAT to the sandbox, which is the posture this removes.
+
 ### The `ssh_key` and `git_pat` lanes are closed too
 
 An earlier pass over this doc described a real gap here: the GitHub denies

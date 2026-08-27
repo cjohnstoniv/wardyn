@@ -111,6 +111,7 @@ type bootFlags struct {
 	agentModel         *string
 	scanAIAdvisor      *bool
 	requireOpSetEgress *bool
+	gitPATBroker       *string
 
 	bedrockRegion       *string
 	bedrockModel        *string
@@ -238,6 +239,7 @@ func parseBootFlags() *bootFlags {
 		// inline_policy.go's filterMemberGrants comment names matters more than
 		// the convenience) opts in here.
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before applyWorkspaceRequirements auto-adds it at launch — a scan_seeded egress host (the workspace scanner reading untrusted repo content) is skipped instead. Mirrors the operator_set-only gate the SECRET side has always applied unconditionally. ON by default since 0.7; set false to restore pre-0.7 behavior, where any enabled egress requirement was auto-added regardless of provenance."),
+		gitPATBroker: flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", "never-resident git_pat lane: `on` (default) mints a non-GitHub forge's PAT PROXY-SIDE and injects it on the outbound leg, so the credential never enters the sandbox — the posture github_token has always had. `off` restores pre-0.7 behavior, where the in-sandbox credential helper mints the PAT into the agent's process. Off is an escape hatch for a forge that misbehaves under the broker's insteadOf rewrite, not a supported posture."),
 
 		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
 		// billed via AWS). Both must be set to enable it; the AWS credentials

@@ -16,6 +16,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
 // Capabilities declares what a driver (on this host/cluster) can actually
@@ -153,6 +155,11 @@ type ProxyConfig struct {
 	// proxy-side. Populated at dispatch from the run's github grants; empty => no
 	// repo brokered. See proxy.Config.GitGrants.
 	GitGrants map[string]uuid.UUID
+	// PATGrants is the git_pat broker's per-HOST allowlist ("host" -> the grant
+	// to mint from), backing the proxy's /wardyn/git/ route so a non-GitHub
+	// forge's PAT is minted proxy-side and never enters the sandbox. Empty => no
+	// host brokered. See proxy.Config.PATGrants.
+	PATGrants map[string]proxy.PATGrant
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded

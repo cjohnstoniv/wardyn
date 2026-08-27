@@ -202,6 +202,31 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **Git PATs for non-GitHub forges are never resident.** The two git lanes had
+  opposite credential postures: a `github_token` was minted proxy-side and
+  injected on the outbound leg — never in the sandbox, per-repo, ref-confined,
+  ≤1h — while a `git_pat` for GitLab or Azure DevOps was handed to the
+  **in-sandbox** credential helper and sat in the agent's process for the life of
+  the run, at whatever scope the operator's PAT carried. The asymmetry was the
+  gap.
+
+  `agent-run` now rewrites a granted host to a plain-HTTP broker path, so the
+  proxy terminates the request, mints server-side and injects Basic auth itself —
+  removing the opaque `CONNECT` tunnel rather than trying to inject into one. The
+  grant ids are **withheld from the sandbox env**, which is the half that
+  matters: leaving them would let the in-sandbox helper mint the PAT anyway and
+  the credential would be resident despite the broker.
+
+  **It does not make the PAT least-privilege** — Wardyn cannot narrow a scope the
+  operator issued, and there is no ADO/GitLab equivalent of a scoped installation
+  token. The allowlist is per **host** for exactly that reason. The broker admits
+  only the smart-HTTP surface the GitHub lane does; forwarding arbitrary paths
+  would make it a credentialed proxy to the whole forge.
+
+  `WARDYN_GIT_PAT_BROKER=off` restores the old lane. There is deliberately **no
+  automatic fallback** — falling back would silently return the PAT to the
+  sandbox.
+
 - **`tool_rules`: an autonomous run's tool use is no longer all-or-nothing.**
   `tool_approvals` had exactly two settings and no middle — `auto` runs every
   tool with no gate at all, `hold` routes **every** gated call to a human. On a

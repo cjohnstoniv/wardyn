@@ -417,6 +417,20 @@ type Config struct {
 	// (making it operator_set), which is the action the gate exists to require.
 	// Set false to restore pre-0.7 behavior.
 	RequireOperatorSetEgress bool
+	// DisableGitPATBroker (WARDYN_GIT_PAT_BROKER=off) is the OPERATOR ESCAPE
+	// HATCH for the never-resident git_pat lane.
+	//
+	// With the broker on (the default), a git_pat for a non-GitHub forge is
+	// minted PROXY-SIDE and injected on the outbound leg, so the PAT never enters
+	// the sandbox — the same posture github_token has always had. Turning it off
+	// restores the pre-0.7 behaviour, where the grant id rides the sandbox env and
+	// the in-sandbox credential helper mints the PAT into the agent's process.
+	//
+	// It exists because the broker changes the git TRANSPORT for those hosts (an
+	// insteadOf rewrite to a plain-HTTP broker path), and a forge that behaves
+	// unexpectedly under that rewrite must not leave a fleet unable to clone.
+	// Reverting is a flag flip and a restart, not a redeploy.
+	DisableGitPATBroker bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only

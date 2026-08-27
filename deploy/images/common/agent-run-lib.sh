@@ -280,6 +280,35 @@ configure_git_broker_insteadof() {
     done <<< "$records"
 }
 
+# ── git_pat broker insteadOf (never-resident PATs for non-GitHub forges) ─────
+# WARDYN_GIT_PAT_BROKER_HOSTS is a space-separated host list set by dispatch when
+# the never-resident git_pat lane is on. For each host, rewrite git's HTTPS URL to
+# the proxy's plain-HTTP broker path so the proxy TERMINATES the request, mints the
+# PAT server-side and injects Basic auth itself.
+#
+# WHY THE REWRITE IS THE MECHANISM. git-over-HTTPS is an opaque CONNECT tunnel; a
+# proxy cannot inject credentials into one. Rewriting to plain HTTP against the
+# sidecar removes the tunnel — the sandbox speaks cleartext to its OWN proxy over
+# a loopback-equivalent hop, and the credential lives only on the outbound leg.
+#
+# There is no fallback to a direct HTTPS clone, deliberately: falling back would
+# mean a broker failure silently reverts to a lane where the PAT is resident,
+# which is the posture this exists to remove. If the broker is unreachable the
+# clone fails and says so.
+configure_git_pat_broker_insteadof() {
+    [[ -n "${WARDYN_GIT_PAT_BROKER_HOSTS:-}" ]] || return 0
+    command -v git >/dev/null 2>&1 || return 0
+    local base host
+    base="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
+    base="${base%/}"
+    for host in $WARDYN_GIT_PAT_BROKER_HOSTS; do
+        # Host-shaped only. The value is server-set, but this is the string that
+        # becomes a URL prefix, so it is validated here rather than trusted.
+        [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || continue
+        git config --global url."${base}/wardyn/git/${host}/".insteadOf "https://${host}/" || true
+    done
+}
+
 # ── run branch (push branch-namespace confinement) ───────────────────────────
 # name_run_branch <repo-dir> — check a freshly-cloned repo out onto THIS run's own
 # branch, `wardyn/$WARDYN_RUN_ID/work`.

@@ -235,7 +235,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, seedAutoTools bool, toolApprovals string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, seedAutoTools bool, toolApprovals string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID, patBroker bool) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
@@ -318,6 +318,24 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// A PAT for a BROKERED forge is withheld for the same reason the ssh_key is —
 	// see dropBrokeredGrants.
 	gitPATGrants, droppedPAT = dropBrokeredGrants(gitPATGrants, gitGrants, brokeredForgeHost)
+	// THE POINT OF THE PAT BROKER, and the half that is easy to leave out: when
+	// the never-resident lane is on, the grant ids must NOT reach the sandbox.
+	// Leaving them here would let the in-sandbox credential helper mint the PAT
+	// exactly as before, and the credential would be resident despite the broker
+	// — the feature would look like it worked while changing nothing.
+	//
+	// agent-run learns which hosts to route through the broker from
+	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
+	// grant id, so it cannot be used to mint anything.
+	if patBroker && len(gitPATGrants) > 0 {
+		hosts := make([]string, 0, len(gitPATGrants))
+		for h := range gitPATGrants {
+			hosts = append(hosts, h)
+		}
+		sort.Strings(hosts)
+		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
+		gitPATGrants = nil
+	}
 	if len(gitPATGrants) > 0 {
 		if b, merr := json.Marshal(gitPATGrants); merr == nil {
 			sandboxEnv["WARDYN_GIT_PAT_GRANTS"] = string(b)

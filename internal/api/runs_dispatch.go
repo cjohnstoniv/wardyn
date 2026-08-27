@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -25,21 +26,27 @@ import (
 // wrong credential family onto every host. Named fields make each call site
 // self-documenting; the zero value is the "none" case per field.
 type dispatchParams struct {
-	RunToken           string                     // proxy-verifiable run token (never a usable in-sandbox secret)
-	Image              string                     // resolved sandbox OCI image (convention or built devcontainer)
-	Policy             types.RunPolicySpec        // egress/resource policy (dispatchRun mutates a local copy)
-	FirstGitHubGrantID *uuid.UUID                 // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
-	GitGrants          map[string]uuid.UUID       // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
-	GitPATGrants       map[string]string          // {host: grant_id} for non-GitHub PAT hosts
-	SSHGrants          map[string]string          // {host: grant_id} for SSH clone hosts
-	Injections         []runner.InjectionGrant    // proxy-side credential injections
-	Interactive        bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
-	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	InteractiveStart   string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
-	SeedAutoTools      bool                       // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
-	ToolApprovals      string                     // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
-	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
-	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
+	RunToken           string               // proxy-verifiable run token (never a usable in-sandbox secret)
+	Image              string               // resolved sandbox OCI image (convention or built devcontainer)
+	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
+	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
+	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
+	// PATBroker reports whether the never-resident git_pat lane is on for this
+	// run. When it is, every git_pat grant is brokered proxy-side and NONE of
+	// them reaches the sandbox env — which is the entire point: leaving the
+	// grant ids in place would let the in-sandbox helper mint the PAT anyway and
+	// the credential would be resident despite the broker.
+	PATBroker        bool
+	GitPATGrants     map[string]string          // {host: grant_id} for non-GitHub PAT hosts
+	SSHGrants        map[string]string          // {host: grant_id} for SSH clone hosts
+	Injections       []runner.InjectionGrant    // proxy-side credential injections
+	Interactive      bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
+	TaskMode         string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
+	InteractiveStart string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
+	SeedAutoTools    bool                       // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
+	ToolApprovals    string                     // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
+	BedrockRef       *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
+	ExtraEnv         map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
 	// env this run needs (runToolchainNeeds over its workspaces' profiles).
 	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
@@ -165,7 +172,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, p.PATBroker)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -356,6 +363,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// these "<org>/<repo>" keys (each -> its github_token grant), minting the
 			// scoped token proxy-side so it never enters the sandbox.
 			GitGrants: p.GitGrants,
+			// git_pat per-HOST allowlist: the /wardyn/git/ route serves only these
+			// hosts, minting the stored PAT proxy-side so it never enters the
+			// sandbox. Empty when the lane is off, which makes the route 403 —
+			// the same state as a run with no PAT grants at all.
+			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -844,4 +856,26 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 		run.ID.String(), "success", mustJSON(map[string]any{"exit_code": 0})))
 	return true
+}
+
+// patBrokerGrants converts the run's {host: grant_id} PAT grants into the
+// proxy's per-host broker allowlist, or nil when the lane is off.
+//
+// The username is left empty here on purpose: the control plane resolves the
+// host's git username at MINT time (ADO wants "pat", GitLab "oauth2", and an
+// operator may override), so duplicating that resolution at dispatch would be a
+// second place for it to drift. The proxy uses whatever the mint returns.
+func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
+	if !on || len(pat) == 0 {
+		return nil
+	}
+	out := make(map[string]proxy.PATGrant, len(pat))
+	for host, id := range pat {
+		gid, err := uuid.Parse(id)
+		if err != nil {
+			continue // a malformed id cannot broker; the host simply is not granted
+		}
+		out[strings.ToLower(strings.TrimSpace(host))] = proxy.PATGrant{GrantID: gid}
+	}
+	return out
 }

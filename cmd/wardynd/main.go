@@ -355,6 +355,11 @@ func run() error {
 		Components:                componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:             feats.scanAdvisor,
 		RequireOperatorSetEgress:  *f.requireOpSetEgress,
+		// "off" is the only value that disables it: a typo must not silently
+		// turn a security posture off, so anything else (including "false",
+		// "no", or a misspelling) leaves the broker ON. Same shape as the
+		// subscription-inject escape hatch.
+		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
 		LocalLoopback:         lm.loopback,

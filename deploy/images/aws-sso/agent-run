@@ -62,7 +62,7 @@ materialize_aws_sso_config
 provision_git_helper_secret
 workdir="${HOME}/work"
 mkdir -p "$workdir"
-configure_git_broker_insteadof
+configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 dispatch_repo_clones
 resolve_workdir
 
