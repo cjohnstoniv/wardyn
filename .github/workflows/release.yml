@@ -108,6 +108,11 @@ jobs:
       contents: read
       packages: write
       id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+      # attest-build-provenance writes to the repo's attestations API, which is a
+      # SEPARATE scope from id-token — without it the action gets far enough to
+      # generate the statement and then fails with "Resource not accessible by
+      # integration", after the image has already been pushed and signed.
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
