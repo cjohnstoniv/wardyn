@@ -264,6 +264,49 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
+  # Standalone CLI binaries. The images and the chart cover the two install paths,
+  # but neither gives you just `wardyn` — for CI, for an air-gapped host, or for
+  # anyone who wants the client without the stack. Static (CGO_ENABLED=0) so they
+  # run anywhere, and covered by the same signed SHA256SUMS as everything else.
+  binaries:
+    name: CLI binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          out="wardyn-${GOOS}-${GOARCH}"
+          go build -trimpath -o "$out" ./cmd/wardyn
+          # A cross-built binary that cannot report its own version is a binary
+          # nobody can support. Only checkable natively.
+          if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then
+            "./$out" --version || "./$out" version
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: wardyn-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+
   # The chart, published as an OCI artifact so installing does not require cloning.
   #
   # Until 0.6.2 the images were published and the CHART was not, which made the
@@ -317,7 +360,7 @@ jobs:
   # all, and nobody could verify what they did pull without reading RELEASING.md.
   release-assets:
     name: Release assets (SBOMs, checksums, notices)
-    needs: [images, chart]
+    needs: [images, chart, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -329,13 +372,14 @@ jobs:
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: "{sbom-*,chart}"
+          pattern: "{sbom-*,chart,cli-*}"
           merge-multiple: true
           path: assets
       - name: Assemble the asset set
         run: |
           set -euo pipefail
-          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE assets/
+          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
+          chmod +x assets/wardyn-* 2>/dev/null || true
           cd assets
           # One SBOM per published image. If the matrix grows and this does not,
           # the count assertion below is what says so.
@@ -367,7 +411,8 @@ jobs:
         run: |
           set -euo pipefail
           have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
-          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE; do
+          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
+                      install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"

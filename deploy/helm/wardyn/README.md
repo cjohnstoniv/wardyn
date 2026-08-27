@@ -52,7 +52,7 @@ install.
 
 ## What it renders
 
-`helm install wardyn ./deploy/helm/wardyn` (plus the required auth flag from
+`helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION"` (plus the required auth flag from
 [Installation](#installation)) renders:
 
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all
@@ -145,11 +145,16 @@ kubectl create secret docker-registry regcred -n wardyn \
 
 ## Installation
 
-From 0.6.2 the chart is published as an OCI artifact, so installing needs no
-clone:
+The chart is published as an OCI artifact, so installing needs no clone. Pin the
+version — an unpinned OCI install silently follows the newest chart:
 
 ```bash
-helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version 0.6.2 \
+WARDYN_VERSION=$(curl -fsSL https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+```
+
+```bash
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
   --namespace wardyn --create-namespace \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
@@ -169,7 +174,7 @@ for a released version — see the callout at the top):
 kubectl create secret generic wardyn-auth -n wardyn \
   --from-literal=admin-token="$(openssl rand -hex 32)"
 
-helm install wardyn ./deploy/helm/wardyn \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
   --namespace wardyn \
   --create-namespace \
   --set image.repository="$REGISTRY/wardynd" \
@@ -233,7 +238,7 @@ kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
   --from-literal=age-key="$(docker run --rm "$REGISTRY/wardynd:$TAG" -gen-age-key)" \
   -n wardyn
-helm install wardyn ./deploy/helm/wardyn -n wardyn \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
   --set secrets.ageKeyFromSecret=true \
   --set auth.adminToken.secretRef.name=wardyn-auth
@@ -254,7 +259,7 @@ install where losing every stored secret on restart is genuinely fine.
 creates `<release>-secrets`. The DSN lands base64'd in the release — laptop demos only:
 
 ```bash
-helm install wardyn ./deploy/helm/wardyn -n wardyn \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
   --set postgres.dsn.secretRef.name="" \
   --set postgres.dsn.value="postgres://wardyn:wardyn-dev@db:5432/wardyn?sslmode=disable" \
   --set auth.adminToken.secretRef.name=wardyn-auth
@@ -338,7 +343,7 @@ phase B to "CNI does not enforce", inviting
 `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 
 ```bash
-helm install wardyn ./deploy/helm/wardyn -n wardyn \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   --set postgres.dsn.secretRef.name=wardyn-pg \
   --set secrets.ageKeyFromSecret=true \

@@ -64,6 +64,27 @@ or, for a whole file, an entry on the frozen allowlist inside
 `scripts/check-file-size.sh`, which is the authoritative list. The allowlist is
 frozen: listed files may shrink freely, but material growth fails the gate.
 
+## Building from source
+
+This is the CONTRIBUTOR path. If you only want to *run* Wardyn, don't build it —
+`install.sh` and the Helm chart both pull published, signed images and need no
+clone at all. See the README's Install section.
+
+```sh
+git clone https://github.com/cjohnstoniv/wardyn && cd wardyn
+make setup                     # asks containerized vs host; PULLS published images
+WARDYN_BUILD_LOCAL=1 make setup  # builds every image from THIS tree instead
+```
+
+`WARDYN_BUILD_LOCAL=1` is what you want while working on the daemon, the proxy or
+the UI — without it `make setup` pulls the released images and you would be
+running someone else's binary against your own source.
+
+Individual pieces: `make build` (Go binaries), `make ui` (the console bundle),
+`make agent-images` (the agent images, including `agent-claude-code`, which is
+deliberately never published because it bundles a proprietary vendor CLI — see
+`deploy/images/THIRD-PARTY-TERMS.md`).
+
 ## Getting Started
 
 1. Fork the repository

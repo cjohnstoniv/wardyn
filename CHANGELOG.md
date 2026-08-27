@@ -8,6 +8,49 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-08-27
+
+A CI-permission fix for 0.6.2, which shipped its images but not its provenance.
+
+### Added
+
+- **`install.sh` — a one-line install that needs no clone.**
+  `curl -fsSL https://raw.githubusercontent.com/cjohnstoniv/wardyn/main/install.sh | sh`
+  pulls the signed images, mints this box's secret-store key locally, and starts
+  the stack. Docker is the only requirement. `WARDYN_NS` / `WARDYN_PORT` and the
+  other port knobs let a second install sit beside an existing one, and the script
+  detects a conflicting stack and says so rather than surfacing a raw daemon
+  conflict.
+
+  Until now the documented install was `git clone && make setup`. Pulling instead
+  of building removed the wait; it did not remove the clone. This does.
+
+- **Standalone `wardyn` CLI binaries** (linux/darwin × amd64/arm64), static and
+  covered by the release's signed `SHA256SUMS` — for CI, air-gapped hosts, or
+  anyone who wants the client without the stack.
+
+### Changed
+
+- **The README leads with the two paths a user actually takes** — install on this
+  machine, or `helm install` onto Kubernetes — and building from source moved to
+  `CONTRIBUTING.md` where it belongs. The Helm chart's examples are OCI-first and
+  version-pinned; an unpinned `oci://` install silently follows the newest chart.
+
+### Fixed
+
+- **`actions/attest-build-provenance` needs `attestations: write`.** The 0.6.2 tag
+  run pushed and cosign-signed all five images, attested their SBOMs, and
+  published the Helm chart — then failed on every image at the provenance step
+  with "Resource not accessible by integration". `id-token: write` covers cosign's
+  OIDC exchange; writing to the repository's attestations API is a separate scope.
+  Because `release-assets` depends on `images`, it was skipped, so 0.6.2's Release
+  carries none of the SBOMs, notices or signed checksums.
+
+  0.6.2's images are correct and remain published. This release is the same code
+  with the workflow permission added — the tag was not rewritten, because moving a
+  published tag is worse than spending a patch number.
+
+
 ## [0.6.2] — 2026-08-27
 
 ### Security

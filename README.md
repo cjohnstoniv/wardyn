@@ -19,18 +19,43 @@ the flagship use.
 
 ![Wardyn detecting this host's confinement capabilities](docs/img/getting-started.png)
 
-## Quickstart
+## Install
+
+Two paths, neither needs a clone. Everything below pulls cosign-signed images
+with attested SBOMs — [`docs/VERIFY.md`](docs/VERIFY.md) is how you check that.
+
+**On your machine** — containerized control plane + UI:
 
 ```sh
-git clone https://github.com/cjohnstoniv/wardyn
-cd wardyn
-make setup   # containerized control plane + UI
+curl -fsSL https://raw.githubusercontent.com/cjohnstoniv/wardyn/main/install.sh | sh
 ```
 
-`make setup` asks **containerized vs host** (Enter = containerized;
-`WARDYN_SETUP_MODE=container|local` skips it). Containerized keeps
-`wardynd` in a compose container, so sandbox callbacks route in-network and
-record/replay work on Docker Desktop + WSL2 NAT.
+Docker is the only requirement. It installs into `~/.wardyn`, mints this box's
+secret-store key locally, and starts the stack on <http://127.0.0.1:8080>.
+`WARDYN_VERSION`, `WARDYN_HOME` and `WARDYN_PORT` override the defaults.
+
+**On Kubernetes** — the chart is a published OCI artifact:
+
+```sh
+WARDYN_VERSION=$(curl -fsSL https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
+  --namespace wardyn --create-namespace \
+  --set auth.adminToken.secretRef.name=wardyn-auth
+```
+
+The chart needs an admin token or OIDC, a Postgres DSN, and an age identity —
+[`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md) covers each, plus
+admin/member RBAC, the Kubernetes runner substrate, SSH exposure and the full
+values table. Day-2 lives in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+`.claude/skills/wardyn-k8s-setup/` ships an agent-readable recipe for the same
+path, so a coding agent working in a clone can drive the install.
+
+**Building from source is a contributor path, not an install path** — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md). If you want it anyway: clone, then
+`make setup` (which asks containerized vs host, and pulls published images unless
+`WARDYN_BUILD_LOCAL=1`).
 
 **That is the whole setup.** The barrier is the only requirement — no model, no
 API key, no agent. Put the sandbox rules in a small **YAML** (or JSON) policy and
