@@ -8,6 +8,105 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **Shared subscription credentials are refused outside a single-user posture.**
+  Wardyn injected one operator's live Anthropic OAuth token, proxy-side, from a
+  server-global provider with no binding to the human who launched the run. On a
+  desktop that is the operator using their own subscription; on a multi-user
+  deployment it is that subscription serving other people's runs, which the harness
+  vendor's terms prohibit — each end user must authenticate with their own
+  credential — putting the **operator** in breach, not Wardyn. A new boot-time
+  predicate (`subscriptionInjectPosture`) permits it only when the runner is not
+  k8s, no OIDC issuer is configured, and either local mode is on or
+  `WARDYN_ALLOW_SHARED_SUBSCRIPTION` waives that last clause for a genuinely
+  single-user demo box. Enforced at four depths: the credential providers are not
+  constructed at boot, neither dispatch lane authors a grant, the integration
+  selector will not mount the operator's `~/.claude`, and the injection sink
+  refuses to resolve — the sink being the one place every producer converges, and
+  placed ahead of the call that would otherwise rotate the operator's own
+  credential file. The Helm chart refuses the three desktop-only variables
+  outright.
+- **Record Mode no longer writes a shared-subscription grant into a stored
+  profile.** `wardyn record save` on a subscription run produced a durable,
+  shareable, policy-id-addressable grant on one person's live credential. A
+  least-privilege profile carrying that is mis-sold by its own name.
+- **`make setup` no longer touches credentials.** Both staging prompts are gone;
+  you connect a subscription in the console, which signs in inside a sandbox and
+  stores the token age-encrypted instead of copying your `~/.claude`.
+  `scripts/stage-claude-creds.sh` survives for demo recordings behind the same
+  override. `docs/CI.md`'s subscription section is deleted rather than softened:
+  CI is the intermediation case.
+- **`wardynd:latest` is signed.** `publish-image.yml` pushes it on every merge to
+  main and had no cosign step, so the one image `deploy/desktop/install.sh` pulls
+  was the one nobody could verify.
+
+### Added
+
+- **`agent-base`**, a published agent image carrying the full runner contract and
+  no coding agent. `agent-claude-code` is no longer published: it bundles a
+  proprietary CLI whose own package declares `SEE LICENSE IN README.md` while
+  shipping neither that file nor a licence, so a puller cannot read the terms they
+  are bound by. It remains a local build recipe (`make agent-images`), which is
+  also the honest arrangement — you install that CLI under your own agreement with
+  its vendor. Existing `0.5.0`/`0.6.0`/`0.6.1` tags stay published; retracting
+  released versions breaks existing pulls.
+- **Per-digest SBOMs and build provenance**, cosign-attested, scanned from the
+  pushed image rather than the source tree — the old source scan reported zero npm
+  packages for `wardynd` while the image ships the entire compiled console, and saw
+  no OS packages at all, which is where the GPL and the CVEs live.
+- **Release assets that exist**: the per-image SBOMs, `THIRD-PARTY-NOTICES.md`,
+  `LICENSE`, `NOTICE` and a cosign-signed `SHA256SUMS`, with a job that fails if any
+  of them did not land. Previous releases carried demo videos or nothing.
+- **[`docs/VERIFY.md`](docs/VERIFY.md)** — the consumer-side verification
+  procedure, previously present only in a maintainer runbook.
+- **[`security/vex/wardyn.openvex.json`](security/vex/wardyn.openvex.json)** —
+  GO-2026-5932 as a machine-readable `not_affected` /
+  `vulnerable_code_not_present` statement, so downstream scanners stop re-raising a
+  finding `govulncheck` already disproves on every push.
+- **[`LICENSING.md`](LICENSING.md), [`TRADEMARKS.md`](TRADEMARKS.md),
+  [`PROVENANCE.md`](PROVENANCE.md), [`AUTHORS`](AUTHORS),
+  [`docs/EXPORT.md`](docs/EXPORT.md)** — the explicit free-for-commercial-use
+  grant, the naming policy Apache-2.0 §6 deliberately does not supply, the honest
+  account of the squashed root commit and the AI-assistance position, a definition
+  for the copyright holder named in 990 file headers, and the 5D002
+  self-classification.
+- **[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) + `licenses/texts/`** — 83
+  Go modules and 90 bundled UI packages with verbatim licence texts, generated and
+  CI-verified against drift, and shipped inside every image at
+  `/usr/share/doc/wardyn/`.
+- **`deploy/images/THIRD-PARTY-GPL.md`** — the GPL/LGPL corresponding-source offer,
+  machine-derived from the published images' SBOMs (279 packages across five
+  images; even distroless conveys one).
+
+### Changed
+
+- **`make setup` pulls the published images instead of building them**, falling
+  back to a build when any is missing — a version whose images are not pushed yet,
+  an air-gapped host, an unreachable registry, or a working tree ahead of the tag.
+  `WARDYN_BUILD_LOCAL=1` forces the build.
+- **Every published image now carries `LICENSE`, `NOTICE`,
+  `THIRD-PARTY-NOTICES.md` and the verbatim licence texts** at
+  `/usr/share/doc/wardyn/`, plus `org.opencontainers.image.*` labels whose
+  `licenses` field states what is *actually* in the image rather than what Wardyn's
+  own code is licensed under. Apache-2.0 §4(a)/(d) make these conditions of the
+  grant, and publishing an image is distribution.
+- **The Go licence gate is an allowlist.** `go-licenses` defaults to
+  `--disallowed_types=forbidden,unknown`; the explicit `forbidden,restricted`
+  override added `restricted` but silently dropped `unknown`, so a dependency with
+  no detectable licence passed a gate that would have caught it out of the box.
+  Both gates now read one shared `licenses/ALLOWED-LICENSES.txt`.
+- **The UI licence gate cannot pass vacuously** — it rejected an empty licence
+  expression as fully vouched-for, and reported success having examined zero
+  packages when `node_modules` was absent. Its wildcards are gone (a `BSD-*`
+  allowlist admits BSD-4-Clause), and `--self-test` pins the residue logic against
+  19 expressions.
+- **Trivy scans every published image**, not the single one that 0.6.2 stops
+  publishing. `check-image-pins` fails if the release and scan matrices drift.
+- **The bundled OFL fonts ship with their licence.** 14 `.woff2` files reached
+  `ui/dist` and no OFL text did. The shadcn/ui-derived console primitives are
+  attributed (MIT, © 2023 shadcn) rather than carrying no copyright line at all.
+
 ## [0.6.1] — 2026-08-25
 
 First patch on 0.6. Three CI jobs that had never run before the v0.6.0 push went
