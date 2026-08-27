@@ -739,24 +739,3 @@ jobs:
             make dco DCO_RANGE="$BASE..HEAD"
           fi
 
-  # ── supply-chain: SBOM freshness (continuous, unsigned) ────────────────────
-  # Produces a CycloneDX SBOM via syft on every push to main (not on PRs) and
-  # uploads it as a plain, UNSIGNED workflow artifact — a continuous freshness
-  # check, never a registry upload. The real, cosign-SIGNED release SBOM (plus
-  # the four cosign-signed release images) is a SEPARATE job, on a SEPARATE
-  # trigger: .github/workflows/release.yml, on a vX.Y.Z tag push. Kept "-stub"
-  # in the job id on purpose: relative to that real release artifact, this one
-  # still is one — a cheap main-tip check, not something anyone should pull
-  # and trust as a release manifest.
-  sbom-stub:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Generate SBOM (CycloneDX JSON via syft, version pinned in the Makefile)
-        run: make sbom
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: wardyn-sbom
-          path: wardyn-sbom.cdx.json

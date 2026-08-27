@@ -81,6 +81,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   machine-derived from the published images' SBOMs (279 packages across five
   images; even distroless conveys one).
 
+### Removed
+
+- **`make sbom` and CI's `sbom-stub` job.** They scanned the source tree, which
+  sees no OS packages and no bundled UI — for `wardynd` that is zero npm packages
+  reported while the image ships the entire compiled console. It was downloadable
+  from every main-branch CI run as `wardyn-sbom`, so the failure mode was someone
+  trusting a manifest that misrepresents the product. The per-digest attested
+  SBOMs replace it, and Trivy already scans all five images on every PR, so
+  "does our tooling still run" stays covered.
+
 ### Changed
 
 - **`make setup` pulls the published images instead of building them**, falling

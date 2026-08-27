@@ -55,15 +55,13 @@ name: Release images
 # `unknown/unknown` platforms — those would land inside the signed index
 # without ever having been reviewed here.
 #
-# ── SBOM ──────────────────────────────────────────────────────────────────
-# `make sbom` (the existing target — not re-deriving syft flags here) via a
-# SEPARATE job, uploaded as a workflow artifact exactly like ci.yml's
-# `sbom-stub` job already does for main-branch freshness — the two are now
-# siblings: sbom-stub is the continuous, unsigned, non-release check;
-# THIS run is the versioned release SBOM. Deliberately NOT auto-attached to
-# a GitHub Release object: RELEASING.md's step 5 ("Create the GitHub
-# Release") is manual by design ("nothing here is automated to push
-# anything") — download this artifact and attach it by hand if wanted.
+# ── SBOM, provenance, release assets ──────────────────────────────────────
+# Each pushed digest gets a CycloneDX SBOM scanned from the IMAGE (syft on the
+# registry ref, not `syft .` — a source-tree scan sees no OS packages and no
+# bundled UI, which is precisely where the copyleft and the CVEs live), attested
+# with `cosign attest`, plus actions/attest-build-provenance. The release-assets
+# job then puts those SBOMs, the notices and a signed SHA256SUMS ON the Release
+# and fails if any did not land.
 #
 # ── linux/amd64 + linux/arm64 ────────────────────────────────────────────────
 # W-DESK S1: an Apple-silicon / arm64 laptop is the desktop tier's ordinary
@@ -228,7 +226,7 @@ jobs:
       # about contents, and it is what an enterprise scanner can actually consume.
       #
       # syft is pointed at the PUSHED DIGEST, not at the source tree. `syft .`
-      # (the old `make sbom`) describes something nobody can pull: it omits every
+      # (a source-tree scan) describes something nobody can pull: it omits every
       # apt package in the base image and every globally-installed npm CLI, which
       # is exactly where the non-permissive components live.
       - name: SBOM for the pushed digest

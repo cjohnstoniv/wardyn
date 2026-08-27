@@ -203,11 +203,11 @@ the other:
   `ghcr.io/cjohnstoniv/agent-aws-sso`
   — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
-  is what triggers it. It also generates the release CycloneDX SBOM
-  (`make sbom`) as a workflow artifact named `wardyn-sbom-vX.Y.Z` — download
-  it from the run and attach it to the GitHub Release (step 6) by hand if you
-  want it there; nothing here auto-touches the Release object, matching this
-  document's "nothing here is automated to push anything" for that step.
+  is what triggers it. It also attests a per-digest CycloneDX SBOM and build
+  provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
+  and uploads the SBOMs, notices and a cosign-signed `SHA256SUMS` to the Release
+  — failing if any asset did not land. The supply-chain artifacts are no longer
+  yours to remember; the demo videos in step 7 still are.
   Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
   (arm64 laptops are the desktop tier's ordinary hardware — see
   [docs/DESKTOP.md](docs/DESKTOP.md)). Images are **not** digest-pinned

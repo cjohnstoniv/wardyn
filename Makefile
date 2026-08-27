@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -662,17 +662,6 @@ dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 
-# CycloneDX SBOM via syft (installs syft if absent, pinned). Consumed by two
-# callers: ci.yml's sbom-stub job (continuous freshness check on main, no
-# signing) and .github/workflows/release.yml (the real release asset, cosign-
-# signed, on a vX.Y.Z tag) — this target earned dropping its former "release
-# stub" self-description once the second caller landed; it IS the release
-# SBOM step now, not a placeholder for one.
-sbom: ## Generate a CycloneDX SBOM via syft
-	@echo "Generating CycloneDX SBOM via syft $(SYFT_VERSION)..."
-	@command -v syft >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/anchore/syft/$(SYFT_VERSION)/install.sh | sh -s -- -b /usr/local/bin $(SYFT_VERSION)
-	syft . -o cyclonedx-json > wardyn-sbom.cdx.json
-
 # Fail closed on a copyleft license in a SHIPPED (prod) UI dependency.
 npm-license: ## Every shipped (prod) UI dependency licence must be on the shared allowlist
 	@echo "Checking UI production dependency licences against licenses/ALLOWED-LICENSES.txt..."
@@ -834,7 +823,7 @@ test-drive: ## Guided governance test-drive (ARGS defaults to --up: brings the s
 # precisely the state where a re-run of setup uses old code.
 clean: ## Remove built binaries, the e2e/local bin dirs and the UI bundle
 	@echo "Cleaning built binaries and generated output..."
-	rm -rf bin .e2e-bin .local-bin ui/dist wardyn-sbom.cdx.json $(patsubst cmd/%/,%,$(wildcard cmd/*/))
+	rm -rf bin .e2e-bin .local-bin ui/dist $(patsubst cmd/%/,%,$(wildcard cmd/*/))
 
 # Validate every fenced mermaid diagram in the public docs: parses/renders via
 # mermaid-cli and each load-bearing label still exists at its cited source.
