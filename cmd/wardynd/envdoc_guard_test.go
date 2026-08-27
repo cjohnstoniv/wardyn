@@ -59,6 +59,9 @@ var envDocShellOnly = map[string]bool{
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
+	// Forces scripts/up.sh to build every image from the working tree instead of
+	// pulling the published ones. An installer-time decision, so no Go reads it.
+	"WARDYN_BUILD_LOCAL": true,
 	// The compose wardynd service's own image tag, so a job on a shared daemon
 	// can build its own instead of racing another job's write to the mutable
 	// :local tag (scripts/run-e2e-ssh.sh, run-e2e-ui-sandbox.sh). Its sibling
