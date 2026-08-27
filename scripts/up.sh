@@ -491,6 +491,46 @@ cmd_up() {
   esac
   export WARDYN_HOST_GOOS WARDYN_HOST_GOARCH
 
+  # PULL FIRST. Wardyn publishes signed, SBOM-attested images for every release
+  # (docs/VERIFY.md), so a fresh install should not have to compile Go and build a
+  # UI bundle to see the product. We pull them and retag to the :local names the
+  # compose file already uses, which leaves every build path below untouched.
+  #
+  # Fallback rather than a flag day: if ANY image is missing — a release whose
+  # images have not been pushed yet, an air-gapped host, a registry an operator
+  # cannot reach, or a working tree ahead of the last tag — we build exactly as
+  # before. That is why this is a pull-first path and not a pull-only default: a
+  # default that breaks between the version bump and the image push would be a
+  # worse trade than a slower first run.
+  #
+  # WARDYN_BUILD_LOCAL=1 skips the pull outright (contributors testing their own
+  # changes must never silently run a published binary instead).
+  pulled_all=false
+  if [ "${WARDYN_BUILD_LOCAL:-}" != 1 ] && [ "${WARDYN_BUILD_LOCAL:-}" != true ]; then
+    ver="$(grep -oE 'Version = "[^"]+"' "${REPO_ROOT}/internal/version/version.go" | head -1 | cut -d'"' -f2 || true)"
+    if [ -n "$ver" ]; then
+      log "Pulling published images for ${ver} (set WARDYN_BUILD_LOCAL=1 to build from source instead)"
+      pulled_all=true
+      for pair in "wardynd:wardyn/wardynd:local" \
+                  "wardyn-proxy:wardyn/wardyn-proxy:local" \
+                  "agent-base:wardyn/agent-base:local" \
+                  "agent-codex-cli:wardyn/agent-codex-cli:local" \
+                  "agent-aws-sso:wardyn/agent-aws-sso:local"; do
+        remote="ghcr.io/cjohnstoniv/${pair%%:*}:${ver}"
+        localref="${pair#*:}"
+        if docker pull -q "$remote" >/dev/null 2>&1 && docker tag "$remote" "$localref"; then
+          continue
+        fi
+        warn "could not pull ${remote} — building from source instead."
+        pulled_all=false
+        break
+      done
+    fi
+  fi
+  if $pulled_all; then
+    log "Using published images (cosign-signed, SBOM-attested — see docs/VERIFY.md). Skipped the local build."
+  else
+
   log "Building the wardynd image (serves the REST API + embedded UI)"
   # ponytail: retry, don't predict. A corp allowlist mirror 404s the pnpm TARBALL,
   # which is only observable from inside the build — a registry probe hits the
@@ -529,6 +569,7 @@ cmd_up() {
       || die "still failing with WARDYN_UI_STAGE=ui-prebuilt (the failing step is above). If the error is x509, stage your corp root CA at deploy/images/corp-ca.pem — see deploy/images/README.md."
     log "Recovered: built the UI on this host and reused it (WARDYN_UI_STAGE=ui-prebuilt)."
   fi
+  fi  # end: pulled_all fallback
 
   if [ ! -f "${ENV_FILE}" ]; then
     log "Creating ${ENV_FILE} from .env.example"
