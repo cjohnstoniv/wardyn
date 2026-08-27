@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **The release pipeline can be rehearsed.** `release.yml` gains a
+  `workflow_dispatch` with `dry_run` (default true): it builds every image, the
+  CLI cross-builds and the chart package, runs the SBOM merge and its zero-npm
+  assertion, and pushes, signs, attests and uploads **nothing**.
+
+  This pipeline could previously only be exercised by tagging, so its bugs were
+  unobservable until a real tag pushed — which is why 0.6.2 shipped images with no
+  provenance and 0.6.3 shipped an SBOM that understated its own contents. Both
+  would have failed a dry run. `make release-check` was green every time, because
+  it validates the repository, not the workflow.
+
+
 ## [0.6.4] — 2026-08-27
 
 ### Fixed
