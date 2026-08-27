@@ -219,3 +219,133 @@ jobs:
         with:
           name: docker-tagged-live-reports
           path: test/reports/go/docker/**
+
+  # ── Lanes still NOT wired anywhere, and why ────────────────────────────────
+  # Stated so "it runs nightly" is not read as "everything runs nightly":
+  #
+  #   make test-e2e-ssh-k8s     needs a kind cluster. ENV-BLOCKED on the
+  #                             maintainer's box (subnet collision) and not
+  #                             stood up here; its own §6/§7 arms have never
+  #                             been run live.
+  #   make test-e2e-subscription  needs a real vendor subscription credential,
+  #                             which no CI runner has or should have.
+  #   make test-e2e-concurrent  not wired; no blocker other than runner time.
+  #
+  # A regression in any of those still ships silently.
+
+  # ── B7a: the BYOI wrap lane ────────────────────────────────────────────────
+  # `make test-e2e-byoi` ran in NO workflow. It is also the lane that reproduces
+  # the `desktop-envelope` failure locally — the wrap producing an image that
+  # cannot pass its own agent-run --selftest kept that job red on EVERY run since
+  # it was added, and nothing scheduled would have caught the regression coming
+  # back.
+  #
+  # Unlike ssh-e2e-live and ui-sandbox-e2e-live below, run-e2e-byoi.sh does NOT
+  # start a control plane — its own header says so ("Requires a wardynd already
+  # started with -envbuild and WARDYN_ENVBUILD_TOOLS_DIR"). So this job brings
+  # one up, the same way ci.yml's desktop-envelope does.
+  byoi-e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Docker available
+        run: docker --version
+      - name: Build wardynd
+        run: docker compose -f deploy/compose/docker-compose.yaml build wardynd
+      # Every launched run gets a proxy sidecar. The driver PULLS it now, but
+      # wardyn/wardyn-proxy:local lives in no registry, so it must be built here.
+      - name: Build wardyn-proxy
+        run: docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image
+      - name: Boot the compose stack
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.yaml up -d --no-build postgres registry wardynd
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
+          docker compose -f deploy/compose/docker-compose.yaml logs wardynd
+          echo "::error::wardynd did not become healthy"; exit 1
+      - name: Live BYOI e2e (wrap + selftest gate)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-byoi 2>&1 | tee test/reports/e2e/byoi-e2e.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: byoi-e2e-live-results
+          path: test/reports/e2e/byoi-e2e.log
+          if-no-files-found: error
+      - name: Teardown
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yaml down -v || true
+
+  # ── B7b: the UI-sandbox relay lane ─────────────────────────────────────────
+  # Also ran in no workflow. run-e2e-ui-sandbox.sh brings up its OWN dedicated,
+  # uniquely-namespaced stack (same shape as ssh-e2e-live), so this job only has
+  # to invoke it — but for that reason it must not share a runner with the jobs
+  # above.
+  ui-sandbox-e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Docker available
+        run: docker --version
+      - name: Live UI-sandbox relay e2e (dedicated compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ui-sandbox 2>&1 | tee test/reports/e2e/ui-sandbox-e2e.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ui-sandbox-e2e-live-results
+          path: test/reports/e2e/ui-sandbox-e2e.log
+          if-no-files-found: error
+
+  # ── The notification this workflow never had ───────────────────────────────
+  # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
+  # notified anywhere, and no nightly job is a branch-protection context — so a
+  # red nightly blocked nothing and told nobody.
+  #
+  # SCOPED TO THE TWO JOBS ADDED ABOVE, deliberately. The flagship `e2e-live` job
+  # carries pre-existing failures that have never been re-characterised; wiring a
+  # notification to the whole workflow would fire every night, and an alert that
+  # always fires is one everybody filters by week two — the same end state as no
+  # alert, reached expensively. Widen this only after e2e-live is green or its
+  # failures are characterised.
+  notify-new-lanes:
+    needs: [byoi-e2e-live, ui-sandbox-e2e-live]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the nightly-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="nightly: a BYOI or UI-sandbox e2e lane is failing"
+          # Deduplicate by title: a lane that stays broken for a week should
+          # append to one issue, not open seven.
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "One of the nightly lanes added in 0.7 (byoi-e2e-live, ui-sandbox-e2e-live) failed." \
+              "" \
+              "Both were green when wired, and neither shares the pre-existing failures of the older e2e-live job - so this is a real regression rather than known noise." \
+              "" \
+              "Run: $RUN_URL")
+            gh issue create --title "$title" --body "$body"
+          fi

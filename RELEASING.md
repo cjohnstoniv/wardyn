@@ -17,8 +17,11 @@ document is that process, written down.
   `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
   `license-headers`, `gitleaks`), `dco`, `desktop-envelope`, `buildx-smoke`,
-  `trivy` (plus `sbom-stub`, which runs
-  **only** on push to `main` — see "Repo settings" below). Two more publish
+  `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
+  was missing from this list entirely. `sbom-stub` used to be named here and is
+  **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
+  maintainer following this list literally was waiting on a phantom job while
+  skipping the one that catches a GPL regression. Two more publish
   workflows are not part of this job list at all (see "Container images"
   below): `publish-image` (`.github/workflows/publish-image.yml`, push to
   `main` only) and `release` (`.github/workflows/release.yml`, triggered by
@@ -187,9 +190,10 @@ A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which 
 the five supply-chain gates are `gates (...)` rather than bare names.
 
 A job conditional on `push`, a schedule, or a path filter must **not** be a required
-context (this is why `sbom-stub` is absent above): GitHub does not treat a
-never-reported required context as passing, so the PR sits at "Expected — waiting
-for status to be reported" and cannot be merged.
+context: GitHub does not treat a never-reported required context as passing, so
+the PR sits at "Expected — waiting for status to be reported" and cannot be
+merged. `screenshots-fresh` (PR-only) is the live example. This paragraph used
+to cite `sbom-stub`, which no longer exists.
 
 ## Container images
 

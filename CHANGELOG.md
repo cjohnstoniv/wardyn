@@ -122,6 +122,22 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **The BYOI-wrap and UI-sandbox e2e lanes now run nightly, and a failure opens
+  an issue.** `make test-e2e-byoi` and `make test-e2e-ui-sandbox` ran in **no
+  workflow at all** — and the BYOI lane is the one that reproduces the
+  `desktop-envelope` failure, so nothing scheduled would have caught that
+  regression returning. Nothing in `.github/workflows/` previously used
+  `if: failure()`, opened an issue, or notified anywhere, and no nightly job is
+  a branch-protection context: a red nightly blocked nothing and told nobody.
+
+  The notification is **scoped to the two new jobs**, deliberately. The flagship
+  `e2e-live` job carries pre-existing, never-re-characterised failures; wiring
+  an alert to the whole workflow would fire every night, and an alert that
+  always fires is filtered by week two — the same end state as no alert, reached
+  expensively. The lanes still wired nowhere (`test-e2e-ssh-k8s`,
+  `test-e2e-subscription`, `test-e2e-concurrent`) are now named in the workflow
+  with the reason, so "it runs nightly" is not read as "everything does".
+
 - **A blocked egress request now says WHICH rule blocked it.** Eight distinct
   outcomes collapsed into one `X-Wardyn-Egress: denied`, and they call for
   completely different actions — ask the operator to allowlist a host, versus
@@ -142,6 +158,16 @@ managed Kubernetes; every item below was verified against the code before it was
   invisible to the deployment: the client saw `ResourceShortage` and nothing was
   recorded. That mattered less while the gateway was off by default — the
   desktop envelope now ships it **on**.
+
+### Fixed
+
+- **`RELEASING.md`'s tag-gate job list was wrong in both directions.** It named
+  `sbom-stub`, which was **deleted** along with `make sbom` — so a maintainer
+  following it literally waited on a job that can never report — and it omitted
+  **`notices`**, the copyleft / unreviewed-dependency gate, telling them to skip
+  the one job that catches a GPL regression on a release that adds an X stack.
+  Both corrected, and a new guard fails when `ci.yml` and that list disagree in
+  either direction; this list had already drifted twice.
 
 ### Changed
 
