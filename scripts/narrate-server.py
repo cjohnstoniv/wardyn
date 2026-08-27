@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -62,72 +63,85 @@ PIPER_MODEL = Path(
 _SUBS = [
     # Spaced em-dash first, so the surrounding spaces go with it; a bare "—"
     # replaced by ", " would leave "for good , Same" and an odd spoken pause.
-    (" — ", ", "),
-    (" – ", ", "),
-    ("—", ", "),
-    ("–", ", "),
-    ("…", ", "),
+    (" — ", ", ", False),
+    (" – ", ", ", False),
+    ("—", ", ", False),
+    ("–", ", ", False),
+    ("…", ", ", False),
     # HETERONYMS, phrase-scoped on purpose: "live" the adjective is /laɪv/
     # ("a live run") while "lives" the verb is /lɪv/ ("where a yes lives") —
     # a bare word sub would break the verb, so only known adjective phrases
     # are respelled. Add phrases here as scripts grow them; the verifier's
     # pronunciation watch flags unmapped occurrences for review.
-    ("watch it live", "watch it lyve"),
-    ("live run", "lyve run"),
-    ("live decision", "lyve decision"),
-    ("live strip", "lyve strip"),
-    ("held live", "held lyve"),
-    ("caught it live", "caught it lyve"),
-    ("blocked live", "blocked lyve"),
+    ("watch it live", "watch it lyve", True),
+    ("live run", "lyve run", True),
+    ("live decision", "lyve decision", True),
+    ("live strip", "lyve strip", True),
+    ("held live", "held lyve", True),
+    ("caught it live", "caught it lyve", True),
+    ("blocked live", "blocked lyve", True),
     # ...and the VERB sense (/lɪv/) where the scripts use it:
-    ("attacks live exactly here", "attacks liv exactly here"),
-    ("no keys live in the room", "no keys liv in the room"),
-    ("keys live inside", "keys liv inside"),
-    ("keys don't live in the room", "keys don't liv in the room"),
+    ("attacks live exactly here", "attacks liv exactly here", True),
+    ("no keys live in the room", "no keys liv in the room", True),
+    ("keys live inside", "keys liv inside", True),
+    ("keys don't live in the room", "keys don't liv in the room", True),
     # "record" the VERB (/rɪˈkɔːɹd/) where espeak would stress it as the noun:
-    ("Only record work you trust", "Only ruh-cord work you trust"),
-    ("You can't record what a policy", "You can't ruh-cord what a policy"),
+    ("Only record work you trust", "Only ruh-cord work you trust", True),
+    ("You can't record what a policy", "You can't ruh-cord what a policy", True),
     # "live" the VERB in the 03 split's owner line, and the ADJECTIVE in 03d's
     # "the live GitHub API" — both senses in one round, so both are pinned.
-    ("credentials can live", "credentials can liv"),
-    ("the live GitHub", "the lyve GitHub"),
+    ("credentials can live", "credentials can liv", True),
+    ("the live GitHub", "the lyve GitHub", True),
     # "read-back"/"read it back" are present tense everywhere in 03a (/riːd/) —
     # Kokoro reads a bare "read" as past tense after "the"; pin the phrases.
-    ("read-back", "reed-back"),
-    ("read it back", "reed it back"),
+    ("read-back", "reed-back", True),
+    ("read it back", "reed it back", True),
     # 03c's audit-panel line reads the panel upward — imperative /riːd/ again.
-    ("so read it upward", "so reed it upward"),
+    ("so read it upward", "so reed it upward", True),
     # "use" the VERB (/juːz/) where espeak guesses the noun — validated against
     # the venv phonemizer 2026-08-24 ("yooz" → /juːz/). NOTE: the r2 adjudication's
     # H1 pin ("first-use approval" → "first yoos approval") was REJECTED by that
     # same validation: the phrase already reads /juːs/ correctly, and "yoos"
     # phonemizes to /juːz/ — the exact inversion it meant to prevent.
-    ("use it, not have it", "yooz it, not have it"),
-    ("demos ahead use this key", "demos ahead yooz this key"),
+    ("use it, not have it", "yooz it, not have it", True),
+    ("demos ahead use this key", "demos ahead yooz this key", True),
     # The colon in the header name is inaudible; a comma lands the pause (r2 H3).
-    ("Authorization: Bearer", "Authorization, Bearer"),
+    ("Authorization: Bearer", "Authorization, Bearer", False),
     # The quote marks around 'forbidden' are inaudible; a comma lands the beat.
-    ("Not 'forbidden'.", "Not, forbidden."),
+    ("Not 'forbidden'.", "Not, forbidden.", False),
     # "PyPI" reads as "pie-pie" bare:
-    ("PyPI", "pie pee eye"),
+    ("PyPI", "pie pee eye", True),
     # The owner's script uses three-dot trailing ellipses ("useful...") — read
     # as a breath, not dots. Must precede nothing (plain literal).
-    ("...", ", "),
+    ("...", ", ", False),
     # Specific hosts BEFORE the generic .com/.org rules.
-    ("api.anthropic.com", "the Anthropic eh pee eye"),
-    ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint"),
-    ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4"),
-    ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1"),
+    ("api.anthropic.com", "the Anthropic eh pee eye", True),
+    ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint", True),
+    ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4", True),
+    ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1", True),
     # Generic last: without these a bare "example.com" reads as one mangled token.
-    (".com", " dot com"),
-    (".org", " dot org"),
+    (".com", " dot com", True),
+    (".org", " dot org", True),
 ]
 
 
-def speakable(text: str) -> str:
-    """Normalize on-screen caption text into something a TTS reads correctly."""
+def speakable(text: str, initialisms: bool = True) -> str:
+    """Normalize on-screen caption text into something a TTS reads correctly.
+
+    `initialisms=False` skips every kokoro-specific respelling. Those are tuned to
+    kokoro's G2P; a model with its own text frontend reads the bare forms correctly and
+    is actively HURT by them -- chatterbox says "eh pee eye" as a word, stressed like
+    "a-PEE-eye", instead of three letters.
+
+    The four kokoro-only blocks are `_SUBS`'s tagged entries, `_SAY`, the digit-string
+    rules and the identifier loop. `_SUBS` stays ONE ordered list and filters in place:
+    ORDER IS LOAD-BEARING (see its header), so splitting it into guarded/unguarded halves
+    would let ".com" fire before "api.anthropic.com" and silently mangle the host.
+    """
     out = text
-    for a, b in _SUBS:
+    for a, b, kokoro_only in _SUBS:
+        if kokoro_only and not initialisms:
+            continue
         out = out.replace(a, b)
     # Initialisms Kokoro reads as words ("CI" came out wrong on camera; CLI/AI
     # are the same trap). Phonetic respellings, not bare letter-spacing: a
@@ -145,23 +159,26 @@ def speakable(text: str) -> str:
     _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye",
             "CC1": "see see one", "PAT": "pee eh tee", "PATs": "pee eh tees", "STS": "ess tee ess",
             "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess", "npm": "en pee em"}
-    out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
+    if initialisms:
+        out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
     # Numbers the captions spell as digits but mean as digit STRINGS: a file mode,
     # a port, the cloud-metadata address. Read as quantities they come out as
     # "four hundred forty-three" / "one hundred sixty-nine…" (checked against the
     # venv's phonemizer 2026-08-24); the captions already write "Four-oh-four".
-    out = re.sub(r"\b0400\b", "oh four oh oh", out)
-    out = re.sub(r"\b443\b", "four four three", out)
+    if initialisms:
+        out = re.sub(r"\b0400\b", "oh four oh oh", out)
+        out = re.sub(r"\b443\b", "four four three", out)
     # Lowercase identifier PARTS (ssh_key, cloud_sts, ttl_seconds, api_key) reach
     # the engine as bare words after the underscore split below; spell them too,
     # but never inside a hostname (ssh.github.com, api.anthropic.com).
     # Policy identifiers the walks speak by name. The initialism parts are
     # lowercase here, so the uppercase map above never sees them; spell the
     # known ones explicitly (a generic lowercase rule ate "the pat on the back").
-    for ident, said in (("ssh_key", "ess ess aitch key"), ("cloud_sts", "cloud ess tee ess"),
-                        ("ttl_seconds", "tee tee ell seconds"), ("api_key", "eh pee eye key"),
-                        ("git_pat", "git pee eh tee"), ("the ssh client", "the ess ess aitch client")):
-        out = out.replace(ident, said)
+    if initialisms:
+        for ident, said in (("ssh_key", "ess ess aitch key"), ("cloud_sts", "cloud ess tee ess"),
+                            ("ttl_seconds", "tee tee ell seconds"), ("api_key", "eh pee eye key"),
+                            ("git_pat", "git pee eh tee"), ("the ssh client", "the ess ess aitch client")):
+            out = out.replace(ident, said)
     # Every other policy key is spoken as words: eligible_grants → "eligible
     # grants" (the decoration strip below would otherwise fuse them).
     out = out.replace("_", " ")
@@ -215,8 +232,99 @@ class Piper(Engine):
         )
 
 
+class Myvoice(Engine):
+    """The operator's own cloned voice, rendered in a network-less container.
+
+    The engine lives in ~/myvoice/engines/<e>, is built once with network access and run
+    with none. It speaks JSON-lines on stdin/stdout, so ONE process is started here and
+    reused for every clip: a fresh container per line would pay ~25 s of model load each
+    time, which for a full narration pass is hours of pure overhead.
+
+    `voice` is the reference clip id under ~/myvoice/corpus/ref/, so switching which
+    recording is cloned goes through the same --voice seam every other engine uses -- and
+    because the cache key is sha1(engine|voice|text), a new reference re-renders
+    automatically instead of silently serving clips of the old one.
+    """
+
+    name = "myvoice"
+
+    def __init__(self, voice: str, arm: str = "") -> None:
+        arm = arm or os.environ.get("MYVOICE_ARM", "cosyvoice")
+        self.root = Path(os.environ.get("MYVOICE_ROOT", Path.home() / "myvoice"))
+        run_sh = self.root / "engines" / "run.sh"
+        ref = self.root / "corpus" / "ref" / f"{voice}.wav"
+        if not run_sh.exists():
+            raise RuntimeError(f"no myvoice checkout at {self.root}")
+        if not ref.exists():
+            raise RuntimeError(f"no reference clip {ref}")
+        self.out_dir = self.root / "renders" / "narrate"
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.run_sh, self.arm, self.voice = run_sh, arm, voice
+        self.proc = None      # started on first real render, not here: see _start()
+
+    def _start(self) -> None:
+        """Boot the container the first time a clip actually has to be rendered.
+
+        A re-run with a warm cache renders nothing, and paying ~25 s of model load to
+        answer entirely from cache is pure waste on a pipeline that re-runs constantly.
+        """
+        env = dict(os.environ, MYVOICE_REF=self.voice)
+        # CosyVoice's rate depends on how much text it gets in one call, and captions here
+        # average ~38 chars: at speed 1.0 short lines land near 115 wpm, far under the
+        # operator's own 157. 1.18 was measured against real captions, not single sentences.
+        env.setdefault("MYVOICE_SPEED", "1.18")
+        env.setdefault("MYVOICE_CFG", "0.3")   # chatterbox only; ignored by cosyvoice
+        self.proc = subprocess.Popen(
+            [str(self.run_sh), self.arm, "serve"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, env=env,
+        )
+        if not self._reply().get("ready"):            # blocks through model load, once
+            raise RuntimeError("engine did not come up")
+
+    def _reply(self) -> dict:
+        """Next JSON line from the engine, skipping anything else on stdout.
+
+        stdout is contractually JSON-only, but chatterbox's watermarker prints
+        "loaded PerthNet (Implicit)..." straight to it during the first generate(). Skip
+        non-JSON rather than trust the contract -- one stray print should not end a take.
+        """
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                raise RuntimeError("engine closed its output")
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    pass
+
+    def render(self, text: str, dest: Path) -> None:
+        if self.proc is None:
+            self._start()
+        name = f"{os.getpid()}_{next(_counter)}.wav"
+        self.proc.stdin.write(json.dumps({"text": text, "out": f"/renders/narrate/{name}"}) + "\n")
+        self.proc.stdin.flush()
+        reply = self._reply()
+        if not reply.get("ok"):
+            raise RuntimeError(reply.get("error", "engine returned no clip"))
+        shutil.move(str(self.out_dir / name), str(dest))
+
+
 def pick_engine(which: str, voice: str) -> Engine:
-    """kokoro when its model is present, else piper. Never raise: see module docstring."""
+    """kokoro when its model is present, else piper. Never raise: see module docstring.
+
+    myvoice is opt-in only -- it is never what `auto` picks, because it needs docker and a
+    recorded reference clip that a plain checkout does not have.
+    """
+    if which == "myvoice":
+        try:
+            return Myvoice(voice)
+        except Exception as e:  # noqa: BLE001
+            # An explicitly requested engine that is missing must fail loudly: silently
+            # narrating a take in the wrong voice is worse than not narrating it.
+            raise SystemExit(f"narrate: myvoice requested but unavailable ({e})")
     if which in ("auto", "kokoro") and KOKORO_MODEL.exists() and KOKORO_VOICES.exists():
         try:
             return Kokoro(voice)
@@ -231,7 +339,9 @@ def pick_engine(which: str, voice: str) -> Engine:
 
 def clip_for(engine: Engine, voice: str, text: str) -> tuple[Path, bool]:
     """Render `text` if it is not already cached. Returns (path, was_cached)."""
-    spoken = speakable(text)
+    # Engines with their own text frontend read the bare forms better than kokoro's
+    # respellings, and the key covers `spoken`, so the two never share a cache entry.
+    spoken = speakable(text, initialisms=engine.name != "myvoice")
     key = hashlib.sha1(f"{engine.name}|{voice}|{spoken}".encode()).hexdigest()[:16]
     dest = CACHE / f"{key}.wav"
     if dest.exists() and dest.stat().st_size > 0:
