@@ -122,6 +122,35 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **The desktop tier is packageable.** `scripts/build-desktop-package.sh` builds
+  a `.deb` and a tarball, **from a clean git tree — never by copying the working
+  directory**. `deploy/compose/.env` is a real file on a maintainer's box: 0600,
+  gitignored, carrying a **live `WARDYN_AGE_KEY`**. Copying the compose dir
+  copies it, packaging tools normalize modes, and the maintainer's age identity
+  then lands on every managed laptop — making every device's secret store
+  decryptable by anyone holding the package, against `docs/DESKTOP.md`'s
+  "never via MDM". `git archive` cannot pick up an untracked file, so the
+  guarantee is structural; a payload scan for a real age identity and for a
+  literal `.env` backs it up.
+
+  The payload keeps the `deploy/` level because `wardyn-desktop.sh` computes
+  `REPO_ROOT` as `../..`, and it ships the **`wardyn` CLI** — the tier installed
+  no host binary at all, so `wardyn ssh` and `wardyn secret set` were both
+  unreachable.
+
+### Fixed
+
+- **`env_get` killed its caller when a key was absent.** Its contract says
+  *"("" when absent)"*, but `grep` exits 1 and every caller runs under
+  `set -euo pipefail`, where `PIPEFAIL` propagates that — so
+  `v="$(env_get "$f" KEY)"` for an absent key **terminated the script silently
+  at the assignment**. It went unnoticed because the pre-existing call sites all
+  used the value inside an `if`, which `set -e` exempts; 0.7's new
+  `WARDYN_DOCKER_SOCK` lookup is the first plain assignment, and it stopped the
+  desktop launcher dead with no output.
+
+### Added
+
 - **Model access on m′ has a documented, working path — it is Bedrock.** Three
   shipped mechanisms compose into what reads as a dead end (m′ mandates OIDC;
   OIDC refuses subscription injection; secret writes are admin-only), and the

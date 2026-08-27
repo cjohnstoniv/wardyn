@@ -159,9 +159,20 @@ wardyn_pick_docker_host() {
 }
 
 # env_get FILE KEY — read the last uncommented KEY= value ("" when absent).
+#
+# The `|| true` is load-bearing, not defensive noise. grep exits 1 when the key
+# is absent, and every caller of this runs under `set -euo pipefail` where
+# PIPEFAIL propagates that through the pipeline — so
+#
+#     v="$(env_get "$f" SOME_KEY)"
+#
+# for an absent key KILLED THE CALLING SCRIPT, silently, at the assignment. It
+# went unnoticed because the pre-existing call sites all used the value inside
+# an `if` condition, which `set -e` exempts. Returning 0-with-empty is what this
+# function's own contract above already promised.
 env_get() {
   [ -f "$1" ] || return 0
-  grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-
+  { grep -E "^$2=" "$1" 2>/dev/null || true; } | tail -1 | cut -d= -f2-
 }
 
 # env_set FILE KEY VALUE — idempotently set KEY=VALUE, replacing an existing

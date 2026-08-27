@@ -280,4 +280,27 @@ else
   echo "test-desktop-profile: systemd-analyze absent — unit syntax not verified on this host"
 fi
 
+# ── 10. the packaging script's clean-tree guarantee ────────────────────────
+# deploy/compose/.env is a real file on a maintainer's box — 0600, gitignored,
+# carrying a LIVE WARDYN_AGE_KEY. If the payload is ever built by copying the
+# working directory instead of exporting from git, that key ships to every
+# managed laptop and every device's secret store becomes decryptable by anyone
+# holding the package. docs/DESKTOP.md says age.key travels "never via MDM".
+PKGR="${REPO_ROOT}/scripts/build-desktop-package.sh"
+[ -x "${PKGR}" ] || fail "${PKGR} missing or not executable"
+grep -q 'git archive HEAD' "${PKGR}" \
+  || fail "${PKGR} no longer exports from git — a working-directory copy picks up deploy/compose/.env and its LIVE age key"
+# Matched on the whole find EXPRESSION, not on "name '.env'" alone: that
+# substring also appears in the script's own explanatory comment, so the
+# narrower match stayed green with the real check deleted.
+grep -qF -e "-name '.env' -o -name '*.env'" "${PKGR}" \
+  || fail "${PKGR} lost the literal '.env' assertion — a bare *.env glob does NOT match a file named '.env', which is the only one this stops"
+grep -q 'AGE-SECRET-KEY-1' "${PKGR}" \
+  || fail "${PKGR} no longer scans the payload for a real age identity"
+# The `deploy/` level in the payload is load-bearing: wardyn-desktop.sh computes
+# REPO_ROOT as ../.. from itself, so a payload rooted at .../wardyn/desktop/
+# resolves to /usr/local/lib and the wrapper dies sourcing common.sh.
+grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
+  || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
+
 echo "test-desktop-profile: m-prime invariants PASS"
