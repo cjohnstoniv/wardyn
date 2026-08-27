@@ -33,6 +33,50 @@ admin actions is that it arrives on a different browser origin. See
 > The **one-line installer** (`install.sh`) is the same: it writes
 > `WARDYN_UI_SANDBOX_PORT` but leaves the listener off, for the same reason.
 
+## The noVNC image, and what relaying a DESKTOP costs
+
+`deploy/images/novnc/` ships a graphical desktop as a relayed app —
+`make agent-image-novnc`, declared as `"name": "novnc"`. It changed no server
+code, which was the whole prediction: an app rides the image, not a seam.
+
+**Base:** `agent-base`, deliberately not the `agent-claude-code` the code-server
+image uses. agent-base is the image contract with no vendor CLI and is what this
+project publishes; an X stack layered on node + npm + a vendor CLI is surface
+for nothing.
+
+**Measured, not estimated:** ~565 MB over agent-base (code-server costs ~228 MiB
+for comparison — an X stack is simply expensive). Listening ~1s into the 20s
+`uiEnsureWaitSecs` budget. If a change pushes size past ~1.4 GB, drop `xterm`
+then `openbox` before raising the ceiling — a relayed app needs neither.
+
+**Local build only**, like `agent-vscode`. Publishing an X stack would drag in
+the trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
+desktop — a supply-chain workstream, not an image. It is therefore **not
+available on the desktop tier**; see the note at the top.
+
+**Parity:** `make test-e2e-ui-sandbox` is **Docker-only and has no `-k8s`
+sibling**, unlike `test-e2e-ssh`. The honest gap is narrow, because the
+transport itself *is* conformance-covered on both substrates
+(`ExecStreamLoopbackRelay`); what is Docker-only is the browser-level lane above
+it. Stated rather than left silent.
+
+### Three ceilings a graphical desktop raises that an editor does not
+
+- **Nothing inside a relayed app is recorded.** That is true of code-server too,
+  but an unrecorded *graphical desktop* is categorically more: every window,
+  every app the user launches, on a tier whose pitch includes "the session is
+  still recorded". The session recording covers the SHELL, not the relayed app.
+- **The relayed app's JavaScript runs in the operator's own browser**, which
+  Wardyn does not confine at all — outside `wardyn-proxy` and outside any egress
+  policy. A desktop is a larger surface for that than an editor.
+- **The relay cookie is valid for 8 hours and never re-checks the principal.**
+  A desktop session is exactly the kind of thing left open all day.
+
+None of these is new in 0.7 — they are properties of the relay, documented in
+`threatmodel/THREAT-MODEL.md`. They are repeated here because a desktop makes
+each of them bigger, and because the decision to ship it anyway was taken with
+them in view rather than around them.
+
 ## Diagnosing a blocked request
 
 A relayed editor is the place developers most often meet the egress policy, and
@@ -312,7 +356,7 @@ with the work it implies, not with a plan:
 | JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach — the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch. A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
 | RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client. That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one. X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
-| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It is the cheapest of the four for that reason | Nothing built; the primitive it would ride is the one documented above |
+| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base` (not the vscode image's `agent-claude-code`) — an X stack does not need a language runtime. Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
 **Decision criteria.** Before any of these becomes work, all of the following
 have to hold — they are the same properties that made the browser relay

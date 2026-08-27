@@ -34,11 +34,25 @@ import (
 // Per the brief: "six routes were missed by hand-listing across two drafts —
 // the walk-enumeration is the point; hand-list nothing."
 //
-// Coverage boundary: the SSH gateway (docs/SSH.md, internal/api/sshgateway.go)
+// Coverage boundary ONE: the SSH gateway (docs/SSH.md, internal/api/sshgateway.go)
 // runs its OWN separate listener with its own authorization (sshAuth) —
 // chi.Walk only ever sees wardynd's HTTP router, so it CANNOT discover or
 // exercise SSH connections at all. A green TestAuthzMatrix says nothing
 // about SSH authorization; sshgateway_test.go is that surface's own pin.
+//
+// Coverage boundary TWO: the UI-sandbox gateway (docs/UI-SANDBOXES.md,
+// internal/api/uigateway.go). UIGatewayHandler is deliberately NOT mounted on
+// this router — its routes must exist only on the second origin, and
+// Server.Handler() 404s them (pinned by TestUIGateway_ConsoleOriginHasNoRelayRoutes).
+// The consequence is the same as SSH's: chi.Walk cannot see it, so a green
+// TestAuthzMatrix says NOTHING about relay authorization. That surface's own
+// pins are the ticket/session tests in uigateway_test.go —
+// EnterRejectsBadTickets, EnterRejectsNonOwnerTicket, EnterRequiresDeclaredApp,
+// EnterRequiresRunningRun, RelayRequiresAValidSessionForThisRun.
+//
+// Both boundaries are named here because the failure mode is a READER's: a
+// green matrix reads as "every route is classified", and without this it would
+// be read that way for two surfaces it never touches.
 
 // routeClass is the authorization tier a route sits behind.
 type routeClass string

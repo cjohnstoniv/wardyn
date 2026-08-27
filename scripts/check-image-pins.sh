@@ -19,14 +19,24 @@
 # Exempt:
 #   - compose `*:local` tags   — locally BUILT images (they carry a `build:` stanza),
 #                                 including behind a `${VAR:-...:local}` override knob
-#   - $ALLOWLIST_REF            — the one documented local retag of a :local image
+#   - $ALLOWLIST_REFS           — the documented local retags of :local images
 # Run via `make lint`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Matched on the REF, not the file: exempting a whole Dockerfile would silently
 # waive every OTHER FROM in it (full/ also pulls digest-pinned toolchain stages).
-ALLOWLIST_REF="wardyn/agent-claude-code:local"  # deploy/images/full/Dockerfile's base — a locally BUILT image, so no upstream digest exists
+# Matched on the REF, one per line. Both entries are locally BUILT images, so no
+# upstream digest exists to pin them to — a digest would have to be recomputed on
+# every rebuild of the base, which is neither stable nor meaningful.
+#   wardyn/agent-claude-code:local  deploy/images/{full,vscode}/Dockerfile's base
+#   wardyn/agent-base:local         deploy/images/novnc/Dockerfile's base — the
+#                                   noVNC image is FROM agent-base deliberately
+#                                   (an X stack needs no language runtime), which
+#                                   is why it needs its own entry rather than
+#                                   riding the one above.
+ALLOWLIST_REFS="wardyn/agent-claude-code:local
+wardyn/agent-base:local"
 fail=0
 
 # ── Dockerfile FROMs ────────────────────────────────────────────────────────
@@ -55,7 +65,10 @@ while IFS= read -r df; do
     done
     ((skip)) && continue
     if [[ "$ref" != *"@sha256:"* ]]; then
-      if [[ "$ref" == "$ALLOWLIST_REF" ]]; then continue; fi
+      # Membership, not equality: ALLOWLIST_REFS is newline-separated, and a
+      # bare == against it silently matched NOTHING once it held more than one
+      # entry — every allowlisted ref would then fail the gate.
+      if grep -qxF -- "$ref" <<<"$ALLOWLIST_REFS"; then continue; fi
       echo "FAIL: $df: FROM '$ref' is not digest-pinned (@sha256). Pin it: FROM $ref@sha256:<digest>." >&2
       fail=1
     fi

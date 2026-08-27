@@ -230,8 +230,12 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   opened and closed, never what was done in it. Proven by a conformance case
   that runs the relay's transport identically on both substrates, an
   HTTP-client e2e lane (`make test-e2e-ui-sandbox`) and a browser e2e lane
-  (`make test-e2e-ui`). A browser desktop (noVNC) is deliberately **deferred**:
-  it is an image variant on this same primitive, not a server change. A general
+  (`make test-e2e-ui`). A browser desktop (noVNC) **shipped in 0.7**
+  (`deploy/images/novnc/`, `make agent-image-novnc`) — and, as predicted, it is
+  an image variant on this same primitive with **no server change**. Local-build
+  only, like `agent-vscode`: publishing an X stack drags in the trivy matrix,
+  a per-image SBOM and a GPL source offer for a whole desktop, which is a
+  supply-chain workstream rather than an image. A general
   native lane stays **exploratory** — the four candidates are costed in
   UI-SANDBOXES.md rather than promised, and natively on the user's own machine
   remains VS Code Remote-SSH over the SSH gateway.

@@ -1,0 +1,73 @@
+#!/bin/sh
+# wardyn-ui-novnc: the UI-sandbox launcher for the "novnc" app
+# (deploy/images/README.md §BYOI launcher convention; uiLauncherScript).
+#
+# Invocation contract: exec'd with NO args and no tty, backgrounded by the
+# caller (`"$b" >/dev/null 2>&1 </dev/null &`), reparented to the sandbox's
+# PID 1, and dying with the sandbox. Readiness is a TCP connect to the declared
+# port — so this script must end with a FOREGROUND process listening on it.
+#
+# THE 20-SECOND BUDGET IS THE DESIGN CONSTRAINT. uiEnsureWaitSecs is 20: if
+# nothing is listening on the port by then the gateway returns exit 4 and
+# audits ui.start/failure. An X stack has three processes to bring up before
+# the listener exists, so they start in dependency order and the LAST one binds
+# the port. Xvfb is the slow one; openbox and x11vnc attach to it.
+#
+# If this ever misses the budget the fix is to drop the window manager, not to
+# raise the constant: a relayed app does not need one, and the ceiling beyond
+# ~45s is where a user assumes the click did nothing.
+set -eu
+
+DISPLAY_NUM=:1
+GEOMETRY=${WARDYN_NOVNC_GEOMETRY:-1280x800x24}
+PORT=6080
+
+if [ "${1:-}" = "--help" ]; then
+	echo "wardyn-ui-novnc: launches noVNC on 127.0.0.1:${PORT} (loopback-only, no auth)"
+	echo "  X display ${DISPLAY_NUM} at ${GEOMETRY}; override with WARDYN_NOVNC_GEOMETRY"
+	exit 0
+fi
+
+# 1. The X server. -nolisten tcp: nothing outside this container may reach the
+#    display, and the relay does not need it to — x11vnc talks to it over the
+#    unix socket.
+Xvfb "$DISPLAY_NUM" -screen 0 "$GEOMETRY" -nolisten tcp >/dev/null 2>&1 &
+export DISPLAY="$DISPLAY_NUM"
+
+# Wait for the display rather than sleeping a guessed interval: a fixed sleep is
+# either wasted budget or a race, and there are only 20 seconds.
+#
+# The readiness signal is the X SOCKET, not `xdpyinfo`. xdpyinfo lives in
+# x11-utils, which this image deliberately does not install — and the first
+# version of this script called it anyway, so the loop simply failed 100 times
+# and burned ~10 of the 20 seconds before continuing. Caught by running it.
+# The socket needs no extra package and appears exactly when Xvfb is ready.
+x_socket="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
+i=0
+while [ "$i" -lt 100 ]; do
+	[ -S "$x_socket" ] && break
+	i=$((i + 1))
+	sleep 0.1
+done
+[ -S "$x_socket" ] || echo "wardyn-ui-novnc: X display did not appear at $x_socket; continuing (x11vnc will report)" >&2
+
+# 2. A window manager, so an app has decorations and focus. First thing to cut
+#    if the budget is ever tight.
+openbox >/dev/null 2>&1 &
+
+# 3. A terminal, so the desktop is not an empty grey square on first open.
+xterm -geometry 100x30+40+40 >/dev/null 2>&1 &
+
+# 4. x11vnc, loopback-only and unauthenticated — the gateway is the auth
+#    boundary (a single-use ticket + the relay cookie), exactly as code-server
+#    runs --auth none beside it. -forever survives a viewer disconnect;
+#    -shared lets a reconnect attach to the same session.
+x11vnc -display "$DISPLAY_NUM" -localhost -rfbport 5900 -forever -shared -quiet -nopw >/dev/null 2>&1 &
+
+# 5. websockify LAST and in the FOREGROUND: it binds the port the gateway
+#    probes, so it must be the process whose listener defines readiness, and it
+#    must not exit.
+exec /usr/local/lib/websockify/run \
+	--web /usr/local/lib/novnc \
+	127.0.0.1:${PORT} \
+	127.0.0.1:5900

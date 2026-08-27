@@ -161,6 +161,13 @@ func (s *Server) uiEnterURLTemplate() string {
 // is disabled (cmd/wardynd then starts no listener). It is deliberately NOT
 // mounted on the console router: these routes must exist ONLY on the second
 // origin, and Server.Handler() must 404 them — pinned by test.
+//
+// CONSEQUENCE, stated because it is easy to miss: being off the chi router also
+// makes this surface invisible to TestAuthzMatrix, which discovers routes by
+// walking that router. A green authz matrix says NOTHING about relay
+// authorization. The ticket/session tests in uigateway_test.go are this
+// surface's own pin, exactly as sshgateway_test.go is the SSH gateway's, and
+// the matrix's own doctrine comment now names both boundaries.
 func (s *Server) UIGatewayHandler() http.Handler {
 	if !s.uiGatewayEnabled() {
 		return nil

@@ -148,10 +148,10 @@ Data is unchanged.
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:359` | **stable** (documented) |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:144` | internal |
 | `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:177` | internal |
-| `ui.auth` | A UI-sandbox relay session is authorized or denied (see the D14/D27 residuals on this channel) | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:288` | internal |
-| `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:652` | internal |
-| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:657` | internal |
-| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:763` | internal |
+| `ui.auth` | A UI-sandbox relay session is authorized or denied (see the D14/D27 residuals on this channel) | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:295` | internal |
+| `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:659` | internal |
+| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:664` | internal |
+| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:770` | internal |
 
 ## Secrets, credentials & identity
 

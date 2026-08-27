@@ -122,6 +122,25 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **A browser desktop (noVNC) is a shipped image variant.**
+  `deploy/images/novnc/`, `make agent-image-novnc`, declared as
+  `"name": "novnc"`. It changed **no server code**, which is exactly what the
+  roadmap predicted an app-on-the-relay would cost.
+
+  It is `FROM agent-base`, **not** the `agent-claude-code` the code-server image
+  uses: agent-base is the contract with no vendor CLI and is what this project
+  actually publishes, and an X stack layered on node + npm + a vendor CLI is
+  surface for nothing. Measured rather than estimated — **~565 MB** over the
+  base (code-server costs ~228 MiB; an X stack is simply expensive), listening
+  **~1s** into the 20s readiness budget. Local build only, like `agent-vscode`:
+  publishing an X stack would drag in the trivy matrix, a per-image SBOM and a
+  GPL source offer for a whole desktop.
+
+  Three ceilings a desktop raises above an editor's are stated in
+  `docs/UI-SANDBOXES.md` — nothing inside a relayed app is recorded, its
+  JavaScript runs in the operator's unconfined browser, and the relay cookie
+  never re-checks the principal. None is new; a desktop makes each bigger.
+
 - **The BYOI-wrap and UI-sandbox e2e lanes now run nightly, and a failure opens
   an issue.** `make test-e2e-byoi` and `make test-e2e-ui-sandbox` ran in **no
   workflow at all** — and the BYOI lane is the one that reproduces the

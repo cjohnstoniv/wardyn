@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -107,6 +107,14 @@ agent-image-vscode: agent-images-core ## Build the code-server UI-sandbox agent 
 	@echo "Building the code-server UI-sandbox image..."
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/vscode/Dockerfile -t wardyn/agent-vscode:local .
 	@echo "Vscode UI-sandbox image built: wardyn/agent-vscode:local"
+
+# Depends on agent-images-core for agent-BASE, not for a vendor CLI: the noVNC
+# image is FROM wardyn/agent-base:local deliberately (see its Dockerfile) — an X
+# stack on top of node + npm + a vendor CLI is surface for nothing.
+agent-image-novnc: agent-images-core ## Build the noVNC UI-sandbox agent image
+	@echo "Building the noVNC UI-sandbox image..."
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc/Dockerfile -t wardyn/agent-novnc:local .
+	@echo "noVNC UI-sandbox image built: wardyn/agent-novnc:local"
 
 build: ## Build Go binaries (default tags)
 	@echo "Building Go binaries..."
