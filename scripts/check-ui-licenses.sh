@@ -53,7 +53,7 @@ if [ "${1:-}" = "--self-test" ]; then
     else [ -n "$r" ] || { echo "SELF-TEST FAIL: '$1' should be REJECTED"; fail=1; }
     fi
   }
-  for e in "MIT" "Apache-2.0" "BSD-3-Clause" "ISC" "0BSD" "OFL-1.1" "(MIT OR CC0-1.0)"; do check "$e" allow; done
+  for e in "MIT" "Apache-2.0" "BSD-3-Clause" "ISC" "0BSD" "OFL-1.1" "(MIT OR Apache-2.0)"; do check "$e" allow; done
   for e in "Unknown" "UNLICENSED" "SEE LICENSE IN LICENSE.md" "SSPL-1.0" "BUSL-1.1" \
            "Elastic-2.0" "CC-BY-NC-4.0" "MIT OR AGPL-3.0" "BSD-4-Clause" "BSD-Protection" \
            "GPL-3.0" "MPL-2.0" ""; do check "$e" reject; done

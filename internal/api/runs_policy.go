@@ -382,48 +382,30 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// unpublishedConventionImages are the agentImage() convention refs Wardyn does
-// NOT publish, mapped to why.
+// withUnpublishedImageWarning appends an explanation when the agent's image
+// resolves to the ghcr convention ref for something Wardyn does not publish.
 //
 // agentImage() falls back to ghcr.io/cjohnstoniv/agent-<key>:<version> for any
-// agent with no explicit WARDYN_AGENT_IMAGES entry. That is right for every image
-// we ship — but agent-claude-code bundles Anthropic's Claude Code CLI, which is
-// not open-source software (its package declares "SEE LICENSE IN README.md", and
-// neither that file nor a LICENSE ships inside the image), so this project does
-// not redistribute it from a public registry. The Dockerfile remains as a local
-// build recipe.
+// agent with no WARDYN_AGENT_IMAGES entry. That is right for every image we ship,
+// but agent-claude-code bundles Anthropic's Claude Code CLI — not open-source,
+// and its terms are not even readable from inside the image — so this project does
+// not redistribute it. Without this the operator's first symptom is a registry 404
+// on a tag that looks like it should exist.
 //
-// Without this check the operator's first symptom is an ImagePullBackOff or a
-// registry 404 on a tag that looks like it should exist — a support ticket that
-// costs an afternoon and teaches nobody anything. Fail at run creation with the
-// actual reason and the actual fix instead.
-var unpublishedConventionImages = map[string]string{
-	"claude-code": "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, " +
-		"which is not open-source and whose terms are not readable from the image. " +
-		"Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — " +
-		"or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md",
-}
-
-// unpublishedAgentImage reports why the resolved image cannot be pulled, or ""
-// when it can. Only fires for the CONVENTION fallback: an operator who set an
-// explicit WARDYN_AGENT_IMAGES entry has supplied their own image and this has
-// nothing to say about it.
-func unpublishedAgentImage(agent string, images map[string]string) string {
+// An explicit override means the operator supplied their own image; say nothing.
+func withUnpublishedImageWarning(warnings []string, agent string, images map[string]string) []string {
 	if _, explicit := images[agent]; explicit {
-		return ""
+		return warnings
 	}
 	key := agent
 	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
 		key = def.ImageKey
 	}
-	return unpublishedConventionImages[key]
-}
-
-// withUnpublishedImageWarning appends the unpublished-image explanation when one
-// applies, so the caller stays a single line.
-func withUnpublishedImageWarning(warnings []string, agent string, images map[string]string) []string {
-	if why := unpublishedAgentImage(agent, images); why != "" {
-		return append(warnings, why)
+	if key != "claude-code" {
+		return warnings
 	}
-	return warnings
+	return append(warnings, "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, "+
+		"which is not open-source and whose terms are not readable from the image. "+
+		"Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — "+
+		"or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md")
 }

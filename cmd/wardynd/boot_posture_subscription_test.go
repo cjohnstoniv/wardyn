@@ -3,7 +3,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The whole point of subscriptionInjectPosture is the NEGATIVE cases, so the
 // table leads with them. A shared subscription credential is one operator's live
@@ -54,7 +57,7 @@ func TestSubscriptionInjectPosture(t *testing.T) {
 				if reason == "" {
 					t.Fatal("refused with an empty reason")
 				}
-				if !contains(reason, "API key") && !contains(reason, "Bedrock") {
+				if !strings.Contains(reason, "API key") && !strings.Contains(reason, "Bedrock") {
 					t.Fatalf("refusal reason names no alternative credential path: %q", reason)
 				}
 			}
@@ -63,15 +66,4 @@ func TestSubscriptionInjectPosture(t *testing.T) {
 			}
 		})
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
 }

@@ -15,10 +15,11 @@ import (
 // the operator is not decoding an ImagePullBackOff.
 func TestUnpublishedAgentImage(t *testing.T) {
 	t.Run("claude-code on the convention fallback warns", func(t *testing.T) {
-		why := unpublishedAgentImage("claude-code", nil)
-		if why == "" {
-			t.Fatal("claude-code has no published convention image; the operator must be told")
+		got := withUnpublishedImageWarning(nil, "claude-code", nil)
+		if len(got) != 1 {
+			t.Fatalf("claude-code has no published convention image; the operator must be told. got %v", got)
 		}
+		why := got[0]
 		// The warning is only useful if it says what to DO.
 		if !strings.Contains(why, "make agent-images") {
 			t.Errorf("warning names no fix: %q", why)
@@ -32,16 +33,16 @@ func TestUnpublishedAgentImage(t *testing.T) {
 	// anything would be noise, and worse, wrong.
 	t.Run("explicit image override says nothing", func(t *testing.T) {
 		images := map[string]string{"claude-code": "registry.corp/agents/claude:1.2.3"}
-		if why := unpublishedAgentImage("claude-code", images); why != "" {
-			t.Fatalf("an explicit override must silence the warning, got %q", why)
+		if got := withUnpublishedImageWarning(nil, "claude-code", images); len(got) != 0 {
+			t.Fatalf("an explicit override must silence the warning, got %v", got)
 		}
 	})
 
 	// Every other agent resolves to an image we do publish.
 	t.Run("published agents say nothing", func(t *testing.T) {
 		for _, agent := range []string{"codex-cli", "aws-sso"} {
-			if why := unpublishedAgentImage(agent, nil); why != "" {
-				t.Errorf("%s is published; warning should be empty, got %q", agent, why)
+			if got := withUnpublishedImageWarning(nil, agent, nil); len(got) != 0 {
+				t.Errorf("%s is published; warning should be empty, got %v", agent, got)
 			}
 		}
 	})
