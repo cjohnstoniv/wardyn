@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-08-27
+
 ### Security
 
 - **Shared subscription credentials are refused outside a single-user posture.**
