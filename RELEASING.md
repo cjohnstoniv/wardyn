@@ -74,7 +74,12 @@ before step 3.
    chart-publish job now REFUSES to push if `version:` does not equal the tag,
    since `helm install --version` would otherwise resolve to a different chart
    than the release being cut), and
-   `ui/package.json` (`"version"`). `cmd/wardyn/version_test.go`'s
+   `ui/package.json` (`"version"`), and **the pinned `install.sh` release-asset
+   URL in `README.md` and in `install.sh`'s own header comment** — those two
+   point at the cosign-signed copy rather than tip-of-`main`, so a missed bump
+   hands new users the previous release's installer.
+   `scripts/test-install-sh.sh` asserts the two agree with each other, but it
+   cannot know the tag you are cutting. `cmd/wardyn/version_test.go`'s
    `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
    all four agree with the CHANGELOG's newest section — but only catch a
    missed bump if `make release-check` runs AFTER this commit; the

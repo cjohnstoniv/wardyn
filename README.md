@@ -27,8 +27,12 @@ with attested SBOMs — [`docs/VERIFY.md`](docs/VERIFY.md) is how you check that
 **On your machine** — containerized control plane + UI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/cjohnstoniv/wardyn/main/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
 ```
+
+That URL is the **cosign-signed** copy, covered by the release's `SHA256SUMS`
+(`docs/VERIFY.md` checks it) — not tip-of-`main`, which nothing signs. The script
+still resolves and installs the newest release; only the script itself is pinned.
 
 Docker is the only requirement. It installs into `~/.wardyn`, mints this box's
 secret-store key locally, and starts the stack on <http://127.0.0.1:8080>.
@@ -37,10 +41,13 @@ secret-store key locally, and starts the stack on <http://127.0.0.1:8080>.
 **On Kubernetes** — the chart is a published OCI artifact:
 
 ```sh
-WARDYN_VERSION=$(curl -fsSL https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest \
-                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+# NOT releases/latest — it excludes pre-releases, and every Wardyn release is
+# one, so that endpoint 404s and leaves this empty.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 
-helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
+  --version "${WARDYN_VERSION:?could not resolve a version — refusing an unpinned install}" \
   --namespace wardyn --create-namespace \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```

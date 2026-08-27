@@ -158,12 +158,15 @@ The chart is published as an OCI artifact, so installing needs no clone. Pin the
 version — an unpinned OCI install silently follows the newest chart:
 
 ```bash
-WARDYN_VERSION=$(curl -fsSL https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest \
-                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+# NOT releases/latest — it excludes pre-releases, and every Wardyn release is
+# one, so that endpoint 404s and leaves this empty.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 ```
 
 ```bash
-helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
+  --version "${WARDYN_VERSION:?could not resolve a version — refusing an unpinned install}" \
   --namespace wardyn --create-namespace \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
@@ -183,7 +186,8 @@ for a released version — see the callout at the top):
 kubectl create secret generic wardyn-auth -n wardyn \
   --from-literal=admin-token="$(openssl rand -hex 32)"
 
-helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
+  --version "${WARDYN_VERSION:?could not resolve a version — refusing an unpinned install}" \
   --namespace wardyn \
   --create-namespace \
   --set image.repository="$REGISTRY/wardynd" \

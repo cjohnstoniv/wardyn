@@ -149,6 +149,28 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **Both documented install paths were broken.** `install.sh` resolved its
+  version from `releases/latest`, which EXCLUDES pre-releases — and RELEASING.md
+  mandates `--prerelease` on every Wardyn release, so that endpoint returned
+  HTTP 404 and the installer died on every run. `curl -fsSL …/install.sh | sh`,
+  the front door 0.6.3 shipped as its headline feature, did not work.
+
+  The README's two Helm blocks used the same endpoint and failed the **opposite**
+  way: the empty result went into `helm install --version ""`, which helm accepts
+  as **unpinned** and silently resolves to the newest chart — the exact outcome
+  the prose two lines above the block warns about. All three now resolve from
+  `releases?per_page=1`, and the Helm blocks guard the empty case on the `helm`
+  command itself, where it cannot be pasted past.
+
+  Nothing caught either one: the root `install.sh` had no lint, no `sh -n` and no
+  test, though `release.yml` ships it in the cosign-signed `SHA256SUMS`.
+  `scripts/test-install-sh.sh` now covers it, in `make test-scripts`.
+
+- **The README handed out an unsigned installer.** It curled `install.sh` from
+  `main`, so the cosign-signed copy in the release assets was never the one
+  anyone executed. It now points at the pinned `releases/download/` asset;
+  RELEASING.md step 1b sweeps that version with the other four.
+
 - **`docs/EXPORT.md` recorded an export-control obligation that does not exist.**
   It listed a BIS/NSA notification as *"PENDING — not yet sent"*, open since
   0.6.2. EAR §742.15(b)(1) places publicly available 5D002 encryption source code

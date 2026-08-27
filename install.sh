@@ -4,7 +4,11 @@
 #
 # install.sh — install Wardyn on this machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/cjohnstoniv/wardyn/main/install.sh | sh
+#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
+#
+# That URL is the cosign-signed release asset, covered by SHA256SUMS. Curling
+# this file from `main` also works, but nothing signs tip-of-main. README.md
+# carries the same URL; RELEASING.md step 1b sweeps the version in both.
 #
 # Pulls the published, cosign-signed images (docs/VERIFY.md) and starts the
 # containerized control plane. No clone, no build, no toolchain — Docker is the
@@ -37,10 +41,16 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (do
 
 # Resolve the version. The GitHub API needs no token for a public repo; if it is
 # rate-limited or offline, say so rather than silently installing something else.
+#
+# NOT `releases/latest`: that endpoint EXCLUDES pre-releases, and RELEASING.md
+# mandates `--prerelease` on every Wardyn release — so it returns HTTP 404 and
+# this script used to die two lines below on every install. `releases?per_page=1`
+# is the newest release of any kind. RELEASING.md says the same thing about
+# `releases/latest/download/`.
 VERSION="${WARDYN_VERSION:-}"
 if [ -z "$VERSION" ]; then
   say "Resolving the latest release"
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null \
             | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$VERSION" ] || die "could not resolve the latest release — set WARDYN_VERSION=vX.Y.Z"
 fi
