@@ -54,6 +54,21 @@ the trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
 desktop — a supply-chain workstream, not an image. It is therefore **not
 available on the desktop tier**; see the note at the top.
 
+**Confinement: both images run under CC2 (gVisor).** Measured, on a daemon with
+`runsc` registered — note that is the **native** `dockerd`, not Docker Desktop's
+socket, so `docker info --format '{{.Runtimes}}'` against the right daemon is
+the first step:
+
+| Image | Under `--runtime=runsc` |
+|---|---|
+| `agent-vscode` (code-server, Node) | listening in ~1s |
+| `agent-novnc` (Xvfb + openbox + xterm + x11vnc + websockify) | listening in ~1s; X socket present, all five processes up, `x11vnc` serving `RFB 003.008`, noVNC serving its page |
+
+The X stack was the open question — it does far more with shared memory and
+ioctls than a Node server does, and gVisor reimplements those. It works
+unmodified. `runsc` there reports `apparmor: false` and `cgroup v2: false`, which
+is expected for gVisor and did not matter to either image.
+
 **Parity:** `make test-e2e-ui-sandbox` is **Docker-only and has no `-k8s`
 sibling**, unlike `test-e2e-ssh`. The honest gap is narrow, because the
 transport itself *is* conformance-covered on both substrates
