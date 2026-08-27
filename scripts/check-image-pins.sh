@@ -90,15 +90,19 @@ done
 # "Apache-2.0" on an image that also conveys GPL or vendor-licensed content;
 # enterprise registries key off that field, so a wrong value is worse than none.
 # Only the two distroless product images are legitimately Apache-2.0 alone.
-PUBLISHED_DOCKERFILES=(
-  deploy/compose/Dockerfile.wardynd
-  deploy/compose/Dockerfile.proxy
-  deploy/compose/Dockerfile.tetragon-ingest
-  deploy/images/claude-code/Dockerfile
-  deploy/images/codex-cli/Dockerfile
-  deploy/images/aws-sso/Dockerfile
-  deploy/images/oracle/Dockerfile
-)
+# DERIVED from release.yml's matrix, never hand-listed: a second copy of "which
+# images do we publish" is a second thing to forget. If the workflow is absent
+# (this gate runs against a throwaway tree in test-image-pins.sh) there are no
+# published images to check and the section is legitimately a no-op.
+RELEASE_WF=.github/workflows/release.yml
+PUBLISHED_DOCKERFILES=()
+if [ -f "$RELEASE_WF" ]; then
+  mapfile -t PUBLISHED_DOCKERFILES < <(grep -oE '^[[:space:]]+dockerfile: [^[:space:]]+' "$RELEASE_WF" | awk '{print $2}' | sort -u)
+  if [ "${#PUBLISHED_DOCKERFILES[@]}" -eq 0 ]; then
+    echo "FAIL: $RELEASE_WF exists but no 'dockerfile:' entries were found — the published-image list derivation has broken, and this gate would silently check nothing." >&2
+    fail=1
+  fi
+fi
 APACHE_ONLY_OK="deploy/compose/Dockerfile.wardynd deploy/compose/Dockerfile.proxy"
 
 for df in "${PUBLISHED_DOCKERFILES[@]}"; do

@@ -39,6 +39,36 @@
 # Usage: [WARDYN_SUBSCRIPTION_INJECT=off] scripts/stage-claude-creds.sh [staging-dir]
 #        (re-run to refresh copies)
 set -euo pipefail
+
+# DEMO PATH ONLY. Copying the operator's ~/.claude into a staging dir is how a
+# SHARED subscription credential reaches a run, and Wardyn now refuses that
+# outside a single-user posture (subscriptionInjectPosture, cmd/wardynd) because
+# the harness vendor requires each end user to authenticate with their own
+# credential. `make setup` no longer calls this, and an ordinary install has no
+# reason to: connect a subscription in the console instead
+# (Settings -> Model provider -> Claude subscription), which signs in inside a
+# sandbox and stores the token age-encrypted rather than copying your host dir.
+#
+# The demo recordings still need a pre-staged credential, so the path survives
+# behind the same override the daemon reads.
+if [ "${WARDYN_ALLOW_SHARED_SUBSCRIPTION:-}" != 1 ] && [ "${WARDYN_ALLOW_SHARED_SUBSCRIPTION:-}" != true ]; then
+  cat >&2 <<'MSG'
+refusing to stage: this copies your ~/.claude into a shared-subscription staging dir.
+
+Connect your subscription in the console instead — it signs in inside a sandbox
+and stores the token age-encrypted, without copying your host credential dir:
+
+    Settings -> Model provider -> Claude subscription -> Sign in
+
+A shared subscription credential is limited to single-user desktop deployments.
+On Kubernetes, or with SSO configured, give each person their own credential
+(wardyn secret set anthropic-api-key) or use Bedrock.
+
+Recording a demo? Set WARDYN_ALLOW_SHARED_SUBSCRIPTION=1.
+MSG
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="${ROOT}/examples/policies/claude-subscription.template.json"
 DEST="${1:-${HOME}/.wardyn/claude-creds}"

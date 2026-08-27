@@ -221,12 +221,14 @@ if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
   done
 fi
 
-# Managed Claude subscription (harness mode): a `claude setup-token` supplied via
-# WARDYN_SUBSCRIPTION_TOKEN is connected proxy-side (never resident) — the reserved
-# secret name needs the dedicated command, not `secret set`. Value via stdin, never argv.
+# A subscription credential belongs to one human; CI runs on behalf of everyone
+# who can trigger the pipeline. Connecting one here makes that person's Claude
+# subscription serve other people's work, which the harness vendor's terms
+# prohibit — and it is the OPERATOR who ends up in breach, not Wardyn. The daemon
+# refuses it structurally now (single-user posture only), so fail here with the
+# reason rather than connecting something that will not resolve at run time.
 if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
-  log "Connecting the Wardyn-managed Claude subscription"
-  printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | wardyn subscription connect --token-stdin || die "subscription connect (token from 'claude setup-token', starts with sk-ant-oat)"
+  die "WARDYN_SUBSCRIPTION_TOKEN is not supported in CI: a subscription credential belongs to one person, and a pipeline runs on behalf of everyone who can trigger it. Use an API key (WARDYN_CI_SECRETS=anthropic-api-key=sk-...) or Bedrock — see docs/CI.md."
 fi
 
 # ── launch args (shared by the preflight preview and the real launch) ────────

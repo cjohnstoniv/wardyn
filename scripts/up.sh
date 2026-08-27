@@ -680,13 +680,16 @@ cmd_up() {
   # never lands in argv/ps, deploy/compose/.env, or the wardynd container env — it
   # lives ONLY in the age-encrypted store. Interactive setup uses
   # `wardyn subscription connect` after launch (or `wardyn setup status`).
+  # Connecting a shared subscription from an env var during `up` is the
+  # pre-provisioning path the posture rule exists to remove: the daemon only
+  # resolves such a credential in a single-user posture, and this stack runs a
+  # shared admin token. Say so instead of connecting something that will not
+  # resolve — a silent no-op reads as "model access is configured" until the
+  # first run fails.
   if [ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]; then
-    log "Connecting the Wardyn-managed Claude subscription from WARDYN_SUBSCRIPTION_TOKEN…"
-    if printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | compose exec -T wardynd /usr/local/bin/wardyn subscription connect --token-stdin; then
-      log "Managed Claude subscription connected (injected proxy-side; never resident in the sandbox)."
-    else
-      warn "subscription connect failed — check the token (from 'claude setup-token', starts with sk-ant-oat)."
-    fi
+    warn "WARDYN_SUBSCRIPTION_TOKEN is ignored: a shared subscription credential is limited to single-user desktop deployments."
+    warn "  Connect it in the console instead (Settings -> Model provider -> Claude subscription), or use an API key / Bedrock."
+    warn "  Genuinely a single-user box? Set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true in deploy/compose/.env and re-run."
   fi
 
   # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can

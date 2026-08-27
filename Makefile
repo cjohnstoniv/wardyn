@@ -765,7 +765,7 @@ setup: ## One-command Wardyn: containerized (default) or host; builds, ups, open
 # Containerized (the default) stages model access at the CLI instead:
 # `claude setup-token | wardyn subscription connect`.
 stage-claude: ## Stage your Claude login for HOST-mode subscription mounts (restarts the host wardynd)
-	WARDYN_STAGE_CLAUDE=1 WARDYN_SETUP_MODE=local ./scripts/setup.sh
+	WARDYN_ALLOW_SHARED_SUBSCRIPTION=1 ./scripts/stage-claude-creds.sh
 
 # Stop the background host-mode wardynd started by `make setup`.
 # (Team/compose mode is stopped with `make compose-down`.)

@@ -363,6 +363,16 @@ services:
       # selects RESIDENT-COPY: a run that mounts ~/.claude uses those creds
       # directly (stage them fresh with `WARDYN_SUBSCRIPTION_INJECT=off
       # scripts/stage-claude-creds.sh`). This is the correct default for compose.
+      # ── SHARED SUBSCRIPTION: DEMO BOXES ONLY ────────────────────────────────
+      # Injecting ONE operator's Anthropic subscription into runs is limited to a
+      # single-user posture. This stack authenticates with a shared admin token
+      # rather than WARDYN_LOCAL_MODE, so without this override the daemon refuses
+      # — deliberately: on a stack anyone else can reach, that credential would
+      # serve OTHER people's runs, and the harness vendor requires each end user to
+      # authenticate with their own. Set it ONLY on a box that is genuinely yours
+      # alone. It does NOT waive the refusal on Kubernetes or with SSO configured.
+      # Everyone else: give each person their own key, or use Bedrock.
+      WARDYN_ALLOW_SHARED_SUBSCRIPTION: "${WARDYN_ALLOW_SHARED_SUBSCRIPTION:-false}"
       WARDYN_SUBSCRIPTION_INJECT: "${WARDYN_SUBSCRIPTION_INJECT:-off}"
       # AWS Bedrock as a third Claude transport (enterprise: no direct Anthropic
       # egress, billed via AWS). Set region + a cross-region INFERENCE-PROFILE id
