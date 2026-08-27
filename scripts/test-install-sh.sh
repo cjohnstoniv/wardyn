@@ -84,4 +84,17 @@ header_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+/install\.sh' "
 [ "$readme_v" = "$header_v" ] \
   || fail "README.md pins install.sh at v${readme_v} but ${INSTALL}'s header says v${header_v} — RELEASING.md step 1b sweeps both"
 
+# ── 7. the agent images it seeds are ones we actually publish ────────────
+# install.sh seeded WARDYN_AGENT_IMAGES with codex-cli and aws-sso only. That
+# left `claude-code` — the catalog's first row and the default agent — resolving
+# through the ghcr convention fallback, which pointed at the unpublished
+# agent-claude-code. On the one-line install that meant only ONE of three agent
+# names worked.
+grep -q '"claude-code"' "$INSTALL" \
+  || fail "$INSTALL seeds no claude-code entry in WARDYN_AGENT_IMAGES — the catalog's default agent then resolves through the ghcr fallback"
+grep -qE 'ghcr\.io/[^"]*/agent-claude-code' "$INSTALL" \
+  && fail "$INSTALL pins agent-claude-code, which this project does not publish — it 404s on every install"
+grep -q 'agent-base' "$INSTALL" \
+  || fail "$INSTALL never names agent-base, the image published in agent-claude-code's place"
+
 echo "test-install-sh: PASS (install.sh + ${#READMES[@]} documented install blocks)"

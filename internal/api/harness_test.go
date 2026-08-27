@@ -12,12 +12,16 @@ import (
 )
 
 // TestAgentImage pins agentImage's behavior across the harness-catalog rewire:
-// a WARDYN_AGENT_IMAGES override always wins (even for an agent the catalog
-// has never heard of), and the ghcr.io fallback convention is BYTE-IDENTICAL
-// to the pre-catalog code for every id here — catalog member or not — because
-// every shipped row's ImageKey equals its ID.
+// a WARDYN_AGENT_IMAGES override always wins (even for an agent the catalog has
+// never heard of), and the ghcr.io fallback convention is byte-identical to the
+// pre-catalog code for every id whose ImageKey equals its ID.
+//
+// claude-code is the ONE row where it does not, since 0.7: its ImageKey points
+// at `base`, because agent-claude-code is not published and the old fallback
+// therefore 404'd on every published install. That divergence is the point of
+// the re-point, so it is asserted explicitly rather than folded into the loop.
 func TestAgentImage(t *testing.T) {
-	ids := []string{"claude-code", "codex-cli", "none", "oracle", "some-random-string"}
+	ids := []string{"codex-cli", "none", "oracle", "some-random-string"}
 	// Convention images carry the DAEMON'S OWN version, not a floating :latest a
 	// later release could re-point under a version-pinned fleet (D19).
 	tag := ":" + version.Version
@@ -27,6 +31,12 @@ func TestAgentImage(t *testing.T) {
 			if got, want := agentImage(id, nil), "ghcr.io/cjohnstoniv/agent-"+id+tag; got != want {
 				t.Errorf("agentImage(%q, nil) = %q, want %q", id, got, want)
 			}
+		}
+	})
+
+	t.Run("claude-code falls back to the PUBLISHED base image", func(t *testing.T) {
+		if got, want := agentImage("claude-code", nil), "ghcr.io/cjohnstoniv/agent-base"+tag; got != want {
+			t.Errorf("agentImage(\"claude-code\", nil) = %q, want %q — agent-claude-code is not published, so any other fallback 404s on a published install", got, want)
 		}
 	})
 
@@ -93,13 +103,18 @@ func TestAgentLLMProvider(t *testing.T) {
 // in harnesscred_test.go, which this rewire must keep passing unmodified.
 func TestAgentHarnessLoginCatalogRewire(t *testing.T) {
 	claudeCode := harnessLogin{
-		provider:    "anthropic",
-		agent:       "claude-code",
-		secretName:  harnessCredSecretName("anthropic"),
-		sentinel:    types.ManagedOAuthSecret,
-		injectHost:  subscriptionInjectionHost,
-		tokenPrefix: "sk-ant-oat",
-		egress:      []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
+		provider: "anthropic",
+		agent:    "claude-code",
+		// The login lane does NOT follow the catalog's ImageKey re-point to
+		// `base`: a login sandbox must carry the vendor CLI it is logging into,
+		// and agent-base ships none, so the box would come up with `claude` not
+		// on PATH and the flow could never complete.
+		loginImageKey: "claude-code",
+		secretName:    harnessCredSecretName("anthropic"),
+		sentinel:      types.ManagedOAuthSecret,
+		injectHost:    subscriptionInjectionHost,
+		tokenPrefix:   "sk-ant-oat",
+		egress:        []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
 	}
 	awsSSO := harnessLogin{
 		provider:          awsSSOProvider,

@@ -70,15 +70,37 @@ const (
 // (a later wave's Tools-tab listing); lookup is always by ID (harnessByID).
 var harnessCatalog = []harnessDef{
 	{
-		ID: "claude-code", Display: "Claude Code", ImageKey: "claude-code",
+		// ImageKey is "base", NOT "claude-code": 0.6.2 stopped publishing
+		// agent-claude-code and publishes agent-base in its place, so the ghcr
+		// fallback for this row resolved to an image that does not exist —
+		// `--agent claude-code` 404'd on every published install (the one-line
+		// installer, Helm, and the desktop tier), leaving codex-cli as the only
+		// working agent name. agent-base carries the full image contract minus
+		// the vendor CLI, which is also exactly what the four callers passing a
+		// literal "claude-code" (source_scan, site_config_probe,
+		// workspace_run_image, setup) actually want.
+		//
+		// An operator who wants the real Claude Code CLI builds it locally and
+		// names it in WARDYN_AGENT_IMAGES, which is consulted FIRST and is keyed
+		// by agent name — so this changes nothing for them. See loginImageKey
+		// below for the one lane that must not follow this re-point.
+		ID: "claude-code", Display: "Claude Code", ImageKey: "base",
 		Gateway: &llmProvider{host: "api.anthropic.com", header: "x-api-key", format: "%s", secret: "anthropic-api-key"},
 		Login: &harnessLogin{
-			provider:    "anthropic",
-			agent:       "claude-code",
-			secretName:  harnessCredSecretName("anthropic"),
-			sentinel:    types.ManagedOAuthSecret,
-			injectHost:  subscriptionInjectionHost, // api.anthropic.com
-			tokenPrefix: "sk-ant-oat",
+			provider: "anthropic",
+			agent:    "claude-code",
+			// NOT the catalog's ImageKey ("base"): a login sandbox must carry the
+			// vendor CLI it is logging into, and agent-base ships none — the box
+			// would come up with `claude` not on PATH and the flow could never
+			// complete. NAMED GAP: agent-claude-code is unpublished, so on a
+			// published install this ref 404s unless the operator has built it
+			// locally and named it in WARDYN_AGENT_IMAGES (which wins over this).
+			// That is the same state as before the re-point, not a regression.
+			loginImageKey: "claude-code",
+			secretName:    harnessCredSecretName("anthropic"),
+			sentinel:      types.ManagedOAuthSecret,
+			injectHost:    subscriptionInjectionHost, // api.anthropic.com
+			tokenPrefix:   "sk-ant-oat",
 			// `claude setup-token` OAuth (observed v2.1.x): authorize on claude.com,
 			// remote callback on platform.claude.com, token exchange on the Anthropic
 			// console/api hosts. Enumerated empirically; prune/extend from the login

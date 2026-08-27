@@ -172,6 +172,37 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **Only one of three agent names resolved on a published install.**
+  `internal/api/harness.go` ships three catalog rows; `agent-claude-code` and
+  `agent-none` both 404 on every published deployment, leaving `codex-cli` as
+  the only `--agent` a user could actually pick. 0.6.2 stopped publishing
+  `agent-claude-code` and publishes `agent-base` in its place — but **nothing
+  selected `agent-base`**, and four production callers pass the literal
+  `"claude-code"` when what they want is simply the default general-purpose
+  image (`source_scan.go`, `site_config_probe.go`, `workspace_run_image.go`,
+  `setup.go`).
+
+  The `claude-code` row's `ImageKey` now points at `base`, which fixes all four
+  at once — an override in `WARDYN_AGENT_IMAGES` is still consulted first and
+  is keyed by agent name, so an operator who pins the image is unaffected. The
+  desktop envelope and the one-line installer both pointed at the retired ref
+  too, and now name `agent-base`; `install.sh` seeded no `claude-code` entry at
+  all.
+
+  **The container-login lane deliberately does not follow the re-point:** a
+  "Log in with Claude" sandbox must carry the vendor CLI it is logging into, and
+  `agent-base` ships none, so that lane keeps a `loginImageKey` of
+  `claude-code`. **Named gap:** that ref is unpublished, so on a published
+  install the login lane needs a locally-built image named in
+  `WARDYN_AGENT_IMAGES` — unchanged from before, not a regression.
+
+  Two consequences that would otherwise have gone quiet: the unpublished-image
+  warning now describes the symptom operators actually hit (the CLI missing from
+  `PATH`, not a registry 404), and `agentImageCheck`'s limited-toolchain warning
+  had silently downgraded to `info` for the default install — `agent-base`
+  carries node/npm/python3 but no Go, Java or Rust, so the warn still applies and
+  now fires.
+
 - **`scripts/test-desktop-profile.sh` checked only one envelope.** It read a
   single hardcoded `wardyn.env.example`, so any second variant shipped with no
   syntax check, no ENV.md parity check and no policy-path check. It now loops

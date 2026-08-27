@@ -564,8 +564,17 @@ func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
 // Node-only by construction => warn naming WARDYN_AGENT_IMAGES; any operator
 // override is assumed provisioned on purpose => info, not a red.
 func TestAgentImageCheck(t *testing.T) {
-	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:") {
-		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr ref", chk.Status, chk.Detail)
+	// The ghcr fallback for claude-code resolves to agent-BASE since 0.7 (the
+	// catalog row's ImageKey was re-pointed because agent-claude-code is not
+	// published). agent-base carries node/npm/python3 but no Go, Java or Rust,
+	// so the warn must still fire — and must name the image the operator will
+	// actually run, not the one that no longer resolves.
+	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-base:") {
+		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr agent-base ref", chk.Status, chk.Detail)
+	}
+	// ...and the locally-built vendor image is still the limited one it always was.
+	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-base:local"}); chk.Status != "warn" {
+		t.Errorf("locally-built agent-base: status=%q, want warn", chk.Status)
 	}
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {
 		t.Errorf("compose demo convention image: status=%q, want warn", chk.Status)

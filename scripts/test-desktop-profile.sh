@@ -181,4 +181,21 @@ for v in WARDYN_WARDYND_IMAGE WARDYN_PROXY_IMAGE; do
   esac
 done
 
+# ── 8. no envelope pins an image this project does not publish ─────────────
+# release.yml's publish matrix is wardynd, wardyn-proxy, agent-base,
+# agent-codex-cli, agent-aws-sso. agent-claude-code is NOT in it — 0.6.2 stopped
+# publishing it (it bundles a vendor CLI whose terms are not readable from
+# inside the image) and agent-base ships in its place. An envelope naming it
+# points every managed laptop at a registry 404, which is what
+# wardyn.env.example did for three releases.
+#
+# Keyed on the ghcr ref, so a LOCAL build (`make agent-images` ->
+# wardyn/agent-claude-code:local) that an operator deliberately points at is
+# still allowed — that is the supported way to get the vendor CLI.
+for f in "${ENV_EXAMPLES[@]}"; do
+  if grep -qE 'ghcr\.io/[^"]*/agent-claude-code' "${f}"; then
+    fail "$(basename "${f}") pins ghcr.io/.../agent-claude-code, which this project does NOT publish (release.yml's matrix ships agent-base in its place) — every device would 404. Use agent-base, or a locally-built ref."
+  fi
+done
+
 echo "test-desktop-profile: m-prime invariants PASS"

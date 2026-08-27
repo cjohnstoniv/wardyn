@@ -416,39 +416,66 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 // provisioned on purpose.
 func agentImageCheck(images map[string]string) SetupCheck {
 	ref := agentImage("claude-code", images)
-	if isConventionNodeOnlyImage(ref) {
+	if isConventionLimitedToolchainImage(ref) {
 		return SetupCheck{
 			ID: "agent_image", Label: "Agent image toolchains", Status: "warn",
-			Detail: "The claude-code harness image (" + ref + ") is the Node-only convention image — " +
-				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
+			Detail: "The configured claude-code agent image (" + ref + ") is a shipped convention image with a " +
+				"limited toolchain — a Go, Rust or Java workspace will fail verify/record with exit 127 " +
+				"(toolchain not found).",
 			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (helm: env.WARDYN_AGENT_IMAGES) (e.g. build deploy/images/full " +
 				"(the fat toolchain image), or your own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a " +
 				"per-run base image in the New Run wizard's \"Sandbox image\" field — Wardyn wraps it with the runner tools.",
 		}
 	}
-	// The setup connectivity probe (site_config_probe.go) dispatches the
-	// "base" image, never "claude-code" (a probe is a bare curl task, not a
-	// coding agent) — named here too so an operator reading this row doesn't
-	// mistake it for what the probe actually runs.
+	// The setup connectivity probe (site_config_probe.go) dispatches the "base"
+	// image, never "claude-code" (a probe is a bare curl task, not a coding
+	// agent). Since 0.7 the claude-code catalog row's ImageKey ALSO points at
+	// base, so on a stock deployment these are the same image and stating them
+	// as a contrast would present one image as two. They diverge only when an
+	// operator pins claude-code in WARDYN_AGENT_IMAGES — which is exactly when
+	// an operator needs to know the probe does not follow that pin.
+	probeRef := agentImage("base", images)
+	detail := "claude-code harness image: " + ref + ". "
+	if probeRef != ref {
+		detail += "The setup connectivity probe runs the `base` image instead: " + probeRef + ". "
+	}
 	return SetupCheck{
 		ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-		Detail: "claude-code harness image: " + ref + ". The setup connectivity probe runs the `base` image: " +
-			agentImage("base", images) + ". Wardyn cannot inspect image contents from the " +
+		Detail: detail + "Wardyn cannot inspect image contents from the " +
 			"control plane (no docker CLI in the distroless build) — verify a workspace to confirm its toolchains.",
 	}
 }
 
-// isConventionNodeOnlyImage reports whether ref is a shipped claude-code
-// convention image (the ghcr fallback or a locally-built tag) — the images
-// known, by construction, to carry Node only (deploy/images/claude-code/Dockerfile).
+// isConventionLimitedToolchainImage reports whether ref is one of Wardyn's own
+// shipped convention images — the ones known, by construction, to carry a
+// limited toolchain, so a Go/Rust/Java workspace fails verify/record at exit 127.
+//
+// agent-base is in this set. It became reachable in 0.7 when the claude-code
+// catalog row's ImageKey was re-pointed at `base` (agent-claude-code is not
+// published), so the ghcr fallback now resolves here — and without this entry
+// the check silently downgraded from warn to info for the DEFAULT install,
+// which is exactly the configuration that most needs the warning. Verified
+// against ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are
+// present; go, java and cargo are not.
+//
 // The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
-func isConventionNodeOnlyImage(ref string) bool {
-	// Prefix, not an exact tag: the ghcr convention now carries the daemon's
+func isConventionLimitedToolchainImage(ref string) bool {
+	// Prefix, not an exact tag: the ghcr convention carries the daemon's own
 	// version tag (D19), not a fixed :latest — every published tag is the same
-	// Node-only convention image.
-	return strings.HasPrefix(ref, "ghcr.io/cjohnstoniv/agent-claude-code:") ||
-		ref == "wardyn/agent-claude-code:local" ||
-		ref == "wardyn/agent-claude-code:demo"
+	// convention image.
+	for _, p := range []string{
+		"ghcr.io/cjohnstoniv/agent-claude-code:",
+		"ghcr.io/cjohnstoniv/agent-base:",
+	} {
+		if strings.HasPrefix(ref, p) {
+			return true
+		}
+	}
+	switch ref {
+	case "wardyn/agent-claude-code:local", "wardyn/agent-claude-code:demo", "wardyn/agent-base:local":
+		return true
+	}
+	return false
 }
 
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind

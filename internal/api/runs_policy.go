@@ -262,12 +262,32 @@ func classesOrNone(classes []types.ConfinementClass) string {
 // used before the catalog existed, since every shipped row's ImageKey equals
 // its ID.
 func agentImage(agent string, images map[string]string) string {
-	if ref, ok := images[agent]; ok {
-		return ref
-	}
 	key := agent
 	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
 		key = def.ImageKey
+	}
+	return agentImageForKey(agent, key, images)
+}
+
+// agentImageForKey is agentImage with the convention key supplied by the caller
+// instead of read from the catalog. The operator map still wins and is still
+// keyed by agent NAME, so an operator who pins an agent pins it for every
+// caller — only the ghcr FALLBACK differs.
+//
+// It exists for the container-login lane. The `claude-code` catalog row points
+// its ImageKey at `base`, because agent-base is the image actually published
+// (0.6.2 stopped publishing agent-claude-code) and because four production
+// callers — source_scan, site_config_probe, workspace_run_image and setup —
+// pass the literal "claude-code" when what they want is simply "the default
+// general-purpose agent image". agent-base is correct for all of them.
+//
+// It is NOT correct for "Log in with Claude": deploy/images/base/Dockerfile:1
+// is "the Wardyn agent image contract, with NO vendor CLI", so resolving that
+// lane to agent-base would launch a box where `claude` is not on PATH and the
+// login could never complete. That lane keeps the vendor-CLI key.
+func agentImageForKey(agent, key string, images map[string]string) string {
+	if ref, ok := images[agent]; ok {
+		return ref
 	}
 	return "ghcr.io/cjohnstoniv/agent-" + key + ":" + agentImageTag(version.Version)
 }
@@ -382,30 +402,38 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// withUnpublishedImageWarning appends an explanation when the agent's image
-// resolves to the ghcr convention ref for something Wardyn does not publish.
+// withUnpublishedImageWarning appends an explanation when an agent needs a
+// vendor CLI this project does not redistribute, and the operator has not
+// supplied an image that carries one.
 //
-// agentImage() falls back to ghcr.io/cjohnstoniv/agent-<key>:<version> for any
-// agent with no WARDYN_AGENT_IMAGES entry. That is right for every image we ship,
-// but agent-claude-code bundles Anthropic's Claude Code CLI — not open-source,
-// and its terms are not even readable from inside the image — so this project does
-// not redistribute it. Without this the operator's first symptom is a registry 404
-// on a tag that looks like it should exist.
+// The failure it describes CHANGED SHAPE in 0.7 and the wording follows.
+// Previously claude-code's convention ref was agent-claude-code, which is not
+// published, so the symptom was a registry 404 on a tag that looks like it
+// should exist. That row's ImageKey now points at `base` — agent-base IS
+// published — so the pull succeeds and the symptom moves: the sandbox comes up
+// correctly and `claude` is not on PATH, because deploy/images/base/Dockerfile
+// is "the agent image contract, with NO vendor CLI". Same root cause (we do not
+// redistribute the CLI), a different thing for the operator to see, so warn
+// about what they will actually hit.
+//
+// The trigger is the catalog's loginImageKey rather than a hardcoded agent name:
+// a row carries one exactly when its harness needs a vendor CLI whose image we
+// cannot publish, so a future row inherits this warning by construction instead
+// of by someone remembering to widen an `if`.
 //
 // An explicit override means the operator supplied their own image; say nothing.
 func withUnpublishedImageWarning(warnings []string, agent string, images map[string]string) []string {
 	if _, explicit := images[agent]; explicit {
 		return warnings
 	}
-	key := agent
-	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
-		key = def.ImageKey
-	}
-	if key != "claude-code" {
+	def, ok := harnessByID(agent)
+	if !ok || def.Login == nil || def.Login.loginImageKey == "" {
 		return warnings
 	}
-	return append(warnings, "Wardyn does not publish an agent-claude-code image: it bundles Anthropic's Claude Code CLI, "+
-		"which is not open-source and whose terms are not readable from the image. "+
-		"Build it locally with `make agent-images` — you then install that CLI under your own agreement with Anthropic — "+
-		"or set WARDYN_AGENT_IMAGES to an image you built. See deploy/images/THIRD-PARTY-TERMS.md")
+	return append(warnings, "Wardyn does not publish an agent-"+def.Login.loginImageKey+" image: it bundles a vendor CLI "+
+		"which is not open-source and whose terms are not readable from the image. This run resolves to "+
+		"agent-"+def.ImageKey+" instead, which carries the full agent-image contract but no vendor CLI — the sandbox will "+
+		"start and the CLI will not be on PATH. Build the vendor image locally with `make agent-images` — you then install "+
+		"that CLI under your own agreement with its vendor — or set WARDYN_AGENT_IMAGES to an image you built. "+
+		"See deploy/images/THIRD-PARTY-TERMS.md")
 }

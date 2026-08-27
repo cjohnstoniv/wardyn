@@ -59,13 +59,19 @@ const (
 // ships Anthropic/claude-code only; codex ChatGPT-login capture is the
 // documented v2 seam (needs ~/.codex/auth.json capture + a chatgpt.com sink).
 type harnessLogin struct {
-	provider    string   // canonical provider id, e.g. "anthropic"
-	agent       string   // agent (and thus image) the login sandbox runs
-	secretName  string   // reserved store name holding the captured token blob
-	sentinel    string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
-	injectHost  string   // the ONLY host the sentinel may inject to
-	tokenPrefix string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
-	egress      []string // region-free hosts the interactive login flow must reach
+	provider string // canonical provider id, e.g. "anthropic"
+	agent    string // agent (and thus image) the login sandbox runs
+	// loginImageKey overrides the catalog ImageKey for THIS lane's ghcr
+	// fallback. claude-code's catalog ImageKey is "base" so that `--agent
+	// claude-code` resolves to an image that is actually published — but a
+	// login sandbox must carry the VENDOR CLI it is logging into, and
+	// agent-base ships none. Empty = follow the catalog.
+	loginImageKey string
+	secretName    string   // reserved store name holding the captured token blob
+	sentinel      string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
+	injectHost    string   // the ONLY host the sentinel may inject to
+	tokenPrefix   string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
+	egress        []string // region-free hosts the interactive login flow must reach
 	// regionalSSOEgress: the flow also dials REGION-SCOPED AWS SSO endpoints,
 	// which no static allowlist entry can express (see loginEgress) — they are
 	// derived from the operator's configured SSO region at launch.
@@ -469,6 +475,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		})))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
+	if hl.loginImageKey != "" {
+		image = agentImageForKey(hl.agent, hl.loginImageKey, s.cfg.AgentImages)
+	}
 	// No injections, no repo, no verify plan: a blank interactive box (plus, for
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
 	// CA and attaches; the login pane auto-types the provider's command.

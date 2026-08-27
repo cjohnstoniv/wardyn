@@ -101,7 +101,7 @@ WARDYN_UI_SANDBOX_PORT=${WARDYN_UI_SANDBOX_PORT:-8081}
 # Published images — this install pulls, it never builds.
 WARDYN_WARDYND_IMAGE=ghcr.io/${REPO%/*}/wardynd:${SEMVER}
 WARDYN_PROXY_IMAGE=ghcr.io/${REPO%/*}/wardyn-proxy:${SEMVER}
-WARDYN_AGENT_IMAGES={"codex-cli":"ghcr.io/${REPO%/*}/agent-codex-cli:${SEMVER}","aws-sso":"ghcr.io/${REPO%/*}/agent-aws-sso:${SEMVER}"}
+WARDYN_AGENT_IMAGES={"claude-code":"ghcr.io/${REPO%/*}/agent-base:${SEMVER}","codex-cli":"ghcr.io/${REPO%/*}/agent-codex-cli:${SEMVER}","aws-sso":"ghcr.io/${REPO%/*}/agent-aws-sso:${SEMVER}"}
 EOF
   chmod 600 .env
 else
