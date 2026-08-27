@@ -147,6 +147,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// verdict counts every row in the deployment, which is whole-fleet audit
 	// volume — the disclosure that keeps /metrics admin-gated too.
 	"GET /api/v1/audit/chain/verify": {class: classAdmin},
+	// Operator-triggered sandbox sweep. Admin: it tears down containers, and on
+	// m' the developer is explicitly not an operator.
+	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──

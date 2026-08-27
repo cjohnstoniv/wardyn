@@ -325,6 +325,141 @@ managed file, a run naming no policy really does resolve to that ceiling, and
 a synthesized profile really is clamped to it (see "Tamper posture" above for
 what "clamped" does and does not mean once the caller is an admin).
 
+## Model access on m′
+
+On the member-mode profile three shipped mechanisms compose into what looks
+like a dead end, and it is worth walking because the obvious reading is wrong:
+
+1. m′ makes **OIDC mandatory**.
+2. With OIDC configured, `wardynd` **refuses subscription injection** — a shared
+   subscription credential would serve other people's runs, which the harness
+   vendor's terms prohibit.
+3. Secret writes on m′ are **admin-only**, so the developer cannot
+   `wardyn secret set anthropic-api-key` for themselves, and a member's own
+   inline `api_key` grant is dropped unless the operator eligible-listed that
+   exact {host, secret} pairing.
+
+The daemon's own refusal message names the way out, and it is easy to read only
+the first half of it: *"Give each user their own API key … **or use Bedrock**"*.
+
+**Bedrock is the working path on m′, and it needs no member secret write.**
+
+It is **daemon-level, MDM-set** configuration rather than a per-member
+credential, so it routes around the wall above entirely:
+
+| Variable | Set by |
+|---|---|
+| `WARDYN_BEDROCK_MODEL` | the envelope (a cross-region inference-profile id or an application-inference-profile ARN — **not** a bare foundation-model id) |
+| `WARDYN_BEDROCK_REGION` | the envelope |
+| `bedrock-api-key` secret | the **operator**, once, via the admin token |
+
+With those three in place a member's run resolves Bedrock at dispatch. The
+credential is never resident: a Bedrock API key is a static `Authorization`
+header, so the proxy TLS-MITMs `bedrock-runtime` and injects it, and the
+sandbox holds only a placeholder — the same trust parity as the api-key and
+subscription lanes. No member grant, no workspace requirement, and nothing that
+`filterMemberGrants` can drop.
+
+**Constraint:** Bedrock resolution is scoped to the `claude-code` agent. A
+member running `codex-cli` on m′ still needs an operator-provided OpenAI
+credential.
+
+**Rejected on the record:** `ROADMAP.md`'s alternative — re-running the
+provider-convention model grant *after* `filterMemberGrants`, so a member's own
+key survives with no integration behind it — is a real fix for **pure-BYOK for
+members**, which is a different flow. It is not needed to give an m′ fleet model
+access, and it reopens the secret-exfil guard `filterMemberGrants` exists for
+(a member pairing an arbitrary stored secret with an allowlisted host). Left as
+a Named gap for whoever wants BYOK-for-members specifically.
+
+## Operational hygiene
+
+**Log rotation.** The LaunchDaemon appends stdout *and* stderr to one
+`/var/log/wardyn/desktop.log` every 300s forever, and compose sets no
+`max-size` — nothing bounded it. `install.sh` now lays down
+`/etc/newsyslog.d/wardyn.conf` (macOS). Linux logs to journald, which rotates
+itself; the shipped `logrotate` fragment is only for an operator who has
+redirected the converge job's output to a file.
+
+It keeps **seven generations, not one**, deliberately: the audit-drop counter
+above surfaces *only* as a warning in this file, because nothing scrapes
+`/metrics` on a laptop. Rotating aggressively would destroy the evidence that
+the SIEM fanout dropped events — on the tier that sells recorded evidence.
+
+**Fleet posture.** There is no posture endpoint and none is needed:
+`wardyn support-bundle` already collects it. Schedule it from MDM and collect
+the file:
+
+```sh
+# MDM-scheduled, e.g. daily. The admin token is MDM-held; the developer never
+# reads it, and on m′ they could not use it anyway.
+wardyn support-bundle -o "/var/log/wardyn/support-$(date +%F).tar.gz"
+```
+
+**Leaked sandboxes.** A run row that is terminal but still carries a sandbox ref
+can leave that sandbox running. The **boot** reconciler already tears this down
+(its label-keyed sweep plus the store-state verdict), so what was missing was
+not another boot pass but an **on-demand** one — for the shape a laptop actually
+produces: suspend for a week, wake with dead sandboxes, never reboot, so no boot
+pass ever runs:
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+  http://127.0.0.1:8080/api/v1/admin/sandboxes/sweep
+```
+
+**Decision, recorded:** the on-demand route, **not a ticker, and not a second
+boot pass**. A ticker was rejected on cost — the sweep calls `ListRuns` unpaged
+and probes every terminal run carrying a ref, so it grows with run history
+forever and would additionally need leader election. A second boot pass was
+rejected on evidence: wiring it there makes the existing reconciler tear the
+same sandbox down **twice**, which its own test asserts against. MDM can
+schedule the route like the support bundle.
+
+> ⚠️ **A restart mid-run can write live credentials into the recording, in
+> cleartext, with a `success` audit event.** A single `wardynd` restart — an MDM
+> upgrade window, a crash, a laptop waking — wipes the in-memory secret-masking
+> snapshot. The masking writer then **passes the stream through unmasked**,
+> because nothing in that path can distinguish *"no secrets for this run"* from
+> *"not my run"*. This tier maximises the trigger: a 300s converge timer, an
+> upgrade model that is a daemon restart, and a machine that sleeps. Weigh it
+> against the recorded-evidence claim above before selling recordings as
+> tamper-evident. Fixing it means failing closed on an empty snapshot for a
+> non-terminal run, and is not done.
+
+## The laptop is sometimes offline
+
+A managed laptop lives in airplanes and coffee shops. Four things reach the
+network; here is what each does when it cannot.
+
+| Site | Offline behaviour |
+|---|---|
+| The converge job's image pull | **Fine.** It runs `--pull missing`, so an image already on the box is used as-is. (It used to be `--pull always` under `set -euo pipefail`, which killed the launcher and left the stack **down even though every image was local**.) |
+| OIDC discovery at boot (m′ only) | **Fails boot, loudly, inside a 30s budget — and that is correct.** See below. |
+| First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image. This is inherent: enrolment cannot complete offline. Pre-seed the image, or enrol on-network. |
+| Audit fanout to the SIEM | **Drops past the buffer.** At-most-once beyond 4096 events; see the ceiling above. This is the one that loses evidence rather than recovering. |
+
+**Why the IdP case is not a bug.** On m′, OIDC is the only authentication, so a
+daemon that came up *without* a working authenticator would be serving
+authenticated routes with nothing behind them. `wardynd` therefore fails boot
+rather than degrading. It is not stranded: `wardynd`'s container carries
+`restart: unless-stopped`, and the converge job re-asserts every 300s, so the
+retry loop already exists **one layer up** — and it is fail-closed by
+construction, because a daemon that never finishes booting cannot serve
+anything. It recovers on its own when the network returns.
+
+What was missing was not retry but **diagnosability**: the launcher said only
+*"wardynd did not become healthy"*. It now prints the daemon's last lines and
+names this cause first.
+
+**Three different "offline"s, because they fail differently.** A blackholed
+host fails fast; an *unreachable* IdP is the quick case. A **captive portal**
+is the slow one: DNS resolves and the connection hangs, so each attempt spends
+the whole 30s budget. A laptop with no link at all still has loopback and the
+Docker bridge, so the stack itself comes up — only the outward-facing
+dependencies fail. When testing this, use the mode that matches the site:
+reachable-but-hanging is the one that exercises the boot budget.
+
 ## Which Docker socket
 
 **This is the tier's likeliest install failure, and it is invisible in CI.**

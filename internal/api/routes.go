@@ -149,10 +149,7 @@ func (s *Server) routes() chi.Router {
 			// per-principal evidence ("everything developer X did") in one request (D6).
 			r.Get("/audit/export", s.handleExportAudit)
 			// Tamper-evidence sweep over the audit hash chain (migration 0047).
-			// operatorOnly, unlike the two reads above: it reports whole-deployment
-			// audit volume, which is the same disclosure that keeps /metrics gated.
-			// Operator-INVOKED by design — wardynd never verifies at boot.
-			operatorOnly.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+			s.adminRoutes(operatorOnly)
 			r.Get("/me", s.handleMe)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
@@ -487,4 +484,21 @@ func (s *Server) mountAccountRoutes(r chi.Router, operatorOnly chi.Router) {
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+}
+
+// adminRoutes registers the operator-only maintenance routes.
+//
+// Split out of routes() rather than inlined: routes() sits exactly at golangci
+// funlen's 150-line cap, so ANY addition to it fails `make lint` — a step of
+// the required `build` context. A helper is the honest answer; padding the cap
+// for one route is not.
+func (s *Server) adminRoutes(r chi.Router) {
+	// operatorOnly, unlike the two audit reads in routes(): it reports
+	// whole-deployment audit volume, which is the same disclosure that keeps
+	// /metrics gated. Operator-INVOKED by design — wardynd never verifies at boot.
+	r.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// Sandbox sweep. Deliberately not wired at boot (sweepOrphanedSandboxes
+	// already covers that case — see reconcile.go) and deliberately not a
+	// ticker; see handleSweepSandboxes for the cost argument.
+	r.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
 }

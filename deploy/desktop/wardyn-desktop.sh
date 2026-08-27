@@ -172,7 +172,24 @@ compose up -d --no-build --pull missing
 PORT="${WARDYN_UP_PORT:-8080}"
 BASE_URL="http://127.0.0.1:${PORT}"
 log "Waiting for ${BASE_URL}/healthz"
-wait_healthy "${BASE_URL}" 60 1 || die "wardyn-desktop.sh: wardynd did not become healthy (docker compose -p wardyn-desktop logs wardynd)"
+if ! wait_healthy "${BASE_URL}" 60 1; then
+  # "did not become healthy" on its own sends a developer to the wrong place.
+  # The commonest cause on a laptop is benign and self-healing: OIDC discovery
+  # cannot reach the IdP off-VPN, so wardynd fails boot LOUDLY inside its 30s
+  # budget (deliberate — an authenticator that half-exists is worse than one
+  # that refuses), Docker's `restart: unless-stopped` restarts it, and this
+  # timer re-asserts every 300s. It recovers by itself the moment the network
+  # is back. Print the reason instead of making them go find it.
+  warn "wardyn-desktop.sh: wardynd did not become healthy. Last lines:"
+  compose logs --tail 25 wardynd 2>&1 | sed 's/^/    /' >&2 || true
+  warn "wardyn-desktop.sh: on a laptop the usual cause is an unreachable IdP (off-VPN):"
+  warn "  OIDC discovery has a 30s boot budget and fails CLOSED rather than serving"
+  warn "  authenticated routes with no authenticator. Docker restarts wardynd and this"
+  warn "  job re-asserts every 300s, so it recovers on its own once the network is back."
+  warn "  A captive portal is the slow case: DNS resolves and the request hangs, so the"
+  warn "  full 30s budget is spent before each retry."
+  die "wardyn-desktop.sh: wardynd did not become healthy (docker compose -p wardyn-desktop logs wardynd)"
+fi
 log "wardynd healthy"
 
 # Idempotent site-config apply. site-config.json is a full-document REPLACE

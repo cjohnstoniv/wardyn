@@ -580,3 +580,29 @@ func retryQuick(ctx context.Context, fn func() error) error {
 	}
 	return err
 }
+
+// handleSweepSandboxes is the operator-triggered counterpart to the boot pass.
+//
+// SweepTerminalSandboxes deliberately does not run on a ticker: it calls
+// ListRuns UNPAGED and probes Runner.Status for every terminal run carrying a
+// SandboxRef, so its cost grows with run history forever and a periodic version
+// would additionally need reapTickLock-style leader election. Boot-only is the
+// right default (on a laptop a reboot follows most crashes) but it misses the
+// shape a laptop actually produces: suspend for a week, wake with dead
+// sandboxes, never reboot. This route is that lever, and it is cheap because the
+// operator decides when to pay for it.
+func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
+	swept, err := s.SweepTerminalSandboxes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "sandbox sweep failed: "+err.Error())
+		return
+	}
+	// NOT `sandbox.sweep`: that action is documented as emitted on FAILED
+	// teardown only, by the primitive itself, and reusing it for a success event
+	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
+	// question — WHO asked for a sweep, and what did it find — and the
+	// primitive's own failure rows still fire underneath it.
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep_requested",
+		"", "success", mustJSON(map[string]any{"swept": swept})))
+	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
+}

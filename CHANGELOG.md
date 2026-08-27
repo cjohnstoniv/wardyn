@@ -122,6 +122,30 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Added
 
+- **Model access on m′ has a documented, working path — it is Bedrock.** Three
+  shipped mechanisms compose into what reads as a dead end (m′ mandates OIDC;
+  OIDC refuses subscription injection; secret writes are admin-only), and the
+  daemon's own refusal message names the way out in a clause that is easy to
+  skip: *"…or use Bedrock"*. Bedrock is **daemon-level, MDM-set** config rather
+  than a per-member credential, so it routes around that wall entirely and needs
+  no member secret write. It appeared **zero times** in `docs/DESKTOP.md` and in
+  both envelopes; it is now documented in each, with the `claude-code`-only
+  constraint stated.
+
+- **Log rotation.** The LaunchDaemon appended stdout *and* stderr to one file
+  every 300s forever with no `max-size` anywhere. Ships a `newsyslog` fragment
+  (macOS) and a `logrotate` one (Linux, where journald otherwise handles it),
+  keeping **seven** generations on purpose: the audit-drop counter surfaces only
+  in that file on a laptop, so rotating aggressively would destroy the evidence
+  that the SIEM fanout dropped events.
+
+- **An operator can sweep leaked sandboxes on demand** —
+  `POST /api/v1/admin/sandboxes/sweep`. Not a ticker (the sweep is an unpaged
+  `ListRuns` plus a probe per terminal run, so it grows with history and would
+  need leader election) and **not a second boot pass**: the existing reconciler
+  already covers boot, and adding it there tears the same sandbox down twice.
+  The gap it fills is a laptop that suspends for a week and never reboots.
+
 - **The desktop tier installs on Linux.** `deploy/desktop/install.sh` hard-refused
   every non-Darwin host (*"the Linux/systemd path is not built yet"*), so a tier
   whose own topology diagram showed Linux had no Linux path. It now branches on

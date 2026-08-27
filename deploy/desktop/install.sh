@@ -124,6 +124,16 @@ install -d -m 0755 "${MANAGED_DIR}"
 # swallowed launch failure, not a missing-log inconvenience.
 install -d -m 0755 /var/log/wardyn
 
+# Log rotation. The plist appends stdout AND stderr to one file every 300s
+# forever and compose sets no max-size, so nothing bounded this before.
+if [ "${OS}" = "Darwin" ]; then
+  [ -f "${SCRIPT_DIR}/wardyn.newsyslog.conf" ] && install -m 0644 "${SCRIPT_DIR}/wardyn.newsyslog.conf" /etc/newsyslog.d/wardyn.conf
+else
+  # Linux logs to journald (which rotates itself); this only covers an operator
+  # who has redirected the converge job's output to a file.
+  [ -d /etc/logrotate.d ] && [ -f "${SCRIPT_DIR}/wardyn.logrotate.conf" ] && install -m 0644 "${SCRIPT_DIR}/wardyn.logrotate.conf" /etc/logrotate.d/wardyn
+fi
+
 if [ -s "${AGE_FILE}" ]; then
   echo "==> ${AGE_FILE} already exists — leaving it alone (a re-mint orphans every secret encrypted under the old key)"
 else

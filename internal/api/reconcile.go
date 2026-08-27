@@ -116,6 +116,21 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// containers are visible to the label sweep as "row terminal, containers still
 	// alive" — the exact leak (D13). It repeats on the same slow cadence in
 	// runWatcherSweeper.
+	// NOT wired here: SweepTerminalSandboxes.
+	//
+	// It looks like the missing boot sweep for "terminal run, ref still set,
+	// sandbox still alive" — but sweepOrphanedSandboxes above ALREADY tears that
+	// case down, via the label listing plus the store-state verdict.
+	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox asserts the teardown
+	// happens EXACTLY ONCE, and adding the sweep here makes it twice.
+	//
+	// So the primitive's value is not a second boot pass; it is an ON-DEMAND
+	// retry surface for the shape a laptop actually produces — suspend for a
+	// week, wake with dead sandboxes, never reboot, so no boot pass ever runs.
+	// That is POST /api/v1/admin/sandboxes/sweep, which MDM can schedule like
+	// `wardyn support-bundle`. A ticker was rejected separately: the primitive
+	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
+	// cost grows with run history forever and it would need leader election.
 	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
 }
 
