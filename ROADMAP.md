@@ -264,21 +264,23 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   minted by the installer and never by MDM, and the org's ceiling delivered as
   an ordinary `policy.json` file ([docs/DESKTOP.md](docs/DESKTOP.md)). The
   install lane itself — `install.sh`, a launchd `LaunchDaemon`, and the
-  `wardyn-desktop.sh` wrapper it runs — is macOS-only; the Linux/systemd path
-  the topology diagram shows is not built. **Member role: none, by design, on
+  `wardyn-desktop.sh` wrapper it runs — was macOS-only in 0.6; **0.7 built the
+  Linux/systemd path** the topology diagram shows. **Member role: none, by design, on
   the local-mode variant** — local-mode callers are *always* admins
   (`Server.requireOperator`), so this tier's default posture has no member/
   admin split at all, only "the developer is the operator." The envelope's
   documented SSO variant does carry real OIDC member/admin RBAC (same code
-  path as every other tier), but `wardyn-desktop.sh`'s automatic
-  `site-config apply` only runs under local mode — under SSO it warns and
-  leaves that one step to a human, since the wrapper has no CLI-usable
-  credential once a real login is required. `scripts/test-desktop-profile.sh`
+  path as every other tier). In 0.6 `wardyn-desktop.sh`'s automatic
+  `site-config apply` only ran under local mode, on the premise that the wrapper
+  had no CLI-usable credential under SSO — **0.7 found that premise wrong** (the
+  MDM-delivered admin token is already in the container and authenticates even
+  with OIDC configured) and deleted the gate. `scripts/test-desktop-profile.sh`
   (`make test-scripts`) and `ci.yml`'s `desktop-envelope` job (boots the real
   compose profile and proves `/policies/default`, no-policy resolution and
   Recording Mode synthesis all honor the managed ceiling) are the honesty
-  gates; a scripted smoke run against a real Mac is the one piece still
-  owed — see [docs/DESKTOP.md](docs/DESKTOP.md) "Try it, once, on a real Mac".
+  gates; a scripted smoke run against a real Mac is **still owed** — see
+  [docs/DESKTOP.md](docs/DESKTOP.md) "Try it, once, on a real Mac". 0.7 did not
+  close it: it needs hardware, not code.
 - **Extras.** The react-router advisory suppression is **deleted**:
   GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0 — the suppression had
   been carried on a stale note claiming only the 7 → 8 major fixed it — so the
@@ -303,12 +305,15 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   never resident), which slots into 0.7/0.8 when scheduled, not before — and one
   is now a named, dated decision rather than an open maybe: **C0, routing an
   interactive run's tool approvals to the console the way autonomous `hold`
-  runs already do, is DEFERRED to v0.7.** Upstream pins `claude`'s
-  `--permission-prompt-tool` to non-interactive use, and the hook-based
-  alternative fails *open* on a timeout — the wrong default for an approval
-  gate. Self-service value collapses anyway: the human deciding the prompt can
-  already attach to the run and answer it directly, so the console route buys
-  convenience, not a capability that doesn't otherwise exist.
+  runs already do, was deferred to v0.7 and RESOLVED there — as a refusal, not
+  a build.** Upstream pins `claude`'s `--permission-prompt-tool` to
+  non-interactive use, and the hook-based alternative fails *open* on a timeout,
+  the wrong default for an approval gate. 0.7's spike found no mechanism that
+  fails closed for an interactive session, so there was nothing to build on.
+  Self-service value collapses anyway: the human deciding the prompt can already
+  attach to the run and answer it directly. What 0.7 shipped instead is the
+  honest half — `tool_approvals=hold` on an interactive run used to be accepted
+  and silently discarded, and is now refused with a 400 naming the field.
 
 ## Planned
 
@@ -317,19 +322,32 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 v0.7 → v0.8 is the remaining path to alpha: the same governance deployed to
 developer desktops (0.7), then the alpha RC (0.8). The cloud base and
-permissioning 0.6 owed are shipped — see "What v0.6 shipped" above, which now
-includes the desktop tier's macOS install lane; v0.7 is what's left of it
-(Linux/systemd, the enterprise-distribution polish) rather than the whole
-tier from scratch. The sentinel-class PAT lane (proxy-injected git PATs,
-never resident), the one remaining designed-but-unscheduled candidate from
-the 0.5 campaign, slots into 0.7/0.8 when scheduled, not before. **C0**
-(routing an interactive run's tool approvals to the console) is **DEFERRED to
-v0.7** for the reason stated under "What 0.6 deliberately did not ship"
-above — not unscheduled, decided.
+permissioning 0.6 owed are shipped, and 0.7's desktop work is built and awaiting
+release rather than planned.
+
+**C0 is RESOLVED, not deferred again.** The spike's answer: `wardyn-toolgate`
+already routes a NON-interactive run's tool calls to the approval FSM and fails
+closed, and no equivalent mechanism exists for an interactive session — the
+agent parks its own prompt in the attach pane. So there was nothing to build on.
+What 0.7 shipped instead is the honest half: `tool_approvals=hold` on an
+interactive run used to be accepted and silently discarded, and is now refused.
+
+**The sentinel-class PAT lane** (proxy-injected git PATs, never resident) remains
+the one designed-but-unscheduled candidate from the 0.5 campaign. It is **not in
+0.7**: its discriminator is a daemon env var rather than a per-run field, so
+nothing about it is release-trapped, and it slots into 0.8 when scheduled.
+
+**New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
+sandbox's containment posture (egress reach, secrets present, confinement class)
+to a permitted autonomy level, enforced both at the Wardyn boundary and, for
+agents that support managed settings, by generating that agent's enterprise
+policy file. Researched during 0.7 and deliberately not built in it; the
+groundwork is that the posture inputs and the approval FSM it would ride already
+exist.
 
 | Milestone | Scope |
 |---|---|
-| **v0.7** | **Enterprise desktop deployment — the rest of it.** 0.6 already shipped the macOS half (`deploy/desktop/`: install lane, launchd, the envelope contract — [docs/DESKTOP.md](docs/DESKTOP.md)). What's left: the Linux/systemd installer the topology diagram already names, packaging/signing for real MDM distribution (a Jamf/Intune-ready payload, not a git checkout), and closing the SSO-variant gap where `wardyn-desktop.sh` can't self-apply `site-config.json` without a human login. **C0** (routing interactive tool approvals to the console) also lands here — see "What 0.6 deliberately did not ship" for why it waited. A first-class, per-provider model base-URL override — so Wardyn's own `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` credential injection can be redirected to an internal model gateway, not just a run's own outbound `egress_redirects` — is also planned here (see [docs/OPERATIONS.md](docs/OPERATIONS.md) → "Internal model gateway" for today's supported workaround and its limits) |
+| **v0.7** | **Enterprise desktop deployment — the rest of it.** Built and awaiting release: the Linux/systemd installer and uninstaller, an MDM-distributable `.deb`/tarball built from a clean tree, the member-mode (m′) envelope, the SSH gateway actually reachable on the tier, digest-pinned images with a working upgrade path, a browser desktop (noVNC) as an image variant, and **C0**'s outcome — the interactive `tool_approvals` contradiction is now refused rather than silently discarded. Still owed and **operator-gated**: the macOS `.pkg` (needs an Apple Developer ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run. See the release's CHANGELOG for the full list |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
@@ -339,15 +357,35 @@ above — not unscheduled, decided.
 These are known, documented ceilings. They are listed so they are not mistaken for
 shipped behavior; none is scheduled.
 
-- **`--agent` is required even for runs that have no agent.** `POST /runs` rejects
-  a request without an `agent` name (`internal/api/runs_create_validate.go`), and
-  that holds for `task_mode=exec` too — a plain shell command with no harness and
-  no model still has to name one. In practice the field selects the sandbox IMAGE,
-  so it is doing an image-label job under an agent-shaped name. The effect is
-  cosmetic but it is the single biggest reason the CLI reads AI-first for a
-  non-agent user. Fixing it means either defaulting the label server-side for
-  `exec` runs or renaming the field — a wire-contract change, so not a patch
-  release.
+- **The UI-sandbox images are not published.** The relay ships and works, and
+  0.7 added a second app (`novnc`) alongside `vscode` — but neither image is in
+  `release.yml`'s publish matrix, and `deploy/images/vscode/` builds `FROM` a
+  locally-built base. Consequences: the browser lane is **unavailable on the
+  desktop tier** (a managed laptop has no repo and no build path) and on Helm (a
+  cluster pulling only published images gets a gateway with nothing to serve).
+  It works today on a developer checkout. Publishing them means taking on the
+  trivy matrix, a per-image SBOM assertion, and a GPL source offer for a whole X
+  stack — a supply-chain workstream rather than an image build. **Deferred to
+  0.8.**
+
+- **The managed-desktop demo episode (`02b`) is a failing stub.** Its grader arm
+  and persona quiz are written; the take is not shot. It is the
+  managed-desktop/member-mode story for the tier 0.7 is named after. Deferred
+  with the rest of the demo series to the video-restructure campaign, which
+  re-cuts every episode around three audiences rather than shooting this one
+  twice.
+
+- **`--agent` is still required for a run that names no image.** **0.7 narrowed
+  this rather than closing it.** A `task_mode=exec` run that carries an `--image`
+  (or an attached workspace) no longer needs an agent — which was the case that
+  made the CLI read AI-first, and which our own CI docs used to demonstrate the
+  workaround for. What remains: a bare `wardyn run --task-mode exec --task 'echo
+  hi'` with no image still 400s, because there is nothing to run it in.
+  The residual is therefore "the run must name SOMETHING", not "the run must name
+  an agent". Deliberately not defaulted further: defaulting the agent to
+  `claude-code` would make an agentless run eligible for the operator's live
+  subscription credential, and defaulting it to `byoa`/`none` resolves to an
+  image that is not published.
 - **Never-resident Azure DevOps git egress.** Designed, not built. ADO works today
   through the `git_pat` grant, on which the PAT *is* resident in the sandbox. The
   ceiling: ADO has no token-minting API, so the operator PAT's scope is the boundary
@@ -445,8 +483,15 @@ shipped behavior; none is scheduled.
   resolves through the same `resolveRunPolicy` chokepoint and the same
   `resolveRunLLMAccess` verdict the create path uses (`internal/api/preflight.go`),
   so its checklist shows the dropped grant and the resulting no-model-access
-  before the member launches. The fix, if pure-BYOK-for-members is a wanted
-  flow: re-run the provider-convention model grant AFTER `filterMemberGrants`,
+  before the member launches.
+
+  **0.7 note: this is NOT the member-mode model-access story.** A member on the
+  desktop tier's m′ profile reaches a model via **Bedrock**, which is daemon-level
+  MDM-set configuration rather than a per-member credential and therefore routes
+  around this gate entirely — documented in `docs/DESKTOP.md` "Model access on
+  m′". What remains below is specifically pure-BYOK-for-members, a different
+  flow. The fix, if that flow is wanted: re-run the provider-convention model
+  grant AFTER `filterMemberGrants`,
   so a member's own key survives with no integration and no workspace
   requirement behind it.
 
