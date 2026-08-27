@@ -149,6 +149,31 @@ managed Kubernetes; every item below was verified against the code before it was
 Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
 gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
 lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
+- **The BYOI wrap produced images that could not pass their own contract
+  selftest.** `FinalizeBase` COPYed the `wardyn-git-helper` binary onto `PATH`
+  but wired nothing to it, so git never called it. Any run whose policy declares
+  a `github_token` eligible grant then failed `agent-run --selftest` with *"a git
+  grant is present but the credential helper is not wired — brokered git would
+  silently no-op"*. `examples/policies/demo.json` declares exactly that grant and
+  is the desktop tier's own managed ceiling, so this broke the whole BYOI lane.
+
+  The wrap now installs a root-owned `/etc/gitconfig` (COPY, never `RUN` — a BYOI
+  base may carry no shell and no git, and the stage must stay `FROM`+`COPY` for
+  `assertWrapSafeBase`). Its `--secret-file` path is `$HOME`-relative rather than
+  the agent images' hardcoded `/home/agent`, because a BYOI base has its own user
+  and home while `provision_git_helper_secret` always writes
+  `${HOME}/.wardyn/git-helper.secret`; hardcoding it would have left the
+  caller-auth gate silently falling open on every BYOI image.
+
+- **The selftest failed closed on a base image with no git at all.** Absent git
+  is not an unwired helper — there is no git to no-op — and
+  `selftest_check_bins` had already ruled git "not required for this task mode"
+  two blocks earlier. Two halves of one selftest disagreeing is what kept the
+  `desktop-envelope` CI job red on **every run since it was added** — it has
+  never once been green. Both halves are now consistent; where git absence
+  genuinely matters (harness mode, or exec mode with repo wiring)
+  `selftest_check_bins` still requires it.
+
 - **Both documented install paths were broken.** `install.sh` resolved its
   version from `releases/latest`, which EXCLUDES pre-releases — and RELEASING.md
   mandates `--prerelease` on every Wardyn release, so that endpoint returned

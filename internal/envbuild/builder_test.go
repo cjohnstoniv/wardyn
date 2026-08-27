@@ -6,10 +6,13 @@
 package envbuild
 
 import (
+	"archive/tar"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -881,4 +884,92 @@ func TestValidateToolsDir_ConsumesEveryRequiredTool(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildFinalizeContext_WiresGitCredentialHelper is the regression guard for
+// the defect that made `desktop-envelope` red from the day the job was added and
+// never once green: the BYOI wrap COPYed the wardyn-git-helper BINARY onto PATH
+// but wired NOTHING to it, so git never called it. Any run whose policy declares
+// a `github_token` eligible grant then failed `agent-run --selftest` with "a git
+// grant is present but the credential helper is not wired". That is exactly what
+// examples/policies/demo.json declares, and it is the desktop tier's own managed
+// ceiling — so this broke the entire BYOI lane, not a corner of it.
+//
+// Nothing covered buildFinalizeContext before this test, which is how a wrap
+// that produces an unusable image passed every gate.
+func TestBuildFinalizeContext_WiresGitCredentialHelper(t *testing.T) {
+	toolsDir := t.TempDir()
+	for _, name := range requiredTools {
+		if err := os.WriteFile(filepath.Join(toolsDir, name), []byte("#!/bin/sh\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rdr, err := buildFinalizeContext("ubuntu:24.04", toolsDir)
+	if err != nil {
+		t.Fatalf("buildFinalizeContext: %v", err)
+	}
+	files := map[string]string{}
+	modes := map[string]int64{}
+	tr := tar.NewReader(rdr)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read: %v", err)
+		}
+		b, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("tar payload %q: %v", h.Name, err)
+		}
+		files[h.Name] = string(b)
+		modes[h.Name] = h.Mode
+	}
+
+	gitcfg, ok := files["gitconfig"]
+	if !ok {
+		t.Fatalf("no gitconfig in the finalize context; got %v", keysOf(files))
+	}
+	dockerfile := files["Dockerfile"]
+	if !strings.Contains(dockerfile, "COPY gitconfig /etc/gitconfig") {
+		t.Errorf("Dockerfile does not install the gitconfig — the file rides along unused:\n%s", dockerfile)
+	}
+	if !strings.Contains(gitcfg, "credential") || !strings.Contains(gitcfg, "wardyn-git-helper") {
+		t.Errorf("gitconfig does not wire wardyn-git-helper as a credential helper:\n%s", gitcfg)
+	}
+
+	// The caller-auth gate must survive on a base whose home is NOT /home/agent.
+	// agent-run-lib.sh's provision_git_helper_secret always writes
+	// ${HOME}/.wardyn/git-helper.secret; ubuntu:24.04 runs as root (HOME=/root).
+	// A hardcoded agent home here points --secret-file at a path that never
+	// exists, and the helper FALLS OPEN when the file is absent — so the gate
+	// would be silently off on every BYOI image, with no error anywhere.
+	if strings.Contains(gitcfg, "/home/agent") {
+		t.Errorf("gitconfig hardcodes /home/agent; a BYOI base has its own home, so the caller-auth gate would silently fall open:\n%s", gitcfg)
+	}
+	if !strings.Contains(gitcfg, "--secret-file") {
+		t.Errorf("gitconfig drops --secret-file, disabling the per-run caller-auth gate outright:\n%s", gitcfg)
+	}
+	if !strings.Contains(gitcfg, "$HOME") {
+		t.Errorf("gitconfig's --secret-file is not $HOME-relative, so it cannot match provision_git_helper_secret on an arbitrary base:\n%s", gitcfg)
+	}
+
+	// A stage that needs a shell cannot wrap a distroless/scratch BYOI base, and
+	// it breaks the "FROM + COPY only" property assertWrapSafeBase relies on.
+	if strings.Contains(dockerfile, "RUN ") {
+		t.Errorf("finalize Dockerfile gained a RUN; the wrap must stay FROM+COPY (a BYOI base may carry no shell):\n%s", dockerfile)
+	}
+	if got := modes["gitconfig"]; got != 0o644 {
+		t.Errorf("gitconfig mode = %#o, want 0644 (root-owned: the sandbox user must not rewrite its own helper path)", got)
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

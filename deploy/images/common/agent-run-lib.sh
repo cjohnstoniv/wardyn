@@ -572,7 +572,22 @@ selftest_report_repo_and_git() {
     fi
     echo "--- git credential helper ---"
     echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
-    if git config --system --get credential.helper >/dev/null 2>&1; then
+    # Absent git is NOT a wiring failure: there is no git here to no-op, so the
+    # grant is simply unusable in this image — a property of the base the user
+    # brought, not a misconfiguration of ours. Reporting it as "helper not wired"
+    # made every BYOI base without git (ubuntu:24.04, alpine, distroless) fail
+    # closed the moment a policy declared a github_token grant, which contradicts
+    # selftest_check_bins two blocks up: in exec mode it has already ruled git
+    # "not required for this task mode". Two halves of one selftest disagreeing
+    # is what kept `desktop-envelope` red.
+    #
+    # This is NOT a hole: when git absence actually matters — harness mode, or
+    # exec mode with repo wiring — selftest_check_bins requires git and fails
+    # there. That check owns the decision; this one must not second-guess a
+    # config it cannot read.
+    if ! command -v git >/dev/null 2>&1; then
+        echo "  n/a (no git in this image — a git grant cannot be exercised here)"
+    elif git config --system --get credential.helper >/dev/null 2>&1; then
         echo "  OK (system config, global)"
     else
         echo "  MISSING (system gitconfig not wired)"
