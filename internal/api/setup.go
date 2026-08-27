@@ -208,6 +208,16 @@ type SetupCheck struct {
 type SetupAuth struct {
 	Mode          string `json:"mode"`
 	LocalLoopback bool   `json:"local_loopback"`
+	// SharedSubscriptionAllowed reports whether this deployment may inject ONE
+	// operator's Anthropic subscription into runs (single-user desktop only; see
+	// subscriptionInjectPosture in cmd/wardynd). The console reads it to decide
+	// whether to offer the "Connect Claude subscription" affordance at all —
+	// rendering a sign-in that cannot work is worse than not offering it.
+	SharedSubscriptionAllowed bool `json:"shared_subscription_allowed"`
+	// SharedSubscriptionReason says WHY it is unavailable, so the UI can explain
+	// rather than looking identical to "the operator never logged in". Empty when
+	// allowed.
+	SharedSubscriptionReason string `json:"shared_subscription_reason,omitempty"`
 }
 
 // SetupRunner echoes the runner name and the live confinement classes/substrates.
@@ -614,9 +624,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	resp := SetupStatus{
-		Ready:      ready,
-		Checks:     checks,
-		Auth:       SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Ready:  ready,
+		Checks: checks,
+		Auth: SetupAuth{
+			Mode: authMode, LocalLoopback: s.cfg.LocalLoopback,
+			SharedSubscriptionAllowed: s.cfg.SubscriptionPostureOK,
+			SharedSubscriptionReason:  s.cfg.SubscriptionPostureReason,
+		},
 		Runner:     rnr,
 		Providers:  providers,
 		Secrets:    sec,

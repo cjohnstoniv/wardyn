@@ -49,6 +49,38 @@ describe("ModelProviderCard", () => {
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
   });
 
+  // A shared subscription credential is one person's; on a multi-user deployment
+  // injecting it into other people's runs breaches the harness vendor's per-user
+  // authentication terms, and the OPERATOR is the one in breach. The daemon
+  // refuses it there, so the console must not offer a sign-in that cannot work —
+  // and must say why, because a missing affordance reads as "nobody connected one
+  // yet" and a greyed-out one reads as "you lack permission".
+  it("shared subscription blocked: explains instead of offering a sign-in", () => {
+    const st = baseStatus();
+    st.auth.shared_subscription_allowed = false;
+    st.auth.shared_subscription_reason = "OIDC/SSO is configured, which declares that more than one human uses this deployment";
+    model(st);
+    expect(screen.queryByRole("button", { name: /sign in$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Unavailable in this deployment/i)).toBeInTheDocument();
+    expect(screen.getByText(/more than one human/i)).toBeInTheDocument();
+  });
+
+  it("shared subscription allowed: the sign-in is offered", () => {
+    const st = baseStatus();
+    st.auth.shared_subscription_allowed = true;
+    model(st);
+    expect(screen.getByRole("button", { name: /sign in$/i })).toBeInTheDocument();
+  });
+
+  // An older daemon omits the field entirely. Absent must read as ALLOWED so this
+  // console keeps working against one — the daemon is the enforcement point.
+  it("field absent (older daemon): the sign-in is still offered", () => {
+    const st = baseStatus();
+    delete st.auth.shared_subscription_allowed;
+    model(st);
+    expect(screen.getByRole("button", { name: /sign in$/i })).toBeInTheDocument();
+  });
+
   it("nothing stored: no lane reads Connected", () => {
     model();
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();

@@ -223,7 +223,18 @@ export interface SetupStatus {
   // absent as "unknown", not "false".
   llm_ready?: boolean;
   checks: SetupCheck[];
-  auth: { mode: "local" | "sso" | "token" | "disabled"; local_loopback: boolean };
+  auth: {
+    mode: "local" | "sso" | "token" | "disabled";
+    local_loopback: boolean;
+    /** Whether this deployment may inject ONE operator's Anthropic subscription
+     *  into runs. False on Kubernetes and whenever SSO is configured: sharing one
+     *  person's subscription across users breaches the harness vendor's per-user
+     *  authentication terms, and it is the operator who ends up in breach. */
+    shared_subscription_allowed?: boolean;
+    /** Why it is unavailable — rendered instead of the sign-in affordance, so the
+     *  card explains rather than looking like "nobody has connected one yet". */
+    shared_subscription_reason?: string;
+  };
   runner: {
     driver: "docker" | "k8s" | "none" | (string & {});
     confinement_classes: ConfinementClass[];

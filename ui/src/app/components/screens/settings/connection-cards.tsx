@@ -368,6 +368,10 @@ export function ModelProviderCard({
   // that would silently do nothing.
   const managedSub = !!subRow && !subRow.hostCli;
   const bedrockConfigured = !!status.bedrock?.region && !!status.bedrock?.model;
+  // Older daemons omit the field; absent reads as ALLOWED so this console keeps
+  // working against them. The daemon is the enforcement point either way — the UI
+  // only decides whether to offer a lane that would fail.
+  const sharedSubBlocked = status.auth.shared_subscription_allowed === false;
 
   return (
     <>
@@ -401,6 +405,13 @@ export function ModelProviderCard({
                   </Button>
                 )}
               </div>
+            ) : sharedSubBlocked ? (
+              // Not merely disabled: a greyed-out button reads as "you lack
+              // permission". The deployment itself cannot use this lane, so say so
+              // and point at the two that work.
+              <p className="text-[0.8125rem] text-muted-foreground">
+                Unavailable in this deployment — {status.auth.shared_subscription_reason}
+              </p>
             ) : (
               <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
                 Sign in
