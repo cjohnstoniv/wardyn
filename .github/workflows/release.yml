@@ -242,6 +242,20 @@ jobs:
           curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
             | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
           syft "registry:${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
+          # wardynd embeds the console as a Vite bundle, which strips every
+          # package.json — so scanning the IMAGE finds zero npm packages however
+          # you point it, and the whole frontend dependency tree is invisible.
+          # Scanning the image instead of the source tree fixed the OS-package
+          # blindness; it did nothing for this. The lockfile is the only place
+          # those versions still exist, so merge a lockfile-derived scan in.
+          if [ "${{ matrix.name }}" = wardynd ]; then
+            syft dir:ui -o cyclonedx-json > ui-sbom.json
+            jq -s '.[0].components += [.[1].components[] | select(.purl // "" | startswith("pkg:npm"))] | .[0]' \
+              "sbom-${{ matrix.name }}.cdx.json" ui-sbom.json > merged.json
+            mv merged.json "sbom-${{ matrix.name }}.cdx.json"
+            test "$(jq '[.components[]|select(.purl//""|startswith("pkg:npm"))]|length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
+              || { echo "wardynd SBOM still reports zero npm packages after the merge"; exit 1; }
+          fi
           # A scan that finds nothing is a scan that ran against the wrong thing.
           test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
             || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }

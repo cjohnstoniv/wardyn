@@ -8,6 +8,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-08-27
+
+### Fixed
+
+- **The `wardynd` SBOM reported zero npm packages, and 0.6.2's notes claimed
+  otherwise.** Scanning the pushed image instead of the source tree fixed the
+  OS-package blindness and did nothing for this one: `wardynd` embeds the console
+  as a Vite bundle, which strips every `package.json`, so there is no manifest in
+  the image for any scanner to find however you point it. The released
+  `sbom-wardynd.cdx.json` for 0.6.3 carries 1,070 components — 114 Go modules, 4
+  Debian packages, and **zero** of the 611 npm packages actually in the bundle.
+
+  The lockfile is the only place those versions still exist, so the release now
+  merges a `syft dir:ui` scan into the image SBOM, and **fails the job if the
+  result still reports zero npm packages** — the check that would have caught the
+  original mistake instead of shipping it.
+
+
 ## [0.6.3] — 2026-08-27
 
 A CI-permission fix for 0.6.2, which shipped its images but not its provenance.
@@ -97,9 +115,9 @@ A CI-permission fix for 0.6.2, which shipped its images but not its provenance.
   its vendor. Existing `0.5.0`/`0.6.0`/`0.6.1` tags stay published; retracting
   released versions breaks existing pulls.
 - **Per-digest SBOMs and build provenance**, cosign-attested, scanned from the
-  pushed image rather than the source tree — the old source scan reported zero npm
-  packages for `wardynd` while the image ships the entire compiled console, and saw
-  no OS packages at all, which is where the GPL and the CVEs live.
+  pushed image rather than the source tree — the old source scan saw no OS
+  packages at all, which is where the GPL and the CVEs live. (It does *not* fix
+  the npm blindness; see 0.6.4.)
 - **Release assets that exist**: the per-image SBOMs, `THIRD-PARTY-NOTICES.md`,
   `LICENSE`, `NOTICE` and a cosign-signed `SHA256SUMS`, with a job that fails if any
   of them did not land. Previous releases carried demo videos or nothing.
