@@ -28,7 +28,7 @@ name: Release images
 #     default for k8s.proxyImage (environment-specific, required in practice),
 #     so this is the ref an operator points `--set k8s.proxyImage=` at once
 #     they choose ghcr as their registry, not a value baked into the chart.
-#   ghcr.io/cjohnstoniv/agent-claude-code, ghcr.io/cjohnstoniv/agent-codex-cli
+#   ghcr.io/cjohnstoniv/agent-base, ghcr.io/cjohnstoniv/agent-codex-cli
 #     internal/api/runs_policy.go's agentImage() fallback convention:
 #     "ghcr.io/cjohnstoniv/agent-" + ImageKey, and internal/api/harness.go's
 #     catalog sets ImageKey "claude-code"/"codex-cli" for exactly these two
@@ -158,7 +158,8 @@ jobs:
           # also the honest arrangement: the operator installs that CLI under their
           # own agreement with its vendor. agent-base below is what ships instead.
           #
-          # 0.5.0/0.6.0/0.6.1 of agent-claude-code remain on GHCR — retracting them
+          # 0.5.0 and 0.6.0 of agent-claude-code remain on GHCR — 0.6.1 was
+          # NEVER published, and this comment used to claim it was. Retracting them
           # would break existing pulls of already-released versions, and they are
           # documented in deploy/images/THIRD-PARTY-TERMS.md.
           - name: agent-base

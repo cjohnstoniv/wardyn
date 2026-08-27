@@ -208,7 +208,7 @@ the other:
   pushes all FIVE images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
   `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
-  `ghcr.io/cjohnstoniv/agent-claude-code`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
+  `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
   `ghcr.io/cjohnstoniv/agent-aws-sso`
   — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
@@ -234,7 +234,11 @@ the other:
 
   ```sh
   TAG=0.6.0   # the bare semver just pushed, no leading v
-  for img in wardynd wardyn-proxy agent-claude-code agent-codex-cli agent-aws-sso; do
+  # agent-BASE, not agent-claude-code: the latter has not been published since
+  # 0.6.2 and this loop errored on it every release (an interactive paste with
+  # no `set -e` just carries on), while agent-base — the image that IS published
+  # — went unverified.
+  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

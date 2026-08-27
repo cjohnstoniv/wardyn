@@ -18,12 +18,43 @@
 # Usage: scripts/gpl-source-offer.sh <sbom-dir> [tag]
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# INPUT. This reads syft SBOMs from a directory. Nothing in the repo produces
+# one any more — `make sbom` and every syft call were deleted, and the only
+# surviving syft run is in release.yml against a PUSHED digest, i.e. available
+# only AFTER the tag, while this file must be correct IN the release commit.
+#
+# So the input is produced by hand, pre-tag, against the PREVIOUS release's
+# published digests:
+#
+#     mkdir -p /tmp/sbom
+#     for i in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do
+#       syft "registry:ghcr.io/cjohnstoniv/$i:<prev-tag>" -o syft-json \
+#         > "/tmp/sbom/04-sbom-$i-<prev-tag>-amd64.json"
+#     done
+#     scripts/gpl-source-offer.sh /tmp/sbom <prev-tag>
+#
+# Do NOT try to source this from release.yml's dry run: under dry_run that job
+# writes `{"components":[]}` stubs and skips the merge entirely, so it produces
+# five zero-component files, not image SBOMs.
 SBOM_DIR="${1:?usage: gpl-source-offer.sh <sbom-dir> [tag]}"
-TAG="${2:-0.6.1}"
+TAG="${2:?usage: gpl-source-offer.sh <sbom-dir> <tag> — no default; a stale default silently regenerates the offer for the wrong release}"
 OUT=deploy/images/THIRD-PARTY-GPL.md
 export LC_ALL=C
 
-IMAGES=(wardynd wardyn-proxy agent-claude-code agent-codex-cli agent-aws-sso)
+# The CURRENTLY PUBLISHED set, which is what release.yml's matrix pushes.
+# agent-claude-code is deliberately ABSENT: 0.6.2 stopped publishing it and
+# publishes agent-base in its place. It was still listed here long after that,
+# so the loop errored on it (an interactive paste with no `set -e` just carries
+# on) while agent-base — the image that IS published — was never scanned at all.
+IMAGES=(wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso)
+
+# STILL-DISTRIBUTED, NO LONGER PUBLISHED. agent-claude-code 0.5.0 and 0.6.0
+# remain pullable from GHCR, so the corresponding-source offer covering them is
+# still owed and its section must be RETAINED across regenerations — regenerating
+# from the current publish set alone would delete the only offer covering images
+# that are still being conveyed.
+HISTORICAL_NOTE=1
+HISTORICAL_TAGS=(0.5.0 0.6.0)
 
 {
   echo "# Corresponding source for GPL and LGPL components in the published images"
@@ -77,5 +108,49 @@ IMAGES=(wardynd wardyn-proxy agent-claude-code agent-codex-cli agent-aws-sso)
     fi
     echo
   done
+
+  # ── STILL DISTRIBUTED, NO LONGER PUBLISHED ────────────────────────────────
+  # The obligation attaches to CONVEYING, not to still being in the publish
+  # matrix. agent-claude-code:0.5.0 and :0.6.0 remain pullable from GHCR (0.6.1
+  # and later never were — release.yml's own header claims 0.6.1 was, and is
+  # wrong), so the corresponding-source offer covering them is still owed for
+  # three years from their publication.
+  #
+  # Regenerating from the CURRENT publish set alone silently deletes this — which
+  # is exactly what happened on the first regeneration for 0.7. That is a legal
+  # regression that produces no error, so the sections are emitted here and
+  # HISTORICAL_TAGS is the list to shrink only when a tag stops being pullable.
+  if [ "${HISTORICAL_NOTE:-0}" = "1" ]; then
+    echo "## Still distributed, no longer published"
+    echo
+    echo "\`agent-claude-code\` was published through 0.6.0 and is no longer built by"
+    echo "the release workflow (\`agent-base\` ships in its place). Those tags remain"
+    echo "PULLABLE, so they are still being conveyed and the offer below still stands."
+    echo "Verify with \`docker manifest inspect\` before shrinking this list."
+    echo
+    for htag in "${HISTORICAL_TAGS[@]}"; do
+      f="$SBOM_DIR/04-sbom-agent-claude-code-${htag}-amd64.json"
+      echo "### \`ghcr.io/cjohnstoniv/agent-claude-code:${htag}\`"
+      echo
+      if [ ! -f "$f" ]; then
+        echo "_No SBOM available — RE-SCAN BEFORE RELEASING; an absent section is not the same as no obligation._"
+        echo
+        continue
+      fi
+      n=$(jq -r '[.artifacts[] | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))] | length' "$f")
+      echo "$n package(s) carrying a GPL or LGPL term."
+      echo
+      if [ "$n" -gt 0 ]; then
+        echo "| package | version | licence | type |"
+        echo "|---|---|---|---|"
+        jq -r '.artifacts[]
+               | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))
+               | [.name, .version, (((.licenses//[])|map(.value//.spdxExpression//"")|join(", "))), .type]
+               | @tsv' "$f" \
+          | sort -u | while IFS=$'\t' read -r n v l t; do printf '| `%s` | %s | %s | %s |\n' "$n" "$v" "$l" "$t"; done
+      fi
+      echo
+    done
+  fi
 } > "$OUT"
 echo "wrote $OUT ($(wc -l < "$OUT") lines)"

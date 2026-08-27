@@ -180,6 +180,25 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Fixed
 
+- **The GPL corresponding-source offer covered the wrong images.** Its hardcoded
+  list still named `agent-claude-code`, unpublished since 0.6.2, and omitted
+  `agent-base`, which publishes in its place — so the loop errored on a ref that
+  does not exist while the image that IS published **was never scanned and had
+  no offer at all**. Publishing an image conveys its GPL/LGPL binaries, so that
+  is a real obligation, and it failed silently: a missing image produces no
+  output rather than an error. The same two errors were in `RELEASING.md`'s
+  manual cosign verification loop and in `release.yml`'s own header.
+
+  Regenerated against the published digests — and the first regeneration
+  **deleted** the section covering `agent-claude-code` 0.5.0/0.6.0, which are
+  **still pullable** and therefore still being conveyed. The generator now
+  retains a "still distributed, no longer published" section, verified by
+  `docker manifest inspect` (0.6.1 was never published; a comment in
+  `release.yml` claimed it was). Its stale default tag is gone — a default
+  silently regenerates the offer for the wrong release — and a new guard fails
+  when the offer's image list and `release.yml`'s publish matrix disagree in
+  either direction.
+
 - **`RELEASING.md`'s tag-gate job list was wrong in both directions.** It named
   `sbom-stub`, which was **deleted** along with `make sbom` — so a maintainer
   following it literally waited on a job that can never report — and it omitted
